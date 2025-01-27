@@ -635,3 +635,11 @@ class Filter(object):
         for bond in asymmetric_bonds:
             atom_array.bonds.remove_bond(bond[0], bond[1])
         return atom_array
+
+    #TODO: Write a Filter method that removes side chains
+    def remove_protein_side_chains(self, atom_array: AtomArray) -> AtomArray:
+        """
+        Removes protein side chains from the input AtomArray and changes every residue name annotation to glycine.
+        Downstream functions will pretend that every residue is glycine.
+        """
+        pass

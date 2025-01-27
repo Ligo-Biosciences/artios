@@ -649,7 +649,7 @@ class Filter(object):
             AtomArray: Modified atom array with only backbone atoms and all residues labeled as GLY
         """
         # Keep only backbone atoms
-        backbone_mask = np.isin(atom_array.atom_name, ["N", "CA", "C", "O"])
+        backbone_mask = np.isin(atom_array.atom_name, ["N", "CA", "C", "O", "OXT"])
         backbone_array = atom_array[backbone_mask]
         
         # Change all residue names to GLY

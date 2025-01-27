@@ -120,7 +120,7 @@ class AtomArrayTokenizer(object):
         tokens = []
         total_atom_num = 0
         for res in struc.residue_iter(self.atom_array):
-            atom_num = len(res)
+            atom_num = len(res)  # TODO: only extract the backbone atoms for proteins / nucleotides
             first_atom = res[0]
             res_name = first_atom.res_name
             mol_type = first_atom.mol_type

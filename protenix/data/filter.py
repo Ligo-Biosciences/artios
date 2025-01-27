@@ -636,10 +636,23 @@ class Filter(object):
             atom_array.bonds.remove_bond(bond[0], bond[1])
         return atom_array
 
-    #TODO: Write a Filter method that removes side chains
-    def remove_protein_side_chains(self, atom_array: AtomArray) -> AtomArray:
+    @staticmethod
+    def remove_protein_side_chains(atom_array: AtomArray) -> AtomArray:
         """
         Removes protein side chains from the input AtomArray and changes every residue name annotation to glycine.
-        Downstream functions will pretend that every residue is glycine.
+        Only keeps backbone atoms (N, CA, C, O) and changes all residue names to GLY.
+
+        Args:
+            atom_array (AtomArray): Input atom array containing protein structure
+
+        Returns:
+            AtomArray: Modified atom array with only backbone atoms and all residues labeled as GLY
         """
-        pass
+        # Keep only backbone atoms
+        backbone_mask = np.isin(atom_array.atom_name, ["N", "CA", "C", "O"])
+        backbone_array = atom_array[backbone_mask]
+        
+        # Change all residue names to GLY
+        backbone_array.res_name[:] = "GLY"
+        
+        return backbone_array

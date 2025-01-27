@@ -42,7 +42,7 @@ default_weighted_pdb_configs = {
             "chain": 0.5,
             "interface": 1,
         },
-        "alpha_dict": {
+        "alpha_dict": {  # TODO: iterate on this selection to emphasize ligands
             "prot": 3,
             "nuc": 3,
             "ligand": 1,
@@ -133,7 +133,7 @@ data_configs = {
             ),
             "pdb_list": "",
             "random_sample_if_failed": True,
-            "max_n_token": -1,  # can be used for removing data with too many tokens.
+            "max_n_token": 3000, # -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,
             "exclusion": {  # do not sample the data based on ions.
                 "mol_1_type": ListValue(["ions"]),
@@ -179,7 +179,7 @@ data_configs = {
         **deepcopy(default_test_configs),
     },
     "msa": {
-        "enable": True,
+        "enable": False,  # True
         "enable_rna_msa": False,
         "prot": {
             "pairing_db": "uniref100",

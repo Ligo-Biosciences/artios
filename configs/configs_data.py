@@ -42,15 +42,15 @@ default_weighted_pdb_configs = {
             "chain": 0.5,
             "interface": 1,
         },
-        "alpha_dict": {  # TODO: iterate on this selection to emphasize ligands
-            "prot": 3,
-            "nuc": 3,
-            "ligand": 1,
+        "alpha_dict": {
+            "prot": 1,  # AF3: 3
+            "nuc": 0,  # AF3: 3
+            "ligand": 1,  # AF3: 1
         },
         "force_recompute_weight": True,
     },
     "cropping_configs": {
-        "method_weights": ListValue([0.2, 0.4, 0.4]),
+        "method_weights": ListValue([0.0, 0.5, 0.5]),  # AF3: [0.2, 0.4, 0.4]
         "crop_size": GlobalConfigValue("train_crop_size"),
     },
     "sample_weight": 0.5,

@@ -137,7 +137,7 @@ def sample_diffusion(
     attn_chunk_size: Optional[int] = None,
 ) -> torch.Tensor:
     """Implements Algorithm 18 in AF3.
-    It performances denoising steps from time 0 to time T.
+    It performs denoising steps from time 0 to time T with Euler's method.
     The time steps (=noise levels) are given by noise_schedule.
 
     Args:

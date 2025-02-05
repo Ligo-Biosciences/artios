@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 from functools import partial
 from typing import Optional, Union
 
@@ -32,6 +31,7 @@ from protenix.model.utils import (
     broadcast_token_to_atom,
     permute_final_dims,
 )
+from protenix.utils.utils import _add, _mul
 from protenix.openfold_local.model.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import checkpoint_blocks
 
@@ -212,10 +212,7 @@ class AttentionPairBias(nn.Module):
 
         # Output projection (from adaLN-Zero [27])
         if self.has_s:
-            if inplace_safe:
-                a *= torch.sigmoid(self.linear_a_last(s))
-            else:
-                a = torch.sigmoid(self.linear_a_last(s)) * a
+            a = _mul(a, torch.sigmoid(self.linear_a_last(s)), inplace_safe=inplace_safe)
 
         return a
 
@@ -288,12 +285,9 @@ class DiffusionTransformerBlock(nn.Module):
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
-        if inplace_safe:
-            attn_out += a
-        else:
-            attn_out = attn_out + a
+        attn_out = _add(attn_out, a, inplace_safe=inplace_safe) 
         ff_out = self.conditioned_transition_block(a=attn_out, s=s)
-        out_a = ff_out + attn_out
+        out_a = _add(ff_out, attn_out)
         # Avoid s/z to be deleted by torch.utils.checkpoint
         return out_a, s, z
 
@@ -759,22 +753,12 @@ class AtomAttentionEncoder(nn.Module):
             dim=-1
         )  # [..., n_blocks, n_queries, n_keys, C_atompair]
 
-        # Line5-Line6: Embed pairwise inverse squared distances, and the valid mask
-        if inplace_safe:
-            p_lm += (
-                self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True)))
-                * v_lm
-            )
-            p_lm += self.linear_no_bias_v(v_lm.to(dtype=p_lm.dtype)) * v_lm
-        else:
-            p_lm = (
-                p_lm
-                + self.linear_no_bias_invd(
-                    1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))
-                )
-                * v_lm
-            )
-            p_lm = p_lm + self.linear_no_bias_v(v_lm.to(dtype=p_lm.dtype)) * v_lm
+        # Line5-Line6: Embed pairwise inverse squared distances, and the valid mask with appropiate masking
+        invd_emb = _mul(self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))), v_lm)
+        mask_emb = _mul(self.linear_no_bias_v(v_lm.to(dtype=p_lm.dtype)), v_lm)
+
+        p_lm = _add(p_lm, invd_emb, inplace_safe=inplace_safe)
+        p_lm = _add(p_lm, mask_emb, inplace_safe=inplace_safe)
 
         # Line7: Initialise the atom single representation as the single conditioning
         q_l = c_l.clone()

@@ -185,16 +185,16 @@ class FourierEmbedding(nn.Module):
         """
         Args:
             c (int): embedding dim.
+            seed (int, optional): Random seed for reproducibility. Defaults to 42.
         """
         super(FourierEmbedding, self).__init__()
         self.c = c
-        self.seed = seed
-        generator = torch.Generator()
-        generator.manual_seed(seed)
-        w_value = torch.randn(size=(c,), generator=generator)
-        self.w = nn.Parameter(w_value, requires_grad=False)
-        b_value = torch.randn(size=(c,), generator=generator)
-        self.b = nn.Parameter(b_value, requires_grad=False)
+        
+        # Register buffers instead of parameters since they don't need gradients
+        # This is more memory efficient and semantically clearer
+        generator = torch.Generator().manual_seed(seed)
+        self.register_buffer('w', torch.randn(c, generator=generator))
+        self.register_buffer('b', torch.randn(c, generator=generator))
 
     def forward(self, t_hat_noise_level: torch.Tensor) -> torch.Tensor:
         """

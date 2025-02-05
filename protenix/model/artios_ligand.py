@@ -118,6 +118,7 @@ class ArtiosLigand(nn.Module):
         # This function is an attempt at unifying the code from main_train_loop(), main_inference_loop() and forward()
         # which all feature some fairly clunky boilerplate and common code.
         # TODO: Unfinished. Need to add main_inference_loop logic after the _main_inference_loop() section.
+        
         # TODO: It will be neat if this function takes in noisy_coords and just performs denoising. This will require moving the 
         # seperate training and inference logic elsewhere which will be easier with lightning.
         # This will require a lot of refactoring, including a noise generator (we can keep generator.py?), the noising of the coords

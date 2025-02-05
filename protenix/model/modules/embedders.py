@@ -75,6 +75,7 @@ class InputFeatureEmbedder(nn.Module):
             chunk_size=chunk_size,
         )  # [..., N_token, c_token]
         # Concatenate the per-token features.
+        # TODO: delete useless token-level features 
         batch_shape = input_feature_dict["restype"].shape[:-1]
         s_inputs = torch.cat(
             [a]

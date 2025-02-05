@@ -217,7 +217,7 @@ class RelativePositionEncoding(nn.Module):
                 start += result.shape[0]
                 del result
             del a_rel_pos, a_rel_token, b_same_entity, a_rel_chain
-            p = p.reshape(*origin_shape, -1)
+            p = p.view(*origin_shape, -1)
             return p
 
 

@@ -792,14 +792,15 @@ class Attention(nn.Module):
             self.linear_q = LinearNoBias(self.c_q, self.c_hidden * self.num_heads)
         self.linear_k = LinearNoBias(self.c_k, self.c_hidden * self.num_heads)
         self.linear_v = LinearNoBias(self.c_v, self.c_hidden * self.num_heads)
-        self.linear_o = LinearNoBias(self.c_hidden * self.num_heads, self.c_q)
+        self.linear_o = LinearNoBias(self.c_hidden * self.num_heads, self.c_q, init="zeros")
         self.linear_g = None
         if self.gating:
             self.linear_g = LinearNoBias(self.c_q, self.c_hidden * self.num_heads)
             self.sigmoid = nn.Sigmoid()
-
-        # Zero init the output layer
-        nn.init.zeros_(self.linear_o.weight)
+    
+    def split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        """Split heads of tensor along the last dimension."""
+        return x.view(x.shape[:-1] + (self.num_heads, -1))
 
     def _prep_qkv(
         self, q_x: torch.Tensor, kv_x: torch.Tensor, apply_scale: bool = True
@@ -824,9 +825,9 @@ class Attention(nn.Module):
         v = self.linear_v(kv_x)
 
         # [*, Q/K/V, H, C_hidden]
-        q = q.view(q.shape[:-1] + (self.num_heads, -1))
-        k = k.view(k.shape[:-1] + (self.num_heads, -1))
-        v = v.view(v.shape[:-1] + (self.num_heads, -1))
+        q = self.split_heads(q)
+        k = self.split_heads(k)
+        v = self.split_heads(v)
 
         # [*, H, Q/K/V, C_hidden]
         q = q.transpose(-2, -3)
@@ -854,7 +855,7 @@ class Attention(nn.Module):
             g = self.sigmoid(self.linear_g(q_x))
 
             # [*, G/Q, H, C_hidden]
-            g = g.view(g.shape[:-1] + (self.num_heads, -1))
+            g = self.split_heads(g)
             o = o * g
 
         # [*, Q, H * C_hidden]

@@ -167,58 +167,13 @@ class RelativePositionEncoding(nn.Module):
         )  # [..., N_token, N_token]
         a_rel_chain = F.one_hot(d_chain, 2 * (self.s_max + 1))
 
-        if self.training:
-            p = self.linear_no_bias(
-                torch.cat(
-                    [a_rel_pos, a_rel_token, b_same_entity[..., None], a_rel_chain],
-                    dim=-1,
-                ).float()
-            )  # [..., N_token, N_token, 2 * (self.r_max + 1)+ 2 * (self.r_max + 1)+ 1 + 2 * (self.s_max + 1)] -> [..., N_token, N_token, c_z]
-            return p
-        else:
-            del d_chain, d_token, d_residue, b_same_chain, b_same_residue
-            origin_shape = a_rel_pos.shape[:-1]
-            Ntoken = a_rel_pos.shape[-2]
-            a_rel_pos = a_rel_pos.reshape(-1, a_rel_pos.shape[-1])
-            chunk_num = 1 if Ntoken < 3200 else 8
-            a_rel_pos_chunks = torch.chunk(
-                a_rel_pos.reshape(-1, a_rel_pos.shape[-1]), chunk_num, dim=-2
-            )
-            a_rel_token_chunks = torch.chunk(
-                a_rel_token.reshape(-1, a_rel_token.shape[-1]), chunk_num, dim=-2
-            )
-            b_same_entity_chunks = torch.chunk(
-                b_same_entity.reshape(-1, 1), chunk_num, dim=-2
-            )
-            a_rel_chain_chunks = torch.chunk(
-                a_rel_chain.reshape(-1, a_rel_chain.shape[-1]), chunk_num, dim=-2
-            )
-            start = 0
-            p = None
-            for i in range(len(a_rel_pos_chunks)):
-                data = torch.cat(
-                    [
-                        a_rel_pos_chunks[i],
-                        a_rel_token_chunks[i],
-                        b_same_entity_chunks[i],
-                        a_rel_chain_chunks[i],
-                    ],
-                    dim=-1,
-                ).float()
-                result = self.linear_no_bias(data)
-                del data
-                if p is None:
-                    p = torch.empty(
-                        (a_rel_pos.shape[-2], self.c_z),
-                        device=a_rel_pos.device,
-                        dtype=result.dtype,
-                    )
-                p[start : start + result.shape[0]] = result
-                start += result.shape[0]
-                del result
-            del a_rel_pos, a_rel_token, b_same_entity, a_rel_chain
-            p = p.reshape(*origin_shape, -1)
-            return p
+        p = self.linear_no_bias(
+            torch.cat(
+                [a_rel_pos, a_rel_token, b_same_entity[..., None], a_rel_chain],
+                dim=-1,
+            ).float()
+        )  # [..., N_token, N_token, 2 * (self.r_max + 1)+ 2 * (self.r_max + 1)+ 1 + 2 * (self.s_max + 1)] -> [..., N_token, N_token, c_z]
+        return p
 
 
 class FourierEmbedding(nn.Module):

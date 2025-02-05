@@ -27,11 +27,12 @@ from protenix.model.modules.primitives import (
     rearrange_qk_to_dense_trunk,
 )
 from protenix.model.utils import (
+    _add,
+    _mul,
     aggregate_atom_to_token,
     broadcast_token_to_atom,
     permute_final_dims,
 )
-from protenix.utils.utils import _add, _mul
 from protenix.openfold_local.model.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import checkpoint_blocks
 

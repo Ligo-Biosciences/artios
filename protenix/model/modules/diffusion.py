@@ -111,12 +111,9 @@ class DiffusionConditioning(nn.Module):
             tensors=[z_trunk, self.relpe(input_feature_dict)], dim=-1
         )  # [..., N_tokens, N_tokens, 2*c_z]
         pair_z = self.linear_no_bias_z(self.layernorm_z(pair_z))
-        if inplace_safe:
-            pair_z += self.transition_z1(pair_z)
-            pair_z += self.transition_z2(pair_z)
-        else:
-            pair_z = pair_z + self.transition_z1(pair_z)
-            pair_z = pair_z + self.transition_z2(pair_z)
+        pair_z = add(pair_z, self.transition_z1(pair_z), inplace_safe=inplace_safe)
+        pair_z = add(pair_z, self.transition_z2(pair_z), inplace_safe=inplace_safe)
+
         # Single conditioning
         single_s = torch.cat(
             tensors=[s_trunk, s_inputs], dim=-1

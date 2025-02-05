@@ -295,5 +295,72 @@ class ArtiosLigand(nn.Module):
 
             # all_log_dict = simple_merge_dict_list(log_dicts)
 
-
         return pred_dict, label_dict, log_dict
+    
+    def forward_refactor(    
+            self,
+            noisy_coords: torch.Tensor,
+            input_feature_dict: dict[str, Any],
+            label_full_dict: dict[str, Any],
+            label_dict: dict[str, Any],
+            symmetric_permutation: SymmetricPermutation,
+            inplace_safe: bool = False,
+            chunk_size: Optional[int] = None,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
+        """
+        A refactoring of the forward function to take in noisy coords. 
+        We still want the output to be in the form of a dictionary I think like in the original forward.
+        The coords should be stored as
+
+        Args:
+            noisy_coords: torch.Tensor,
+                Noised coordinates of the protein backbone ([..., N_atom, 3])
+            input_feature_dict (dict[str, Any]): 
+                Input feature dictionary.
+            label_full_dict (dict[str, Any]): 
+                Full label dictionary (uncropped).
+            label_dict (dict[str, Any]): 
+                Label dictionary (cropped).
+            symmetric_permutation (SymmetricPermutation, optional): 
+                Symmetric permutation object. Defaults to None.
+            inplace_safe (bool, optional): 
+                Whether to use inplace operations safely. Defaults to False.
+            chunk_size (Optional[int], optional): Chunk size for memory-efficient operations. Defaults to None.
+
+        Returns:
+            tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
+                Prediction, updated label, and log dictionaries.
+        """
+
+        N_token = input_feature_dict["residue_index"].shape[-1]
+        if N_token <= 16:
+            # Deepspeed_evo_attention do not support token <= 16
+            deepspeed_evo_attention_condition_satisfy = False
+        else:
+            deepspeed_evo_attention_condition_satisfy = True
+
+        # Initialize dictionaries
+        log_dict = {} 
+        pred_dict = {}
+
+        # Creating single and pair embeddings used to condition the diffusion module
+        s_inputs = self.input_feature_embedder(
+            input_feature_dict, inplace_safe=False, chunk_size=chunk_size
+        )  # [..., N_token, 449] TODO: is 449 c_token? Why not set in configs?
+        s_init = self.linear_no_bias_s_init(s_inputs)  #  [..., N_token, c_s]
+        z_init = add(
+            self.linear_no_bias_z_init1(s_init)[..., None, :],
+            self.linear_no_bias_z_init2(s_init)[..., None, :, :],
+            inplace_safe=inplace_safe
+        )  #  [..., N_token, N_token, c_z]
+
+        # Add relative position encoding and token bonds to pair embeddings
+        pos_enc = self.relative_position_encoding(input_feature_dict)
+        z_init = add(z_init, pos_enc, inplace_safe=inplace_safe)
+
+        token_bonds_emb = self.linear_no_bias_token_bonds(input_feature_dict["token_bonds"].unsqueeze(dim=-1))
+        z_init = add(z_init, token_bonds_emb, inplace_safe=inplace_safe)
+
+        # Initialize z and s
+        z = z_init
+        s = s_init

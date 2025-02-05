@@ -803,19 +803,9 @@ class AtomAttentionEncoder(nn.Module):
             n_keys=self.n_keys,
             compute_mask=False,
         )
-        if inplace_safe:
-            p_lm += self.linear_no_bias_cl(F.relu(c_l_q[..., None, :]))
-            p_lm += self.linear_no_bias_cm(F.relu(c_l_k[..., None, :, :]))
-            p_lm += self.small_mlp(p_lm)
-        else:
-            p_lm = (
-                p_lm
-                + self.linear_no_bias_cl(F.relu(c_l_q[..., None, :]))
-                + self.linear_no_bias_cm(F.relu(c_l_k[..., None, :, :]))
-            )  # [..., (N_sample), n_blocks, n_queries, n_keys, c_atompair]
-
-            # Run a small MLP on the pair activations
-            p_lm = p_lm + self.small_mlp(p_lm)
+        p_lm = _add(p_lm, self.linear_no_bias_cl(F.relu(c_l_q[..., None, :])), inplace_safe=inplace_safe)
+        p_lm = _add(p_lm, self.linear_no_bias_cm(F.relu(c_l_k[..., None, :, :])), inplace_safe=inplace_safe) # [..., (N_sample), n_blocks, n_queries, n_keys, c_atompair]
+        p_lm = _add(p_lm, self.small_mlp(p_lm), inplace_safe=inplace_safe)
 
         # Cross attention transformer
         q_l = self.atom_transformer(

@@ -29,7 +29,6 @@ from protenix.model.utils import (
     pad_at_dim,
     reshape_at_dim,
 )
-from protenix.openfold_local.model.primitives import LayerNorm
 from protenix.openfold_local.utils.chunk_utils import chunk_layer
 
 
@@ -782,16 +781,13 @@ class Attention(nn.Module):
 
         # DISCREPANCY: c_hidden is not the per-head channel dimension, as
         # stated in the supplement, but the overall channel dimension.
-        if q_linear_bias:
-            # Attention in AF3
-            self.linear_q = Linear(
-                in_features=self.c_q, out_features=self.c_hidden * self.num_heads
-            )
-        else:
-            # Vanilla attention
-            self.linear_q = LinearNoBias(self.c_q, self.c_hidden * self.num_heads)
-        self.linear_k = LinearNoBias(self.c_k, self.c_hidden * self.num_heads)
-        self.linear_v = LinearNoBias(self.c_v, self.c_hidden * self.num_heads)
+        # Attention in AF3 vs vanilla attention
+        linear_layer = Linear if q_linear_bias else LinearNoBias
+        self.linear_q = linear_layer(
+            in_features=self.c_q, out_features=self.c_hidden * self.num_heads, init="glorot"
+        )
+        self.linear_k = LinearNoBias(self.c_k, self.c_hidden * self.num_heads, init="glorot")
+        self.linear_v = LinearNoBias(self.c_v, self.c_hidden * self.num_heads, init="glorot")
         self.linear_o = LinearNoBias(self.c_hidden * self.num_heads, self.c_q, init="zeros")
         self.linear_g = None
         if self.gating:

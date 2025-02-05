@@ -24,7 +24,7 @@ from protenix.model.modules.transformer import (
     AtomAttentionEncoder,
     DiffusionTransformer,
 )
-from protenix.model.utils import expand_at_dim, _add
+from protenix.model.utils import expand_at_dim, add
 from protenix.model.modules.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 
@@ -132,8 +132,8 @@ class DiffusionConditioning(nn.Module):
         ).unsqueeze(
             dim=-2
         )  # [..., N_sample, N_tokens, c_s]
-        single_s = _add(single_s, self.transition_s1(single_s), inplace_safe=inplace_safe)
-        single_s = _add(single_s, self.transition_s2(single_s), inplace_safe=inplace_safe)
+        single_s = add(single_s, self.transition_s1(single_s), inplace_safe=inplace_safe)
+        single_s = add(single_s, self.transition_s2(single_s), inplace_safe=inplace_safe)
  
         if not self.training and pair_z.shape[-2] > 2000:
             torch.cuda.empty_cache()
@@ -368,7 +368,7 @@ class DiffusionModule(nn.Module):
                 chunk_size=chunk_size,
             )
         # Full self-attention on token level.
-        a_token = _add(a_token, self.linear_no_bias_s(self.layernorm_s(s_single)), inplace_safe=inplace_safe) # [..., N_sample, N_token, c_token]
+        a_token = add(a_token, self.linear_no_bias_s(self.layernorm_s(s_single)), inplace_safe=inplace_safe) # [..., N_sample, N_token, c_token]
         
         a_token = self.diffusion_transformer(
             a=a_token,

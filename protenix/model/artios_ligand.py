@@ -13,7 +13,7 @@ from protenix.model.generator import (
     sample_diffusion
 )
 from protenix.utils.torch_utils import autocasting_disable_decorator
-from protenix.utils.utils import _add
+from protenix.model.utils import _add
 
 class ArtiosLigand(nn.Module):
     def __init__(self, configs):

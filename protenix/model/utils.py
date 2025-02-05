@@ -21,7 +21,7 @@ from scipy.spatial.transform import Rotation
 
 from protenix.utils.scatter_utils import scatter
 
-def _add(a, b, inplace_safe: bool = False):
+def add(a, b, inplace_safe: bool = False):
     """
     Add two objects with optional in-place modification.
 
@@ -39,7 +39,7 @@ def _add(a, b, inplace_safe: bool = False):
     else:
         return a + b
 
-def _mul(a, b, inplace_safe: bool = False):
+def mul(a, b, inplace_safe: bool = False):
     if inplace_safe:
         a *= b
         return a

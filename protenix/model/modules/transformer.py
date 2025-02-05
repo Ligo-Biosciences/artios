@@ -27,8 +27,8 @@ from protenix.model.modules.primitives import (
     rearrange_qk_to_dense_trunk,
 )
 from protenix.model.utils import (
-    _add,
-    _mul,
+    add,
+    mul,
     aggregate_atom_to_token,
     broadcast_token_to_atom,
     permute_final_dims,
@@ -207,7 +207,7 @@ class AttentionPairBias(nn.Module):
 
         # Output projection (from adaLN-Zero [27])
         if self.has_s:
-            a = _mul(a, torch.sigmoid(self.linear_a_last(s)), inplace_safe=inplace_safe)
+            a = mul(a, torch.sigmoid(self.linear_a_last(s)), inplace_safe=inplace_safe)
 
         return a
 
@@ -280,9 +280,9 @@ class DiffusionTransformerBlock(nn.Module):
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
-        attn_out = _add(attn_out, a, inplace_safe=inplace_safe) 
+        attn_out = add(attn_out, a, inplace_safe=inplace_safe) 
         ff_out = self.conditioned_transition_block(a=attn_out, s=s)
-        out_a = _add(ff_out, attn_out)
+        out_a = add(ff_out, attn_out)
         # Avoid s/z to be deleted by torch.utils.checkpoint
         return out_a, s, z
 
@@ -712,11 +712,11 @@ class AtomAttentionEncoder(nn.Module):
         )  # [..., n_blocks, n_queries, n_keys, C_atompair]
 
         # Line5-Line6: Embed pairwise inverse squared distances, and the valid mask with appropiate masking
-        invd_emb = _mul(self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))), v_lm)
-        mask_emb = _mul(self.linear_no_bias_v(v_lm.to(dtype=p_lm.dtype)), v_lm)
+        invd_emb = mul(self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))), v_lm)
+        mask_emb = mul(self.linear_no_bias_v(v_lm.to(dtype=p_lm.dtype)), v_lm)
 
-        p_lm = _add(p_lm, invd_emb, inplace_safe=inplace_safe)
-        p_lm = _add(p_lm, mask_emb, inplace_safe=inplace_safe)
+        p_lm = add(p_lm, invd_emb, inplace_safe=inplace_safe)
+        p_lm = add(p_lm, mask_emb, inplace_safe=inplace_safe)
 
         # Line7: Initialise the atom single representation as the single conditioning
         q_l = c_l.clone()
@@ -761,9 +761,9 @@ class AtomAttentionEncoder(nn.Module):
             n_keys=self.n_keys,
             compute_mask=False,
         )
-        p_lm = _add(p_lm, self.linear_no_bias_cl(F.relu(c_l_q[..., None, :])), inplace_safe=inplace_safe)
-        p_lm = _add(p_lm, self.linear_no_bias_cm(F.relu(c_l_k[..., None, :, :])), inplace_safe=inplace_safe) # [..., (N_sample), n_blocks, n_queries, n_keys, c_atompair]
-        p_lm = _add(p_lm, self.small_mlp(p_lm), inplace_safe=inplace_safe)
+        p_lm = add(p_lm, self.linear_no_bias_cl(F.relu(c_l_q[..., None, :])), inplace_safe=inplace_safe)
+        p_lm = add(p_lm, self.linear_no_bias_cm(F.relu(c_l_k[..., None, :, :])), inplace_safe=inplace_safe) # [..., (N_sample), n_blocks, n_queries, n_keys, c_atompair]
+        p_lm = add(p_lm, self.small_mlp(p_lm), inplace_safe=inplace_safe)
 
         # Cross attention transformer
         q_l = self.atom_transformer(

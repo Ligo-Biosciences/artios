@@ -24,7 +24,7 @@ from protenix.model.modules.frames import (
     expressCoordinatesInFrame,
     gather_frame_atom_by_indices,
 )
-from protenix.model.utils import expand_at_dim, _add, _mul
+from protenix.model.utils import expand_at_dim, add, mul
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 from protenix.utils.torch_utils import cdist
 
@@ -74,7 +74,7 @@ class SmoothLDDTLoss(nn.Module):
         # For save cuda memory we use inplace op
         dist_diff_epsilon = 0
         for threshold in [0.5, 1, 2, 4]:
-            dist_diff_epsilon = _add(dist_diff_epsilon, _mul(0.25, torch.sigmoid(threshold - dist_diff), inplace_safe=True), inplace_safe=True)
+            dist_diff_epsilon = add(dist_diff_epsilon, mul(0.25, torch.sigmoid(threshold - dist_diff), inplace_safe=True), inplace_safe=True)
 
         # Compute mean
         if c_lm is not None:

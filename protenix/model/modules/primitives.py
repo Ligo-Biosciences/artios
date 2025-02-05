@@ -28,7 +28,7 @@ from protenix.model.utils import (
     move_final_dim_to_dim,
     pad_at_dim,
     reshape_at_dim,
-    _add
+    add
 )
 from protenix.openfold_local.utils.chunk_utils import chunk_layer
 
@@ -368,7 +368,7 @@ def _attention(
     attn_weights = q @ k
 
     if attn_bias is not None:
-        attn_weights = _add(attn_weights, attn_bias, inplace_safe=inplace_safe)
+        attn_weights = add(attn_weights, attn_bias, inplace_safe=inplace_safe)
 
     # [..., n_q, n_kv]
     attn_weights = F.softmax(attn_weights, dim=-1)
@@ -924,7 +924,7 @@ class Attention(nn.Module):
                     (1,) * (len(q.shape[:-2])) + local_attn_bias.shape
                 )
                 if attn_bias is not None:
-                    local_attn_bias = _add(local_attn_bias, attn_bias, inplace_safe=inplace_safe)
+                    local_attn_bias = add(local_attn_bias, attn_bias, inplace_safe=inplace_safe)
                 o = _attention(
                     q=q,
                     k=k,

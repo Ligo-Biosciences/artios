@@ -13,7 +13,7 @@ from protenix.model.generator import (
     sample_diffusion
 )
 from protenix.utils.torch_utils import autocasting_disable_decorator
-from protenix.model.utils import _add
+from protenix.model.utils import add
 
 class ArtiosLigand(nn.Module):
     def __init__(self, configs):
@@ -141,7 +141,7 @@ class ArtiosLigand(nn.Module):
             input_feature_dict, inplace_safe=False, chunk_size=chunk_size
         )  # [..., N_token, 449] TODO: is 449 c_token? Why not set in configs?
         s_init = self.linear_no_bias_s_init(s_inputs)  #  [..., N_token, c_s]
-        z_init = _add(
+        z_init = add(
             self.linear_no_bias_z_init1(s_init)[..., None, :],
             self.linear_no_bias_z_init2(s_init)[..., None, :, :],
             inplace_safe=inplace_safe
@@ -149,10 +149,10 @@ class ArtiosLigand(nn.Module):
 
         # Add relative position encoding and token bonds to pair embeddings
         pos_enc = self.relative_position_encoding(input_feature_dict)
-        z_init = _add(z_init, pos_enc, inplace_safe=inplace_safe)
+        z_init = add(z_init, pos_enc, inplace_safe=inplace_safe)
 
         token_bonds_emb = self.linear_no_bias_token_bonds(input_feature_dict["token_bonds"].unsqueeze(dim=-1))
-        z_init = _add(z_init, token_bonds_emb, inplace_safe=inplace_safe)
+        z_init = add(z_init, token_bonds_emb, inplace_safe=inplace_safe)
 
         # Initialize z and s
         z = z_init

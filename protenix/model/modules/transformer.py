@@ -459,7 +459,7 @@ class AtomTransformer(nn.Module):
                 [..., N_atom, c_atom]
             p (torch.Tensor): atompair embedding in dense block shape.
                 [..., n_blocks, n_queries, n_keys, c_atompair]
-
+                Note: n_blocks = N_atom // n_queries, not to be confused with n_blocks in AtomTransformer.
         Returns:
             torch.Tensor: the output of AtomTransformer
                 [..., N_atom, c_atom]

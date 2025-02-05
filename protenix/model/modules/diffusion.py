@@ -97,9 +97,9 @@ class DiffusionConditioning(nn.Module):
             s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
                 [..., N_tokens, c_s_inputs]
             s_trunk (torch.Tensor): single feature embedding from PairFormer (Alg17)
-                [..., N_tokens, c_s]
+                [..., N_tokens, c_s]  # TODO: delete s_trunk from DiffusionConditioning inputs
             z_trunk (torch.Tensor): pair feature embedding from PairFormer (Alg17)
-                [..., N_tokens, N_tokens, c_z]
+                [..., N_tokens, N_tokens, c_z]  # TODO: delete z_trunk from DiffusionConditioning inputs
             inplace_safe (bool): Whether it is safe to use inplace operations.
         Returns:
             tuple[torch.Tensor, torch.Tensor]: embeddings s and z
@@ -108,14 +108,14 @@ class DiffusionConditioning(nn.Module):
         """
         # Pair conditioning
         pair_z = torch.cat(
-            tensors=[z_trunk, self.relpe(input_feature_dict)], dim=-1
+            tensors=[z_trunk, self.relpe(input_feature_dict)], dim=-1  # TODO: delete z_trunk from DiffusionConditioning inputs
         )  # [..., N_tokens, N_tokens, 2*c_z]
-        pair_z = self.linear_no_bias_z(self.layernorm_z(pair_z))
+        pair_z = self.linear_no_bias_z(self.layernorm_z(pair_z)) 
         pair_z = add(pair_z, self.transition_z1(pair_z), inplace_safe=inplace_safe)
-        pair_z = add(pair_z, self.transition_z2(pair_z), inplace_safe=inplace_safe)
+        pair_z = add(pair_z, self.transition_z2(pair_z), inplace_safe=inplace_safe)  # TODO: delete the 2nd transition
 
         # Single conditioning
-        single_s = torch.cat(
+        single_s = torch.cat(  # TODO: delete s_trunk from DiffusionConditioning inputs
             tensors=[s_trunk, s_inputs], dim=-1
         )  # [..., N_tokens, c_s + c_s_inputs]
         single_s = self.linear_no_bias_s(self.layernorm_s(single_s))
@@ -295,9 +295,9 @@ class DiffusionModule(nn.Module):
             s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
                 [..., N_tokens, c_s_inputs]
             s_trunk (torch.Tensor): single feature embedding from PairFormer (Alg17)
-                [..., N_tokens, c_s]
+                [..., N_tokens, c_s]  # TODO: delete s_trunk from DiffusionModule inputs
             z_trunk (torch.Tensor): pair feature embedding from PairFormer (Alg17)
-                [..., N_tokens, N_tokens, c_z]
+                [..., N_tokens, N_tokens, c_z]  # TODO: delete z_trunk from DiffusionModule inputs
             inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 
@@ -426,9 +426,9 @@ class DiffusionModule(nn.Module):
             s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
                 [..., N_tokens, c_s_inputs]
             s_trunk (torch.Tensor): single feature embedding from PairFormer (Alg17)
-                [..., N_tokens, c_s]
+                [..., N_tokens, c_s]  # TODO: delete s_trunk from DiffusionModule inputs
             z_trunk (torch.Tensor): pair feature embedding from PairFormer (Alg17)
-                [..., N_tokens, N_tokens, c_z]
+                [..., N_tokens, N_tokens, c_z]  # TODO: delete z_trunk from DiffusionModule inputs
             inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 

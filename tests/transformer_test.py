@@ -8,6 +8,7 @@ from protenix.model.modules.transformer import (
     DiffusionTransformer,
     AtomTransformer, 
     AtomAttentionDecoder, 
+    AtomAttentionEncoder,
     ConditionedTransitionBlock
 )
 
@@ -143,7 +144,7 @@ class TestAtomTransformer:
         data_path = "/Users/baharalan/Developer/artios-ligand/tests/testdata/sample_data_dict.pt"
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path)["input_feature_dict"]
+        return torch.load(data_path)
 
     def test_atom_transformer(self, device, sample_data):
         c_atom = 128
@@ -259,6 +260,56 @@ class TestAtomAttentionDecoder:
         # Check output shape and values
         assert out.shape == (batch_size, n_atoms, 3)  # Output should be 3D coordinates
         assert not torch.isnan(out).any()
+    
+    def test_atom_attention_encoder(self, device, sample_data):
+        has_coords = True
+        n_blocks = 3
+        n_heads = 4
+        c_token = 384
+        c_atom = 128
+        c_atompair = 16
+        c_s = 384
+        c_z = 128
+        n_queries = 32
+        n_keys = 128
+
+        model = AtomAttentionEncoder(
+            has_coords=has_coords,
+            c_token=c_token,
+            c_atom=c_atom,
+            c_atompair=c_atompair,
+            c_s=c_s,
+            c_z=c_z,
+            n_blocks=n_blocks,
+            n_heads=n_heads,
+            n_queries=n_queries,
+            n_keys=n_keys
+        ).to(device)
+
+        # Move sample data to device
+        n_tokens = sample_data["basic"]["N_token"][0]
+        n_atoms = sample_data["basic"]["N_atom"][0]
+        sample_data = sample_data["input_feature_dict"]
+        input_dict = {k: v.to(device) if torch.is_tensor(v) else v 
+                     for k, v in sample_data.items()}
+        batch_size = 2
+
+        # Create dummy input tensors
+        r_l = torch.randn(batch_size, n_atoms, 3).to(device)
+        s = torch.randn(batch_size, n_tokens, c_s).to(device)
+        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
+
+        a, q_l, c_l, p_lm = model(input_dict, r_l, s, z)
+
+        # Check output shapes and values
+        assert a.shape == (batch_size, n_tokens, c_token)
+        assert q_l.shape == (batch_size, n_atoms, c_atom)
+        assert c_l.shape == (batch_size, n_atoms, c_atom)
+        assert p_lm.shape == (batch_size, n_atoms // n_queries, n_queries, n_keys, c_atompair)
+        assert not torch.isnan(a).any()
+        assert not torch.isnan(q_l).any()
+        assert not torch.isnan(c_l).any()
+        assert not torch.isnan(p_lm).any()
 
 
 if __name__ == "__main__":

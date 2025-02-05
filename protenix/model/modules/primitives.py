@@ -14,12 +14,14 @@
 
 import math
 from functools import partial
-from typing import Optional, Union
+from typing import Optional, Union, Callable, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn import Linear
+from scipy.stats import truncnorm
+from functools import partialmethod
+import numpy as np
 
 from protenix.model.utils import (
     flatten_final_dims,
@@ -28,51 +30,164 @@ from protenix.model.utils import (
     reshape_at_dim,
     _add
 )
-from protenix.openfold_local.model.primitives import LayerNorm
 from protenix.openfold_local.utils.chunk_utils import chunk_layer
 
-LinearNoBias = partial(Linear, bias=False)
+
+# Linear layer utilities
+
+def _calculate_fan(linear_weight_shape, fan="fan_in"):
+    """Calculate fan-in/fan-out/fan-avg for a linear layer weight shape."""
+    fan_out, fan_in = linear_weight_shape
+    
+    fan_options = {
+        "fan_in": fan_in,
+        "fan_out": fan_out, 
+        "fan_avg": (fan_in + fan_out) / 2
+    }
+    
+    if fan not in fan_options:
+        raise ValueError(f"Invalid fan option. Must be one of: {list(fan_options.keys())}")
+        
+    return fan_options[fan]
 
 
-class AdaptiveLayerNorm(nn.Module):
+def trunc_normal_init_(weight, bias=None, scale=1.0, fan="fan_in"):
+    """Initialize weight using truncated normal distribution with given scale and fan."""
+    shape = weight.shape
+    fan_size = _calculate_fan(shape, fan)
+    adjusted_scale = scale / max(1, fan_size)
+    
+    # Truncated normal parameters
+    a, b = -2, 2
+    std = math.sqrt(adjusted_scale) / truncnorm.std(a=a, b=b, loc=0, scale=1)
+    
+    # Generate truncated normal samples
+    samples = truncnorm.rvs(
+        a=a, 
+        b=b,
+        loc=0,
+        scale=std,
+        size=np.prod(shape)
+    ).reshape(shape)
+
+    # Initialize weight and bias
+    with torch.no_grad():
+        weight.copy_(torch.tensor(samples, device=weight.device))
+        init_bias_to_zero_(bias)
+
+
+def init_bias_to_zero_(bias=None):
+    if bias is not None:
+        with torch.no_grad():
+            bias.fill_(0.0)
+
+def init_weight_to_zero_(weight):
+    with torch.no_grad():
+        weight.fill_(0.0)
+
+
+def lecun_normal_init_(weight, bias=None):
+    trunc_normal_init_(weight, bias, scale=1.0)
+
+
+def he_normal_init_(weight, bias=None):
+    trunc_normal_init_(weight, bias, scale=2.0)
+
+
+def glorot_uniform_init_(weight, bias=None):
+    nn.init.xavier_uniform_(weight, gain=1)
+    init_bias_to_zero_(bias)
+
+
+def final_init_(weight, bias=None):
+    init_weight_to_zero_(weight)
+    init_bias_to_zero_(bias)
+
+    
+def gating_init_(weight, bias=None):
+    init_weight_to_zero_(weight)
+    init_bias_to_zero_(bias)
+
+
+def normal_init_(weight, bias=None):
+    nn.init.kaiming_normal_(weight, nonlinearity="linear")
+    init_bias_to_zero_(bias)
+
+
+def bias_init_fn(weight: torch.Tensor, bias: Optional[torch.Tensor], biasinit: float = 0.0) -> None:
+    """Helper function to initialize BiasInitLinear weights and bias"""
+    with torch.no_grad():
+        nn.init.zeros_(weight)
+        if bias is not None:
+            nn.init.constant_(bias, biasinit)
+
+
+class Linear(nn.Linear):
     """
-    Implements Algorithm 26 in AF3
+    Linear layer with non-standard initialisations.
+  
     """
-
-    def __init__(self, c_a: int = 768, c_s: int = 384) -> None:
+    def __init__(
+            self,
+            in_features: int,
+            out_features: int,
+            bias: bool = True,
+            init: str = "default",
+            init_fn: Optional[Callable[[torch.Tensor, torch.Tensor], None]] = None,
+            precision: Optional[torch.dtype] = None,
+    ) -> None:
         """
         Args:
-            c_a (int, optional): the embedding dim of a(single feature aggregated atom info). Defaults to 768.
-            c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
-        """
-        super(AdaptiveLayerNorm, self).__init__()
-        self.layernorm_a = nn.LayerNorm(c_a, elementwise_affine=False, bias=False)
-        # The pytorch version should be newer than 2.1
-        self.layernorm_s = nn.LayerNorm(c_s, bias=False)
-        self.linear_s = Linear(in_features=c_s, out_features=c_a)
-        self.linear_nobias_s = LinearNoBias(in_features=c_s, out_features=c_a)
+            in_features (int):
+                The final dimension of inputs to the layer
+            out_features (int):
+                The final dimension of layer outputs
+            bias (bool):
+                Whether to learn an additive bias. True by default
+            init (str):
+                The initializer to use. Choose from:
 
-    def zero_init(self):
-        nn.init.zeros_(self.linear_s.weight)
-        nn.init.zeros_(self.linear_s.bias)
-        nn.init.zeros_(self.linear_nobias_s.weight)
+                "default": LeCun fan-in truncated normal initialization
+                "relu": He initialization w/ truncated normal distribution
+                "glorot": Fan-average Glorot uniform initialization
+                "gating": Weights=0, Bias=1
+                "normal": Normal initialization with std = 1 / sqrt(fan_in)
+                "zeros": Weights=0, Bias=0
 
-    def forward(self, a: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+                Overridden by init_fn if the latter is not None.
+            init_fn (Callable): A custom initializer taking weight and bias as inputs.
+                Overrides init if not None.
         """
-        Args:
-            a (torch.Tensor): the single feature aggregate per-atom representation
-                [..., N_token, c_a]
-            s (torch.Tensor): single embedding
-                [..., N_token, c_s]
+        super(Linear, self).__init__(in_features, out_features, bias)
 
-        Returns:
-            torch.Tensor: the updated a from AdaLN
-                [..., N_token, c_a]
-        """
-        a = self.layernorm_a(a)
-        s = self.layernorm_s(s)
-        a = torch.sigmoid(self.linear_s(s)) * a + self.linear_nobias_s(s)
-        return a
+        init_methods = {
+            "default": lecun_normal_init_,
+            "relu": he_normal_init_,
+            "glorot": glorot_uniform_init_, 
+            "gating": gating_init_,
+            "normal": normal_init_,
+            "zeros": final_init_
+        }
+
+        if init_fn is not None:
+            with torch.no_grad():
+                init_fn(self.weight, self.bias if bias else None)
+        else:
+            if init not in init_methods:
+                raise ValueError(f"Invalid init method: {init}")
+            init_methods[init](self.weight, self.bias if bias else None)
+
+        self.precision = precision
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.linear(x, self.weight, self.bias)
+
+
+class LinearNoBias(Linear):
+    """
+    Linear layer with no bias.
+    """
+    __init__ = partialmethod(Linear.__init__, bias=False)
 
 
 class BiasInitLinear(Linear):
@@ -93,11 +208,92 @@ class BiasInitLinear(Linear):
             biasinit (float, optional): the initial bias value. Defaults to 0.0.
         """
         super(BiasInitLinear, self).__init__(
-            in_features=in_features, out_features=out_features, bias=bias
+            in_features=in_features,
+            out_features=out_features,
+            bias=bias,
+            init_fn=lambda w, b: bias_init_fn(w, b, biasinit)
         )
-        nn.init.zeros_(tensor=self.weight)
-        if bias:
-            nn.init.constant_(tensor=self.bias, val=biasinit)
+
+
+class LayerNorm(nn.LayerNorm):
+    """LayerNorm with bias=False by default."""
+    def __init__(
+            self,
+            normalized_shape: Union[int, Tuple[int, ...]],
+            eps: float = 1e-5,
+            elementwise_affine: bool = True,
+            bias: bool = False,
+            device: Optional[torch.device] = None,
+            dtype: Optional[torch.dtype] = None
+    ):
+        super().__init__(
+            normalized_shape=normalized_shape,
+            eps=eps,
+            elementwise_affine=elementwise_affine,
+            bias=bias,
+            device=device,
+            dtype=dtype
+        )
+
+
+class SwiGLU(nn.Module):
+    """SwiGLU layer that computes swish(Linear(a)) * Linear(b)"""
+    def __init__(
+            self,
+            c_in: int,
+            c_out: int
+    ) -> None:
+        """
+        Args:
+            c_in (int): Input channels
+            c_out (int): Output channels
+        """
+        super(SwiGLU, self).__init__()
+        self.c_in = c_in
+        self.c_out = c_out
+        self.linear = LinearNoBias(c_in, c_out * 2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """SwiGLU layer."""
+        a, b = self.linear(x).chunk(2, dim=-1)
+        output = F.silu(a) * b
+        return output
+
+
+class AdaptiveLayerNorm(nn.Module):
+    """
+    Implements Algorithm 26 in AF3
+    """
+
+    def __init__(self, c_a: int = 768, c_s: int = 384) -> None:
+        """
+        Args:
+            c_a (int, optional): the embedding dim of a(single feature aggregated atom info). Defaults to 768.
+            c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
+        """
+        super(AdaptiveLayerNorm, self).__init__()
+        self.layernorm_a = LayerNorm(c_a, elementwise_affine=False)
+        # The pytorch version should be newer than 2.1
+        self.layernorm_s = LayerNorm(c_s)
+        self.linear_s = BiasInitLinear(in_features=c_s, out_features=c_a, biasinit=1.0)  # gate values 0.73 @ init
+        self.linear_nobias_s = LinearNoBias(in_features=c_s, out_features=c_a, init="zeros")
+
+    def forward(self, a: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            a (torch.Tensor): the single feature aggregate per-atom representation
+                [..., N_token, c_a]
+            s (torch.Tensor): single embedding
+                [..., N_token, c_s]
+
+        Returns:
+            torch.Tensor: the updated a from AdaLN
+                [..., N_token, c_a]
+        """
+        a = self.layernorm_a(a)
+        s = self.layernorm_s(s)
+        a = torch.sigmoid(self.linear_s(s)) * a + self.linear_nobias_s(s)
+        return a
 
 
 class Transition(nn.Module):
@@ -114,14 +310,9 @@ class Transition(nn.Module):
         super(Transition, self).__init__()
         self.n = n
         self.c_in = c_in
-        self.layernorm1 = LayerNorm(c_in)
-        self.linear_no_bias_a = LinearNoBias(in_features=c_in, out_features=n * c_in)
-        self.linear_no_bias_b = LinearNoBias(in_features=c_in, out_features=n * c_in)
-        self.linear_no_bias = LinearNoBias(in_features=n * c_in, out_features=c_in)
-        self.zero_init()
-
-    def zero_init(self):
-        nn.init.zeros_(self.linear_no_bias.weight)
+        self.layernorm = LayerNorm(c_in)
+        self.swiglu = SwiGLU(c_in=c_in, c_out=n * c_in)
+        self.linear_no_bias = LinearNoBias(in_features=n * c_in, out_features=c_in, init="zeros")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -133,37 +324,9 @@ class Transition(nn.Module):
             torch.Tensor: the output tensor as the same shape of x
                 [..., c]
         """
-        if self.training:
-            x = self.layernorm1(x)
-            a = self.linear_no_bias_a(x)
-            b = self.linear_no_bias_b(x)
-            x = self.linear_no_bias(F.silu(a) * b)
-            return x
-        else:
-            other_dims = x.shape[:-1]
-            dim_size = x.shape[-1]
-            size = x.shape[-2]
-            x = x.reshape(-1, dim_size)
-            chunk_num = 1 if size < 3200 else 8
-            chunks = torch.chunk(x, chunk_num, dim=-2)
-            outputs = torch.empty(
-                (x.shape[0], self.c_in), dtype=x.dtype, device=x.device
-            )
-            start = 0
-            for chunk in chunks:
-                y = self.layernorm1(chunk)
-                a = self.linear_no_bias_a(y)
-                a = F.silu(a, True)
-                b = self.linear_no_bias_b(y)
-                del y
-                b *= a
-                del a
-                b = self.linear_no_bias(b)
-                outputs[start : start + b.shape[0]] = b
-                start += b.shape[0]
-                del b
-            outputs = outputs.reshape(*other_dims, self.c_in)
-            return outputs
+        x = self.layernorm(x)
+        x = self.linear_no_bias(self.swiglu(x))
+        return x
 
 
 def _attention(
@@ -616,24 +779,22 @@ class Attention(nn.Module):
 
         # DISCREPANCY: c_hidden is not the per-head channel dimension, as
         # stated in the supplement, but the overall channel dimension.
-        if q_linear_bias:
-            # Attention in AF3
-            self.linear_q = Linear(
-                in_features=self.c_q, out_features=self.c_hidden * self.num_heads
-            )
-        else:
-            # Vanilla attention
-            self.linear_q = LinearNoBias(self.c_q, self.c_hidden * self.num_heads)
-        self.linear_k = LinearNoBias(self.c_k, self.c_hidden * self.num_heads)
-        self.linear_v = LinearNoBias(self.c_v, self.c_hidden * self.num_heads)
-        self.linear_o = LinearNoBias(self.c_hidden * self.num_heads, self.c_q)
+        # Attention in AF3 vs vanilla attention
+        linear_layer = Linear if q_linear_bias else LinearNoBias
+        self.linear_q = linear_layer(
+            in_features=self.c_q, out_features=self.c_hidden * self.num_heads, init="glorot"
+        )
+        self.linear_k = LinearNoBias(self.c_k, self.c_hidden * self.num_heads, init="glorot")
+        self.linear_v = LinearNoBias(self.c_v, self.c_hidden * self.num_heads, init="glorot")
+        self.linear_o = LinearNoBias(self.c_hidden * self.num_heads, self.c_q, init="zeros")
         self.linear_g = None
         if self.gating:
             self.linear_g = LinearNoBias(self.c_q, self.c_hidden * self.num_heads)
             self.sigmoid = nn.Sigmoid()
-
-        # Zero init the output layer
-        nn.init.zeros_(self.linear_o.weight)
+    
+    def split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        """Split heads of tensor along the last dimension."""
+        return x.view(x.shape[:-1] + (self.num_heads, -1))
 
     def _prep_qkv(
         self, q_x: torch.Tensor, kv_x: torch.Tensor, apply_scale: bool = True
@@ -658,9 +819,9 @@ class Attention(nn.Module):
         v = self.linear_v(kv_x)
 
         # [*, Q/K/V, H, C_hidden]
-        q = q.view(q.shape[:-1] + (self.num_heads, -1))
-        k = k.view(k.shape[:-1] + (self.num_heads, -1))
-        v = v.view(v.shape[:-1] + (self.num_heads, -1))
+        q = self.split_heads(q)
+        k = self.split_heads(k)
+        v = self.split_heads(v)
 
         # [*, H, Q/K/V, C_hidden]
         q = q.transpose(-2, -3)
@@ -688,7 +849,7 @@ class Attention(nn.Module):
             g = self.sigmoid(self.linear_g(q_x))
 
             # [*, G/Q, H, C_hidden]
-            g = g.view(g.shape[:-1] + (self.num_heads, -1))
+            g = self.split_heads(g)
             o = o * g
 
         # [*, Q, H * C_hidden]

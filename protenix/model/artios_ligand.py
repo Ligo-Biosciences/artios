@@ -13,7 +13,7 @@ from protenix.model.generator import (
     sample_diffusion
 )
 from protenix.utils.torch_utils import autocasting_disable_decorator
-
+from protenix.utils.utils import _add
 
 class ArtiosLigand(nn.Module):
     def __init__(self, configs):
@@ -143,16 +143,11 @@ class ArtiosLigand(nn.Module):
         )  #  [..., N_token, N_token, c_z]
 
         # Add relative position encoding and token bonds to pair embeddings
-        if inplace_safe:
-            z_init += self.relative_position_encoding(input_feature_dict)
-            z_init += self.linear_no_bias_token_bonds(
-                input_feature_dict["token_bonds"].unsqueeze(dim=-1)
-            )
-        else:
-            z_init = z_init + self.relative_position_encoding(input_feature_dict)
-            z_init = z_init + self.linear_no_bias_token_bonds(
-                input_feature_dict["token_bonds"].unsqueeze(dim=-1)
-            )
+        pos_enc = self.relative_position_encoding(input_feature_dict)
+        z_init = _add(z_init, pos_enc, in_place_safe=inplace_safe)
+
+        token_bonds_emb = self.linear_no_bias_token_bonds(input_feature_dict["token_bonds"].unsqueeze(dim=-1))
+        z_init = _add(z_init, token_bonds_emb, in_place_safe=inplace_safe)
 
         z = z_init
         s = s_init

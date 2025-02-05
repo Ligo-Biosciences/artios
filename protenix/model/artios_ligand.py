@@ -140,15 +140,15 @@ class ArtiosLigand(nn.Module):
         z_init = _add(
             self.linear_no_bias_z_init1(s_init)[..., None, :],
             self.linear_no_bias_z_init2(s_init)[..., None, :, :],
-            in_place_safe=inplace_safe
+            inplace_safe=inplace_safe
         )  #  [..., N_token, N_token, c_z]
 
         # Add relative position encoding and token bonds to pair embeddings
         pos_enc = self.relative_position_encoding(input_feature_dict)
-        z_init = _add(z_init, pos_enc, in_place_safe=inplace_safe)
+        z_init = _add(z_init, pos_enc, inplace_safe=inplace_safe)
 
         token_bonds_emb = self.linear_no_bias_token_bonds(input_feature_dict["token_bonds"].unsqueeze(dim=-1))
-        z_init = _add(z_init, token_bonds_emb, in_place_safe=inplace_safe)
+        z_init = _add(z_init, token_bonds_emb, inplace_safe=inplace_safe)
 
         z = z_init
         s = s_init

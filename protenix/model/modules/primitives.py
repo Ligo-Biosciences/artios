@@ -29,6 +29,7 @@ from protenix.model.utils import (
 )
 from protenix.openfold_local.model.primitives import LayerNorm
 from protenix.openfold_local.utils.chunk_utils import chunk_layer
+from protenix.utils.utils import _add
 
 LinearNoBias = partial(Linear, bias=False)
 
@@ -204,10 +205,7 @@ def _attention(
     attn_weights = q @ k
 
     if attn_bias is not None:
-        if inplace_safe:
-            attn_weights += attn_bias
-        else:
-            attn_weights = attn_weights + attn_bias
+        attn_weights = _add(attn_weights, attn_bias, inplace_safe=inplace_safe)
 
     # [..., n_q, n_kv]
     attn_weights = F.softmax(attn_weights, dim=-1)
@@ -765,10 +763,7 @@ class Attention(nn.Module):
                     (1,) * (len(q.shape[:-2])) + local_attn_bias.shape
                 )
                 if attn_bias is not None:
-                    if inplace_safe:
-                        local_attn_bias += attn_bias
-                    else:
-                        local_attn_bias = local_attn_bias + attn_bias
+                    local_attn_bias = _add(local_attn_bias, attn_bias, inplace_safe=inplace_safe)
                 o = _attention(
                     q=q,
                     k=k,

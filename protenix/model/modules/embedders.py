@@ -50,7 +50,7 @@ class InputFeatureEmbedder(nn.Module):
             has_coords=False,
         )
         # Line2
-        self.input_feature = {"restype": 32, "profile": 32, "deletion_mean": 1}
+        self.input_feature = {"restype": 21} # {"restype": 32, "profile": 32, "deletion_mean": 1}
 
     def forward(
         self,
@@ -66,7 +66,7 @@ class InputFeatureEmbedder(nn.Module):
 
         Returns:
             torch.Tensor: token embedding
-                [..., N_token, 384 (c_token) + 32 + 32 + 1 :=449]
+                [..., N_token, 384 (c_token) + 21 :=405] # 384 (c_token) + 32 + 32 + 1 :=449
         """
         # Embed per-atom features.
         a, _, _, _ = self.atom_attention_encoder(
@@ -75,7 +75,6 @@ class InputFeatureEmbedder(nn.Module):
             chunk_size=chunk_size,
         )  # [..., N_token, c_token]
         # Concatenate the per-token features.
-        # TODO: delete useless token-level features 
         batch_shape = input_feature_dict["restype"].shape[:-1]
         s_inputs = torch.cat(
             [a]
@@ -85,6 +84,7 @@ class InputFeatureEmbedder(nn.Module):
             ],
             dim=-1,
         )
+        
         return s_inputs
 
 

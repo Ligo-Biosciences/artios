@@ -26,10 +26,10 @@ from protenix.model.utils import (
     move_final_dim_to_dim,
     pad_at_dim,
     reshape_at_dim,
+    _add
 )
 from protenix.openfold_local.model.primitives import LayerNorm
 from protenix.openfold_local.utils.chunk_utils import chunk_layer
-from protenix.utils.utils import _add
 
 LinearNoBias = partial(Linear, bias=False)
 

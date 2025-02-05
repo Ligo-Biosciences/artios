@@ -21,6 +21,30 @@ from scipy.spatial.transform import Rotation
 
 from protenix.utils.scatter_utils import scatter
 
+def _add(a, b, inplace_safe: bool = False):
+    """
+    Add two objects with optional in-place modification.
+
+    Args:
+        a: First object to add
+        b: Second object to add 
+        in_place (bool): If True, modifies first argument in place. Defaults to False.
+
+    Returns:
+        The sum of the two objects
+    """
+    if inplace_safe:
+        a += b
+        return a
+    else:
+        return a + b
+
+def _mul(a, b, inplace_safe: bool = False):
+    if inplace_safe:
+        a *= b
+        return a
+    else:
+        return a * b
 
 def centre_random_augmentation(
     x_input_coords: torch.Tensor,

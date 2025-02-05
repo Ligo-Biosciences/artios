@@ -137,9 +137,10 @@ class ArtiosLigand(nn.Module):
             input_feature_dict, inplace_safe=False, chunk_size=chunk_size
         )  # [..., N_token, 449] TODO: is 449 c_token? Why not set in configs?
         s_init = self.linear_no_bias_s_init(s_inputs)  #  [..., N_token, c_s]
-        z_init = (
-            self.linear_no_bias_z_init1(s_init)[..., None, :]
-            + self.linear_no_bias_z_init2(s_init)[..., None, :, :]
+        z_init = _add(
+            self.linear_no_bias_z_init1(s_init)[..., None, :],
+            self.linear_no_bias_z_init2(s_init)[..., None, :, :],
+            in_place_safe=inplace_safe
         )  #  [..., N_token, N_token, c_z]
 
         # Add relative position encoding and token bonds to pair embeddings

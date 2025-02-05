@@ -25,9 +25,8 @@ from protenix.model.modules.transformer import (
     DiffusionTransformer,
 )
 from protenix.model.utils import expand_at_dim
-from protenix.openfold_local.model.primitives import LayerNorm
+from protenix.model.modules.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
-
 
 class DiffusionConditioning(nn.Module):
     """
@@ -277,55 +276,6 @@ class DiffusionModule(nn.Module):
             c_atompair=c_atompair,
             blocks_per_ckpt=blocks_per_ckpt,
         )
-        self.init_parameters(initialization)
-
-    def init_parameters(self, initialization: dict):
-        """
-        Initializes the parameters of the diffusion module according to the provided initialization configuration.
-
-        Args:
-            initialization (dict): A dictionary containing initialization settings.
-        """
-        if initialization.get("zero_init_condition_transition", False):
-            self.diffusion_conditioning.transition_z1.zero_init()
-            self.diffusion_conditioning.transition_z2.zero_init()
-            self.diffusion_conditioning.transition_s1.zero_init()
-            self.diffusion_conditioning.transition_s2.zero_init()
-
-        self.atom_attention_encoder.linear_init(
-            zero_init_atom_encoder_residual_linear=initialization.get(
-                "zero_init_atom_encoder_residual_linear", False
-            ),
-            he_normal_init_atom_encoder_small_mlp=initialization.get(
-                "he_normal_init_atom_encoder_small_mlp", False
-            ),
-            he_normal_init_atom_encoder_output=initialization.get(
-                "he_normal_init_atom_encoder_output", False
-            ),
-        )
-
-        if initialization.get("glorot_init_self_attention", False):
-            for (
-                block
-            ) in (
-                self.atom_attention_encoder.atom_transformer.diffusion_transformer.blocks
-            ):
-                block.attention_pair_bias.glorot_init()
-
-        for block in self.diffusion_transformer.blocks:
-            if initialization.get("zero_init_adaln", False):
-                block.attention_pair_bias.layernorm_a.zero_init()
-                block.conditioned_transition_block.adaln.zero_init()
-            if initialization.get("zero_init_residual_condition_transition", False):
-                nn.init.zeros_(
-                    block.conditioned_transition_block.linear_nobias_b.weight
-                )
-
-        if initialization.get("zero_init_atom_decoder_linear", False):
-            nn.init.zeros_(self.atom_attention_decoder.linear_no_bias_a.weight)
-
-        if initialization.get("zero_init_dit_output", False):
-            nn.init.zeros_(self.atom_attention_decoder.linear_no_bias_out.weight)
 
     def f_forward(
         self,

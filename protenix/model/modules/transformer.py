@@ -32,7 +32,7 @@ from protenix.model.utils import (
     broadcast_token_to_atom,
     permute_final_dims,
 )
-from protenix.openfold_local.model.primitives import LayerNorm
+from protenix.model.modules.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import checkpoint_blocks
 
 
@@ -87,12 +87,6 @@ class AttentionPairBias(nn.Module):
         self.layernorm_z = LayerNorm(c_z)
         # Alg24. Line8 is scalar, but this is different for different heads
         self.linear_nobias_z = LinearNoBias(in_features=c_z, out_features=n_heads)
-
-    def glorot_init(self):
-        nn.init.xavier_uniform_(self.attention.linear_q.weight)
-        nn.init.xavier_uniform_(self.attention.linear_k.weight)
-        nn.init.xavier_uniform_(self.attention.linear_v.weight)
-        nn.init.zeros_(self.attention.linear_q.bias)
 
     def local_multihead_attention(
         self,
@@ -592,40 +586,40 @@ class AtomAttentionEncoder(nn.Module):
             in_features=3, out_features=self.c_atompair
         )
         self.linear_no_bias_invd = LinearNoBias(
-            in_features=1, out_features=self.c_atompair
+            in_features=1, out_features=self.c_atompair, init="zeros"
         )
         self.linear_no_bias_v = LinearNoBias(
-            in_features=1, out_features=self.c_atompair
+            in_features=1, out_features=self.c_atompair, init="zeros"
         )
 
         if self.has_coords:
             # Line9
             self.layernorm_s = LayerNorm(self.c_s)
             self.linear_no_bias_s = LinearNoBias(
-                in_features=self.c_s, out_features=self.c_atom
+                in_features=self.c_s, out_features=self.c_atom, init="zeros"
             )
             # Line10
             self.layernorm_z = LayerNorm(self.c_z)  # memory bottleneck
             self.linear_no_bias_z = LinearNoBias(
-                in_features=self.c_z, out_features=self.c_atompair
+                in_features=self.c_z, out_features=self.c_atompair, init="zeros"
             )
             # Line11
             self.linear_no_bias_r = LinearNoBias(
-                in_features=3, out_features=self.c_atom
+                in_features=3, out_features=self.c_atom, init="zeros"
             )
         self.linear_no_bias_cl = LinearNoBias(
-            in_features=self.c_atom, out_features=self.c_atompair
+            in_features=self.c_atom, out_features=self.c_atompair, init="zeros"
         )
         self.linear_no_bias_cm = LinearNoBias(
-            in_features=self.c_atom, out_features=self.c_atompair
+            in_features=self.c_atom, out_features=self.c_atompair, init="zeros"
         )
         self.small_mlp = nn.Sequential(
             nn.ReLU(),
-            LinearNoBias(in_features=self.c_atompair, out_features=self.c_atompair),
+            LinearNoBias(in_features=self.c_atompair, out_features=self.c_atompair, init="relu"),
             nn.ReLU(),
-            LinearNoBias(in_features=self.c_atompair, out_features=self.c_atompair),
+            LinearNoBias(in_features=self.c_atompair, out_features=self.c_atompair, init="relu"),
             nn.ReLU(),
-            LinearNoBias(in_features=self.c_atompair, out_features=self.c_atompair),
+            LinearNoBias(in_features=self.c_atompair, out_features=self.c_atompair, init="relu"),
         )
         self.atom_transformer = AtomTransformer(
             n_blocks=n_blocks,
@@ -637,45 +631,8 @@ class AtomAttentionEncoder(nn.Module):
             blocks_per_ckpt=blocks_per_ckpt,
         )
         self.linear_no_bias_q = LinearNoBias(
-            in_features=self.c_atom, out_features=self.c_token
+            in_features=self.c_atom, out_features=self.c_token, init="relu"
         )
-
-    def linear_init(
-        self,
-        zero_init_atom_encoder_residual_linear: bool = False,
-        he_normal_init_atom_encoder_small_mlp: bool = False,
-        he_normal_init_atom_encoder_output: bool = False,
-    ):
-        """
-        Initializes the parameters of the diffusion module according to the provided initialization configuration.
-
-        Args:
-            zero_init_atom_encoder_residual_linear (bool): Whether to zero-initialize the residual linear layers.
-            he_normal_init_atom_encoder_small_mlp (bool): Whether to initialize the small MLP layers with He normal initialization.
-            he_normal_init_atom_encoder_output (bool): Whether to initialize the output layer with He normal initialization.
-        """
-
-        if zero_init_atom_encoder_residual_linear:
-            nn.init.zeros_(self.linear_no_bias_invd.weight)
-            nn.init.zeros_(self.linear_no_bias_v.weight)
-            nn.init.zeros_(self.linear_no_bias_s.weight)
-            nn.init.zeros_(self.linear_no_bias_z.weight)
-            nn.init.zeros_(self.linear_no_bias_r.weight)
-            nn.init.zeros_(self.linear_no_bias_cl.weight)
-            nn.init.zeros_(self.linear_no_bias_cm.weight)
-        if he_normal_init_atom_encoder_small_mlp:
-            for layer in self.small_mlp:
-                if not isinstance(layer, torch.nn.modules.activation.ReLU):
-                    nn.init.kaiming_normal_(
-                        layer.weight,
-                        a=0,
-                        mode="fan_in",
-                        nonlinearity="relu",
-                    )
-        if he_normal_init_atom_encoder_output:
-            nn.init.kaiming_normal_(
-                self.linear_no_bias_q.weight, a=0, mode="fan_in", nonlinearity="relu"
-            )
 
     def forward(
         self,

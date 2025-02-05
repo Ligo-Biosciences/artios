@@ -118,8 +118,8 @@ class ArtiosLigand(nn.Module):
         # This function is an attempt at unifying the code from main_train_loop(), main_inference_loop() and forward()
         # which all feature some fairly clunky boilerplate and common code.
         # TODO: Unfinished. Need to add main_inference_loop logic after the _main_inference_loop() section.
-        # TODO: Look into changing the inputs such that this function takes in noisy coords. This will be neater and will
-        # eliminate the need for seperate training and inference sections. 
+        # TODO: It will be neat if this function takes in noisy_coords and just performs denoising. This will require moving the 
+        # seperate training and inference logic elsewhere which will be easier with lightning.
 
         N_token = input_feature_dict["residue_index"].shape[-1]
         if N_token <= 16:

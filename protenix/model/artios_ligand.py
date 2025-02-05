@@ -120,6 +120,9 @@ class ArtiosLigand(nn.Module):
         # TODO: Unfinished. Need to add main_inference_loop logic after the _main_inference_loop() section.
         # TODO: It will be neat if this function takes in noisy_coords and just performs denoising. This will require moving the 
         # seperate training and inference logic elsewhere which will be easier with lightning.
+        # This will require a lot of refactoring, including a noise generator (we can keep generator.py?), the noising of the coords
+        # (which should take place in the model_step of the lightning module), a seperate sampler.py file that performs the sampling 
+        # in the many ways we will sampling to occur,
 
         N_token = input_feature_dict["residue_index"].shape[-1]
         if N_token <= 16:
@@ -150,11 +153,12 @@ class ArtiosLigand(nn.Module):
         token_bonds_emb = self.linear_no_bias_token_bonds(input_feature_dict["token_bonds"].unsqueeze(dim=-1))
         z_init = _add(z_init, token_bonds_emb, inplace_safe=inplace_safe)
 
+        # Initialize z and s
         z = z_init
         s = s_init
 
+        # Training logic (mainly from main_train_loop)
         if self.training:
-            # Training logic from main_train_loop
             N_sample = self.diffusion_batch_size
             _, x_denoised, x_noise_level = autocasting_disable_decorator(
                 self.configs.skip_amp.sample_diffusion_training
@@ -222,8 +226,8 @@ class ArtiosLigand(nn.Module):
                 )
                 log_dict.update(perm_log_dict)
 
+        # Inference logic (mainly from _main_inference_loop)
         if not self.training:
-            # Inference logic from _main_inference_loop
             keys_to_delete = []
             for key in input_feature_dict.keys():
                 if "template_" in key or key in [

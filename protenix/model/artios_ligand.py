@@ -283,4 +283,16 @@ class ArtiosLigand(nn.Module):
             
             # TODO: add in the main_inference_loop logic 
 
+            # all_pred_dict = {
+            #     "summary_confidence": _list_join(pred_dicts, "summary_confidence"),
+            #     "full_data": _list_join(pred_dicts, "full_data"),
+            #     "plddt": _cat(pred_dicts, "plddt"),
+            #     "pae": _cat(pred_dicts, "pae"),
+            #     "pde": _cat(pred_dicts, "pde"),
+            #     "resolved": _cat(pred_dicts, "resolved"),
+            # }
+
+            # all_log_dict = simple_merge_dict_list(log_dicts)
+
+
         return pred_dict, label_dict, log_dict

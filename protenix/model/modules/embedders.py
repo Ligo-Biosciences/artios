@@ -50,7 +50,8 @@ class InputFeatureEmbedder(nn.Module):
             has_coords=False,
         )
         # Line2
-        self.input_feature = {"restype": 21} # {"restype": 32, "profile": 32, "deletion_mean": 1}
+        # TODO: Since we're just working with ligands and glycine, restype is 2?
+        self.input_feature = {"restype": 2} # {"restype": 32, "profile": 32, "deletion_mean": 1}
 
     def forward(
         self,
@@ -66,7 +67,7 @@ class InputFeatureEmbedder(nn.Module):
 
         Returns:
             torch.Tensor: token embedding
-                [..., N_token, 384 (c_token) + 21 :=405]
+                [..., N_token, 384 (c_token) + 2 := 386]
         """
         # Embed per-atom features.
         a, _, _, _ = self.atom_attention_encoder(

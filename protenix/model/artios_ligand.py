@@ -85,7 +85,6 @@ class ArtiosLigand(nn.Module):
         self,
         input_feature_dict: dict[str, Any],
         label_dict: dict[str, Any],
-        N_cycle: int,
         mode: str,
         inplace_safe: bool = True,
         chunk_size: Optional[int] = 4,
@@ -98,7 +97,6 @@ class ArtiosLigand(nn.Module):
         Args:
             input_feature_dict (dict[str, Any]): Input features dictionary.
             label_dict (dict[str, Any]): Label dictionary.
-            N_cycle (int): Number of cycles.
             mode (str): Mode of operation (e.g., 'inference').
             inplace_safe (bool): Whether to use inplace operations safely. Defaults to True.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to 4.
@@ -115,7 +113,6 @@ class ArtiosLigand(nn.Module):
             pred_dict, log_dict, time_tracker = self._main_inference_loop(
                 input_feature_dict=input_feature_dict,
                 label_dict=label_dict,
-                N_cycle=N_cycle,
                 mode=mode,
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
@@ -153,7 +150,6 @@ class ArtiosLigand(nn.Module):
         self,
         input_feature_dict: dict[str, Any],
         label_dict: dict[str, Any],
-        N_cycle: int,
         mode: str,
         inplace_safe: bool = True,
         chunk_size: Optional[int] = 4,
@@ -184,7 +180,6 @@ class ArtiosLigand(nn.Module):
         )
 
         if mode == "inference":
-            # TODO: this code is not needed for us as we do not use templates, msa, etc.
             keys_to_delete = []
             for key in input_feature_dict.keys():
                 if "template_" in key or key in [
@@ -307,7 +302,6 @@ class ArtiosLigand(nn.Module):
         input_feature_dict: dict[str, Any],
         label_full_dict: dict[str, Any],
         label_dict: dict,
-        N_cycle: int,
         symmetric_permutation: SymmetricPermutation,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
@@ -319,7 +313,6 @@ class ArtiosLigand(nn.Module):
             input_feature_dict (dict[str, Any]): Input features dictionary.
             label_full_dict (dict[str, Any]): Full label dictionary (uncropped).
             label_dict (dict): Label dictionary (cropped).
-            N_cycle (int): Number of cycles.
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object.
             inplace_safe (bool): Whether to use inplace operations safely. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
@@ -471,7 +464,6 @@ class ArtiosLigand(nn.Module):
 
         if mode == "train":
             nc_rng = np.random.RandomState(current_step)
-            N_cycle = nc_rng.randint(1, self.N_cycle + 1)
             assert self.training
             assert label_dict is not None
             assert symmetric_permutation is not None
@@ -480,7 +472,6 @@ class ArtiosLigand(nn.Module):
                 input_feature_dict=input_feature_dict,
                 label_full_dict=label_full_dict,
                 label_dict=label_dict,
-                N_cycle=N_cycle,
                 symmetric_permutation=symmetric_permutation,
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
@@ -489,7 +480,6 @@ class ArtiosLigand(nn.Module):
             pred_dict, log_dict, time_tracker = self.main_inference_loop(
                 input_feature_dict=input_feature_dict,
                 label_dict=None,
-                N_cycle=self.N_cycle,
                 mode=mode,
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
@@ -508,7 +498,6 @@ class ArtiosLigand(nn.Module):
             pred_dict, log_dict, time_tracker = self.main_inference_loop(
                 input_feature_dict=input_feature_dict,
                 label_dict=label_dict,
-                N_cycle=self.N_cycle,
                 mode=mode,
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,

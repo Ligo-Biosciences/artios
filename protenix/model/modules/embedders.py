@@ -50,7 +50,7 @@ class InputFeatureEmbedder(nn.Module):
             has_coords=False,
         )
         # Line2
-        self.input_feature = {"restype": 2} # {"restype": 32, "profile": 32, "deletion_mean": 1}
+        self.input_feature = {"restype": 32} # {"restype": 32, "profile": 32, "deletion_mean": 1}
 
     def forward(
         self,
@@ -66,7 +66,7 @@ class InputFeatureEmbedder(nn.Module):
 
         Returns:
             torch.Tensor: token embedding
-                [..., N_token, 384 (c_token) + 2 := 386]
+                [..., N_token, 384 (c_token) + 32 (c_atompair) := 416]
         """
         # Embed per-atom features.
         a, _, _, _ = self.atom_attention_encoder(

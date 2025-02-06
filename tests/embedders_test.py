@@ -14,7 +14,8 @@ class TestInputFeatureEmbedder:
 
     @pytest.fixture
     def sample_data(self):
-        data_path = "/Users/baharalan/Developer/artios-ligand/tests/testdata/sample_data_dict.pt"
+        data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt") #data_path = "/Users/baharalan/Developer/artios-ligand/tests/testdata/sample_data_dict.pt" 
+
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
         return torch.load(data_path)["input_feature_dict"]
@@ -37,7 +38,7 @@ class TestInputFeatureEmbedder:
         out = embedder(input_dict)
 
         # Check output shape
-        expected_dim = c_token + 21 # 449 as per docstring TODO: update since removed certain restypes 
+        expected_dim = c_token + 32 # 449 as per docstring TODO: update since removed certain restypes 
         assert out.shape[-1] == expected_dim
         assert out.shape[:-1] == input_dict["restype"].shape[:-1]
         assert not torch.isnan(out).any()

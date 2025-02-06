@@ -58,17 +58,17 @@ class DiffusionConditioning(nn.Module):
 
         ### From Main Inference Loop
         # Line 2-3
+        self.layernorm_s_init = LayerNorm(self.c_s_inputs)
         self.linear_no_bias_s_init = LinearNoBias(in_features=self.c_s_inputs, out_features=self.c_s) 
-        self.linear_no_bias_z_init1 = LinearNoBias(in_features=self.c_s, out_features=self.c_z)
-        self.linear_no_bias_z_init2 = LinearNoBias(in_features=self.c_s, out_features=self.c_z)
+        self.linear_no_bias_z_init_i = LinearNoBias(in_features=self.c_s, out_features=self.c_z)
+        self.linear_no_bias_z_init_j = LinearNoBias(in_features=self.c_s, out_features=self.c_z)
 
         # Line 4-5
-        self.relpe1 = RelativePositionEncoding(c_z=c_z)
         self.linear_no_bias_token_bonds = LinearNoBias(in_features=1, out_features=self.c_z)
 
         ### From Diffusion Conditioning
         #  Line 1-2
-        self.relpe2 = RelativePositionEncoding(c_z=c_z)
+        self.relpe = RelativePositionEncoding(c_z=c_z)
         self.layernorm_z = LayerNorm(2 * self.c_z)
         self.linear_no_bias_z = LinearNoBias(
             in_features=2 * self.c_z, out_features=self.c_z
@@ -76,11 +76,6 @@ class DiffusionConditioning(nn.Module):
         # Line 3-5:
         self.transition_z = Transition(c_in=self.c_z, n=2)
 
-        # Line 6-7
-        self.layernorm_s = LayerNorm(self.c_s)
-        self.linear_no_bias_s = LinearNoBias(
-            in_features=self.c_s, out_features=self.c_s
-        )
         # Line 8-9
         self.fourier_embedding = FourierEmbedding(c=c_noise_embedding)
         self.layernorm_n = LayerNorm(c_noise_embedding)
@@ -114,68 +109,53 @@ class DiffusionConditioning(nn.Module):
         """
         ### Logic from Main Inference Loop (Algorithm 1)
         # Create single embedding from s_inputs (Line 2)
-        s_init = self.linear_no_bias_s_init(s_inputs) 
+        s = self.linear_no_bias_s_init(self.layernorm_s_init(s_inputs)) 
 
         # Create pair embedding from s_init (Line 3)
-        z_init = add(
-            self.linear_no_bias_z_init1(s_init)[..., None, :],
-            self.linear_no_bias_z_init2(s_init)[..., None, :, :],
+        z = add(
+            self.linear_no_bias_z_init_i(s)[..., None, :],
+            self.linear_no_bias_z_init_j(s)[..., None, :, :],
         )  #  [..., N_token, N_token, c_z]
 
-        # Add relative position encoding to pair embedding (Line 4)
-        z_init = add(
-            z_init,
-            self.relpe1(input_feature_dict),
-            inplace_safe=inplace_safe
-        )
-
         # Add token bonds to pair embedding (Line 5)
-        z_init = add(
-            z_init,
+        z = add(
+            z,
             self.linear_no_bias_token_bonds(input_feature_dict["token_bonds"].unsqueeze(-1)),
             inplace_safe=inplace_safe
         )
 
         ### Logic from Diffusion Conditioning (Algorithm 21)
         # Concatenate z_init with relative position encoding and embed (Line 1)
-        pair_z = torch.cat(
-            tensors=[z_init, self.relpe2(input_feature_dict)], dim=-1 #TODO: probably not needed, we just added pos encs, why repeat
+        z = torch.cat(
+            tensors=[z, self.relpe(input_feature_dict)], dim=-1 
         ) # [..., N_tokens, N_tokens, 2*c_z]
 
         # Normalise and embed pair embedding (Line 2)
-        pair_z = self.linear_no_bias_z(self.layernorm_z(pair_z)) 
+        z = self.linear_no_bias_z(self.layernorm_z(z)) 
 
         # Send pair embedding through one transition (Line 3-5)
-        pair_z = add(pair_z, self.transition_z(pair_z), inplace_safe=inplace_safe)
-
-        # concat s_trunk and s_inputs ABLATED (Line 6)
-
-        # single_s made from sending s_init through layer norm and LinearNoBias (Line 7)
-        single_s = self.linear_no_bias_s(self.layernorm_s(s_init))
+        z = add(z, self.transition_z(z), inplace_safe=inplace_safe)
 
         # Fourier embed the noise level (Line 8)
         noise_n = self.fourier_embedding(
             t_hat_noise_level=torch.log(input=t_hat_noise_level / self.sigma_data) / 4
         ).to(
-            single_s.dtype
+            s.dtype
         )  # [..., N_sample, c_in]
         
         # Normalise, embed noise and add to single embed (Line 9)
-        single_s = add(
-            single_s.unsqueeze(dim=-3),
+        s = add(
+            s.unsqueeze(dim=-3),
             self.linear_no_bias_n(
                 self.layernorm_n(noise_n)
             ).unsqueeze(dim=-2)
         )  # [..., N_sample, N_tokens, c_s]
         
         # Send single embedding through two transitions (Line 10-12)
-        single_s = add(single_s, self.transition_s1(single_s), inplace_safe=inplace_safe)
-        single_s = add(single_s, self.transition_s2(single_s), inplace_safe=inplace_safe)
+        s = add(s, self.transition_s1(s), inplace_safe=inplace_safe)
+        s = add(s, self.transition_s2(s), inplace_safe=inplace_safe)
  
-        if not self.training and pair_z.shape[-2] > 2000:
-            torch.cuda.empty_cache()
-
-        return single_s, pair_z
+        return s, z
 
 
 class DiffusionSchedule:
@@ -312,7 +292,7 @@ class DiffusionModule(nn.Module):
             blocks_per_ckpt=blocks_per_ckpt,
         )
 
-    def f_forward(
+    def f_forward( #TODO: change to s and z's instead of single_s and pair_z
         self,
         r_noisy: torch.Tensor,
         t_hat_noise_level: torch.Tensor,

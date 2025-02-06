@@ -87,7 +87,7 @@ model_configs = {
     # Model
     "c_s": 384,
     "c_z": 128,
-    "c_s_inputs": 449,  # c_s_inputs == c_token + 32 + 32 + 1
+    "c_s_inputs": 449,  # TODO: needs updating. c_s_inputs == c_token + 32 + 32 + 1
     "c_atom": 128,
     "c_atompair": 16,
     "c_token": 384,

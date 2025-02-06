@@ -58,7 +58,7 @@ class DiffusionConditioning(nn.Module):
 
         ### From Main Inference Loop
         # Line 2-3
-        self.linear_no_bias_s_inputs = LinearNoBias(in_features=self.c_s_inputs, out_features=self.c_s) 
+        self.linear_no_bias_s_init = LinearNoBias(in_features=self.c_s_inputs, out_features=self.c_s) 
         self.linear_no_bias_z_init1 = LinearNoBias(in_features=self.c_s, out_features=self.c_z)
         self.linear_no_bias_z_init2 = LinearNoBias(in_features=self.c_s, out_features=self.c_z)
 
@@ -114,7 +114,7 @@ class DiffusionConditioning(nn.Module):
         """
         ### Logic from Main Inference Loop (Algorithm 1)
         # Create single embedding from s_inputs (Line 2)
-        s_init = self.linear_no_bias_s_inputs(s_inputs) 
+        s_init = self.linear_no_bias_s_init(s_inputs) 
 
         # Create pair embedding from s_init (Line 3)
         z_init = add(

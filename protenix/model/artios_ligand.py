@@ -49,7 +49,7 @@ class ArtiosLigand(nn.Module):
             **configs.model.diffusion_module
         )
 
-        # TODO: delete all these linears and relpos
+        # TODO: delete all these linears and relpos.
         self.linear_no_bias_s_init = LinearNoBias(
             in_features=self.c_s_inputs, out_features=self.c_s
         )

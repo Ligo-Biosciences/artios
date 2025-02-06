@@ -66,7 +66,7 @@ class InputFeatureEmbedder(nn.Module):
 
         Returns:
             torch.Tensor: token embedding
-                [..., N_token, 384 (c_token) + 21 :=405] # 384 (c_token) + 32 + 32 + 1 :=449
+                [..., N_token, 384 (c_token) + 21 :=405]
         """
         # Embed per-atom features.
         a, _, _, _ = self.atom_attention_encoder(

@@ -183,11 +183,7 @@ class Linear(nn.Linear):
         return F.linear(x, self.weight, self.bias)
 
 
-class LinearNoBias(Linear):
-    """
-    Linear layer with no bias.
-    """
-    __init__ = partialmethod(Linear.__init__, bias=False)
+LinearNoBias = partial(Linear, bias=False)
 
 
 class BiasInitLinear(Linear):

@@ -39,7 +39,7 @@ class DiffusionConditioning(nn.Module):
         sigma_data: float = 16.0,
         c_z: int = 128,
         c_s: int = 384,
-        c_s_inputs: int = 405,
+        c_s_inputs: int = 386,
         c_noise_embedding: int = 256,
     ) -> None:
         """

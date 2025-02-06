@@ -1383,12 +1383,7 @@ class ProtenixLoss(nn.Module):
         super(ProtenixLoss, self).__init__()
         self.configs = configs
 
-        self.alpha_confidence = self.configs.loss.weight.alpha_confidence #TODO: loss weights in configs will need updating
-        self.alpha_pae = self.configs.loss.weight.alpha_pae
-        self.alpha_except_pae = self.configs.loss.weight.alpha_except_pae
         self.alpha_diffusion = self.configs.loss.weight.alpha_diffusion
-        self.alpha_distogram = self.configs.loss.weight.alpha_distogram
-        self.alpha_bond = self.configs.loss.weight.alpha_bond
         self.weight_smooth_lddt = self.configs.loss.weight.smooth_lddt
 
         self.lddt_radius = {
@@ -1397,28 +1392,20 @@ class ProtenixLoss(nn.Module):
         }
 
         self.loss_weight = {  
-            # confidence
-            "plddt_loss": self.alpha_confidence * self.alpha_except_pae,
-            "pde_loss": self.alpha_confidence * self.alpha_except_pae,
-            "resolved_loss": self.alpha_confidence * self.alpha_except_pae,
-            "pae_loss": self.alpha_confidence * self.alpha_pae,
             # diffusion
             "mse_loss": self.alpha_diffusion,
-            "bond_loss": self.alpha_diffusion * self.alpha_bond,
             "smooth_lddt_loss": self.alpha_diffusion
             * self.weight_smooth_lddt,  # Different from AF3 appendix eq(6), where smooth_lddt has no weight
-            # distogram
-            "distogram_loss": self.alpha_distogram,
         }
 
-        self.plddt_loss = PLDDTLoss(**configs.loss.plddt, **self.lddt_radius) 
-        self.pde_loss = PDELoss(**configs.loss.pde)
-        self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
-        self.pae_loss = PAELoss(**configs.loss.pae)
+        #self.plddt_loss = PLDDTLoss(**configs.loss.plddt, **self.lddt_radius) 
+        #self.pde_loss = PDELoss(**configs.loss.pde)
+        #self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
+        #self.pae_loss = PAELoss(**configs.loss.pae)
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
-        self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
+        #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
-        self.distogram_loss = DistogramLoss(**configs.loss.distogram)
+        #self.distogram_loss = DistogramLoss(**configs.loss.distogram)
 
     def calculate_label(
         self,
@@ -1451,14 +1438,14 @@ class ProtenixLoss(nn.Module):
             label_dict["coordinate"].dtype
         )  # [..., N_atom, N_atom]
 
-        lddt_mask = compute_lddt_mask( # TODO: delete
+        lddt_mask = compute_lddt_mask( 
             true_distance=distance,
             distance_mask=distance_mask,
             is_nucleotide=feat_dict["is_rna"].bool() + feat_dict["is_dna"].bool(),
             **self.lddt_radius,
         )
 
-        label_dict["lddt_mask"] = lddt_mask #TODO: delete
+        label_dict["lddt_mask"] = lddt_mask 
         label_dict["distance_mask"] = distance_mask
         if not self.configs.loss_metrics_sparse_enable:
             label_dict["distance"] = distance
@@ -1556,8 +1543,6 @@ class ProtenixLoss(nn.Module):
         """
         assert mode in ["train", "eval", "inference"]
         if mode == "train":
-            # Confidence Loss: use mini-rollout coordinates
-            confidence_coordinate = "coordinate_mini"
             if not self.configs.train_confidence_only:
                 # Scale diffusion loss with noise-level
                 diffusion_per_sample_scale = (
@@ -1565,8 +1550,6 @@ class ProtenixLoss(nn.Module):
                 ) / (self.configs.sigma_data * pred_dict["noise_level"]) ** 2
 
         else:
-            # Confidence Loss: use diffusion coordinates
-            confidence_coordinate = "coordinate"
             # No scale is required
             diffusion_per_sample_scale = None
 
@@ -1574,7 +1557,7 @@ class ProtenixLoss(nn.Module):
             # Skip Diffusion Loss and distogram loss
             loss_fns = {}
         else:
-            # Diffusion Loss: SmoothLDDTLoss / BondLoss / MSELoss # TODO: remove unncessary losses from loss_fns
+            # Diffusion Loss: SmoothLDDTLoss + MSELoss 
             loss_fns = {}
             if self.configs.loss.diffusion_lddt_loss_dense:
                 loss_fns.update(
@@ -1612,24 +1595,6 @@ class ProtenixLoss(nn.Module):
                 )
             loss_fns.update(
                 {
-                    "bond_loss": lambda: (
-                        self.bond_loss.sparse_forward(
-                            pred_coordinate=pred_dict["coordinate"],
-                            true_coordinate=label_dict["coordinate"],
-                            distance_mask=label_dict["distance_mask"],
-                            bond_mask=feat_dict["bond_mask"],
-                            per_sample_scale=diffusion_per_sample_scale,
-                        )
-                        if self.configs.loss.diffusion_sparse_loss_enable
-                        else self.bond_loss(
-                            pred_distance=pred_dict["distance"],
-                            true_distance=label_dict["distance"],
-                            distance_mask=label_dict["distance_mask"],
-                            bond_mask=feat_dict["bond_mask"],
-                            per_sample_scale=diffusion_per_sample_scale,
-                            diffusion_chunk_size=self.configs.loss.diffusion_bond_chunk_size,
-                        )
-                    ),
                     "mse_loss": lambda: self.mse_loss(
                         pred_coordinate=pred_dict["coordinate"],
                         true_coordinate=label_dict["coordinate"],
@@ -1638,21 +1603,9 @@ class ProtenixLoss(nn.Module):
                         is_dna=feat_dict["is_dna"],
                         is_ligand=feat_dict["is_ligand"],
                         per_sample_scale=diffusion_per_sample_scale,
-                    ),
+                    )
                 }
             )
-            # Distogram Loss
-            if "distogram" in pred_dict:
-                loss_fns.update(
-                    {
-                        "distogram_loss": lambda: self.distogram_loss(
-                            logits=pred_dict["distogram"],
-                            true_coordinate=label_dict["coordinate"],
-                            coordinate_mask=label_dict["coordinate_mask"],
-                            rep_atom_mask=feat_dict["distogram_rep_atom_mask"],
-                        )
-                    }
-                )
 
         # Confidence Loss:
         # Only when resoluton is in [min_resolution, max_resolution] the confidence loss is considered
@@ -1673,41 +1626,6 @@ class ProtenixLoss(nn.Module):
                 [0.0],
                 dtype=label_dict["coordinate"].dtype,
                 device=label_dict["coordinate"].device,
-            )
-
-        if all(x in pred_dict for x in ["plddt", "pde", "pae", "resolved"]): # TODO: delete
-            loss_fns.update(
-                {
-                    "plddt_loss": lambda: self.plddt_loss(
-                        logits=pred_dict["plddt"],
-                        pred_coordinate=pred_dict[confidence_coordinate].detach(),
-                        true_coordinate=label_dict["coordinate"],
-                        coordinate_mask=label_dict["coordinate_mask"],
-                        rep_atom_mask=feat_dict["plddt_m_rep_atom_mask"],
-                        is_nucleotide=feat_dict["is_rna"] + feat_dict["is_dna"],
-                        is_polymer=1 - feat_dict["is_ligand"],
-                    ),
-                    "pde_loss": lambda: self.pde_loss(
-                        logits=pred_dict["pde"],
-                        pred_coordinate=pred_dict[confidence_coordinate].detach(),
-                        true_coordinate=label_dict["coordinate"],
-                        coordinate_mask=label_dict["coordinate_mask"],
-                        rep_atom_mask=feat_dict["distogram_rep_atom_mask"],
-                    ),
-                    "resolved_loss": lambda: self.resolved_loss(
-                        logits=pred_dict["resolved"],
-                        coordinate_mask=label_dict["coordinate_mask"],
-                    ),
-                    "pae_loss": lambda: self.pae_loss(
-                        logits=pred_dict["pae"],
-                        pred_coordinate=pred_dict[confidence_coordinate].detach(),
-                        true_coordinate=label_dict["coordinate"],
-                        coordinate_mask=label_dict["coordinate_mask"],
-                        frame_atom_index=feat_dict["frame_atom_index"],
-                        rep_atom_mask=feat_dict["pae_rep_atom_mask"],
-                        has_frame=feat_dict["has_frame"],
-                    ),
-                }
             )
 
         cum_loss, metrics = self.aggregate_losses(loss_fns, has_valid_resolution)

@@ -20,7 +20,7 @@ class TestAttentionPairBias:
 
     @pytest.fixture
     def sample_data(self):
-        data_path = "/Users/baharalan/Developer/artios-ligand/tests/testdata/sample_data_dict.pt"
+        data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
         return torch.load(data_path)["input_feature_dict"]
@@ -141,7 +141,7 @@ class TestAtomTransformer:
 
     @pytest.fixture
     def sample_data(self):
-        data_path = "/Users/baharalan/Developer/artios-ligand/tests/testdata/sample_data_dict.pt"
+        data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
         return torch.load(data_path)
@@ -217,7 +217,7 @@ class TestAtomAttentionDecoder:
 
     @pytest.fixture
     def sample_data(self):
-        data_path = "/Users/baharalan/Developer/artios-ligand/tests/testdata/sample_data_dict.pt"
+        data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
         return torch.load(data_path)

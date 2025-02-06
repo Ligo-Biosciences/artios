@@ -30,7 +30,7 @@ class ArtiosLigand(nn.Module):
         # Diffusion 
         self.train_noise_sampler = TrainingNoiseSampler(**configs.train_noise_sampler)
         self.inference_noise_scheduler = InferenceNoiseScheduler(
-            **configs.inference_noise_scheduler
+           **configs.inference_noise_scheduler
         )
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
@@ -42,7 +42,7 @@ class ArtiosLigand(nn.Module):
         )
 
         self.input_feature_embedder = InputFeatureEmbedder(
-            **configs.model.input_feature_embedder
+            **configs.model.input_embedder
         )
 
         self.diffusion_module = DiffusionModule(

@@ -49,24 +49,6 @@ class ArtiosLigand(nn.Module):
             **configs.model.diffusion_module
         )
 
-        # TODO: delete all these linears and relpos.
-        self.linear_no_bias_s_init = LinearNoBias(
-            in_features=self.c_s_inputs, out_features=self.c_s
-        )
-        self.linear_no_bias_z_init1 = LinearNoBias(
-            in_features=self.c_s, out_features=self.c_z
-        )
-        self.linear_no_bias_z_init2 = LinearNoBias(
-            in_features=self.c_s_inputs, out_features=self.c_z
-        )
-        self.linear_no_bias_token_bonds = LinearNoBias(  # TODO: move to DiffusionConditioning
-            in_features=1, out_features=self.c_z
-        )
-
-        self.relative_position_encoding = RelativePositionEncoding(
-            **configs.model.relative_position_encoding
-        )
-
     def sample_diffusion(self, **kwargs) -> torch.Tensor:
         """
         Samples diffusion process based on the provided configurations.
@@ -150,14 +132,17 @@ class ArtiosLigand(nn.Module):
         def _list_join(dict_list, key):
             return sum([x[key] for x in dict_list], [])
 
+        #all_pred_dict = {
+        #    "coordinate": _cat(pred_dicts, "coordinate"),
+        #    "summary_confidence": _list_join(pred_dicts, "summary_confidence"),
+        #    "full_data": _list_join(pred_dicts, "full_data"),
+        #    "plddt": _cat(pred_dicts, "plddt"),
+        #    "pae": _cat(pred_dicts, "pae"),
+        #    "pde": _cat(pred_dicts, "pde"),
+        #    "resolved": _cat(pred_dicts, "resolved"),
+        #}
         all_pred_dict = {
             "coordinate": _cat(pred_dicts, "coordinate"),
-            "summary_confidence": _list_join(pred_dicts, "summary_confidence"),
-            "full_data": _list_join(pred_dicts, "full_data"),
-            "plddt": _cat(pred_dicts, "plddt"),
-            "pae": _cat(pred_dicts, "pae"),
-            "pde": _cat(pred_dicts, "pde"),
-            "resolved": _cat(pred_dicts, "resolved"),
         }
 
         all_log_dict = simple_merge_dict_list(log_dicts)
@@ -274,7 +259,7 @@ class ArtiosLigand(nn.Module):
         # Permutation: when label is given, permute coordinates and other heads
         step_permutation = time.time()
         if label_dict is not None and symmetric_permutation is not None:
-            pred_dict, log_dict = symmetric_permutation.permute_inference_pred_dict( # TODO: check if this permutes confidence logits 
+            pred_dict, log_dict = symmetric_permutation.permute_inference_pred_dict( 
                 input_feature_dict=input_feature_dict,
                 pred_dict=pred_dict,
                 label_dict=label_dict,
@@ -291,7 +276,6 @@ class ArtiosLigand(nn.Module):
         else:
             interested_atom_mask = label_dict.get("interested_ligand_mask", None)
 
-        # TODO: comment this out for now, we need clash data in the future
         #pred_dict["summary_confidence"], pred_dict["full_data"] = (
         #    sample_confidence.compute_full_data_and_summary(
         #        configs=self.configs,
@@ -350,7 +334,6 @@ class ArtiosLigand(nn.Module):
         else:
             deepspeed_evo_attention_condition_satisfy = True
 
-        # TODO: delete pairformer outputs, only use InputFeatureEmbedder
         s_inputs = self.input_feature_embedder(
             input_feature_dict=input_feature_dict,
             inplace_safe=inplace_safe,
@@ -449,7 +432,7 @@ class ArtiosLigand(nn.Module):
         # Permute symmetric atom/chain in each sample to match true structure
         # Note: currently chains cannot be permuted since label is cropped
         pred_dict, perm_log_dict, _, _ = (
-            symmetric_permutation.permute_diffusion_sample_to_match_label( # TODO: check if working on confidence logits
+            symmetric_permutation.permute_diffusion_sample_to_match_label( 
                 input_feature_dict, pred_dict, label_dict, stage="train"
             )
         )

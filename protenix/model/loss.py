@@ -1383,7 +1383,7 @@ class ProtenixLoss(nn.Module):
         super(ProtenixLoss, self).__init__()
         self.configs = configs
 
-        self.alpha_confidence = self.configs.loss.weight.alpha_confidence
+        self.alpha_confidence = self.configs.loss.weight.alpha_confidence #TODO: loss weights in configs will need updating
         self.alpha_pae = self.configs.loss.weight.alpha_pae
         self.alpha_except_pae = self.configs.loss.weight.alpha_except_pae
         self.alpha_diffusion = self.configs.loss.weight.alpha_diffusion
@@ -1396,7 +1396,7 @@ class ProtenixLoss(nn.Module):
             "is_not_nucleotide_threshold": 15.0,
         }
 
-        self.loss_weight = {
+        self.loss_weight = {  
             # confidence
             "plddt_loss": self.alpha_confidence * self.alpha_except_pae,
             "pde_loss": self.alpha_confidence * self.alpha_except_pae,
@@ -1411,8 +1411,7 @@ class ProtenixLoss(nn.Module):
             "distogram_loss": self.alpha_distogram,
         }
 
-        # Loss
-        self.plddt_loss = PLDDTLoss(**configs.loss.plddt, **self.lddt_radius)
+        self.plddt_loss = PLDDTLoss(**configs.loss.plddt, **self.lddt_radius) 
         self.pde_loss = PDELoss(**configs.loss.pde)
         self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
         self.pae_loss = PAELoss(**configs.loss.pae)
@@ -1452,14 +1451,14 @@ class ProtenixLoss(nn.Module):
             label_dict["coordinate"].dtype
         )  # [..., N_atom, N_atom]
 
-        lddt_mask = compute_lddt_mask(
+        lddt_mask = compute_lddt_mask( # TODO: delete
             true_distance=distance,
             distance_mask=distance_mask,
             is_nucleotide=feat_dict["is_rna"].bool() + feat_dict["is_dna"].bool(),
             **self.lddt_radius,
         )
 
-        label_dict["lddt_mask"] = lddt_mask
+        label_dict["lddt_mask"] = lddt_mask #TODO: delete
         label_dict["distance_mask"] = distance_mask
         if not self.configs.loss_metrics_sparse_enable:
             label_dict["distance"] = distance
@@ -1575,7 +1574,7 @@ class ProtenixLoss(nn.Module):
             # Skip Diffusion Loss and distogram loss
             loss_fns = {}
         else:
-            # Diffusion Loss: SmoothLDDTLoss / BondLoss / MSELoss
+            # Diffusion Loss: SmoothLDDTLoss / BondLoss / MSELoss # TODO: remove unncessary losses from loss_fns
             loss_fns = {}
             if self.configs.loss.diffusion_lddt_loss_dense:
                 loss_fns.update(
@@ -1676,7 +1675,7 @@ class ProtenixLoss(nn.Module):
                 device=label_dict["coordinate"].device,
             )
 
-        if all(x in pred_dict for x in ["plddt", "pde", "pae", "resolved"]):
+        if all(x in pred_dict for x in ["plddt", "pde", "pae", "resolved"]): # TODO: delete
             loss_fns.update(
                 {
                     "plddt_loss": lambda: self.plddt_loss(

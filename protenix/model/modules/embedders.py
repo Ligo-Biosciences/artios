@@ -50,7 +50,6 @@ class InputFeatureEmbedder(nn.Module):
             has_coords=False,
         )
         # Line2
-        # TODO: Since we're just working with ligands and glycine, restype is 2?
         self.input_feature = {"restype": 2} # {"restype": 32, "profile": 32, "deletion_mean": 1}
 
     def forward(

@@ -47,7 +47,7 @@ class DiffusionConditioning(nn.Module):
             sigma_data (torch.float, optional): the standard deviation of the data. Defaults to 16.0.
             c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128.
             c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
-            c_s_inputs (int, optional): input embedding dim from InputEmbedder. Defaults to 449. TODO: should be 405 if removing unused residue types
+            c_s_inputs (int, optional): input embedding dim from InputEmbedder. Defaults to 449.
             c_noise_embedding (int, optional): noise embedding dim. Defaults to 256.
         """
         super(DiffusionConditioning, self).__init__()
@@ -318,8 +318,6 @@ class DiffusionModule(nn.Module):
         t_hat_noise_level: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         s_inputs: torch.Tensor,
-        s_trunk: torch.Tensor,
-        z_trunk: torch.Tensor,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
@@ -335,10 +333,6 @@ class DiffusionModule(nn.Module):
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input feature
             s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
                 [..., N_tokens, c_s_inputs]
-            s_trunk (torch.Tensor): single feature embedding from PairFormer (Alg17)
-                [..., N_tokens, c_s]  # TODO: delete s_trunk from DiffusionModule inputs
-            z_trunk (torch.Tensor): pair feature embedding from PairFormer (Alg17)
-                [..., N_tokens, N_tokens, c_z]  # TODO: delete z_trunk from DiffusionModule inputs
             inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 
@@ -373,12 +367,10 @@ class DiffusionModule(nn.Module):
             )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
 
         # Expand embeddings to match N_sample
-        s_trunk = expand_at_dim(
-            s_trunk, dim=-3, n=N_sample
-        )  # [..., N_sample, N_token, c_s]
         z_pair = expand_at_dim(
             z_pair, dim=-4, n=N_sample
         )  # [..., N_sample, N_token, N_token, c_z]
+
         # Fine-grained checkpoint for finetuning stage 2 (token num: 768) for avoiding OOM
         if blocks_per_ckpt and self.use_fine_grained_checkpoint:
             checkpoint_fn = get_checkpoint_fn()
@@ -386,7 +378,7 @@ class DiffusionModule(nn.Module):
                 self.atom_attention_encoder,
                 input_feature_dict,
                 r_noisy,
-                s_trunk,
+                s_single, # Replaced s_trunk
                 z_pair,
                 inplace_safe,
                 chunk_size,
@@ -396,13 +388,17 @@ class DiffusionModule(nn.Module):
             a_token, q_skip, c_skip, p_skip = self.atom_attention_encoder(
                 input_feature_dict=input_feature_dict,
                 r_l=r_noisy,
-                s=s_trunk,
+                s=s_single, # Replaced s_trunk
                 z=z_pair,
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
             )
         # Full self-attention on token level.
-        a_token = add(a_token, self.linear_no_bias_s(self.layernorm_s(s_single)), inplace_safe=inplace_safe) # [..., N_sample, N_token, c_token]
+        a_token = add(
+            a_token, 
+            self.linear_no_bias_s(self.layernorm_s(s_single)), 
+            inplace_safe=inplace_safe
+        ) # [..., N_sample, N_token, c_token]
         
         a_token = self.diffusion_transformer(
             a=a_token,
@@ -447,8 +443,6 @@ class DiffusionModule(nn.Module):
         t_hat_noise_level: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         s_inputs: torch.Tensor,
-        s_trunk: torch.Tensor,
-        z_trunk: torch.Tensor,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
@@ -462,10 +456,6 @@ class DiffusionModule(nn.Module):
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
             s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
                 [..., N_tokens, c_s_inputs]
-            s_trunk (torch.Tensor): single feature embedding from PairFormer (Alg17)
-                [..., N_tokens, c_s]  # TODO: delete s_trunk from DiffusionModule inputs
-            z_trunk (torch.Tensor): pair feature embedding from PairFormer (Alg17)
-                [..., N_tokens, N_tokens, c_z]  # TODO: delete z_trunk from DiffusionModule inputs
             inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 
@@ -490,8 +480,6 @@ class DiffusionModule(nn.Module):
             t_hat_noise_level=t_hat_noise_level,
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs,
-            s_trunk=s_trunk,
-            z_trunk=z_trunk,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )

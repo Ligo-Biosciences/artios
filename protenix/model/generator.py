@@ -124,8 +124,6 @@ def sample_diffusion(
     denoise_net: Callable,
     input_feature_dict: dict[str, Any],
     s_inputs: torch.Tensor,
-    s_trunk: torch.Tensor,
-    z_trunk: torch.Tensor,
     noise_schedule: torch.Tensor,
     N_sample: int = 1,
     gamma0: float = 0.8,
@@ -145,10 +143,6 @@ def sample_diffusion(
         input_feature_dict (dict[str, Any]): input meta feature dict
         s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
             [..., N_tokens, c_s_inputs]
-        s_trunk (torch.Tensor): single feature embedding from PairFormer (Alg17)
-            [..., N_tokens, c_s]
-        z_trunk (torch.Tensor): pair feature embedding from PairFormer (Alg17)
-            [..., N_tokens, N_tokens, c_z]
         noise_schedule (torch.Tensor): noise-level schedule (which is also the time steps) since sigma=t.
             [N_iterations]
         N_sample (int): number of generated samples
@@ -209,8 +203,6 @@ def sample_diffusion(
                 t_hat_noise_level=t_hat,
                 input_feature_dict=input_feature_dict,
                 s_inputs=s_inputs,
-                s_trunk=s_trunk,
-                z_trunk=z_trunk,
                 chunk_size=attn_chunk_size,
                 inplace_safe=inplace_safe,
             )
@@ -250,8 +242,6 @@ def sample_diffusion_training(
     label_dict: dict[str, Any],
     input_feature_dict: dict[str, Any],
     s_inputs: torch.Tensor,
-    s_trunk: torch.Tensor,
-    z_trunk: torch.Tensor,
     N_sample: int = 1,
     diffusion_chunk_size: Optional[int] = None,
 ) -> tuple[torch.Tensor, ...]:
@@ -269,10 +259,6 @@ def sample_diffusion_training(
         input_feature_dict (dict[str, Any]): input meta feature dict
         s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
             [..., N_tokens, c_s_inputs]
-        s_trunk (torch.Tensor): single feature embedding from PairFormer (Alg17)
-            [..., N_tokens, c_s]
-        z_trunk (torch.Tensor): pair feature embedding from PairFormer (Alg17)
-            [..., N_tokens, N_tokens, c_z]
         N_sample (int): number of training samples
     Returns:
         torch.Tensor: the denoised coordinates of x in inference stage
@@ -302,9 +288,7 @@ def sample_diffusion_training(
             x_noisy=x_gt_augment + noise,
             t_hat_noise_level=sigma,
             input_feature_dict=input_feature_dict,
-            s_inputs=s_inputs,
-            s_trunk=s_trunk,
-            z_trunk=z_trunk,
+            s_inputs=s_inputs
         )
     else:
         x_denoised = []
@@ -322,9 +306,7 @@ def sample_diffusion_training(
                 x_noisy=x_noisy_i,
                 t_hat_noise_level=t_hat_noise_level_i,
                 input_feature_dict=input_feature_dict,
-                s_inputs=s_inputs,
-                s_trunk=s_trunk,
-                z_trunk=z_trunk,
+                s_inputs=s_inputs
             )
             x_denoised.append(x_denoised_i)
         x_denoised = torch.cat(x_denoised, dim=-3)

@@ -37,7 +37,7 @@ class TestInputFeatureEmbedder:
         out = embedder(input_dict)
 
         # Check output shape
-        expected_dim = c_token + 32 + 32 + 1  # 449 as per docstring
+        expected_dim = c_token + 21 # 449 as per docstring TODO: update since removed certain restypes 
         assert out.shape[-1] == expected_dim
         assert out.shape[:-1] == input_dict["restype"].shape[:-1]
         assert not torch.isnan(out).any()

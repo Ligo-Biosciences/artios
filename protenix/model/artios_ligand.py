@@ -191,13 +191,13 @@ class ArtiosLigand(nn.Module):
         pred_dict = {}
         time_tracker = {}
 
-        # TODO: delete pairformer outputs, only use InputFeatureEmbedder
-        s_inputs, s, z = self.get_pairformer_output(
+        # Embed input features 
+        s_inputs = self.input_feature_embedder(
             input_feature_dict=input_feature_dict,
-            N_cycle=N_cycle,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
+
         if mode == "inference":
             # TODO: this code is not needed for us as we do not use templates, msa, etc.
             keys_to_delete = []
@@ -217,6 +217,7 @@ class ArtiosLigand(nn.Module):
             torch.cuda.empty_cache()
         step_trunk = time.time()
         time_tracker.update({"pairformer": step_trunk - step_st})
+
         # Sample diffusion
         # [..., N_sample, N_atom, 3]
         N_sample = self.configs.sample_diffusion["N_sample"]
@@ -229,8 +230,6 @@ class ArtiosLigand(nn.Module):
             denoise_net=self.diffusion_module,
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs,
-            s_trunk=s,
-            z_trunk=z,
             N_sample=N_sample,
             noise_schedule=noise_schedule,
             inplace_safe=inplace_safe,
@@ -241,49 +240,48 @@ class ArtiosLigand(nn.Module):
         if mode == "inference" and N_token > 2000:
             torch.cuda.empty_cache()
         
-        # TODO: delete distogram head
         # Distogram logits: log contact_probs only, to reduce the dimension
-        pred_dict["contact_probs"] = sample_confidence.compute_contact_prob(
-            distogram_logits=self.distogram_head(z),
-            **sample_confidence.get_bin_params(self.configs.loss.distogram),
-        )  # [N_token, N_token]
+        #pred_dict["contact_probs"] = sample_confidence.compute_contact_prob(
+        #    distogram_logits=self.distogram_head(z),
+        #    **sample_confidence.get_bin_params(self.configs.loss.distogram),
+        #)  # [N_token, N_token]
 
-        # TODO: delete confidence head
         # Confidence logits
-        (
-            pred_dict["plddt"],
-            pred_dict["pae"],
-            pred_dict["pde"],
-            pred_dict["resolved"],
-        ) = self.run_confidence_head(
-            input_feature_dict=input_feature_dict,
-            s_inputs=s_inputs,
-            s_trunk=s,
-            z_trunk=z,
-            pair_mask=None,
-            x_pred_coords=pred_dict["coordinate"],
-            use_memory_efficient_kernel=self.configs.use_memory_efficient_kernel,
-            use_deepspeed_evo_attention=self.configs.use_deepspeed_evo_attention
-            and deepspeed_evo_attention_condition_satisfy,
-            use_lma=self.configs.use_lma,
-            inplace_safe=inplace_safe,
-            chunk_size=chunk_size,
-        )
+        #(
+        #    pred_dict["plddt"],
+        #    pred_dict["pae"],
+        #    pred_dict["pde"],
+        #    pred_dict["resolved"],
+        #) = self.run_confidence_head(
+        #    input_feature_dict=input_feature_dict,
+        #    s_inputs=s_inputs,
+        #    s_trunk=s,
+        #    z_trunk=z,
+        #    pair_mask=None,
+        #    x_pred_coords=pred_dict["coordinate"],
+        #    use_memory_efficient_kernel=self.configs.use_memory_efficient_kernel,
+        #    use_deepspeed_evo_attention=self.configs.use_deepspeed_evo_attention
+        #    and deepspeed_evo_attention_condition_satisfy,
+        #    use_lma=self.configs.use_lma,
+        #    inplace_safe=inplace_safe,
+        #    chunk_size=chunk_size,
+        #)
+        #step_confidence = time.time()
+        #time_tracker.update({"confidence": step_confidence - step_diffusion})
 
-        step_confidence = time.time()
-        time_tracker.update({"confidence": step_confidence - step_diffusion})
         time_tracker.update({"model_forward": time.time() - step_st})
 
         # Permutation: when label is given, permute coordinates and other heads
+        step_permutation = time.time()
         if label_dict is not None and symmetric_permutation is not None:
-            pred_dict, log_dict = symmetric_permutation.permute_inference_pred_dict(
+            pred_dict, log_dict = symmetric_permutation.permute_inference_pred_dict( # TODO: check if this permutes confidence logits 
                 input_feature_dict=input_feature_dict,
                 pred_dict=pred_dict,
                 label_dict=label_dict,
                 permute_by_pocket=("pocket_mask" in label_dict)
                 and ("interested_ligand_mask" in label_dict),
             )
-            last_step_seconds = step_confidence
+            last_step_seconds = step_permutation
             time_tracker.update({"permutation": time.time() - last_step_seconds})
 
         # Summary Confidence & Full Data
@@ -294,29 +292,29 @@ class ArtiosLigand(nn.Module):
             interested_atom_mask = label_dict.get("interested_ligand_mask", None)
 
         # TODO: comment this out for now, we need clash data in the future
-        pred_dict["summary_confidence"], pred_dict["full_data"] = (
-            sample_confidence.compute_full_data_and_summary(
-                configs=self.configs,
-                pae_logits=pred_dict["pae"],
-                plddt_logits=pred_dict["plddt"],
-                pde_logits=pred_dict["pde"],
-                contact_probs=pred_dict.get(
-                    "per_sample_contact_probs", pred_dict["contact_probs"]
-                ),
-                token_asym_id=input_feature_dict["asym_id"],
-                token_has_frame=input_feature_dict["has_frame"],
-                atom_coordinate=pred_dict["coordinate"],
-                atom_to_token_idx=input_feature_dict["atom_to_token_idx"],
-                atom_is_polymer=1 - input_feature_dict["is_ligand"],
-                N_recycle=N_cycle,
-                interested_atom_mask=interested_atom_mask,
-                return_full_data=True,
-                mol_id=(input_feature_dict["mol_id"] if mode != "inference" else None),
-                elements_one_hot=(
-                    input_feature_dict["ref_element"] if mode != "inference" else None
-                ),
-            )
-        )
+        #pred_dict["summary_confidence"], pred_dict["full_data"] = (
+        #    sample_confidence.compute_full_data_and_summary(
+        #        configs=self.configs,
+        #        pae_logits=pred_dict["pae"],
+        #        plddt_logits=pred_dict["plddt"],
+        #        pde_logits=pred_dict["pde"],
+        #        contact_probs=pred_dict.get(
+        #            "per_sample_contact_probs", pred_dict["contact_probs"]
+        #        ),
+        #        token_asym_id=input_feature_dict["asym_id"],
+        #        token_has_frame=input_feature_dict["has_frame"],
+        #        atom_coordinate=pred_dict["coordinate"],
+        #        atom_to_token_idx=input_feature_dict["atom_to_token_idx"],
+        #        atom_is_polymer=1 - input_feature_dict["is_ligand"],
+        #        N_recycle=N_cycle,
+        #        interested_atom_mask=interested_atom_mask,
+        #        return_full_data=True,
+        #        mol_id=(input_feature_dict["mol_id"] if mode != "inference" else None),
+        #        elements_one_hot=(
+        #            input_feature_dict["ref_element"] if mode != "inference" else None
+        #        ),
+        #    )
+        #)
 
         return pred_dict, log_dict, time_tracker
     
@@ -353,9 +351,8 @@ class ArtiosLigand(nn.Module):
             deepspeed_evo_attention_condition_satisfy = True
 
         # TODO: delete pairformer outputs, only use InputFeatureEmbedder
-        s_inputs, s, z = self.get_pairformer_output(
+        s_inputs = self.input_feature_embedder(
             input_feature_dict=input_feature_dict,
-            N_cycle=N_cycle,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
@@ -375,8 +372,6 @@ class ArtiosLigand(nn.Module):
                 denoise_net=self.diffusion_module,
                 input_feature_dict=input_feature_dict,
                 s_inputs=s_inputs.detach(),
-                s_trunk=s.detach(),
-                z_trunk=z.detach(),
                 N_sample=N_sample_mini_rollout,
                 noise_schedule=self.inference_noise_scheduler(
                     N_step=N_step_mini_rollout,
@@ -398,34 +393,34 @@ class ArtiosLigand(nn.Module):
             )
             log_dict.update(perm_log_dict)
 
-        # TODO: delete confidence head
-        # Confidence: use mini-rollout prediction, and detach token embeddings
-        plddt_pred, pae_pred, pde_pred, resolved_pred = self.run_confidence_head(
-            input_feature_dict=input_feature_dict,
-            s_inputs=s_inputs,
-            s_trunk=s,
-            z_trunk=z,
-            pair_mask=None,
-            x_pred_coords=coordinate_mini,
-            use_memory_efficient_kernel=self.configs.use_memory_efficient_kernel,
-            use_deepspeed_evo_attention=self.configs.use_deepspeed_evo_attention
-            and deepspeed_evo_attention_condition_satisfy,
-            use_lma=self.configs.use_lma,
-            inplace_safe=inplace_safe,
-            chunk_size=chunk_size,
-        )
-        pred_dict.update(
-            {
-                "plddt": plddt_pred,
-                "pae": pae_pred,
-                "pde": pde_pred,
-                "resolved": resolved_pred,
-            }
-        )
 
-        if self.train_confidence_only:
-            # Skip diffusion loss and distogram loss. Return now.
-            return pred_dict, label_dict, log_dict
+        # Confidence head: use mini-rollout prediction, and detach token embeddings
+        #plddt_pred, pae_pred, pde_pred, resolved_pred = self.run_confidence_head(
+        #    input_feature_dict=input_feature_dict,
+        #    s_inputs=s_inputs,
+        #    s_trunk=s,
+        #    z_trunk=z,
+        #    pair_mask=None,
+        #    x_pred_coords=coordinate_mini,
+        #    use_memory_efficient_kernel=self.configs.use_memory_efficient_kernel,
+        #    use_deepspeed_evo_attention=self.configs.use_deepspeed_evo_attention
+        #    and deepspeed_evo_attention_condition_satisfy,
+        #    use_lma=self.configs.use_lma,
+        #    inplace_safe=inplace_safe,
+        #    chunk_size=chunk_size,
+        #)
+        #pred_dict.update(
+        #    {
+        #        "plddt": plddt_pred,
+        #        "pae": pae_pred,
+        #        "pde": pde_pred,
+        #        "resolved": resolved_pred,
+        #    }
+        #)
+        #if self.train_confidence_only:
+        #    # Skip diffusion loss and distogram loss. Return now.
+        #    return pred_dict, label_dict, log_dict
+
 
         # Denoising: use permuted coords to generate noisy samples and perform denoising
         # N_sample: number of noisy samples generated from the same ground truth.
@@ -440,14 +435,11 @@ class ArtiosLigand(nn.Module):
             label_dict=label_dict,
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs,
-            s_trunk=s,
-            z_trunk=z,
             N_sample=N_sample,
             diffusion_chunk_size=self.configs.diffusion_chunk_size,
         )
         pred_dict.update(
             {
-                "distogram": self.distogram_head(z),  # TODO: delete distogram head
                 # [..., N_sample=48, N_atom, 3]: diffusion loss
                 "coordinate": x_denoised,
                 "noise_level": x_noise_level,
@@ -457,7 +449,7 @@ class ArtiosLigand(nn.Module):
         # Permute symmetric atom/chain in each sample to match true structure
         # Note: currently chains cannot be permuted since label is cropped
         pred_dict, perm_log_dict, _, _ = (
-            symmetric_permutation.permute_diffusion_sample_to_match_label(
+            symmetric_permutation.permute_diffusion_sample_to_match_label( # TODO: check if working on confidence logits
                 input_feature_dict, pred_dict, label_dict, stage="train"
             )
         )

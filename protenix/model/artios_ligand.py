@@ -188,7 +188,7 @@ class ArtiosLigand(nn.Module):
                     "deletion_value",
                     "profile",
                     "deletion_mean",
-                    "token_bonds",
+                    # "token_bonds",
                 ]:
                     keys_to_delete.append(key)
 

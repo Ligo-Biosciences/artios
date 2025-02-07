@@ -519,6 +519,177 @@ class MSELoss(nn.Module):
 
         return loss
 
+class FlowMatchingLoss(nn.Module):
+    """
+    Implements flow matching loss which computes MSE between predicted and ground truth velocities
+    """
+
+    def __init__(
+        self,
+        weight_mse: float = 1 / 3,
+        weight_dna: float = 5.0,
+        weight_rna=5.0,
+        weight_ligand=10.0,
+        eps=1e-6,
+        reduction: str = "mean",
+    ) -> None:
+        super(FlowMatchingLoss, self).__init__()
+        self.weight_mse = weight_mse
+        self.weight_dna = weight_dna
+        self.weight_rna = weight_rna
+        self.weight_ligand = weight_ligand
+        self.eps = eps
+        self.reduction = reduction
+
+    def weighted_rigid_align(
+        self,
+        velocity_pred: torch.Tensor,
+        timestep: torch.Tensor,
+        noise: torch.Tensor,
+        coords_target: torch.Tensor,
+        coordinate_mask: torch.Tensor,
+        is_dna: torch.Tensor,
+        is_rna: torch.Tensor,
+        is_ligand: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """compute weighted rigid alignment results for flow matching
+
+        Args:
+            velocity_pred (torch.Tensor): predicted velocity from network
+                [..., N_sample, N_atom, 3]
+            timestep (torch.Tensor): noising timestep for each sample
+                [..., N_sample]
+            noise (torch.Tensor): noise used for each sample
+                [..., N_sample, N_atom, 3]
+            coords_target (torch.Tensor): ground truth coordinates
+                [..., N_atom, 3]
+            coordinate_mask (torch.Tensor): whether true coordinates exist
+                [N_atom] or [..., N_atom]
+            is_dna / is_rna / is_ligand (torch.Tensor): mol type mask
+                [N_atom] or [..., N_atom]
+
+        Returns:
+            velocity_target_aligned (torch.Tensor): aligned ground truth velocity
+                [..., N_sample, N_atom, 3]
+            weight (torch.Tensor): weights for each atom
+                [N_atom] or [..., N_sample, N_atom]
+        """
+        N_sample = velocity_pred.size(-3)
+        weight = (
+            1
+            + self.weight_dna * is_dna
+            + self.weight_rna * is_rna
+            + self.weight_ligand * is_ligand
+        )  # [N_atom] or [..., N_atom]
+
+        # Calculate implied predicted coordinates from velocity
+        # x_t = x_0 + t * v_t
+        timestep = timestep.unsqueeze(-1).unsqueeze(-1)  # [..., N_sample, 1, 1]
+        coords_pred = coords_target.unsqueeze(-3) + timestep * velocity_pred # [..., N_sample, N_atom, 3]
+
+        # Apply coordinate_mask
+        weight = weight * coordinate_mask  # [N_atom] or [..., N_atom]
+        coords_target = coords_target * coordinate_mask.unsqueeze(dim=-1)
+        coords_pred = coords_pred * coordinate_mask[..., None, :, None]
+
+        # Calculate ground truth velocity
+        # v = x_1 - x_0
+        velocity_target = coords_target - noise 
+
+        # Reshape to add "N_sample" dimension for true velocity
+        velocity_target = expand_at_dim(
+            velocity_target, dim=-3, n=N_sample
+        )  # [..., N_sample, N_atom, 3]
+        if len(weight.shape) > 1:
+            weight = expand_at_dim(
+                weight, dim=-2, n=N_sample
+            )  # [..., N_sample, N_atom]
+
+        # Align GT velocity to predicted velocity
+        d = velocity_pred.dtype
+        # Some ops in weighted_rigid_align do not support BFloat16 training
+        with torch.cuda.amp.autocast(enabled=False):
+            velocity_target_aligned = weighted_rigid_align(
+                x=velocity_target.to(torch.float32),  # [..., N_sample, N_atom, 3]
+                x_target=velocity_pred.to(
+                    torch.float32
+                ),  # [..., N_sample, N_atom, 3]
+                atom_weight=weight.to(
+                    torch.float32
+                ),  # [N_atom] or [..., N_sample, N_atom]
+                stop_gradient=True,
+            )  # [..., N_sample, N_atom, 3]
+            velocity_target_aligned = velocity_target_aligned.to(d)
+
+        return (velocity_target_aligned.detach(), weight.detach())
+
+    def forward(
+        self,
+        velocity_pred: torch.Tensor,
+        timestep: torch.Tensor,
+        noise: torch.Tensor,
+        coords_target: torch.Tensor,
+        coordinate_mask: torch.Tensor,
+        is_dna: torch.Tensor,
+        is_rna: torch.Tensor,
+        is_ligand: torch.Tensor,
+        per_sample_scale: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """Flow Matching Loss
+
+        Args:
+            velocity_pred (torch.Tensor): predicted velocity from network
+                [..., N_sample, N_atom, 3]
+            timestep (torch.Tensor): noising timestep for each sample
+                [..., N_sample]
+            noise (torch.Tensor): noise used for each sample
+                [..., N_sample, N_atom, 3]
+            coords_target (torch.Tensor): ground truth coordinates
+                [..., N_atom, 3]
+            coordinate_mask (torch.Tensor): whether true coordinates exist
+                [N_atom] or [..., N_atom]
+            is_dna / is_rna / is_ligand (torch.Tensor): mol type mask
+                [N_atom] or [..., N_atom]
+            per_sample_scale (torch.Tensor, optional): whether to scale the loss by the per-sample noise-level
+                [..., N_sample]
+
+        Returns:
+            torch.Tensor: the weighted flow matching loss
+                [...] is self.reduction is None else []
+        """
+        # True_velocity_aligned: [..., N_sample, N_atom, 3]
+        # Weight: [N_atom] or [..., N_sample, N_atom]
+        with torch.no_grad():
+            velocity_target_aligned, weight = self.weighted_rigid_align(
+                velocity_pred=velocity_pred,
+                timestep=timestep,
+                noise=noise,
+                coords_target=coords_target,
+                coordinate_mask=coordinate_mask,
+                is_dna=is_dna,
+                is_rna=is_rna,
+                is_ligand=is_ligand,
+            )
+
+        # Calculate MSE loss between velocities
+        per_atom_se = ((velocity_pred - velocity_target_aligned) ** 2).sum(
+            dim=-1
+        )  # [..., N_sample, N_atom]
+        per_sample_weighted_mse = (weight * per_atom_se).sum(dim=-1) / (
+            coordinate_mask.sum(dim=-1, keepdim=True) + self.eps
+        )  # [..., N_sample]
+
+        if per_sample_scale is not None:
+            per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
+
+        weighted_align_mse_loss = self.weight_mse * (per_sample_weighted_mse).mean(
+            dim=-1
+        )  # [...]
+
+        loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
+
+        return loss
+
 
 class ProtenixLoss(nn.Module):
     """Aggregation of the various losses"""

@@ -172,7 +172,7 @@ data_configs = {
                 DATA_ROOT_DIR, "indices/posebusters_indices_mainchain_interface.csv"
             ),
             "pdb_list": "",
-            "find_pocket": True,
+            "find_pocket": False,
             "find_all_pockets": False,
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
         },

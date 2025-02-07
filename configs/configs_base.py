@@ -40,7 +40,7 @@ basic_configs = {
     "skip_load_scheduler": False,
     "train_confidence_only": False,
     "use_wandb": True,
-    "wandb_id": "",
+    "wandb_id": "", #TODO 
     "seed": 42,
     "deterministic": False,
     "ema_decay": -1.0,
@@ -87,7 +87,7 @@ model_configs = {
     # Model
     "c_s": 384,
     "c_z": 128,
-    "c_s_inputs": 416,  # TODO: needs updating. c_s_inputs == c_token + 32 + 32 + 1
+    "c_s_inputs": 416,  # TODO: needs updating. c_s_inputs == c_token + 32
     "c_atom": 128,
     "c_atompair": 16,
     "c_token": 384,
@@ -102,7 +102,7 @@ model_configs = {
     ),  # NOTE: Number of blocks in each activation checkpoint, if None, no checkpointing is performed.
     # switch of kernels
     "use_memory_efficient_kernel": False,
-    "use_deepspeed_evo_attention": True,
+    "use_deepspeed_evo_attention": True, # TODO: not using deepspeed
     "use_flash": False,
     "use_lma": False,
     "use_xformer": False,
@@ -132,7 +132,7 @@ model_configs = {
         "p_std": 1.5,
         "sigma_data": 16.0,  # NOTE: in EDM, this is 1.0
     },
-    "inference_noise_scheduler": {
+    "inference_noise_scheduler": { # TODO: this uses EDM tuning. will get big boost by tuning for proteins
         "s_max": 160.0,
         "s_min": 4e-4,
         "rho": 7,
@@ -143,7 +143,7 @@ model_configs = {
         "gamma_min": 1.0,
         "noise_scale_lambda": 1.003,
         "step_scale_eta": 1.5,
-        "N_step": 200,
+        "N_step": 200, # TODO: this is alot! 
         "N_sample": 5,
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
@@ -156,19 +156,19 @@ model_configs = {
             "c_atompair": GlobalConfigValue("c_atompair"),
             "c_token": GlobalConfigValue("c_token"),
         },
-        "relative_position_encoding": {
+        "relative_position_encoding": { 
             "r_max": 32,
             "s_max": 2,
             "c_z": GlobalConfigValue("c_z"),
         },
-        "template_embedder": {
+        "template_embedder": { # TODO: delete
             "c": 64,
             "c_z": GlobalConfigValue("c_z"),
             "n_blocks": 0,
             "dropout": 0.25,
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
-        "msa_module": {
+        "msa_module": { # TODO: delete 
             "c_m": 64,
             "c_z": GlobalConfigValue("c_z"),
             "c_s_inputs": GlobalConfigValue("c_s_inputs"),
@@ -177,7 +177,7 @@ model_configs = {
             "pair_dropout": 0.25,
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
-        "pairformer": {
+        "pairformer": { # TODO: delete 
             "n_blocks": GlobalConfigValue("n_blocks"),
             "c_z": GlobalConfigValue("c_z"),
             "c_s": GlobalConfigValue("c_s"),
@@ -219,7 +219,7 @@ model_configs = {
             },
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
-        "confidence_head": {
+        "confidence_head": { 
             "c_z": GlobalConfigValue("c_z"),
             "c_s": GlobalConfigValue("c_s"),
             "c_s_inputs": GlobalConfigValue("c_s_inputs"),
@@ -232,7 +232,7 @@ model_configs = {
             "distance_bin_step": 1.25,
             "stop_gradient": True,
         },
-        "distogram_head": {
+        "distogram_head": { 
             "c_z": GlobalConfigValue("c_z"),
             "no_bins": GlobalConfigValue("no_bins"),
         },

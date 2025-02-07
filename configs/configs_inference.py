@@ -32,5 +32,5 @@ inference_configs = {
         code_directory, "./release_data/checkpoint/model_v0.2.0.pt"
     ),
     "num_workers": 16,
-    "use_msa": True,
+    "use_msa": True, # TODO: false
 }

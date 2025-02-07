@@ -87,7 +87,7 @@ model_configs = {
     # Model
     "c_s": 384,
     "c_z": 128,
-    "c_s_inputs": 416,  # TODO: needs updating. c_s_inputs == c_token + 32
+    "c_s_inputs": 416,  # c_s_inputs == c_token + 32
     "c_atom": 128,
     "c_atompair": 16,
     "c_token": 384,
@@ -277,7 +277,7 @@ loss_configs = {
         "diffusion_sparse_loss_enable": GlobalConfigValue("loss_metrics_sparse_enable"),
         "diffusion_lddt_loss_dense": True,  # only set true in initial training for training speed
         "resolution": {"min": 0.1, "max": 4.0},
-        "weight": {
+        "weight": { # TODO: set unused loss weights to 0 (for completion)
             "alpha_confidence": 1e-4,
             "alpha_pae": 0.0,  # or 1 in finetuning stage 3
             "alpha_except_pae": 1.0,

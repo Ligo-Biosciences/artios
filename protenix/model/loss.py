@@ -519,6 +519,7 @@ class MSELoss(nn.Module):
 
         return loss
 
+
 class FlowMatchingLoss(nn.Module):
     """
     Implements flow matching loss which computes MSE between predicted and ground truth velocities
@@ -544,22 +545,25 @@ class FlowMatchingLoss(nn.Module):
     def weighted_rigid_align(
         self,
         velocity_pred: torch.Tensor,
+        velocity_target: torch.Tensor,
         timestep: torch.Tensor,
-        noise: torch.Tensor,
+        coords_noisy: torch.Tensor,
         coords_target: torch.Tensor,
         coordinate_mask: torch.Tensor,
         is_dna: torch.Tensor,
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """compute weighted rigid alignment results for flow matching
 
         Args:
             velocity_pred (torch.Tensor): predicted velocity from network
                 [..., N_sample, N_atom, 3]
+            velocity_target (torch.Tensor): ground truth velocity
+                [..., N_sample, N_atom, 3]
             timestep (torch.Tensor): noising timestep for each sample
                 [..., N_sample]
-            noise (torch.Tensor): noise used for each sample
+            coords_noisy (torch.Tensor): noised coords (x_t = (1-t)*x_0 + t*x_1)
                 [..., N_sample, N_atom, 3]
             coords_target (torch.Tensor): ground truth coordinates
                 [..., N_atom, 3]
@@ -582,19 +586,15 @@ class FlowMatchingLoss(nn.Module):
             + self.weight_ligand * is_ligand
         )  # [N_atom] or [..., N_atom]
 
-        # Calculate implied predicted coordinates from velocity
-        # x_t = x_0 + t * v_t
+        # Calculate implied predicted coordinates from velocity 
+        # x_pred = x_t + (1-t) * v_pred
         timestep = timestep.unsqueeze(-1).unsqueeze(-1)  # [..., N_sample, 1, 1]
-        coords_pred = coords_target.unsqueeze(-3) + timestep * velocity_pred # [..., N_sample, N_atom, 3]
+        coords_pred = coords_noisy + (1 - timestep) * velocity_pred # [..., N_sample, N_atom, 3] 
 
         # Apply coordinate_mask
         weight = weight * coordinate_mask  # [N_atom] or [..., N_atom]
         coords_target = coords_target * coordinate_mask.unsqueeze(dim=-1)
         coords_pred = coords_pred * coordinate_mask[..., None, :, None]
-
-        # Calculate ground truth velocity
-        # v = x_1 - x_0
-        velocity_target = coords_target - noise 
 
         # Reshape to add "N_sample" dimension for true velocity
         velocity_target = expand_at_dim(
@@ -626,8 +626,9 @@ class FlowMatchingLoss(nn.Module):
     def forward(
         self,
         velocity_pred: torch.Tensor,
+        velocity_target: torch.Tensor,
         timestep: torch.Tensor,
-        noise: torch.Tensor,
+        coords_noisy: torch.Tensor,
         coords_target: torch.Tensor,
         coordinate_mask: torch.Tensor,
         is_dna: torch.Tensor,
@@ -642,7 +643,7 @@ class FlowMatchingLoss(nn.Module):
                 [..., N_sample, N_atom, 3]
             timestep (torch.Tensor): noising timestep for each sample
                 [..., N_sample]
-            noise (torch.Tensor): noise used for each sample
+            coords_noisy (torch.Tensor): noised coords (x_t = (1-t)*x_0 + t*x_1)
                 [..., N_sample, N_atom, 3]
             coords_target (torch.Tensor): ground truth coordinates
                 [..., N_atom, 3]
@@ -662,8 +663,9 @@ class FlowMatchingLoss(nn.Module):
         with torch.no_grad():
             velocity_target_aligned, weight = self.weighted_rigid_align(
                 velocity_pred=velocity_pred,
+                velocity_target=velocity_target,
                 timestep=timestep,
-                noise=noise,
+                coords_noisy=coords_noisy,
                 coords_target=coords_target,
                 coordinate_mask=coordinate_mask,
                 is_dna=is_dna,

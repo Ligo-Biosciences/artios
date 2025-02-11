@@ -127,30 +127,26 @@ model_configs = {
             1
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
-    "train_noise_sampler": {
-        "p_mean": -1.2,
-        "p_std": 1.5,
-        "sigma_data": 16.0,  # NOTE: in EDM, this is 1.0
+    "train_timestep_sampler": { 
+        "loc": -1.2,
+        "scale": 1.5
     },
-    "inference_noise_scheduler": { # TODO: this uses EDM tuning. will get big boost by tuning for proteins
-        "s_max": 160.0,
-        "s_min": 4e-4,
-        "rho": 7,
-        "sigma_data": 16.0,  # NOTE: in EDM, this is 1.0
+    "inference_timestep_scheduler": { 
+        "p": -0.7
     },
-    "sample_diffusion": {
-        "gamma0": 0.8,
-        "gamma_min": 1.0,
-        "noise_scale_lambda": 1.003,
-        "step_scale_eta": 1.5,
-        "N_step": 200, # TODO: this is alot! 
+    "sample_diffusion": { 
+        "N_step": 50, 
         "N_sample": 5,
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
+        "stoch_type": "non_singular",
+        "alpha": 1.0,
+        "gamma": 1.0,
+        "sigma_data": GlobalConfigValue("sigma_data"),
     },
     "model": {
         "N_model_seed": 1,  # for inference
-        "N_cycle": 4,
+        "N_cycle": 4, # TODO: not used anymore
         "input_embedder": {
             "c_atom": GlobalConfigValue("c_atom"),
             "c_atompair": GlobalConfigValue("c_atompair"),
@@ -316,6 +312,14 @@ loss_configs = {
                 "weight_ligand": 10.0,
                 "eps": 1e-6,
             },
+            "flow_matching": {
+                "weight_mse": 1 / 3,
+                "weight_dna": 5.0,
+                "weight_rna": 5.0,
+                "weight_ligand": 10.0,
+                "eps": 1e-6,
+            },
+
             "bond": {
                 "eps": 1e-6,
             },

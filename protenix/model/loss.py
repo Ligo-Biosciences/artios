@@ -520,7 +520,7 @@ class MSELoss(nn.Module):
         return loss
 
 
-class FlowMatchingLoss(nn.Module):
+class FMLoss(nn.Module):
     """
     Implements flow matching loss which computes MSE between predicted and ground truth velocities
     """
@@ -534,7 +534,7 @@ class FlowMatchingLoss(nn.Module):
         eps=1e-6,
         reduction: str = "mean",
     ) -> None:
-        super(FlowMatchingLoss, self).__init__()
+        super(FMLoss, self).__init__()
         self.weight_mse = weight_mse
         self.weight_dna = weight_dna
         self.weight_rna = weight_rna
@@ -546,8 +546,7 @@ class FlowMatchingLoss(nn.Module):
         self,
         velocity_pred: torch.Tensor,
         velocity_target: torch.Tensor,
-        timestep: torch.Tensor,
-        coords_noisy: torch.Tensor,
+        coords_pred: torch.Tensor,
         coords_target: torch.Tensor,
         coordinate_mask: torch.Tensor,
         is_dna: torch.Tensor,
@@ -586,20 +585,13 @@ class FlowMatchingLoss(nn.Module):
             + self.weight_ligand * is_ligand
         )  # [N_atom] or [..., N_atom]
 
-        # Calculate implied predicted coordinates from velocity 
-        # x_pred = x_t + (1-t) * v_pred
-        timestep = timestep.unsqueeze(-1).unsqueeze(-1)  # [..., N_sample, 1, 1]
-        coords_pred = coords_noisy + (1 - timestep) * velocity_pred # [..., N_sample, N_atom, 3] 
-
         # Apply coordinate_mask
         weight = weight * coordinate_mask  # [N_atom] or [..., N_atom]
         coords_target = coords_target * coordinate_mask.unsqueeze(dim=-1)
         coords_pred = coords_pred * coordinate_mask[..., None, :, None]
 
         # Reshape to add "N_sample" dimension for true velocity
-        velocity_target = expand_at_dim(
-            velocity_target, dim=-3, n=N_sample
-        )  # [..., N_sample, N_atom, 3]
+        velocity_target = expand_at_dim(velocity_target, dim=-3, n=N_sample)  # [..., N_sample, N_atom, 3]
         if len(weight.shape) > 1:
             weight = expand_at_dim(
                 weight, dim=-2, n=N_sample
@@ -607,11 +599,14 @@ class FlowMatchingLoss(nn.Module):
 
         # Align GT velocity to predicted velocity
         d = velocity_pred.dtype
-        # Some ops in weighted_rigid_align do not support BFloat16 training
-        with torch.cuda.amp.autocast(enabled=False):
-            velocity_target_aligned = weighted_rigid_align(
-                x=velocity_target.to(torch.float32),  # [..., N_sample, N_atom, 3]
-                x_target=velocity_pred.to(
+        # Some ops in weighted_rigid_align do not support BFloat16 training 
+        # #TODO: the below logic is wrong
+        # Here, we should align the target coordinates to the predicted coordinates, 
+        # then get the velocity by applying the same transformation to the target velocity
+        with torch.cuda.amp.autocast(enabled=False): 
+            coords_target_aligned, rot, trans = weighted_rigid_align(
+                x=coords_target.to(torch.float32),  # [..., N_sample, N_atom, 3]
+                x_target=coords_pred.to(
                     torch.float32
                 ),  # [..., N_sample, N_atom, 3]
                 atom_weight=weight.to(
@@ -619,9 +614,13 @@ class FlowMatchingLoss(nn.Module):
                 ),  # [N_atom] or [..., N_sample, N_atom]
                 stop_gradient=True,
             )  # [..., N_sample, N_atom, 3]
-            velocity_target_aligned = velocity_target_aligned.to(d)
+            coords_target_aligned = coords_target_aligned.to(d)
 
-        return (velocity_target_aligned.detach(), weight.detach())
+            # TODO: use workings on ipad to apply correct transform to the target velocity
+
+
+
+        return (coords_target_aligned.detach(), rot, trans, weight.detach())
 
     def forward(
         self,
@@ -710,7 +709,7 @@ class ProtenixLoss(nn.Module):
 
         self.loss_weight = {  
             # diffusion
-            "mse_loss": self.alpha_diffusion,
+            "_loss": self.alpha_diffusion,
             "smooth_lddt_loss": self.alpha_diffusion
             * self.weight_smooth_lddt,  # Different from AF3 appendix eq(6), where smooth_lddt has no weight
         }
@@ -719,12 +718,12 @@ class ProtenixLoss(nn.Module):
         #self.pde_loss = PDELoss(**configs.loss.pde)
         #self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
         #self.pae_loss = PAELoss(**configs.loss.pae)
-        self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
+        self.fm_loss = FMLoss(**configs.loss.diffusion.flow_matching)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
         #self.distogram_loss = DistogramLoss(**configs.loss.distogram)
 
-    def calculate_label(
+    def calculate_label( # TODO: dont need to touch this 
         self,
         feat_dict: dict[str, Any],
         label_dict: dict[str, Any],
@@ -769,7 +768,7 @@ class ProtenixLoss(nn.Module):
         del distance, distance_mask, lddt_mask
         return label_dict
 
-    def calculate_prediction(
+    def calculate_prediction( # TODO: dont need to touch this 
         self,
         pred_dict: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
@@ -789,7 +788,7 @@ class ProtenixLoss(nn.Module):
             )  # [..., N_atom, N_atom]
         return pred_dict
 
-    def aggregate_losses(
+    def aggregate_losses( # TODO: dont need to touch this 
         self, loss_fns: dict, has_valid_resolution: Optional[torch.Tensor] = None
     ) -> tuple[torch.Tensor, dict]:
         """
@@ -797,7 +796,7 @@ class ProtenixLoss(nn.Module):
 
         Args:
             loss_fns (dict): Dictionary of loss functions to be aggregated.
-            has_valid_resolution (Optional[torch.Tensor]): Tensor indicating valid resolutions. Defaults to None.
+            has_valid_resolution (Optional[torch.Tensor]): Tensor indicating valid resolutions. Defaults to None. # TODO: can be removed
 
         Returns:
             tuple[torch.Tensor, dict]:
@@ -837,7 +836,7 @@ class ProtenixLoss(nn.Module):
 
         return cum_loss, all_metrics
 
-    def calculate_losses(
+    def calculate_losses( # TODO: needs editing
         self,
         feat_dict: dict[str, Any],
         pred_dict: dict[str, torch.Tensor],
@@ -861,10 +860,8 @@ class ProtenixLoss(nn.Module):
         assert mode in ["train", "eval", "inference"]
         if mode == "train":
             if not self.configs.train_confidence_only:
-                # Scale diffusion loss with noise-level
-                diffusion_per_sample_scale = (
-                    pred_dict["noise_level"] ** 2 + self.configs.sigma_data**2
-                ) / (self.configs.sigma_data * pred_dict["noise_level"]) ** 2
+                # Scale diffusion loss with noise-level #TODO: for flow matching this is  1.0 / (2 * sigma_data ** 2)
+                diffusion_per_sample_scale =  1.0 / (2 * self.configs.sigma_data ** 2)
 
         else:
             # No scale is required
@@ -912,7 +909,7 @@ class ProtenixLoss(nn.Module):
                 )
             loss_fns.update(
                 {
-                    "mse_loss": lambda: self.mse_loss(
+                    "fm_loss": lambda: self.fm_loss( # TODO: change this to FMLoss
                         pred_coordinate=pred_dict["coordinate"],
                         true_coordinate=label_dict["coordinate"],
                         coordinate_mask=label_dict["coordinate_mask"],
@@ -924,7 +921,7 @@ class ProtenixLoss(nn.Module):
                 }
             )
 
-        # Confidence Loss:
+        # Confidence Loss: #TODO: this can be removed and thus we can remove the resolution check from aggregate_losses
         # Only when resoluton is in [min_resolution, max_resolution] the confidence loss is considered
         # NOTE: here we assume batch_size == 1
         resolution = feat_dict["resolution"].item()
@@ -948,7 +945,7 @@ class ProtenixLoss(nn.Module):
         cum_loss, metrics = self.aggregate_losses(loss_fns, has_valid_resolution)
         return cum_loss, metrics
 
-    def forward(
+    def forward( #TODO: needs editing
         self,
         feat_dict: dict[str, Any],
         pred_dict: dict[str, torch.Tensor],
@@ -986,7 +983,7 @@ class ProtenixLoss(nn.Module):
                 mode=mode,
             )
         else:
-            if "coordinate" in pred_dict:
+            if "coordinate" in pred_dict: # TODO: change to velocity
                 N_sample = pred_dict["coordinate"].shape[-3]
             elif self.configs.train_confidence_only:
                 N_sample = pred_dict["coordinate_mini"].shape[-3]
@@ -1003,14 +1000,14 @@ class ProtenixLoss(nn.Module):
                 )
                 pred_dict_i = {}
                 for key, value in pred_dict.items():
-                    if key in ["coordinate"] and mode == "train":
+                    if key in ["coordinate"] and mode == "train": # TODO: change to velocity 
                         pred_dict_i[key] = value[
                             i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
                             :,
                             :,
                         ]
                     elif (
-                        key in ["coordinate", "plddt", "pae", "pde", "resolved"]
+                        key in ["coordinate", "plddt", "pae", "pde", "resolved"] # TODO: remove keys and change to velocity
                         and mode != "train"
                     ):
                         pred_dict_i[key] = value[
@@ -1018,7 +1015,7 @@ class ProtenixLoss(nn.Module):
                             :,
                             :,
                         ]
-                    elif key == "noise_level":
+                    elif key == "noise_level": #TODO: change to timestep, but also, where is this used? Probably in timestep dependent loss weighting but didn't we get rid of this?
                         pred_dict_i[key] = value[
                             i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size
                         ]

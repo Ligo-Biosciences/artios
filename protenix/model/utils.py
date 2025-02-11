@@ -494,3 +494,28 @@ def simple_merge_dict_list(dict_list: list[dict]) -> dict:
     for k, v in merged_dict.items():
         merged_dict[k] = np.concatenate(v)
     return merged_dict
+
+
+def sample_logit_normal(
+    size, 
+    device, 
+    dtype=torch.float32, 
+    loc=0, 
+    scale=1, 
+    generator=None
+):
+    """Sample from a logit-normal distribution. Used to generate timesteps for flow matching."""
+    normal_samples = torch.normal(loc, scale, size, device=device, dtype=dtype, generator=generator)
+    return torch.sigmoid(normal_samples)
+
+
+def noise_w_flow_matching(
+    data, 
+    noise, 
+    timestep, 
+    sigma_min=1e-5
+):
+    """Flow-matching interpolation between the data and noise.
+    Requires data, noise and timestep to be broadcastable. 
+    """
+    return timestep * data + (1 - (1 - sigma_min) * timestep) * noise

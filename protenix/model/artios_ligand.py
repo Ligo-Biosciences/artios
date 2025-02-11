@@ -8,8 +8,8 @@ import numpy as np
 from protenix.model import sample_confidence
 from protenix.model.generator import (
     sample_diffusion_training, 
-    TrainingNoiseSampler,
-    InferenceNoiseScheduler,
+    TrainingTimestepSampler,
+    InferenceTimestepScheduler,
     sample_diffusion,
     sample_diffusion_training
 )
@@ -28,9 +28,9 @@ class ArtiosLigand(nn.Module):
         self.configs = configs
 
         # Diffusion 
-        self.train_noise_sampler = TrainingNoiseSampler(**configs.train_noise_sampler)
-        self.inference_noise_scheduler = InferenceNoiseScheduler(
-           **configs.inference_noise_scheduler
+        self.train_timestep_sampler = TrainingTimestepSampler(**configs.train_timestep_sampler) 
+        self.inference_timestep_scheduler = InferenceTimestepScheduler(
+           **configs.inference_timestep_scheduler
         )
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
@@ -48,6 +48,7 @@ class ArtiosLigand(nn.Module):
         self.diffusion_module = DiffusionModule(
             **configs.model.diffusion_module
         )
+        self.sigma_data = configs.sigma_data
 
     def sample_diffusion(self, **kwargs) -> torch.Tensor:
         """
@@ -59,10 +60,10 @@ class ArtiosLigand(nn.Module):
         _configs = {
             key: self.configs.sample_diffusion.get(key)
             for key in [
-                "gamma0",
-                "gamma_min",
-                "noise_scale_lambda",
-                "step_scale_eta",
+                "stoch_type",
+                "alpha",
+                "gamma",
+                "sigma_data"
             ]
         }
         _configs.update(
@@ -139,7 +140,7 @@ class ArtiosLigand(nn.Module):
         #    "resolved": _cat(pred_dicts, "resolved"),
         #}
         all_pred_dict = {
-            "coordinate": _cat(pred_dicts, "coordinate"),
+            "coordinate": _cat(pred_dicts, "coordinate")
         }
 
         all_log_dict = simple_merge_dict_list(log_dicts)
@@ -196,65 +197,37 @@ class ArtiosLigand(nn.Module):
                 del input_feature_dict[key]
             torch.cuda.empty_cache()
         step_trunk = time.time()
-        time_tracker.update({"pairformer": step_trunk - step_st})
+        time_tracker.update({"input_embed": step_trunk - step_st})
 
-        # Sample diffusion
-        # [..., N_sample, N_atom, 3]
+        ### Diffusion
+        # Number of samples to generate from the same conditioning
         N_sample = self.configs.sample_diffusion["N_sample"]
         N_step = self.configs.sample_diffusion["N_step"]
-
-        noise_schedule = self.inference_noise_scheduler(
-            N_step=N_step, device=s_inputs.device, dtype=s_inputs.dtype
-        )
+        # Generate timesteps for solving the FM SDE
+        timesteps = self.inference_timestep_scheduler(N_step=N_step,
+                                                      device=s_inputs.device, 
+                                                      dtype=s_inputs.dtype)
+        # N_sample different ouputs created via diffusion
         pred_dict["coordinate"] = self.sample_diffusion(
             denoise_net=self.diffusion_module,
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs,
             N_sample=N_sample,
-            noise_schedule=noise_schedule,
+            timesteps=timesteps,
             inplace_safe=inplace_safe,
         )
-
         step_diffusion = time.time()
+
         time_tracker.update({"diffusion": step_diffusion - step_trunk})
         if mode == "inference" and N_token > 2000:
             torch.cuda.empty_cache()
-        
-        # Distogram logits: log contact_probs only, to reduce the dimension
-        #pred_dict["contact_probs"] = sample_confidence.compute_contact_prob(
-        #    distogram_logits=self.distogram_head(z),
-        #    **sample_confidence.get_bin_params(self.configs.loss.distogram),
-        #)  # [N_token, N_token]
-
-        # Confidence logits
-        #(
-        #    pred_dict["plddt"],
-        #    pred_dict["pae"],
-        #    pred_dict["pde"],
-        #    pred_dict["resolved"],
-        #) = self.run_confidence_head(
-        #    input_feature_dict=input_feature_dict,
-        #    s_inputs=s_inputs,
-        #    s_trunk=s,
-        #    z_trunk=z,
-        #    pair_mask=None,
-        #    x_pred_coords=pred_dict["coordinate"],
-        #    use_memory_efficient_kernel=self.configs.use_memory_efficient_kernel,
-        #    use_deepspeed_evo_attention=self.configs.use_deepspeed_evo_attention
-        #    and deepspeed_evo_attention_condition_satisfy,
-        #    use_lma=self.configs.use_lma,
-        #    inplace_safe=inplace_safe,
-        #    chunk_size=chunk_size,
-        #)
-        #step_confidence = time.time()
-        #time_tracker.update({"confidence": step_confidence - step_diffusion})
-
         time_tracker.update({"model_forward": time.time() - step_st})
 
-        # Permutation: when label is given, permute coordinates and other heads
+        ### Permutation
+        # When label is given, permute coordinates and other heads
         step_permutation = time.time()
         if label_dict is not None and symmetric_permutation is not None:
-            pred_dict, log_dict = symmetric_permutation.permute_inference_pred_dict( 
+            pred_dict, log_dict = symmetric_permutation.permute_inference_pred_dict( #TODO: change to update velocities too
                 input_feature_dict=input_feature_dict,
                 pred_dict=pred_dict,
                 label_dict=label_dict,
@@ -265,35 +238,11 @@ class ArtiosLigand(nn.Module):
             time_tracker.update({"permutation": time.time() - last_step_seconds})
 
         # Summary Confidence & Full Data
-        # Computed after coordinates and logits are permuted
+        # Computed after coordinates and logits are permuted #TODO: can we get rid of this?
         if label_dict is None:
             interested_atom_mask = None
         else:
             interested_atom_mask = label_dict.get("interested_ligand_mask", None)
-
-        #pred_dict["summary_confidence"], pred_dict["full_data"] = (
-        #    sample_confidence.compute_full_data_and_summary(
-        #        configs=self.configs,
-        #        pae_logits=pred_dict["pae"],
-        #        plddt_logits=pred_dict["plddt"],
-        #        pde_logits=pred_dict["pde"],
-        #        contact_probs=pred_dict.get(
-        #            "per_sample_contact_probs", pred_dict["contact_probs"]
-        #        ),
-        #        token_asym_id=input_feature_dict["asym_id"],
-        #        token_has_frame=input_feature_dict["has_frame"],
-        #        atom_coordinate=pred_dict["coordinate"],
-        #        atom_to_token_idx=input_feature_dict["atom_to_token_idx"],
-        #        atom_is_polymer=1 - input_feature_dict["is_ligand"],
-        #        N_recycle=N_cycle,
-        #        interested_atom_mask=interested_atom_mask,
-        #        return_full_data=True,
-        #        mol_id=(input_feature_dict["mol_id"] if mode != "inference" else None),
-        #        elements_one_hot=(
-        #            input_feature_dict["ref_element"] if mode != "inference" else None
-        #        ),
-        #    )
-        #)
 
         return pred_dict, log_dict, time_tracker
     
@@ -336,7 +285,8 @@ class ArtiosLigand(nn.Module):
         log_dict = {}
         pred_dict = {}
 
-        # Mini-rollout: used for confidence and label permutation
+        ### Mini-rollout
+        # Mini rollout is performed for confidence and label permutation
         with torch.no_grad():
             # [..., 1, N_atom, 3]
             N_sample_mini_rollout = self.configs.sample_diffusion[
@@ -344,16 +294,16 @@ class ArtiosLigand(nn.Module):
             ]  # =1
             N_step_mini_rollout = self.configs.sample_diffusion["N_step_mini_rollout"]
 
-            coordinate_mini = self.sample_diffusion(
+            coordinate_mini = self.sample_diffusion( 
                 denoise_net=self.diffusion_module,
                 input_feature_dict=input_feature_dict,
                 s_inputs=s_inputs.detach(),
-                N_sample=N_sample_mini_rollout,
-                noise_schedule=self.inference_noise_scheduler(
+                timesteps=self.inference_timestep_scheduler(
                     N_step=N_step_mini_rollout,
                     device=s_inputs.device,
                     dtype=s_inputs.dtype,
                 ),
+                N_sample=N_sample_mini_rollout
             )
             coordinate_mini.detach_()
             pred_dict["coordinate_mini"] = coordinate_mini
@@ -369,63 +319,41 @@ class ArtiosLigand(nn.Module):
             )
             log_dict.update(perm_log_dict)
 
-
-        # Confidence head: use mini-rollout prediction, and detach token embeddings
-        #plddt_pred, pae_pred, pde_pred, resolved_pred = self.run_confidence_head(
-        #    input_feature_dict=input_feature_dict,
-        #    s_inputs=s_inputs,
-        #    s_trunk=s,
-        #    z_trunk=z,
-        #    pair_mask=None,
-        #    x_pred_coords=coordinate_mini,
-        #    use_memory_efficient_kernel=self.configs.use_memory_efficient_kernel,
-        #    use_deepspeed_evo_attention=self.configs.use_deepspeed_evo_attention
-        #    and deepspeed_evo_attention_condition_satisfy,
-        #    use_lma=self.configs.use_lma,
-        #    inplace_safe=inplace_safe,
-        #    chunk_size=chunk_size,
-        #)
-        #pred_dict.update(
-        #    {
-        #        "plddt": plddt_pred,
-        #        "pae": pae_pred,
-        #        "pde": pde_pred,
-        #        "resolved": resolved_pred,
-        #    }
-        #)
-        #if self.train_confidence_only:
-        #    # Skip diffusion loss and distogram loss. Return now.
-        #    return pred_dict, label_dict, log_dict
-
-
-        # Denoising: use permuted coords to generate noisy samples and perform denoising
-        # N_sample: number of noisy samples generated from the same ground truth.
-        # x_denoised: [..., N_sample, N_atom, 3]
-        # x_noise_level: [..., N_sample]
+        ### Diffusion training
         N_sample = self.diffusion_batch_size
-        _, x_denoised, x_noise_level = autocasting_disable_decorator(
+        x_gt_augment, v_gt, coords_pred, velocity_pred, timestep = autocasting_disable_decorator( 
             self.configs.skip_amp.sample_diffusion_training
         )(sample_diffusion_training)(
-            noise_sampler=self.train_noise_sampler,
+            timestep_sampler=self.train_timestep_sampler,
             denoise_net=self.diffusion_module,
             label_dict=label_dict,
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs,
+            sigma_data=self.sigma_data,
             N_sample=N_sample,
             diffusion_chunk_size=self.configs.diffusion_chunk_size,
         )
+
+        # Update dicts
         pred_dict.update(
             {
                 # [..., N_sample=48, N_atom, 3]: diffusion loss
-                "coordinate": x_denoised,
-                "noise_level": x_noise_level,
+                "velocity": velocity_pred,
+                "coordinate": coords_pred,
+                "timestep": timestep, 
+            }
+        )
+        label_dict.update(
+            {
+                "velocity": v_gt,
+                "coordinate": x_gt_augment,
             }
         )
 
         # Permute symmetric atom/chain in each sample to match true structure
         # Note: currently chains cannot be permuted since label is cropped
         pred_dict, perm_log_dict, _, _ = (
-            symmetric_permutation.permute_diffusion_sample_to_match_label( 
+            symmetric_permutation.permute_diffusion_sample_to_match_label( # TODO: check if need to change velocity
                 input_feature_dict, pred_dict, label_dict, stage="train"
             )
         )
@@ -468,7 +396,7 @@ class ArtiosLigand(nn.Module):
             assert label_dict is not None
             assert symmetric_permutation is not None
 
-            pred_dict, label_dict, log_dict = self.main_train_loop(
+            pred_dict, label_dict, log_dict = self.main_train_loop(  
                 input_feature_dict=input_feature_dict,
                 label_full_dict=label_full_dict,
                 label_dict=label_dict,
@@ -477,7 +405,7 @@ class ArtiosLigand(nn.Module):
                 chunk_size=chunk_size,
             )
         elif mode == "inference":
-            pred_dict, log_dict, time_tracker = self.main_inference_loop(
+            pred_dict, log_dict, time_tracker = self.main_inference_loop( 
                 input_feature_dict=input_feature_dict,
                 label_dict=None,
                 mode=mode,
@@ -495,7 +423,7 @@ class ArtiosLigand(nn.Module):
                 )
                 label_dict.update(label_full_dict)
 
-            pred_dict, log_dict, time_tracker = self.main_inference_loop(
+            pred_dict, log_dict, time_tracker = self.main_inference_loop( 
                 input_feature_dict=input_feature_dict,
                 label_dict=label_dict,
                 mode=mode,

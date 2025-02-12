@@ -549,6 +549,7 @@ class FMLoss(nn.Module):
         coords_pred: torch.Tensor,
         coords_target: torch.Tensor,
         coordinate_mask: torch.Tensor,
+        noise: torch.Tensor,
         is_dna: torch.Tensor,
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
@@ -560,14 +561,14 @@ class FMLoss(nn.Module):
                 [..., N_sample, N_atom, 3]
             velocity_target (torch.Tensor): ground truth velocity
                 [..., N_sample, N_atom, 3]
-            timestep (torch.Tensor): noising timestep for each sample
-                [..., N_sample]
-            coords_noisy (torch.Tensor): noised coords (x_t = (1-t)*x_0 + t*x_1)
+            coords_pred (torch.Tensor): predicted coordinates
                 [..., N_sample, N_atom, 3]
             coords_target (torch.Tensor): ground truth coordinates
                 [..., N_atom, 3]
             coordinate_mask (torch.Tensor): whether true coordinates exist
                 [N_atom] or [..., N_atom]
+            noise (torch.Tensor): Initial noise used to generate predictions.
+                [..., N_sample, N_atom, 3]
             is_dna / is_rna / is_ligand (torch.Tensor): mol type mask
                 [N_atom] or [..., N_atom]
 
@@ -600,11 +601,9 @@ class FMLoss(nn.Module):
         # Align GT velocity to predicted velocity
         d = velocity_pred.dtype
         # Some ops in weighted_rigid_align do not support BFloat16 training 
-        # #TODO: the below logic is wrong
-        # Here, we should align the target coordinates to the predicted coordinates, 
-        # then get the velocity by applying the same transformation to the target velocity
         with torch.cuda.amp.autocast(enabled=False): 
-            coords_target_aligned, rot, trans = weighted_rigid_align(
+            # Get rotation and translation to align target coords to predicted coords
+            coords_target_aligned, rot_mat, trans_vec = weighted_rigid_align(
                 x=coords_target.to(torch.float32),  # [..., N_sample, N_atom, 3]
                 x_target=coords_pred.to(
                     torch.float32
@@ -616,20 +615,22 @@ class FMLoss(nn.Module):
             )  # [..., N_sample, N_atom, 3]
             coords_target_aligned = coords_target_aligned.to(d)
 
-            # TODO: use workings on ipad to apply correct transform to the target velocity
+            # Use rot_mat and trans_vec to transform target velocity
+            # R*v_gt + (R-I)*x_0 + b ~ v_pred 
+            velocity_target_aligned = torch.matmul(velocity_target.to(d), rot_mat.transpose(-1, -2)) + \
+                torch.matmul(noise.to(d), (rot_mat - torch.eye(3, device=rot_mat.device, dtype=rot_mat.dtype)).transpose(-1, -2)) + \
+                trans_vec.unsqueeze(-2)  # [..., N_sample, N_atom, 3]
 
-
-
-        return (coords_target_aligned.detach(), rot, trans, weight.detach())
+        return (velocity_target_aligned.detach(), weight.detach())
 
     def forward(
         self,
         velocity_pred: torch.Tensor,
         velocity_target: torch.Tensor,
-        timestep: torch.Tensor,
-        coords_noisy: torch.Tensor,
+        coords_pred: torch.Tensor,
         coords_target: torch.Tensor,
         coordinate_mask: torch.Tensor,
+        noise: torch.Tensor,
         is_dna: torch.Tensor,
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
@@ -640,14 +641,16 @@ class FMLoss(nn.Module):
         Args:
             velocity_pred (torch.Tensor): predicted velocity from network
                 [..., N_sample, N_atom, 3]
-            timestep (torch.Tensor): noising timestep for each sample
-                [..., N_sample]
-            coords_noisy (torch.Tensor): noised coords (x_t = (1-t)*x_0 + t*x_1)
+            velocity_target (torch.Tensor): ground truth velocity
+                [..., N_sample, N_atom, 3]
+            coords_pred (torch.Tensor): predicted coordinates
                 [..., N_sample, N_atom, 3]
             coords_target (torch.Tensor): ground truth coordinates
                 [..., N_atom, 3]
             coordinate_mask (torch.Tensor): whether true coordinates exist
                 [N_atom] or [..., N_atom]
+            noise (torch.Tensor): Initial noise used to generate predictions.
+                [..., N_sample, N_atom, 3]
             is_dna / is_rna / is_ligand (torch.Tensor): mol type mask
                 [N_atom] or [..., N_atom]
             per_sample_scale (torch.Tensor, optional): whether to scale the loss by the per-sample noise-level
@@ -663,10 +666,10 @@ class FMLoss(nn.Module):
             velocity_target_aligned, weight = self.weighted_rigid_align(
                 velocity_pred=velocity_pred,
                 velocity_target=velocity_target,
-                timestep=timestep,
-                coords_noisy=coords_noisy,
+                coords_pred=coords_pred,
                 coords_target=coords_target,
                 coordinate_mask=coordinate_mask,
+                noise=noise,
                 is_dna=is_dna,
                 is_rna=is_rna,
                 is_ligand=is_ligand,
@@ -718,12 +721,13 @@ class ProtenixLoss(nn.Module):
         #self.pde_loss = PDELoss(**configs.loss.pde)
         #self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
         #self.pae_loss = PAELoss(**configs.loss.pae)
+        self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
         self.fm_loss = FMLoss(**configs.loss.diffusion.flow_matching)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
         #self.distogram_loss = DistogramLoss(**configs.loss.distogram)
 
-    def calculate_label( # TODO: dont need to touch this 
+    def calculate_label( 
         self,
         feat_dict: dict[str, Any],
         label_dict: dict[str, Any],
@@ -768,7 +772,7 @@ class ProtenixLoss(nn.Module):
         del distance, distance_mask, lddt_mask
         return label_dict
 
-    def calculate_prediction( # TODO: dont need to touch this 
+    def calculate_prediction(  
         self,
         pred_dict: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
@@ -788,7 +792,7 @@ class ProtenixLoss(nn.Module):
             )  # [..., N_atom, N_atom]
         return pred_dict
 
-    def aggregate_losses( # TODO: dont need to touch this 
+    def aggregate_losses(  
         self, loss_fns: dict, has_valid_resolution: Optional[torch.Tensor] = None
     ) -> tuple[torch.Tensor, dict]:
         """
@@ -836,7 +840,7 @@ class ProtenixLoss(nn.Module):
 
         return cum_loss, all_metrics
 
-    def calculate_losses( # TODO: needs editing
+    def calculate_losses(
         self,
         feat_dict: dict[str, Any],
         pred_dict: dict[str, torch.Tensor],
@@ -860,7 +864,7 @@ class ProtenixLoss(nn.Module):
         assert mode in ["train", "eval", "inference"]
         if mode == "train":
             if not self.configs.train_confidence_only:
-                # Scale diffusion loss with noise-level #TODO: for flow matching this is  1.0 / (2 * sigma_data ** 2)
+                # Scale 
                 diffusion_per_sample_scale =  1.0 / (2 * self.configs.sigma_data ** 2)
 
         else:
@@ -871,7 +875,7 @@ class ProtenixLoss(nn.Module):
             # Skip Diffusion Loss and distogram loss
             loss_fns = {}
         else:
-            # Diffusion Loss: SmoothLDDTLoss + MSELoss 
+            # Diffusion Loss: SmoothLDDTLoss + FMLoss 
             loss_fns = {}
             if self.configs.loss.diffusion_lddt_loss_dense:
                 loss_fns.update(
@@ -909,10 +913,13 @@ class ProtenixLoss(nn.Module):
                 )
             loss_fns.update(
                 {
-                    "fm_loss": lambda: self.fm_loss( # TODO: change this to FMLoss
-                        pred_coordinate=pred_dict["coordinate"],
-                        true_coordinate=label_dict["coordinate"],
+                    "fm_loss": lambda: self.fm_loss( 
+                        velocity_pred=pred_dict["velocity"],
+                        velocity_target=label_dict["velocity"],
+                        coords_pred=pred_dict["coordinate"],
+                        coords_target=label_dict["coordinate"],
                         coordinate_mask=label_dict["coordinate_mask"],
+                        noise=pred_dict["noise"],
                         is_rna=feat_dict["is_rna"],
                         is_dna=feat_dict["is_dna"],
                         is_ligand=feat_dict["is_ligand"],
@@ -1014,10 +1021,6 @@ class ProtenixLoss(nn.Module):
                             i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
                             :,
                             :,
-                        ]
-                    elif key == "noise_level": #TODO: change to timestep, but also, where is this used? Probably in timestep dependent loss weighting but didn't we get rid of this?
-                        pred_dict_i[key] = value[
-                            i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size
                         ]
                     else:
                         pred_dict_i[key] = value

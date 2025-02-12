@@ -55,7 +55,7 @@ class TestGenerator:
         
         # Test scheduling
         n_steps = 50
-        timesteps = scheduler(N_steps=n_steps, device=device)
+        timesteps = scheduler(N_step=n_steps, device=device)
         
         # Check output shape and values
         assert timesteps.shape == (n_steps + 1,)
@@ -112,7 +112,7 @@ class TestGenerator:
         
         # Test with and without diffusion chunking
         for chunk_size in [None, 2]:
-            x_gt_augment, coords_pred, velocity_pred, timestep = sample_diffusion_training(
+            noise, x_gt_augment, v_gt_coords_pred, coords_pred, velocity_pred, timestep = sample_diffusion_training(
                 timestep_sampler=timestep_sampler,
                 denoise_net=mock_denoise_net,
                 label_dict=label_dict,

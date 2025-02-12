@@ -119,23 +119,25 @@ def sample_diffusion(
     dtype = s_inputs.dtype
 
     # Stochasticity schedule g
-    if stoch_type == "deterministic":
-        g = torch.zeros_like(timesteps)
-    elif stoch_type == "constant":
-        g = torch.ones_like(timesteps) * (0.5 * (alpha**2))
-    elif stoch_type == "non_singular":
-        g = 0.5 * (alpha**2) * (1 - timesteps)
-    elif stoch_type == "zero_ends":
-        g = 0.5 * (alpha**2) * timesteps * (1 - timesteps)  
-    elif stoch_type == "proteina":
-        g = alpha / (timesteps + 0.01)    
-    else:
+    stoch_schedules = {
+        "deterministic": lambda t: torch.zeros_like(t),
+        "constant": lambda t: torch.ones_like(t) * (0.5 * (alpha**2)),
+        "non_singular": lambda t: 0.5 * (alpha**2) * (1 - t),
+        "zero_ends": lambda t: 0.5 * (alpha**2) * t * (1 - t),
+        "proteina": lambda t: alpha / (t + 0.01)
+    }
+
+    if stoch_type not in stoch_schedules:
         raise ValueError(f"Invalid stochasticity type: {stoch_type}")
+        
+    g = stoch_schedules[stoch_type](timesteps)
 
     def _chunk_sample_diffusion(chunk_n_sample, inplace_safe):
         """ 
         Performs all sampling logic for a single chunk of samples 
         i.e generate noise, send noise through Euler steps, return denoised coordinates
+
+        TODO: switch to coordinate-based SDE
         """
         # Generate noise
         x_0 = sigma_data * torch.randn(
@@ -264,11 +266,14 @@ def sample_diffusion_training(
     )  # [..., N_sample, N_atom, 3]
 
     # Get timestep for noising
+    # timestep: independent timesteps for each sample [..., N_sample]
     timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype) 
     # Generate noise
-    noise = torch.randn_like(x_target_augment, dtype=dtype) * sigma_data # [..., N_sample, N_atom, 3]
+    noise = torch.randn_like(x_target_augment, dtype=dtype) * sigma_data  # [..., N_sample, N_atom, 3]
     # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )
-    x_noisy = noise_w_flow_matching(x_target_augment, noise, timestep[...,:, None, None])
+    x_noisy = noise_w_flow_matching(x_target_augment, noise, timestep[..., :, None, None])
+
+    # TODO: switch to coordinate-based sampling, not velocity
     # Generate ground truth velocity
     v_target = (x_target_augment - noise) * label_dict["coordinate_mask"][..., None, :, None]
 
@@ -280,7 +285,7 @@ def sample_diffusion_training(
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs
         )
-        coords_pred = x_noisy + (1 - timestep[...,:, None, None]) * velocity_pred
+        coords_pred = x_noisy + (1 - timestep[..., :, None, None]) * velocity_pred
     else:
         velocity_pred = [] 
         coords_pred = []
@@ -300,7 +305,7 @@ def sample_diffusion_training(
                 input_feature_dict=input_feature_dict,
                 s_inputs=s_inputs
             )
-            x_pred_i = x_noisy_i + (1 - timestep_i[...,:, None, None]) * velocity_pred_i
+            x_pred_i = x_noisy_i + (1 - timestep_i[..., :, None, None]) * velocity_pred_i
 
             velocity_pred.append(velocity_pred_i)
             coords_pred.append(x_pred_i)

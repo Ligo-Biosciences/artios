@@ -255,7 +255,7 @@ def sample_diffusion_training(
     dtype = label_dict["coordinate"].dtype
 
     # Create N_sample versions of the input structure by randomly rotating and translating
-    x_gt_augment = centre_random_augmentation(
+    x_target_augment = centre_random_augmentation(
         x_input_coords=label_dict["coordinate"],
         N_sample=N_sample,
         mask=label_dict["coordinate_mask"],
@@ -266,11 +266,11 @@ def sample_diffusion_training(
     # Get timestep for noising
     timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype) 
     # Generate noise
-    noise = torch.randn_like(x_gt_augment, dtype=dtype) * sigma_data # [..., N_sample, N_atom, 3]
+    noise = torch.randn_like(x_target_augment, dtype=dtype) * sigma_data # [..., N_sample, N_atom, 3]
     # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )
-    x_noisy = noise_w_flow_matching(x_gt_augment, noise, timestep[...,:, None, None])
+    x_noisy = noise_w_flow_matching(x_target_augment, noise, timestep[...,:, None, None])
     # Generate ground truth velocity
-    v_gt = (x_gt_augment - noise) * label_dict["coordinate_mask"][..., None, :, None]
+    v_target = (x_target_augment - noise) * label_dict["coordinate_mask"][..., None, :, None]
 
     # Get velocity predictions [..., N_sample, N_atom, 3]
     if diffusion_chunk_size is None:
@@ -307,4 +307,4 @@ def sample_diffusion_training(
         velocity_pred = torch.cat(velocity_pred, dim=-3)
         coords_pred = torch.cat(coords_pred, dim=-3)
 
-    return x_gt_augment, v_gt,coords_pred, velocity_pred, timestep # TODO: why are we returning x_gt_augment? probably for the loss? might need to return v_gt?
+    return noise, x_target_augment, v_target, coords_pred, velocity_pred, timestep 

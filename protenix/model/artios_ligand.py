@@ -321,7 +321,7 @@ class ArtiosLigand(nn.Module):
 
         ### Diffusion training
         N_sample = self.diffusion_batch_size
-        x_gt_augment, v_gt, coords_pred, velocity_pred, timestep = autocasting_disable_decorator( 
+        noise, x_gt_augment, v_gt, coords_pred, velocity_pred, timestep = autocasting_disable_decorator( 
             self.configs.skip_amp.sample_diffusion_training
         )(sample_diffusion_training)(
             timestep_sampler=self.train_timestep_sampler,

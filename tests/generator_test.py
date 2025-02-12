@@ -81,7 +81,7 @@ class TestGenerator:
         timesteps = torch.linspace(0, 1, n_steps, device=device)
         
         # Test different stochasticity types
-        for stoch_type in ["deterministic", "constant", "non_singular", "zero_ends", "proteina"]:
+        for stoch_type in ["deterministic", "constant", "non_singular", "zero_ends"]:
             coords_pred = sample_diffusion(
                 denoise_net=mock_denoise_net,
                 input_feature_dict=input_dict,
@@ -112,7 +112,7 @@ class TestGenerator:
         
         # Test with and without diffusion chunking
         for chunk_size in [None, 2]:
-            noise, x_gt_augment, v_gt_coords_pred, coords_pred, velocity_pred, timestep = sample_diffusion_training(
+            x_gt_augment, coords_pred, timestep = sample_diffusion_training(
                 timestep_sampler=timestep_sampler,
                 denoise_net=mock_denoise_net,
                 label_dict=label_dict,
@@ -125,12 +125,10 @@ class TestGenerator:
             # Check output shapes and values
             assert x_gt_augment.shape == (*batch_shape, n_samples, n_atoms, 3)
             assert coords_pred.shape == (*batch_shape, n_samples, n_atoms, 3)
-            assert velocity_pred.shape == (*batch_shape, n_samples, n_atoms, 3)
             assert timestep.shape == (*batch_shape, n_samples)
             
             assert not torch.isnan(x_gt_augment).any()
             assert not torch.isnan(coords_pred).any()
-            assert not torch.isnan(velocity_pred).any()
             assert not torch.isnan(timestep).any()
             assert ((timestep >= 0) & (timestep <= 1)).all()
 

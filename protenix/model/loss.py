@@ -27,6 +27,9 @@ from protenix.model.modules.frames import (
 from protenix.model.utils import expand_at_dim, add, mul
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 from protenix.utils.torch_utils import cdist
+from protenix.model.modules.embedders import FourierEmbedding
+from protenix.model.modules.primitives import MLP
+
 
 def loss_reduction(loss: torch.Tensor, method: str = "mean") -> torch.Tensor:
     """reduction wrapper
@@ -384,6 +387,7 @@ class MSELoss(nn.Module):
         weight_ligand=10.0,
         eps=1e-6,
         reduction: str = "mean",
+        uncertainty_embed_dim: int = 64,
     ) -> None:
         super(MSELoss, self).__init__()
         self.weight_mse = weight_mse
@@ -392,6 +396,9 @@ class MSELoss(nn.Module):
         self.weight_ligand = weight_ligand
         self.eps = eps
         self.reduction = reduction
+        self.uncertainty_embed_dim = uncertainty_embed_dim
+        self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
+        self.uncertainty_mlp = MLP(c_in=uncertainty_embed_dim, width_factor=2)
 
     def weighted_rigid_align(
         self,
@@ -499,6 +506,10 @@ class MSELoss(nn.Module):
                 is_rna=is_rna,
                 is_ligand=is_ligand,
             )
+
+        # Compute u(t) 
+        timestep_embed = self.fourier_embedding(timestep) #TODO: loss needs to see timestep
+        u_t = self.uncertainty_mlp(timestep_embed)
 
         # Calculate MSE loss
         per_atom_se = ((pred_coordinate - true_coordinate_aligned) ** 2).sum(
@@ -774,7 +785,7 @@ class ProtenixLoss(nn.Module):
         cum_loss, metrics = self.aggregate_losses(loss_fns, has_valid_resolution)
         return cum_loss, metrics
 
-    def forward( #TODO: needs editing
+    def forward( 
         self,
         feat_dict: dict[str, Any],
         pred_dict: dict[str, torch.Tensor],
@@ -812,7 +823,7 @@ class ProtenixLoss(nn.Module):
                 mode=mode,
             )
         else:
-            if "coordinate" in pred_dict: # TODO: change to velocity
+            if "coordinate" in pred_dict: 
                 N_sample = pred_dict["coordinate"].shape[-3]
             elif self.configs.train_confidence_only:
                 N_sample = pred_dict["coordinate_mini"].shape[-3]
@@ -829,14 +840,14 @@ class ProtenixLoss(nn.Module):
                 )
                 pred_dict_i = {}
                 for key, value in pred_dict.items():
-                    if key in ["coordinate"] and mode == "train": # TODO: change to velocity 
+                    if key in ["coordinate"] and mode == "train": 
                         pred_dict_i[key] = value[
                             i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
                             :,
                             :,
                         ]
                     elif (
-                        key in ["coordinate", "plddt", "pae", "pde", "resolved"] # TODO: remove keys and change to velocity
+                        key in ["coordinate", "plddt", "pae", "pde", "resolved"] 
                         and mode != "train"
                     ):
                         pred_dict_i[key] = value[

@@ -206,7 +206,7 @@ class ArtiosLigand(nn.Module):
         # Generate timesteps for solving the FM SDE
         timesteps = self.inference_timestep_scheduler(N_step=N_step,
                                                       device=s_inputs.device, 
-                                                      dtype=s_inputs.dtype)
+                                                      dtype=s_inputs.dtype) 
         # N_sample different ouputs created via diffusion
         pred_dict["coordinate"] = self.sample_diffusion(
             denoise_net=self.diffusion_module,
@@ -227,7 +227,7 @@ class ArtiosLigand(nn.Module):
         # When label is given, permute coordinates and other heads
         step_permutation = time.time()
         if label_dict is not None and symmetric_permutation is not None:
-            pred_dict, log_dict = symmetric_permutation.permute_inference_pred_dict( #TODO: change to update velocities too
+            pred_dict, log_dict = symmetric_permutation.permute_inference_pred_dict( 
                 input_feature_dict=input_feature_dict,
                 pred_dict=pred_dict,
                 label_dict=label_dict,
@@ -321,7 +321,7 @@ class ArtiosLigand(nn.Module):
 
         ### Diffusion training
         N_sample = self.diffusion_batch_size
-        noise, x_gt_augment, v_gt, coords_pred, velocity_pred, timestep = autocasting_disable_decorator( 
+        x_target_augment, coords_pred, timestep = autocasting_disable_decorator( 
             self.configs.skip_amp.sample_diffusion_training
         )(sample_diffusion_training)(
             timestep_sampler=self.train_timestep_sampler,
@@ -338,22 +338,20 @@ class ArtiosLigand(nn.Module):
         pred_dict.update(
             {
                 # [..., N_sample=48, N_atom, 3]: diffusion loss
-                "velocity": velocity_pred,
                 "coordinate": coords_pred,
                 "timestep": timestep, 
             }
         )
         label_dict.update(
             {
-                "velocity": v_gt,
-                "coordinate": x_gt_augment,
+                "coordinate": x_target_augment,
             }
         )
 
         # Permute symmetric atom/chain in each sample to match true structure
         # Note: currently chains cannot be permuted since label is cropped
         pred_dict, perm_log_dict, _, _ = (
-            symmetric_permutation.permute_diffusion_sample_to_match_label( # TODO: check if need to change velocity
+            symmetric_permutation.permute_diffusion_sample_to_match_label( 
                 input_feature_dict, pred_dict, label_dict, stage="train"
             )
         )

@@ -312,7 +312,7 @@ class AF3Trainer(object):
     def aggregate_metrics(self, lddt_dict: dict, batch: dict) -> dict:
 
         simple_metrics, _ = self.lddt_metrics.aggregate_lddt(
-            lddt_dict, batch["pred_dict"]["summary_confidence"]
+            lddt_dict, batch["pred_dict"]["summary_confidence"] # TODO: "summary_confidence" I dont think is used anymore ?
         )
 
         return simple_metrics

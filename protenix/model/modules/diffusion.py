@@ -266,7 +266,7 @@ class DiffusionModule(nn.Module):
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 
         Returns:
-            torch.Tensor: velocity prediction
+            torch.Tensor: denoised coords
                 [..., N_sample, N_atom, 3]
         """
         N_sample = r_noisy.size(-3)
@@ -342,7 +342,7 @@ class DiffusionModule(nn.Module):
         # Fine-grained checkpoint for finetuning stage 2 (token num: 768) for avoiding OOM
         if blocks_per_ckpt and self.use_fine_grained_checkpoint:
             checkpoint_fn = get_checkpoint_fn()
-            velocity_pred = checkpoint_fn(
+            r_update = checkpoint_fn(
                 self.atom_attention_decoder,
                 input_feature_dict,
                 a_token,
@@ -354,7 +354,7 @@ class DiffusionModule(nn.Module):
             )
         else:
             # Broadcast token activations to atoms and run Sequence-local Atom Attention
-            velocity_pred = self.atom_attention_decoder(
+            r_update = self.atom_attention_decoder(
                 input_feature_dict=input_feature_dict,
                 a=a_token,
                 q_skip=q_skip,
@@ -364,7 +364,16 @@ class DiffusionModule(nn.Module):
                 chunk_size=chunk_size,
             )
 
-        return velocity_pred
+        return r_update 
+
+    def c_in(self, timestep: torch.Tensor) -> torch.Tensor:
+        return 1 / (self.sigma_data * (timestep ** 2 + (1 - timestep) ** 2).sqrt())
+
+    def c_out(self, timestep: torch.Tensor) -> torch.Tensor:
+        return self.sigma_data * (1 - timestep) / (timestep ** 2 + (1 - timestep) ** 2).sqrt()
+
+    def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
+        return timestep / (timestep ** 2 + (1 - timestep) ** 2).sqrt()
 
     def forward(
         self,
@@ -375,39 +384,21 @@ class DiffusionModule(nn.Module):
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
-        """One step denoise: x_noisy, noise_level -> x_denoised
-
-        Args:
-            x_noisy (torch.Tensor): the noisy version of the input atom coords
-                [..., N_sample, N_atom,3]
-            timestep (torch.Tensor): the noising timestep (the t such that x_t = (1-t)*x_0 + t*x_1)
-                [..., N_sample]
-            input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
-            s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
-                [..., N_tokens, c_s_inputs]
-            inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
-            chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
-
-        Returns:
-            torch.Tensor: the velocity prediction at current timestep
-                [..., N_sample, N_atom,3]
-        """
-        # Scale positions to dimensionless vectors with approximately unit variance
-        c_in = (torch.sqrt((1-timestep)**2 + timestep**2) * self.sigma_data) ** -1 
-        r_noisy = x_noisy * c_in[..., None, None]
+        # Scale input noisy coords to unit variance
+        r_noisy = x_noisy * self.c_in(timestep[..., None, None])
 
         # Predict velocity from noisy coords
-        velocity_pred_unscaled = self.f_forward(
+        r_update = self.f_forward(
             r_noisy=r_noisy,
-            timestep=timestep,
+            timestep=timestep,  # Return to original shape for f_forward
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
 
-        # Rescale velocity to correct variance
-        c_out = self.sigma_data
-        velocity_pred = velocity_pred_unscaled * c_out
+        # Scale output with direct function calls
+        coords_pred = x_noisy * self.c_skip(timestep[..., None, None]) + \
+                      r_update * self.c_out(timestep[..., None, None])
 
-        return velocity_pred
+        return coords_pred

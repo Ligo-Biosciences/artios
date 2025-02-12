@@ -323,6 +323,38 @@ class Transition(nn.Module):
         x = self.layernorm(x)
         x = self.linear_no_bias(self.swiglu(x))
         return x
+    
+    
+class MLP(nn.Module):
+    """
+    Simple MLP with one hidden layer and SiLU activation
+    """
+    def __init__(self, c_in: int, width_factor: int) -> None:
+        """
+        Args:
+            c_in (int): Input dimension
+            width_factor (int): Factor by which input dimension is multiplied to get hidden dimension
+        """
+        super(MLP, self).__init__()
+        self.linear1 = nn.Linear(c_in, width_factor * c_in)
+        self.linear2 = nn.Linear(width_factor * c_in, 1)
+        self.activation = nn.SiLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x (torch.Tensor): Input tensor
+                [..., c_in]
+
+        Returns:
+            torch.Tensor: Output scalar
+                [..., 1]
+        """
+        x = self.linear1(x)
+        x = self.activation(x)
+        x = self.linear2(x)
+        return x
+
 
 
 def _attention(

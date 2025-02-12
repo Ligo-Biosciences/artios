@@ -118,13 +118,13 @@ def sample_diffusion(
     device = s_inputs.device
     dtype = s_inputs.dtype
 
-    # Stochasticity schedule g
+    # Stochasticity schedule g (scaled by 1-t for numerical stability)
     stoch_schedules = {
-        "deterministic": lambda t: torch.zeros_like(t),
-        "constant": lambda t: torch.ones_like(t) * (0.5 * (alpha**2)),
-        "non_singular": lambda t: 0.5 * (alpha**2) * (1 - t),
-        "zero_ends": lambda t: 0.5 * (alpha**2) * t * (1 - t),
-        "proteina": lambda t: alpha / (t + 0.01)
+        "deterministic": lambda t: torch.zeros_like(t) / (1 - t),
+        "constant": lambda t: torch.ones_like(t) * (0.5 * (alpha**2)) / (1 - t),
+        "non_singular": lambda t: torch.ones_like(t) *0.5 * (alpha**2),
+        "zero_ends": lambda t: 0.5 * (alpha**2) * t,
+        #"proteina": lambda t: alpha / (t + 0.01)
     }
 
     if stoch_type not in stoch_schedules:
@@ -148,7 +148,6 @@ def sample_diffusion(
 
         # Initialise Euler/Euler-Maruyama
         x = x_0 
-        x_hat_t = None  
         noise = torch.zeros_like(x)
 
         # Sampling loop
@@ -172,7 +171,7 @@ def sample_diffusion(
             )
 
             # Predict velocity at current timestep
-            velocity_pred = denoise_net(
+            coords_pred = denoise_net(
                 x_noisy=x,
                 timestep=t,
                 input_feature_dict=input_feature_dict,
@@ -181,14 +180,17 @@ def sample_diffusion(
                 inplace_safe=inplace_safe,
             )
 
-            # Preduct score at current timestep
-            score = (t_cur * velocity_pred - x) / (1 - t_cur)
+            # Calculate velocity
+            velocity_pred = (coords_pred - x) / (1 - t_cur)
+
+            # Preduct score at current timestep (scaled by 1-t for numerical stability)
+            scaled_score = (t_cur * velocity_pred - x) 
 
             # Calculate step length
             step = t_next - t_cur
 
             # Euler step
-            x = x + step * (velocity_pred.to(torch.float64) + g_t * score) + torch.sqrt(2 * step * g_t * gamma) * noise
+            x = x + step * (velocity_pred.to(torch.float64) + g_t * scaled_score) + torch.sqrt(2 * step * g_t * gamma) * noise
 
         coords_pred = x
         return coords_pred
@@ -226,7 +228,7 @@ def sample_diffusion_training(
     diffusion_chunk_size: Optional[int] = None,
 ) -> tuple[torch.Tensor, ...]:
     """Implements diffusion training. Creates N_sample's of randomly augmented ground truth coordinates, 
-    noises the coords, sends them through the network to get predcited velocity and calculate the denoised coords..
+    noises the coords via FM style interpolation, sends them through the network to get denoised coords.
 
     Args:
         timestep_sampler (TrainingTimestepSampler): the timestep sampler
@@ -241,13 +243,9 @@ def sample_diffusion_training(
             [..., N_tokens, c_s_inputs]
         N_sample (int): number of training samples
     Returns:
-        x_gt_augment (torch.Tensor): the augmented ground truth coordinates 
-            [..., N_sample, N_atom, 3]
-        v_gt (torch.Tensor): the ground truth velocity
+        x_target_augment (torch.Tensor): the augmented ground truth coordinates 
             [..., N_sample, N_atom, 3]
         coords_pred (torch.Tensor): the predicted coordinates
-            [..., N_sample, N_atom, 3]
-        velocity_pred (torch.Tensor): the predicted velocity
             [..., N_sample, N_atom, 3]
         timestep (torch.Tensor): the timestep
             [..., N_sample]
@@ -273,21 +271,15 @@ def sample_diffusion_training(
     # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )
     x_noisy = noise_w_flow_matching(x_target_augment, noise, timestep[..., :, None, None])
 
-    # TODO: switch to coordinate-based sampling, not velocity
-    # Generate ground truth velocity
-    v_target = (x_target_augment - noise) * label_dict["coordinate_mask"][..., None, :, None]
-
-    # Get velocity predictions [..., N_sample, N_atom, 3]
+    # Get denoised output predictions [..., N_sample, N_atom, 3]
     if diffusion_chunk_size is None:
-        velocity_pred = denoise_net( 
+        coords_pred = denoise_net( 
             x_noisy=x_noisy, 
             timestep=timestep, 
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs
         )
-        coords_pred = x_noisy + (1 - timestep[..., :, None, None]) * velocity_pred
     else:
-        velocity_pred = [] 
         coords_pred = []
         no_chunks = N_sample // diffusion_chunk_size + (
             N_sample % diffusion_chunk_size != 0
@@ -299,17 +291,14 @@ def sample_diffusion_training(
             timestep_i = timestep[
                 ..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size
             ]
-            velocity_pred_i = denoise_net(
+            coords_pred_i = denoise_net(
                 x_noisy=x_noisy_i,
                 timestep=timestep_i,
                 input_feature_dict=input_feature_dict,
                 s_inputs=s_inputs
             )
-            x_pred_i = x_noisy_i + (1 - timestep_i[..., :, None, None]) * velocity_pred_i
 
-            velocity_pred.append(velocity_pred_i)
-            coords_pred.append(x_pred_i)
-        velocity_pred = torch.cat(velocity_pred, dim=-3)
+            coords_pred.append(coords_pred_i)
         coords_pred = torch.cat(coords_pred, dim=-3)
 
-    return noise, x_target_augment, v_target, coords_pred, velocity_pred, timestep 
+    return x_target_augment, coords_pred, timestep 

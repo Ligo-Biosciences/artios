@@ -471,7 +471,8 @@ class MSELoss(nn.Module):
         self,
         pred_coordinate: torch.Tensor,
         true_coordinate: torch.Tensor,
-        coordinate_mask: torch.Tensor,
+        coordinate_mask: torch.Tensor, #TODO: check where this is invoked
+        timestep: torch.Tensor,
         is_dna: torch.Tensor,
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
@@ -486,6 +487,8 @@ class MSELoss(nn.Module):
                 [..., N_atom, 3]
             coordinate_mask (torch.Tensor): whether true coordinates exist.
                 [N_atom] or [..., N_atom]
+            timestep (torch.Tensor): the timestep for the current sample.
+                [..., N_sample]
             is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
                 [N_atom] or [..., N_atom]
             per_sample_scale (torch.Tensor, optional): whether to scale the loss by the per-sample noise-level.
@@ -508,8 +511,8 @@ class MSELoss(nn.Module):
             )
 
         # Compute u(t) 
-        timestep_embed = self.fourier_embedding(timestep) #TODO: loss needs to see timestep
-        u_t = self.uncertainty_mlp(timestep_embed)
+        timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
+        u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
 
         # Calculate MSE loss
         per_atom_se = ((pred_coordinate - true_coordinate_aligned) ** 2).sum(
@@ -522,9 +525,7 @@ class MSELoss(nn.Module):
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
 
-        weighted_align_mse_loss = self.weight_mse * (per_sample_weighted_mse).mean(
-            dim=-1
-        )  # [...]
+        weighted_align_mse_loss = (self.weight_mse / u_t.exp()) * (per_sample_weighted_mse) + u_t
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
 

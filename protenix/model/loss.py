@@ -754,6 +754,7 @@ class ProtenixLoss(nn.Module):
                         pred_coordinate=pred_dict["coordinate"],
                         true_coordinate=label_dict["coordinate"],
                         coordinate_mask=label_dict["coordinate_mask"],
+                        timestep=pred_dict["timestep"],
                         is_rna=feat_dict["is_rna"],
                         is_dna=feat_dict["is_dna"],
                         is_ligand=feat_dict["is_ligand"],

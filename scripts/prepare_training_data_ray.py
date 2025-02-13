@@ -16,11 +16,10 @@ import argparse
 import csv
 from pathlib import Path
 from typing import Optional
-
 import pandas as pd
 import ray
+import psutil
 from tqdm import tqdm
-
 from protenix.data.data_pipeline import DataPipeline
 from protenix.utils.file_io import dump_gzip_pickle
 
@@ -66,12 +65,17 @@ def gen_data_from_mmcifs(
     cluster_file: Optional[Path],
     distillation: bool = False,
     num_workers: int = 1,
+    memory_fraction: float = 0.5,  # default to 50% of system memory
 ):
     """
     Generates training data from a list of mmCIF files using Ray for parallel processing.
     """
+    # Calculate object store memory as a fraction of system memory
+    total_memory = psutil.virtual_memory().total
+    object_store_memory = int(total_memory * memory_fraction)
+    
     # Initialize Ray
-    ray.init(num_cpus=num_workers)
+    ray.init(num_cpus=num_workers, object_store_memory=object_store_memory)
 
     # Create a remote version of gen_a_bioassembly_data
     @ray.remote

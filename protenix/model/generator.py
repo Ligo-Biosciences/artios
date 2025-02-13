@@ -122,7 +122,7 @@ def sample_diffusion(
     stoch_schedules = {
         "deterministic": lambda t: torch.zeros_like(t) / (1 - t),
         "constant": lambda t: torch.ones_like(t) * (0.5 * (alpha**2)) / (1 - t),
-        "non_singular": lambda t: torch.ones_like(t) *0.5 * (alpha**2),
+        "non_singular": lambda t: torch.ones_like(t) * 0.5 * (alpha**2),
         "zero_ends": lambda t: 0.5 * (alpha**2) * t,
         #"proteina": lambda t: alpha / (t + 0.01)
     }
@@ -136,8 +136,6 @@ def sample_diffusion(
         """ 
         Performs all sampling logic for a single chunk of samples 
         i.e generate noise, send noise through Euler steps, return denoised coordinates
-
-        TODO: switch to coordinate-based SDE
         """
         # Generate noise
         x_0 = sigma_data * torch.randn(
@@ -163,7 +161,7 @@ def sample_diffusion(
             # Stochastic schedule at current time step
             g_t = g[i]
 
-            # Augment coords [..., N_sample, N_atom, 3] #TODO: should we do this ?
+            # Augment coords [..., N_sample, N_atom, 3] 
             x = (
                 centre_random_augmentation(x_input_coords=x, N_sample=1)
                 .squeeze(dim=-3)
@@ -183,7 +181,7 @@ def sample_diffusion(
             # Calculate velocity
             velocity_pred = (coords_pred - x) / (1 - t_cur)
 
-            # Preduct score at current timestep (scaled by 1-t for numerical stability)
+            # Predict score at current timestep (division by 1-t absorbed into the stochasticity schedule for numerical stability)
             scaled_score = (t_cur * velocity_pred - x) 
 
             # Calculate step length
@@ -263,7 +261,7 @@ def sample_diffusion_training(
         dtype
     )  # [..., N_sample, N_atom, 3]
 
-    # Get timestep for noising
+    # Get timestep for noisingdebugging 
     # timestep: independent timesteps for each sample [..., N_sample]
     timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype) 
     # Generate noise

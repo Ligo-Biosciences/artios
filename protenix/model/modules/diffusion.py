@@ -241,7 +241,7 @@ class DiffusionModule(nn.Module):
             blocks_per_ckpt=blocks_per_ckpt,
         )
 
-    def f_forward( #TODO: change to s and z's instead of single_s and pair_z
+    def f_forward(
         self,
         r_noisy: torch.Tensor,
         timestep: torch.Tensor,
@@ -280,7 +280,7 @@ class DiffusionModule(nn.Module):
         # use checkpoint here if blocks_per_ckpt is not None.
         if blocks_per_ckpt:
             checkpoint_fn = get_checkpoint_fn()
-            s_single, z_pair = checkpoint_fn(
+            s, z = checkpoint_fn(
                 self.diffusion_conditioning,
                 timestep,
                 input_feature_dict,
@@ -288,7 +288,7 @@ class DiffusionModule(nn.Module):
                 inplace_safe,
             )
         else:
-            s_single, z_pair = self.diffusion_conditioning(
+            s, z = self.diffusion_conditioning(
                 timestep=timestep,
                 input_feature_dict=input_feature_dict,
                 s_inputs=s_inputs,
@@ -296,8 +296,8 @@ class DiffusionModule(nn.Module):
             )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
 
         # Expand embeddings to match N_sample
-        z_pair = expand_at_dim(
-            z_pair, dim=-4, n=N_sample
+        z = expand_at_dim(
+            z, dim=-4, n=N_sample
         )  # [..., N_sample, N_token, N_token, c_z]
 
         # Fine-grained checkpoint for finetuning stage 2 (token num: 768) for avoiding OOM
@@ -307,8 +307,8 @@ class DiffusionModule(nn.Module):
                 self.atom_attention_encoder,
                 input_feature_dict,
                 r_noisy,
-                s_single, # Replaced s_trunk
-                z_pair,
+                s, # Replaced s_trunk
+                z,
                 inplace_safe,
                 chunk_size,
             )
@@ -317,22 +317,22 @@ class DiffusionModule(nn.Module):
             a_token, q_skip, c_skip, p_skip = self.atom_attention_encoder(
                 input_feature_dict=input_feature_dict,
                 r_l=r_noisy,
-                s=s_single, # Replaced s_trunk
-                z=z_pair,
+                s=s, # Replaced s_trunk
+                z=z,
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
             )
         # Full self-attention on token level.
         a_token = add(
             a_token, 
-            self.linear_no_bias_s(self.layernorm_s(s_single)), 
+            self.linear_no_bias_s(self.layernorm_s(s)), 
             inplace_safe=inplace_safe
         ) # [..., N_sample, N_token, c_token]
         
         a_token = self.diffusion_transformer(
             a=a_token,
-            s=s_single,
-            z=z_pair,
+            s=s,
+            z=z,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )

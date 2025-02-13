@@ -699,10 +699,13 @@ class ProtenixLoss(nn.Module):
                 - metrics (dict[str, torch.Tensor]): Dictionary containing aggregated metrics.
         """
         assert mode in ["train", "eval", "inference"]
+
+        timestep = pred_dict["timestep"] # [..., N_sample]
+
         if mode == "train":
             if not self.configs.train_confidence_only:
                 # Scale 
-                diffusion_per_sample_scale =  1.0 / (2 * self.configs.sigma_data ** 2)
+                diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * (1-timestep))**2)
 
         else:
             # No scale is required

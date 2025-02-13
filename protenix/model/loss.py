@@ -549,7 +549,7 @@ class ProtenixLoss(nn.Module):
 
         self.loss_weight = {  
             # diffusion
-            "_loss": self.alpha_diffusion,
+            "mse_loss": self.alpha_diffusion,
             "smooth_lddt_loss": self.alpha_diffusion
             * self.weight_smooth_lddt,  # Different from AF3 appendix eq(6), where smooth_lddt has no weight
         }
@@ -647,6 +647,7 @@ class ProtenixLoss(nn.Module):
         cum_loss = 0.0
         all_metrics = {}
         for loss_name, loss_fn in loss_fns.items():
+            print("\n"*3, "self.loss_weight", self.loss_weight, "\n"*3)
             weight = self.loss_weight[loss_name]
             loss_outputs = loss_fn()
             if isinstance(loss_outputs, tuple):

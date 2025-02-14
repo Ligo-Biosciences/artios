@@ -26,6 +26,8 @@ import torch
 from biotite.structure import AtomArray
 from biotite.structure.io import pdbx
 from biotite.structure.io.pdb import PDBFile
+from Bio import PDB
+from io import StringIO
 
 from protenix.data.constants import DNA_STD_RESIDUES, PRO_STD_RESIDUES, RNA_STD_RESIDUES
 
@@ -753,6 +755,133 @@ def pdb_to_cif(input_fname: str, output_fname: str, entry_id: str = None):
         entry_id=entry_id or os.path.basename(output_fname),
         include_bonds=True,
     )
+
+
+def atom_id_to_type(atom_id: str, atom_dict=None) -> str:
+    """Convert atom ID to element type, including ligands and metals.
+    The atom_dict we can provide if the following heuristics fail.
+    The atom_dict is a dictionary mapping atom IDs to elements.
+    
+    Args:
+        atom_id (str): Atom ID from PDB file.
+        atom_dict (dict): Optional dictionary mapping atom IDs to elements.
+
+    Returns:
+        str: The corresponding element symbol.
+
+    Raises:
+        ValueError: If atom ID not recognized.
+    """
+    # Check if atom exists in ligand dictionary
+    if atom_dict and atom_id in atom_dict:
+        return atom_dict[atom_id]
+
+    # Standard protein atoms (CA, CB, OG, etc.)
+    if atom_id.startswith('C'):
+        return 'C'
+    elif atom_id.startswith('N'):
+        return 'N'
+    elif atom_id.startswith('O'):
+        return 'O'
+    elif atom_id.startswith('H'):
+        return 'H'
+    elif atom_id.startswith('S'):
+        return 'S'
+    
+    # Regex-based heuristic for ligands (e.g., "C1", "O2", "N3")
+    match = re.match(r'([A-Z]+)(\d*)', atom_id)
+    if match:
+        element_guess = match.group(1)
+        if element_guess in {'C', 'N', 'O', 'S', 'H', 'P', 'F', 'Cl', 'Br', 'I'}:
+            return element_guess
+
+    # Handle metal ions (ZN, FE, MG, NA, K, CA, etc.)
+    metal_ions = {'ZN', 'FE', 'MG', 'NA', 'K', 'CA', 'MN', 'CO', 'CU', 'NI', 'AL'}
+    if atom_id in metal_ions:
+        return atom_id  # Metals return their own name
+
+    raise ValueError(f"Atom ID '{atom_id}' not recognized.")
+
+
+def get_atom_name(input_feature_dict):
+    """
+    Convert one-hot encoded atom names from ref_atom_name_chars to actual atom names and add to label_dict.
+    """
+    char_indices = input_feature_dict["ref_atom_name_chars"].argmax(dim=-1) # [N_atom, 4]
+    atom_names = []
+    for atom_chars in char_indices:
+        name = ''.join(chr(idx.item() + 32) for idx in atom_chars) # converts indices back to ASCII character
+        atom_names.append(name.strip()) # removes whitespace, store names in list
+    return atom_names
+
+
+def to_pdb(coords, input_feature_dict):
+    """Convert prediction to PDB format string.
+    
+    Args:
+        coords: Atomic coordinates of a structure
+            [..., N_atom, 3]
+        input_feature_dict: Dictionary containing input features
+    
+    Returns:
+        str: PDB format string containing all structures
+    """
+    N_atom = coords.shape[-2]
+    atom_names = get_atom_name(input_feature_dict)
+    ref_space_uid = input_feature_dict["ref_space_uid"]  # [N_atom]
+    
+    pdb_lines = []
+    
+    # Flatten batch and sample dimensions for easier iteration
+    flat_coords = coords.view(-1, N_atom, 3)
+    total_structures = flat_coords.shape[0]
+ 
+    occupancy = 1.00
+    temp_factor = 0.00
+    
+    for struct_idx in range(total_structures):
+        pdb_lines.append(f"MODEL     {struct_idx + 1}".ljust(80)) 
+        
+        for atom_idx in range(N_atom):
+            coord = flat_coords[struct_idx, atom_idx]
+            atom_name = atom_names[atom_idx]
+            res_idx = ref_space_uid[atom_idx] # TODO: I'm not 100% sure this is right when there's multiple chains
+            element = atom_id_to_type(atom_name, atom_dict=None)  # Get element type NICE_TO_HAVE: pass in an atom_dict to handle weirded atom namings if needed
+            
+            # Updated format to include element symbol in columns 77-78
+            record = (
+                f'ATOM  {atom_idx:>5} {atom_name:<4} GLY A{res_idx+1:>4}    '
+                f'{coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}'
+                f"{occupancy:>6.2f}{temp_factor:>6.2f}          {element:>2}"
+            ).ljust(80)
+            
+            pdb_lines.append(record)
+            
+        pdb_lines.append('ENDMDL'.ljust(80))
+    
+    pdb_lines.append('END'.ljust(80))
+    return '\n'.join(pdb_lines) + '\n'
+
+
+def to_mmcif(pred_dict, input_feature_dict, output_path):
+    """Convert prediction to mmCIF format string and save to file.
+    
+    Args:
+        pred_dict: Dictionary containing prediction data
+        input_feature_dict: Dictionary containing input features
+        output_path: Path to save the mmCIF file.
+    
+    """
+    # First get PDB string using existing function
+    coords = pred_dict["coordinate"]
+    pdb_string = to_pdb(coords, input_feature_dict)
+    pdb_parser = PDB.PDBParser()
+    structure = pdb_parser.get_structure('model', StringIO(pdb_string))
+
+    # Write to mmCIF
+    mmcif_writer = PDB.MMCIFIO()
+    mmcif_writer.set_structure(structure)
+    mmcif_writer.save(output_path)
 
 
 if __name__ == "__main__":

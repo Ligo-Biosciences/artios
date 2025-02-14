@@ -40,10 +40,11 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import EMAWrapper
+from protenix.model.utils import to_pdb
+from io import StringIO
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
-
 
 class AF3Trainer(object):
     def __init__(self, configs):
@@ -387,6 +388,15 @@ class AF3Trainer(object):
                     simple_metric_wrapper.add(
                         f"{ema_suffix}{key}", value, namespace=test_name
                     )
+                
+                # Visualise the first structure in the validation batch in wandb
+                # TODO: just temporary sampling logic for intial training runs
+                if index == 0:
+                    pdb_str = to_pdb(batch["pred_dict"]["coordinate"], batch["input_feature_dict"])
+                    if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                        wandb.log({
+                            f"{ema_suffix}structure_{test_name}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
+                        }, step=self.step)
 
                 del batch, simple_metrics
                 if index % 5 == 0:

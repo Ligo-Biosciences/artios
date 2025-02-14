@@ -128,8 +128,8 @@ model_configs = {
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
     "train_timestep_sampler": { 
-        "loc": -1.2,
-        "scale": 1.5
+        "loc": 0.0,
+        "scale": 1.0
     },
     "inference_timestep_scheduler": { 
         "p": -0.7

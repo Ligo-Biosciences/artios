@@ -40,7 +40,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import EMAWrapper
-from protenix.model.utils import to_pdb
+from protenix.data.utils import to_pdb
 from io import StringIO
 
 # Disable WANDB's console output capture to reduce unnecessary logging

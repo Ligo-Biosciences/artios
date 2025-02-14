@@ -27,6 +27,9 @@ from protenix.model.modules.frames import (
 from protenix.model.utils import expand_at_dim, add, mul
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 from protenix.utils.torch_utils import cdist
+from protenix.model.modules.embedders import FourierEmbedding
+from protenix.model.modules.primitives import MLP
+
 
 def loss_reduction(loss: torch.Tensor, method: str = "mean") -> torch.Tensor:
     """reduction wrapper
@@ -384,6 +387,7 @@ class MSELoss(nn.Module):
         weight_ligand=10.0,
         eps=1e-6,
         reduction: str = "mean",
+        uncertainty_embed_dim: int = 64,
     ) -> None:
         super(MSELoss, self).__init__()
         self.weight_mse = weight_mse
@@ -392,6 +396,9 @@ class MSELoss(nn.Module):
         self.weight_ligand = weight_ligand
         self.eps = eps
         self.reduction = reduction
+        self.uncertainty_embed_dim = uncertainty_embed_dim
+        self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
+        self.uncertainty_mlp = MLP(c_in=uncertainty_embed_dim, width_factor=2)
 
     def weighted_rigid_align(
         self,
@@ -464,7 +471,8 @@ class MSELoss(nn.Module):
         self,
         pred_coordinate: torch.Tensor,
         true_coordinate: torch.Tensor,
-        coordinate_mask: torch.Tensor,
+        coordinate_mask: torch.Tensor, #TODO: check where this is invoked
+        timestep: torch.Tensor,
         is_dna: torch.Tensor,
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
@@ -479,6 +487,8 @@ class MSELoss(nn.Module):
                 [..., N_atom, 3]
             coordinate_mask (torch.Tensor): whether true coordinates exist.
                 [N_atom] or [..., N_atom]
+            timestep (torch.Tensor): the timestep for the current sample.
+                [..., N_sample]
             is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
                 [N_atom] or [..., N_atom]
             per_sample_scale (torch.Tensor, optional): whether to scale the loss by the per-sample noise-level.
@@ -500,6 +510,10 @@ class MSELoss(nn.Module):
                 is_ligand=is_ligand,
             )
 
+        # Compute u(t) 
+        timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
+        u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
+
         # Calculate MSE loss
         per_atom_se = ((pred_coordinate - true_coordinate_aligned) ** 2).sum(
             dim=-1
@@ -511,9 +525,7 @@ class MSELoss(nn.Module):
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
 
-        weighted_align_mse_loss = self.weight_mse * (per_sample_weighted_mse).mean(
-            dim=-1
-        )  # [...]
+        weighted_align_mse_loss = (self.weight_mse / u_t.exp()) * (per_sample_weighted_mse) + u_t
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
 
@@ -547,11 +559,12 @@ class ProtenixLoss(nn.Module):
         #self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
         #self.pae_loss = PAELoss(**configs.loss.pae)
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
+        # self.fm_loss = FMLoss(**configs.loss.diffusion.flow_matching)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
         #self.distogram_loss = DistogramLoss(**configs.loss.distogram)
 
-    def calculate_label(
+    def calculate_label( 
         self,
         feat_dict: dict[str, Any],
         label_dict: dict[str, Any],
@@ -596,7 +609,7 @@ class ProtenixLoss(nn.Module):
         del distance, distance_mask, lddt_mask
         return label_dict
 
-    def calculate_prediction(
+    def calculate_prediction(  
         self,
         pred_dict: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
@@ -616,7 +629,7 @@ class ProtenixLoss(nn.Module):
             )  # [..., N_atom, N_atom]
         return pred_dict
 
-    def aggregate_losses(
+    def aggregate_losses(  
         self, loss_fns: dict, has_valid_resolution: Optional[torch.Tensor] = None
     ) -> tuple[torch.Tensor, dict]:
         """
@@ -624,7 +637,7 @@ class ProtenixLoss(nn.Module):
 
         Args:
             loss_fns (dict): Dictionary of loss functions to be aggregated.
-            has_valid_resolution (Optional[torch.Tensor]): Tensor indicating valid resolutions. Defaults to None.
+            has_valid_resolution (Optional[torch.Tensor]): Tensor indicating valid resolutions. Defaults to None. # TODO: can be removed
 
         Returns:
             tuple[torch.Tensor, dict]:
@@ -634,6 +647,7 @@ class ProtenixLoss(nn.Module):
         cum_loss = 0.0
         all_metrics = {}
         for loss_name, loss_fn in loss_fns.items():
+            print("\n"*3, "self.loss_weight", self.loss_weight, "\n"*3)
             weight = self.loss_weight[loss_name]
             loss_outputs = loss_fn()
             if isinstance(loss_outputs, tuple):
@@ -686,12 +700,13 @@ class ProtenixLoss(nn.Module):
                 - metrics (dict[str, torch.Tensor]): Dictionary containing aggregated metrics.
         """
         assert mode in ["train", "eval", "inference"]
+
+        timestep = pred_dict["timestep"] # [..., N_sample]
+
         if mode == "train":
             if not self.configs.train_confidence_only:
-                # Scale diffusion loss with noise-level
-                diffusion_per_sample_scale = (
-                    pred_dict["noise_level"] ** 2 + self.configs.sigma_data**2
-                ) / (self.configs.sigma_data * pred_dict["noise_level"]) ** 2
+                # Scale 
+                diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * (1-timestep))**2)
 
         else:
             # No scale is required
@@ -701,7 +716,7 @@ class ProtenixLoss(nn.Module):
             # Skip Diffusion Loss and distogram loss
             loss_fns = {}
         else:
-            # Diffusion Loss: SmoothLDDTLoss + MSELoss 
+            # Diffusion Loss: SmoothLDDTLoss + FMLoss 
             loss_fns = {}
             if self.configs.loss.diffusion_lddt_loss_dense:
                 loss_fns.update(
@@ -743,15 +758,16 @@ class ProtenixLoss(nn.Module):
                         pred_coordinate=pred_dict["coordinate"],
                         true_coordinate=label_dict["coordinate"],
                         coordinate_mask=label_dict["coordinate_mask"],
+                        timestep=pred_dict["timestep"],
                         is_rna=feat_dict["is_rna"],
                         is_dna=feat_dict["is_dna"],
                         is_ligand=feat_dict["is_ligand"],
                         per_sample_scale=diffusion_per_sample_scale,
-                    )
+                    ),
                 }
             )
 
-        # Confidence Loss:
+        # Confidence Loss: #TODO: this can be removed and thus we can remove the resolution check from aggregate_losses
         # Only when resoluton is in [min_resolution, max_resolution] the confidence loss is considered
         # NOTE: here we assume batch_size == 1
         resolution = feat_dict["resolution"].item()
@@ -775,7 +791,7 @@ class ProtenixLoss(nn.Module):
         cum_loss, metrics = self.aggregate_losses(loss_fns, has_valid_resolution)
         return cum_loss, metrics
 
-    def forward(
+    def forward( 
         self,
         feat_dict: dict[str, Any],
         pred_dict: dict[str, torch.Tensor],
@@ -813,7 +829,7 @@ class ProtenixLoss(nn.Module):
                 mode=mode,
             )
         else:
-            if "coordinate" in pred_dict:
+            if "coordinate" in pred_dict: 
                 N_sample = pred_dict["coordinate"].shape[-3]
             elif self.configs.train_confidence_only:
                 N_sample = pred_dict["coordinate_mini"].shape[-3]
@@ -830,24 +846,20 @@ class ProtenixLoss(nn.Module):
                 )
                 pred_dict_i = {}
                 for key, value in pred_dict.items():
-                    if key in ["coordinate"] and mode == "train":
+                    if key in ["coordinate"] and mode == "train": 
                         pred_dict_i[key] = value[
                             i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
                             :,
                             :,
                         ]
                     elif (
-                        key in ["coordinate", "plddt", "pae", "pde", "resolved"]
+                        key in ["coordinate", "plddt", "pae", "pde", "resolved"] 
                         and mode != "train"
                     ):
                         pred_dict_i[key] = value[
                             i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
                             :,
                             :,
-                        ]
-                    elif key == "noise_level":
-                        pred_dict_i[key] = value[
-                            i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size
                         ]
                     else:
                         pred_dict_i[key] = value

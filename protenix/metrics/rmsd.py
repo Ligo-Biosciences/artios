@@ -257,4 +257,4 @@ def weighted_rigid_align(
             weight=atom_weight,
             allowing_reflection=False,
         )
-        return x_aligned
+        return x_aligned, rot, trans

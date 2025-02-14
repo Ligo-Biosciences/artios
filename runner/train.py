@@ -40,10 +40,11 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import EMAWrapper
+from protenix.model.utils import to_pdb
+from io import StringIO
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
-
 
 class AF3Trainer(object):
     def __init__(self, configs):
@@ -190,6 +191,13 @@ class AF3Trainer(object):
             error_dir=self.error_dir,
         )
 
+    def init_sampler(self): 
+        #TODO: here we should perhaps initialise some sampler object with some sampler configs
+        # To establish how we should formulate the sampler object let's basicalyl copy the evaluate 
+        # method below which is exactly we should be doing a forward pass
+        # They do this via a "batch". #TODO: determine how they get batch and what is stored inside it.
+        pass
+
     def save_checkpoint(self, ema_suffix=""):
         if DIST_WRAPPER.rank == 0:
             path = f"{self.checkpoint_dir}/{self.step}{ema_suffix}.pt"
@@ -312,7 +320,7 @@ class AF3Trainer(object):
     def aggregate_metrics(self, lddt_dict: dict, batch: dict) -> dict:
 
         simple_metrics, _ = self.lddt_metrics.aggregate_lddt(
-            lddt_dict, batch["pred_dict"]["summary_confidence"]
+            lddt_dict, batch["pred_dict"]["summary_confidence"] # TODO: "summary_confidence" I dont think is used anymore ?
         )
 
         return simple_metrics
@@ -363,9 +371,9 @@ class AF3Trainer(object):
 
                 simple_metrics = {}
                 with enable_amp:
-                    # Model forward
+                    # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode)
-                    # Loss forward
+                    # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict, batch = self.get_loss(batch, mode="eval")
                     # lDDT metrics
                     lddt_dict = self.get_metrics(batch)
@@ -380,6 +388,15 @@ class AF3Trainer(object):
                     simple_metric_wrapper.add(
                         f"{ema_suffix}{key}", value, namespace=test_name
                     )
+                
+                # Visualise the first structure in the validation batch in wandb
+                # TODO: just temporary sampling logic for intial training runs
+                if index == 0:
+                    pdb_str = to_pdb(batch["pred_dict"]["coordinate"], batch["input_feature_dict"])
+                    if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                        wandb.log({
+                            f"{ema_suffix}structure_{test_name}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
+                        }, step=self.step)
 
                 del batch, simple_metrics
                 if index % 5 == 0:

@@ -682,7 +682,6 @@ class AtomAttentionEncoder(nn.Module):
                 dim=-1,
             )
         )
-
         # Line2-Line4: Embed offsets between atom reference positions
 
         # Prepare tensors in dense trunks for local operations

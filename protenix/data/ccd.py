@@ -29,6 +29,9 @@ from rdkit import Chem
 from configs.configs_data import data_configs
 from protenix.data.substructure_perms import get_substructure_perms
 
+import gzip
+import re
+
 logger = logging.getLogger(__name__)
 
 COMPONENTS_FILE = data_configs["ccd_components_file"]

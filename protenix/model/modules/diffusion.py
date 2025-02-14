@@ -40,7 +40,7 @@ class DiffusionConditioning(nn.Module):
         c_z: int = 128,
         c_s: int = 384,
         c_s_inputs: int = 386,
-        c_noise_embedding: int = 256,
+        c_timestep_embedding: int = 256,
     ) -> None:
         """
         Args:
@@ -77,10 +77,10 @@ class DiffusionConditioning(nn.Module):
         self.transition_z = Transition(c_in=self.c_z, n=2)
 
         # Line 8-9
-        self.fourier_embedding = FourierEmbedding(c=c_noise_embedding)
-        self.layernorm_n = LayerNorm(c_noise_embedding)
-        self.linear_no_bias_n = LinearNoBias(
-            in_features=c_noise_embedding, out_features=self.c_s
+        self.fourier_embedding = FourierEmbedding(c=c_timestep_embedding)
+        self.layernorm_t = LayerNorm(c_timestep_embedding)
+        self.linear_no_bias_t = LinearNoBias(
+            in_features=c_timestep_embedding, out_features=self.c_s
         )
         # Line 10-12
         self.transition_s1 = Transition(c_in=self.c_s, n=2)
@@ -89,14 +89,14 @@ class DiffusionConditioning(nn.Module):
 
     def forward(
         self,
-        t_hat_noise_level: torch.Tensor,
+        timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         s_inputs: torch.Tensor,
         inplace_safe: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            t_hat_noise_level (torch.Tensor): the noise level
+            timestep (torch.Tensor): the noising timestep (the t such that x_t = (1-t)*x_0 + t*x_1)
                 [..., N_sample]
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
             s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
@@ -105,7 +105,7 @@ class DiffusionConditioning(nn.Module):
         Returns:
             tuple[torch.Tensor, torch.Tensor]: embeddings s and z
                 - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
-                - z (torch.Tensor): [..., N_tokens, N_tokens, c_z]
+                - z (torch.Tensor): [..., N_N_tokens, N_tokens, c_z]
         """
         ### Logic from Main Inference Loop (Algorithm 1)
         # Create single embedding from s_inputs (Line 2)
@@ -136,18 +136,15 @@ class DiffusionConditioning(nn.Module):
         # Send pair embedding through one transition (Line 3-5)
         z = add(z, self.transition_z(z), inplace_safe=inplace_safe)
 
-        # Fourier embed the noise level (Line 8)
-        noise_n = self.fourier_embedding(
-            t_hat_noise_level=torch.log(input=t_hat_noise_level / self.sigma_data) / 4
-        ).to(
-            s.dtype
-        )  # [..., N_sample, c_in]
+        # Fourier embed the noise level (Line 8) 
+        t_hat_timestep = 2 * timestep - 1 # Rescale to [-1, 1] for smoother embedding
+        timestep_t = self.fourier_embedding(t_hat_timestep=t_hat_timestep).to(s.dtype)  # [..., N_sample, c_noise_embedding]
         
         # Normalise, embed noise and add to single embed (Line 9)
         s = add(
             s.unsqueeze(dim=-3),
-            self.linear_no_bias_n(
-                self.layernorm_n(noise_n)
+            self.linear_no_bias_t(
+                self.layernorm_t(timestep_t)
             ).unsqueeze(dim=-2)
         )  # [..., N_sample, N_tokens, c_s]
         
@@ -156,54 +153,6 @@ class DiffusionConditioning(nn.Module):
         s = add(s, self.transition_s2(s), inplace_safe=inplace_safe)
  
         return s, z
-
-
-class DiffusionSchedule:
-    def __init__(
-        self,
-        sigma_data: float = 16.0,
-        s_max: float = 160.0,
-        s_min: float = 4e-4,
-        p: float = 7.0,
-        dt: float = 1 / 200,
-        p_mean: float = -1.2,
-        p_std: float = 1.5,
-    ) -> None:
-        """
-        Args:
-            sigma_data (float, optional): The standard deviation of the data. Defaults to 16.0.
-            s_max (float, optional): The maximum noise level. Defaults to 160.0.
-            s_min (float, optional): The minimum noise level. Defaults to 4e-4.
-            p (float, optional): The exponent for the noise schedule. Defaults to 7.0.
-            dt (float, optional): The time step size. Defaults to 1/200.
-            p_mean (float, optional): The mean of the log-normal distribution for noise level sampling. Defaults to -1.2.
-            p_std (float, optional): The standard deviation of the log-normal distribution for noise level sampling. Defaults to 1.5.
-        """
-        self.sigma_data = sigma_data
-        self.s_max = s_max
-        self.s_min = s_min
-        self.p = p
-        self.dt = dt
-        self.p_mean = p_mean
-        self.p_std = p_std
-        # self.T
-        self.T = int(1 / dt) + 1  # 201
-
-    def get_train_noise_schedule(self) -> torch.Tensor:
-        return self.sigma_data * torch.exp(self.p_mean + self.p_std * torch.randn(1))
-
-    def get_inference_noise_schedule(self) -> torch.Tensor:
-        time_step_lists = torch.arange(start=0, end=1 + 1e-10, step=self.dt)
-        inference_noise_schedule = (
-            self.sigma_data
-            * (
-                self.s_max ** (1 / self.p)
-                + time_step_lists
-                * (self.s_min ** (1 / self.p) - self.s_max ** (1 / self.p))
-            )
-            ** self.p
-        )
-        return inference_noise_schedule
 
 
 class DiffusionModule(nn.Module):
@@ -292,23 +241,23 @@ class DiffusionModule(nn.Module):
             blocks_per_ckpt=blocks_per_ckpt,
         )
 
-    def f_forward( #TODO: change to s and z's instead of single_s and pair_z
+    def f_forward(
         self,
         r_noisy: torch.Tensor,
-        t_hat_noise_level: torch.Tensor,
+        timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         s_inputs: torch.Tensor,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
         """The raw network to be trained.
-        As in EDM equation (7), this is F_theta(c_in * x, c_noise(sigma)).
+        This is v_theta(x_t, t)
         Here, c_noise(sigma) is computed in Conditioning module.
 
         Args:
             r_noisy (torch.Tensor): scaled x_noisy (i.e., c_in * x)
                 [..., N_sample, N_atom, 3]
-            t_hat_noise_level (torch.Tensor): the noise level, as well as the time step t
+            timestep (torch.Tensor): the noising timestep (the t such that x_t = (1-t)*x_0 + t*x_1)
                 [..., N_sample]
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input feature
             s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
@@ -317,11 +266,11 @@ class DiffusionModule(nn.Module):
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 
         Returns:
-            torch.Tensor: coordinates update
+            torch.Tensor: denoised coords
                 [..., N_sample, N_atom, 3]
         """
         N_sample = r_noisy.size(-3)
-        assert t_hat_noise_level.size(-1) == N_sample
+        assert timestep.size(-1) == N_sample
 
         blocks_per_ckpt = self.blocks_per_ckpt
         if not torch.is_grad_enabled():
@@ -331,24 +280,24 @@ class DiffusionModule(nn.Module):
         # use checkpoint here if blocks_per_ckpt is not None.
         if blocks_per_ckpt:
             checkpoint_fn = get_checkpoint_fn()
-            s_single, z_pair = checkpoint_fn(
+            s, z = checkpoint_fn(
                 self.diffusion_conditioning,
-                t_hat_noise_level,
+                timestep,
                 input_feature_dict,
                 s_inputs,
                 inplace_safe,
             )
         else:
-            s_single, z_pair = self.diffusion_conditioning(
-                t_hat_noise_level=t_hat_noise_level,
+            s, z = self.diffusion_conditioning(
+                timestep=timestep,
                 input_feature_dict=input_feature_dict,
                 s_inputs=s_inputs,
                 inplace_safe=inplace_safe,
             )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
 
         # Expand embeddings to match N_sample
-        z_pair = expand_at_dim(
-            z_pair, dim=-4, n=N_sample
+        z = expand_at_dim(
+            z, dim=-4, n=N_sample
         )  # [..., N_sample, N_token, N_token, c_z]
 
         # Fine-grained checkpoint for finetuning stage 2 (token num: 768) for avoiding OOM
@@ -358,8 +307,8 @@ class DiffusionModule(nn.Module):
                 self.atom_attention_encoder,
                 input_feature_dict,
                 r_noisy,
-                s_single, # Replaced s_trunk
-                z_pair,
+                s, # Replaced s_trunk
+                z,
                 inplace_safe,
                 chunk_size,
             )
@@ -368,22 +317,22 @@ class DiffusionModule(nn.Module):
             a_token, q_skip, c_skip, p_skip = self.atom_attention_encoder(
                 input_feature_dict=input_feature_dict,
                 r_l=r_noisy,
-                s=s_single, # Replaced s_trunk
-                z=z_pair,
+                s=s, # Replaced s_trunk
+                z=z,
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
             )
         # Full self-attention on token level.
         a_token = add(
             a_token, 
-            self.linear_no_bias_s(self.layernorm_s(s_single)), 
+            self.linear_no_bias_s(self.layernorm_s(s)), 
             inplace_safe=inplace_safe
         ) # [..., N_sample, N_token, c_token]
         
         a_token = self.diffusion_transformer(
             a=a_token,
-            s=s_single,
-            z=z_pair,
+            s=s,
+            z=z,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
@@ -415,70 +364,41 @@ class DiffusionModule(nn.Module):
                 chunk_size=chunk_size,
             )
 
-        return r_update
+        return r_update 
+
+    def c_in(self, timestep: torch.Tensor) -> torch.Tensor:
+        return 1 / (self.sigma_data * (timestep ** 2 + (1 - timestep) ** 2).sqrt())
+
+    def c_out(self, timestep: torch.Tensor) -> torch.Tensor:
+        return self.sigma_data * (1 - timestep) / (timestep ** 2 + (1 - timestep) ** 2).sqrt()
+
+    def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
+        return timestep / (timestep ** 2 + (1 - timestep) ** 2)
 
     def forward(
         self,
         x_noisy: torch.Tensor,
-        t_hat_noise_level: torch.Tensor,
+        timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         s_inputs: torch.Tensor,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
-        """One step denoise: x_noisy, noise_level -> x_denoised
+        # Scale input noisy coords to unit variance
+        r_noisy = x_noisy * self.c_in(timestep[..., None, None])
 
-        Args:
-            x_noisy (torch.Tensor): the noisy version of the input atom coords
-                [..., N_sample, N_atom,3]
-            t_hat_noise_level (torch.Tensor): the noise level, as well as the time step t
-                [..., N_sample]
-            input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
-            s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
-                [..., N_tokens, c_s_inputs]
-            inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
-            chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
-
-        Returns:
-            torch.Tensor: the denoised coordinates of x
-                [..., N_sample, N_atom,3]
-        """
-        # Scale positions to dimensionless vectors with approximately unit variance
-        # As in EDM:
-        #     r_noisy = (c_in * x_noisy)
-        #     where c_in = 1 / sqrt(sigma_data^2 + sigma^2)
-        r_noisy = (
-            x_noisy
-            / torch.sqrt(self.sigma_data**2 + t_hat_noise_level**2)[..., None, None]
-        )
-
-        # Compute the update given r_noisy (the scaled x_noisy)
-        # As in EDM:
-        #     r_update = F(r_noisy, c_noise(sigma))
+        # Predict velocity from noisy coords
         r_update = self.f_forward(
             r_noisy=r_noisy,
-            t_hat_noise_level=t_hat_noise_level,
+            timestep=timestep,  # Return to original shape for f_forward
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
 
-        # Rescale updates to positions and combine with input positions
-        # As in EDM:
-        #     D = c_skip * x_noisy + c_out * r_update
-        #     c_skip = sigma_data^2 / (sigma_data^2 + sigma^2)
-        #     c_out = (sigma_data * sigma) / sqrt(sigma_data^2 + sigma^2)
-        #     s_ratio = sigma / sigma_data
-        #     c_skip = 1 / (1 + s_ratio^2)
-        #     c_out = sigma / sqrt(1 + s_ratio^2)
+        # Scale output with direct function calls
+        coords_pred = x_noisy * self.c_skip(timestep[..., None, None]) + \
+                      r_update * self.c_out(timestep[..., None, None])
 
-        s_ratio = (t_hat_noise_level / self.sigma_data)[..., None, None].to(
-            r_update.dtype
-        )
-        x_denoised = (
-            1 / (1 + s_ratio**2) * x_noisy
-            + t_hat_noise_level[..., None, None] / torch.sqrt(1 + s_ratio**2) * r_update
-        ).to(r_update.dtype)
-
-        return x_denoised
+        return coords_pred

@@ -87,6 +87,7 @@ def sample_diffusion(
     diffusion_chunk_size: Optional[int] = None,
     inplace_safe: bool = False,
     attn_chunk_size: Optional[int] = None,
+    second_order: bool = False,
 ) -> torch.Tensor:
     """Implements Algorithm 18 in AF3.
     It performs denoising steps from time 0 to time T with Euler's method.
@@ -108,7 +109,7 @@ def sample_diffusion(
         diffusion_chunk_size (Optional[int]): Chunk size for diffusion operation. Defaults to None.
         inplace_safe (bool): Whether to use inplace operations safely. Defaults to False.
         attn_chunk_size (Optional[int]): Chunk size for attention operation. Defaults to None.
-
+        second_order (bool): Whether to use second order Euler-Maruyama. Defaults to False.
     Returns:
         torch.Tensor: the denoised coordinates of x in inference stage
             [..., N_sample, N_atom, 3]
@@ -189,6 +190,20 @@ def sample_diffusion(
 
             # Euler step
             x = x + step * (velocity_pred.to(torch.float64) + g_t * scaled_score) + torch.sqrt(2 * step * g_t * gamma) * noise
+
+            if second_order:
+                t = t_next.new_full((batch_shape + (chunk_n_sample,)), t_next).to(dtype) # [..., N_sample]
+                coords_pred_2 = denoise_net(
+                    x_noisy=x,
+                    timestep=t,
+                    input_feature_dict=input_feature_dict,
+                    s_inputs=s_inputs,
+                    chunk_size=attn_chunk_size,
+                    inplace_safe=inplace_safe,
+                )
+                velocity_pred_2 = (coords_pred_2 - x) / (1 - t_cur)
+
+                scaled_score_2 = (t_cur * velocity_pred_2 - x)
 
         coords_pred = x
         return coords_pred

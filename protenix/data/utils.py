@@ -758,9 +758,10 @@ def pdb_to_cif(input_fname: str, output_fname: str, entry_id: str = None):
 
 
 def atom_id_to_type(atom_id: str, atom_dict=None) -> str:
-    """Convert atom ID to element type, including ligands and metals.
+    """Convert atom ID to element type, including ligands and metals. 
     The atom_dict we can provide if the following heuristics fail.
     The atom_dict is a dictionary mapping atom IDs to elements.
+    FIXME: make me more robust. check alphafold3 paper for detials of the possible weird atoms we can get
     
     Args:
         atom_id (str): Atom ID from PDB file.
@@ -800,7 +801,8 @@ def atom_id_to_type(atom_id: str, atom_dict=None) -> str:
     if atom_id in metal_ions:
         return atom_id  # Metals return their own name
 
-    raise ValueError(f"Atom ID '{atom_id}' not recognized.")
+    #raise ValueError(f"Atom ID '{atom_id}' not recognized.")
+    return atom_id
 
 
 def get_atom_name(input_feature_dict):

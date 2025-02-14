@@ -190,6 +190,13 @@ class AF3Trainer(object):
             error_dir=self.error_dir,
         )
 
+    def init_sampler(self): 
+        #TODO: here we should perhaps initialise some sampler object with some sampler configs
+        # To establish how we should formulate the sampler object let's basicalyl copy the evaluate 
+        # method below which is exactly we should be doing a forward pass
+        # They do this via a "batch". #TODO: determine how they get batch and what is stored inside it.
+        pass
+
     def save_checkpoint(self, ema_suffix=""):
         if DIST_WRAPPER.rank == 0:
             path = f"{self.checkpoint_dir}/{self.step}{ema_suffix}.pt"
@@ -363,9 +370,9 @@ class AF3Trainer(object):
 
                 simple_metrics = {}
                 with enable_amp:
-                    # Model forward
+                    # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode)
-                    # Loss forward
+                    # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict, batch = self.get_loss(batch, mode="eval")
                     # lDDT metrics
                     lddt_dict = self.get_metrics(batch)

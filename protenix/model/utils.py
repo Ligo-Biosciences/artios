@@ -21,6 +21,9 @@ from scipy.spatial.transform import Rotation
 
 from protenix.utils.scatter_utils import scatter
 
+from Bio import PDB
+from io import StringIO
+
 def add(a, b, inplace_safe: bool = False):
     """
     Add two objects with optional in-place modification.
@@ -519,3 +522,113 @@ def noise_w_flow_matching(
     Requires data, noise and timestep to be broadcastable. 
     """
     return timestep * data + (1 - (1 - sigma_min) * timestep) * noise
+
+
+def atom_id_to_type(atom_id: str) -> str:
+    """Convert atom ID to atom type, works only for standard protein residues.
+    TODO: extend this function to deal with more bizarre atoms. This will have to be capable of handling 
+    ligands.
+
+  Args:
+    atom_id: Atom ID to be converted.
+
+  Returns:
+    String corresponding to atom type.
+
+  Raises:
+    ValueError: If atom ID not recognized.
+  """
+
+    if atom_id.startswith('C'):
+        return 'C'
+    elif atom_id.startswith('N'):
+        return 'N'
+    elif atom_id.startswith('O'):
+        return 'O'
+    elif atom_id.startswith('H'):
+        return 'H'
+    elif atom_id.startswith('S'):
+        return 'S'
+    raise ValueError('Atom ID not recognized.')
+
+
+def get_atom_name(input_feature_dict):
+    """
+    Convert one-hot encoded atom names from ref_atom_name_chars to actual atom names and add to label_dict.
+    """
+    char_indices = input_feature_dict["ref_atom_name_chars"].argmax(dim=-1) # [N_atom, 4]
+    atom_names = []
+    for atom_chars in char_indices:
+        name = ''.join(chr(idx.item() + 32) for idx in atom_chars) # converts indices back to ASCII character
+        atom_names.append(name.strip()) # removes whitespace, store names in list
+    return atom_names
+
+
+def to_pdb(pred_dict, input_feature_dict):
+    """Convert prediction to PDB format string.
+    
+    Args:
+        pred_dict: Dictionary containing prediction data with coordinates
+            coords shape: [..., N_sample, N_atom, 3]
+        input_feature_dict: Dictionary containing input features
+    
+    Returns:
+        str: PDB format string containing all structures
+    """
+    coords = pred_dict["coordinate"]  # [..., N_sample, N_atom, 3]
+    *batch_dims, N_sample, N_atom, _ = coords.shape
+    
+    atom_names = get_atom_name(input_feature_dict)
+    ref_space_uid = input_feature_dict["ref_space_uid"]  # [N_atom]
+    
+    pdb_lines = []
+    
+    # Flatten batch and sample dimensions for easier iteration
+    flat_coords = coords.reshape(-1, N_atom, 3)
+    total_structures = flat_coords.shape[0]
+ 
+    occupancy = 1.00
+    temp_factor = 0.00
+    
+    for struct_idx in range(total_structures):
+        pdb_lines.append(f"MODEL     {struct_idx + 1}".ljust(80))
+        
+        for atom_idx in range(N_atom):
+            coord = flat_coords[struct_idx, atom_idx]
+            atom_name = atom_names[atom_idx]
+            res_idx = ref_space_uid[atom_idx] # TODO: this might not be right
+            element = atom_id_to_type(atom_name)  # Get element type
+            
+            # Updated format to include element symbol in columns 77-78
+            record = (
+                f'ATOM  {atom_idx:>5} {atom_name:<4} GLY A{res_idx+1:>4}    '
+                f'{coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}'
+                f"{occupancy:>6.2f}{temp_factor:>6.2f}          {element:>2}"
+            ).ljust(80)
+            
+            pdb_lines.append(record)
+            
+        pdb_lines.append('ENDMDL'.ljust(80))
+    
+    pdb_lines.append('END'.ljust(80))
+    return '\n'.join(pdb_lines) + '\n'
+
+
+def to_mmcif(pred_dict, input_feature_dict, output_path):
+    """Convert prediction to mmCIF format string and save to file.
+    
+    Args:
+        pred_dict: Dictionary containing prediction data
+        input_feature_dict: Dictionary containing input features
+        output_path: Path to save the mmCIF file.
+    
+    """
+    # First get PDB string using existing function
+    pdb_string = to_pdb(pred_dict, input_feature_dict)
+    pdb_parser = PDB.PDBParser()
+    structure = pdb_parser.get_structure('model', StringIO(pdb_string))
+
+    # Write to mmCIF
+    mmcif_writer = PDB.MMCIFIO()
+    mmcif_writer.set_structure(structure)
+    mmcif_writer.save(output_path)

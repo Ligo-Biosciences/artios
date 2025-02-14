@@ -63,11 +63,10 @@ class ArtiosLigand(nn.Module):
                 "stoch_type",
                 "alpha",
                 "gamma",
-                "sigma_data"
+                "sigma_data",
             ]
         }
-        _configs.update(
-            {
+        _configs.update({
             "attn_chunk_size": (
                 self.configs.infer_setting.chunk_size if not self.training else None
             ),
@@ -76,8 +75,9 @@ class ArtiosLigand(nn.Module):
                 if not self.training
                 else None
             ),
-        }
-        )
+            "second_order": self.configs.sample_diffusion.second_order_train if self.training 
+            else self.configs.sample_diffusion.second_order_inference
+        })
         return autocasting_disable_decorator(self.configs.skip_amp.sample_diffusion)(
             sample_diffusion
         )(**_configs, **kwargs)

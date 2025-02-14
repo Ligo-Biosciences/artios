@@ -169,7 +169,7 @@ def sample_diffusion(
                 .to(dtype)
             )
 
-            # Predict velocity at current timestep
+            # Predict coords at current timestep
             coords_pred = denoise_net(
                 x_noisy=x,
                 timestep=t,
@@ -188,22 +188,34 @@ def sample_diffusion(
             # Calculate step length
             step = t_next - t_cur
 
-            # Euler step
-            x = x + step * (velocity_pred.to(torch.float64) + g_t * scaled_score) + torch.sqrt(2 * step * g_t * gamma) * noise
+            # Calculate update
+            update = step * (velocity_pred.to(torch.float64) + g_t * scaled_score) 
 
-            if second_order:
+            # Euler step
+            if not second_order:
+                x = x + update + torch.sqrt(2 * step * g_t * gamma) * noise
+            else:
+                # Calculate intermediate prediction
+                x_middle = x + update
+
+                # Calculate intermediate prediction
                 t = t_next.new_full((batch_shape + (chunk_n_sample,)), t_next).to(dtype) # [..., N_sample]
                 coords_pred_2 = denoise_net(
-                    x_noisy=x,
+                    x_noisy=x_middle,
                     timestep=t,
                     input_feature_dict=input_feature_dict,
                     s_inputs=s_inputs,
                     chunk_size=attn_chunk_size,
                     inplace_safe=inplace_safe,
                 )
-                velocity_pred_2 = (coords_pred_2 - x) / (1 - t_cur)
 
-                scaled_score_2 = (t_cur * velocity_pred_2 - x)
+                # Calculate update at intermediate point
+                velocity_pred_2 = (coords_pred_2 - x_middle) / (1 - t_cur)
+                scaled_score_2 = (t_cur * velocity_pred_2 - x_middle)
+                update_2 = step * (velocity_pred_2.to(torch.float64) + g_t * scaled_score_2)
+
+                # Perform second order Euler step
+                x = x + 1/2 * (update + update_2) + torch.sqrt(2 * step * g_t * gamma) * noise
 
         coords_pred = x
         return coords_pred

@@ -115,22 +115,12 @@ class LDDTMetrics(nn.Module):
             for agg_name, agg_func in sample_aggregators.items()
         }
 
-    def aggregate_lddt(self, lddt_dict, per_sample_summary_confidence):
-
-        # Merge summary_confidence results
-        confidence_scores = sample_confidence.merge_per_sample_confidence_scores(
-            per_sample_summary_confidence
-        )
-
-        # Complex-level LDDT
-        complex_level_ranker = get_complex_level_rankers(
-            confidence_scores, self.complex_ranker_keys
-        )
+    def aggregate_lddt(self, lddt_dict):
 
         complex_lddt = self.aggregate(
-            lddt_dict["complex"], aggregators=complex_level_ranker
+            lddt_dict["complex"]
         )
-        complex_lddt = add_diff_metrics(complex_lddt, self.complex_ranker_keys)
+        
         # Log metrics
         complex_lddt = {
             f"lddt/complex/{name}": value for name, value in complex_lddt.items()

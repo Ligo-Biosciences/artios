@@ -391,12 +391,13 @@ class AF3Trainer(object):
                 
                 # Visualise the first structure in the validation batch in wandb
                 # TODO: just temporary sampling logic for intial training runs
-                if index == 0:
-                    pdb_str = to_pdb(batch["pred_dict"]["coordinate"], batch["input_feature_dict"])
-                    if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                        wandb.log({
-                            f"{ema_suffix}structure_{test_name}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
-                        }, step=self.step)
+                # TODO: this is commented out for early tests, will add back in later
+                #if index == 0:
+                #    pdb_str = to_pdb(batch["pred_dict"]["coordinate"], batch["input_feature_dict"])
+                #    if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                #        wandb.log({
+                #            f"{ema_suffix}structure_{test_name}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
+                #        }, step=self.step)
 
                 del batch, simple_metrics
                 if index % 5 == 0:

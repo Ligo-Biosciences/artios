@@ -327,34 +327,36 @@ class Transition(nn.Module):
     
 class MLP(nn.Module):
     """
-    Simple MLP with one hidden layer and SiLU activation
+    Implements Algorithm 11 in AF3
     """
-    def __init__(self, c_in: int, width_factor: int) -> None:
+
+    def __init__(self, c_in: int, c_out: int, n: int) -> None:
         """
         Args:
-            c_in (int): Input dimension
-            width_factor (int): Factor by which input dimension is multiplied to get hidden dimension
+            c_in (int, optional): the input dimension.
+            n (int, optional): factor by which c_in is multiplied to obtain hidden dimension.
         """
         super(MLP, self).__init__()
-        self.linear1 = nn.Linear(c_in, width_factor * c_in)
-        self.linear2 = nn.Linear(width_factor * c_in, 1)
-        self.activation = nn.SiLU()
+        self.n = n
+        self.c_in = c_in
+        self.c_out = c_out
+        self.layernorm = LayerNorm(c_in)
+        self.swiglu = SwiGLU(c_in=c_in, c_out=n * c_in)
+        self.linear_no_bias = LinearNoBias(in_features=n * c_in, out_features=c_out, init="zeros")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x (torch.Tensor): Input tensor
-                [..., c_in]
+            x (torch.Tensor): the input tensor
+                [..., c]
 
         Returns:
-            torch.Tensor: Output scalar
-                [..., 1]
+            torch.Tensor: the output tensor as the same shape of x
+                [..., c]
         """
-        x = self.linear1(x)
-        x = self.activation(x)
-        x = self.linear2(x)
+        x = self.layernorm(x)
+        x = self.linear_no_bias(self.swiglu(x))
         return x
-
 
 
 def _attention(

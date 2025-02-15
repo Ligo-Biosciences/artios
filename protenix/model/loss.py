@@ -28,7 +28,7 @@ from protenix.model.utils import expand_at_dim, add, mul
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 from protenix.utils.torch_utils import cdist
 from protenix.model.modules.embedders import FourierEmbedding
-from protenix.model.modules.primitives import MLP, Transition
+from protenix.model.modules.primitives import MLP
 
 
 def loss_reduction(loss: torch.Tensor, method: str = "mean") -> torch.Tensor:
@@ -398,7 +398,7 @@ class MSELoss(nn.Module):
         self.reduction = reduction
         self.uncertainty_embed_dim = uncertainty_embed_dim
         self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
-        self.uncertainty_mlp = Transition(c_in=uncertainty_embed_dim, n=2)
+        self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def weighted_rigid_align(
         self,
@@ -512,6 +512,7 @@ class MSELoss(nn.Module):
 
         # Compute u(t) 
         timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
+        print("timestep_embed", timestep_embed.shape)
         u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
 
         # Calculate MSE loss
@@ -524,7 +525,9 @@ class MSELoss(nn.Module):
 
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
-
+        
+        print("u_t", u_t.shape)
+        print("per_sample_weighted_mse", per_sample_weighted_mse.shape)
         weighted_align_mse_loss = (self.weight_mse / u_t.exp()) * (per_sample_weighted_mse) + u_t
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)

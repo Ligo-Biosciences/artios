@@ -22,6 +22,7 @@ from .modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
 from protenix.utils.torch_utils import autocasting_disable_decorator
 from protenix.model.utils import add
 
+
 class ArtiosLigand(nn.Module):
     def __init__(self, configs):
         super(ArtiosLigand, self).__init__()

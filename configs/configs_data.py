@@ -122,7 +122,7 @@ data_configs = {
         "train_sample_weights": ListValue([1.0]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["posebusters_0925"]),  # recentPDB_1536_sample384_0925
+    "test_sets": ListValue(["recentPDB_1536_sample384_0925"]),
     "weightedPDB_before2109_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),

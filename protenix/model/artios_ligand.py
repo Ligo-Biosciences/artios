@@ -30,7 +30,7 @@ class ArtiosLigand(nn.Module):
 
         # Some constants 
         self.N_model_seed = self.configs.model.N_model_seed
-        
+
         # Diffusion 
         self.train_timestep_sampler = TrainingTimestepSampler(**configs.train_timestep_sampler) 
         self.inference_timestep_scheduler = InferenceTimestepScheduler(
@@ -144,7 +144,8 @@ class ArtiosLigand(nn.Module):
         #    "resolved": _cat(pred_dicts, "resolved"),
         #}
         all_pred_dict = {
-            "coordinate": _cat(pred_dicts, "coordinate")
+            "coordinate": _cat(pred_dicts, "coordinate"),
+            "timestep": _cat(pred_dicts, "timestep")
         }
 
         all_log_dict = simple_merge_dict_list(log_dicts)
@@ -220,6 +221,8 @@ class ArtiosLigand(nn.Module):
             timesteps=timesteps,
             inplace_safe=inplace_safe,
         )
+        pred_dict["timestep"] = timesteps
+        
         step_diffusion = time.time()
 
         time_tracker.update({"diffusion": step_diffusion - step_trunk})

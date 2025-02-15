@@ -299,6 +299,7 @@ class AF3Trainer(object):
         self, batch: dict, mode: str = "train"
     ) -> tuple[torch.Tensor, dict, dict]:
         assert mode in ["train", "eval"]
+        self.loss.to(batch["pred_dict"]["coordinate"].device)  # Move loss to device
 
         loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
             self.loss

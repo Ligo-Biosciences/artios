@@ -28,7 +28,7 @@ from protenix.model.utils import expand_at_dim, add, mul
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 from protenix.utils.torch_utils import cdist
 from protenix.model.modules.embedders import FourierEmbedding
-from protenix.model.modules.primitives import MLP
+from protenix.model.modules.primitives import MLP, Transition
 
 
 def loss_reduction(loss: torch.Tensor, method: str = "mean") -> torch.Tensor:
@@ -398,7 +398,7 @@ class MSELoss(nn.Module):
         self.reduction = reduction
         self.uncertainty_embed_dim = uncertainty_embed_dim
         self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
-        self.uncertainty_mlp = MLP(c_in=uncertainty_embed_dim, width_factor=2)
+        self.uncertainty_mlp = Transition(c_in=uncertainty_embed_dim, n=2)
 
     def weighted_rigid_align(
         self,

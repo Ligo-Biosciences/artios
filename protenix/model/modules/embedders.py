@@ -207,7 +207,6 @@ class FourierEmbedding(nn.Module):
             torch.Tensor: the output fourier embedding
                 [..., N_sample, c]
         """
-        device = t_hat_timestep.device
         return torch.cos(
-            input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w.to(device) + self.b.to(device))
+            input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w + self.b)
         )

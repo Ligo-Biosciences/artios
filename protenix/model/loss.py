@@ -512,7 +512,6 @@ class MSELoss(nn.Module):
 
         # Compute u(t) 
         timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
-        print("timestep_embed", timestep_embed.shape)
         u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
 
         # Calculate MSE loss
@@ -648,7 +647,6 @@ class ProtenixLoss(nn.Module):
         cum_loss = 0.0
         all_metrics = {}
         for loss_name, loss_fn in loss_fns.items():
-            print("\n"*3, "self.loss_weight", self.loss_weight, "\n"*3)
             weight = self.loss_weight[loss_name]
             loss_outputs = loss_fn()
             if isinstance(loss_outputs, tuple):

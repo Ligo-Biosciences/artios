@@ -25,7 +25,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 import rootutils
 
-rootutils.setup_root(__file__, indicator=".project_root", pythonpath=True)
+rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs

@@ -60,7 +60,7 @@ default_weighted_pdb_configs = {
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
 }
 
-DATA_ROOT_DIR = "af3-dev-backbone/release_data/"
+DATA_ROOT_DIR = "af3-dev-backbone/release_data/" #af3-dev-backbone/release_data/
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -153,7 +153,7 @@ data_configs = {
             ),
             "pdb_list": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/recentPDB_low_homology_maxtoken1024_sample384_pdb_id.txt",
+                "indices/recentPDB_low_homology_maxtoken1024_sample384_pdb_id.txt", #FIXME: this currently doesn't exist in our datapipeline
             ),
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
             "sort_by_n_token": False,

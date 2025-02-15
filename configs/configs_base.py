@@ -143,6 +143,8 @@ model_configs = {
         "alpha": 1.0,
         "gamma": 1.0,
         "sigma_data": GlobalConfigValue("sigma_data"),
+        "second_order_train": False,
+        "second_order_inference": False,
     },
     "model": {
         "N_model_seed": 1,  # for inference

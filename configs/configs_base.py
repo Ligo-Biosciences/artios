@@ -85,17 +85,17 @@ optim_configs = {
 }
 model_configs = {
     # Model
-    "c_s": 192, # 384
-    "c_z": 64, # 128
-    "c_s_inputs": 224,  # c_s_inputs == c_token + 32
-    "c_atom": 64, # 128
+    "c_s": 384, # 192
+    "c_z": 128, # 64
+    "c_s_inputs": 416,  # c_s_inputs == c_token + 32
+    "c_atom": 128, # 64
     "c_atompair": 16, # 16
-    "c_token": 192, # 384
-    "n_blocks": 16, # 48
+    "c_token": 384, # 192
+    "n_blocks": 48, # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
     "sigma_data": 16.0,
-    "diffusion_batch_size": 12, # 48
+    "diffusion_batch_size": 48, # 12
     "diffusion_chunk_size": ValueMaybeNone(4),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
         1
@@ -135,10 +135,10 @@ model_configs = {
         "p": -0.7
     },
     "sample_diffusion": { 
-        "N_step": 25, # 50
-        "N_sample": 1, # 5 
-        "N_step_mini_rollout": 10, # 25
-        "N_sample_mini_rollout": 1,
+        "N_step": 50, # 25
+        "N_sample": 5, # 1
+        "N_step_mini_rollout": 25, # 10
+        "N_sample_mini_rollout": 1, # 1
         "stoch_type": "non_singular",
         "alpha": 1.0,
         "gamma": 1.0,

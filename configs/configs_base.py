@@ -21,12 +21,12 @@ from protenix.config.extend_types import (
 )
 
 basic_configs = {
-    "project": RequiredValue(str),
-    "run_name": RequiredValue(str),
-    "base_dir": RequiredValue(str),
+    "project": "artios_ligand", # RequiredValue(str),
+    "run_name": "artios_ligand_train",
+    "base_dir": "/content/output",
     # training
-    "eval_interval": RequiredValue(int),
-    "log_interval": RequiredValue(int),
+    "eval_interval": 400, # RequiredValue(int),
+    "log_interval": 50, # RequiredValue(int),
     "checkpoint_interval": -1,
     "eval_first": False,  # run evaluate() before training steps
     "iters_to_accumulate": 1,
@@ -40,7 +40,7 @@ basic_configs = {
     "skip_load_scheduler": False,
     "train_confidence_only": False,
     "use_wandb": True,
-    "wandb_id": "", #TODO 
+    "wandb_id": "", 
     "seed": 42,
     "deterministic": False,
     "ema_decay": -1.0,

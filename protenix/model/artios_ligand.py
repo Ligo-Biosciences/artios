@@ -28,6 +28,9 @@ class ArtiosLigand(nn.Module):
         super(ArtiosLigand, self).__init__()
         self.configs = configs
 
+        # Some constants 
+        self.N_model_seed = self.configs.model.N_model_seed
+        
         # Diffusion 
         self.train_timestep_sampler = TrainingTimestepSampler(**configs.train_timestep_sampler) 
         self.inference_timestep_scheduler = InferenceTimestepScheduler(

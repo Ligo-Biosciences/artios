@@ -196,6 +196,7 @@ class FourierEmbedding(nn.Module):
         generator = torch.Generator().manual_seed(seed)
         self.register_buffer('w', torch.randn(c, generator=generator))
         self.register_buffer('b', torch.randn(c, generator=generator))
+        self.device = None
 
     def forward(self, t_hat_timestep: torch.Tensor) -> torch.Tensor:
         """
@@ -208,5 +209,5 @@ class FourierEmbedding(nn.Module):
                 [..., N_sample, c]
         """
         return torch.cos(
-            input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w + self.b)
+            input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w.to(self.device) + self.b.to(self.device))
         )

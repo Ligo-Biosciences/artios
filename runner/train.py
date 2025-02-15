@@ -34,7 +34,7 @@ from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.loss import ProtenixLoss
-from protenix.model.protenix import Protenix
+from protenix.model.artios_ligand import ArtiosLigand
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
@@ -154,7 +154,7 @@ class AF3Trainer(object):
         self.lddt_metrics = LDDTMetrics(self.configs)
 
     def init_model(self):
-        self.raw_model = Protenix(self.configs).to(self.device)
+        self.raw_model = ArtiosLigand(self.configs).to(self.device)
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
             self.print(f"Using DDP")

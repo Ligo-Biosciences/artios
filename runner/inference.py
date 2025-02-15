@@ -30,7 +30,7 @@ from runner.dumper import DataDumper
 
 from protenix.config import parse_configs, parse_sys_args
 from protenix.data.infer_data_pipeline import get_inference_dataloader
-from protenix.model.protenix import Protenix
+from protenix.model.artios_ligand import ArtiosLigand
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import to_device
@@ -95,7 +95,7 @@ class InferenceRunner(object):
         os.makedirs(self.error_dir, exist_ok=True)
 
     def init_model(self) -> None:
-        self.model = Protenix(self.configs).to(self.device)
+        self.model = ArtiosLigand(self.configs).to(self.device)
 
     def load_checkpoint(self) -> None:
         checkpoint_path = self.configs.load_checkpoint_path

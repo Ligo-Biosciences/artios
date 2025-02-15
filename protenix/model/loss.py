@@ -561,7 +561,7 @@ class ProtenixLoss(nn.Module):
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
         # self.fm_loss = FMLoss(**configs.loss.diffusion.flow_matching)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
-        self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
+        #self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
         #self.distogram_loss = DistogramLoss(**configs.loss.distogram)
 
     def calculate_label( 
@@ -717,40 +717,40 @@ class ProtenixLoss(nn.Module):
         else:
             # Diffusion Loss: SmoothLDDTLoss + FMLoss 
             loss_fns = {}
-            if self.configs.loss.diffusion_lddt_loss_dense:
-                loss_fns.update(
-                    {
-                        "smooth_lddt_loss": lambda: self.smooth_lddt_loss.dense_forward(
-                            pred_coordinate=pred_dict["coordinate"],
-                            true_coordinate=label_dict["coordinate"],
-                            lddt_mask=label_dict["lddt_mask"],
-                            diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
-                        )  # it's faster is not OOM
-                    }
-                )
-            elif self.configs.loss.diffusion_sparse_loss_enable:
-                loss_fns.update(
-                    {
-                        "smooth_lddt_loss": lambda: self.smooth_lddt_loss.sparse_forward(
-                            pred_coordinate=pred_dict["coordinate"],
-                            true_coordinate=label_dict["coordinate"],
-                            lddt_mask=label_dict["lddt_mask"],
-                            diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
-                        )
-                    }
-                )
-            else:
-                loss_fns.update(
-                    {
-                        "smooth_lddt_loss": lambda: self.smooth_lddt_loss(
-                            pred_distance=pred_dict["distance"],
-                            true_distance=label_dict["distance"],
-                            distance_mask=label_dict["distance_mask"],
-                            lddt_mask=label_dict["lddt_mask"],
-                            diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
-                        )
-                    }
-                )
+            #if self.configs.loss.diffusion_lddt_loss_dense:
+            #loss_fns.update(
+            #    {
+            #        "smooth_lddt_loss": lambda: self.smooth_lddt_loss.dense_forward(
+            #                pred_coordinate=pred_dict["coordinate"],
+            #                true_coordinate=label_dict["coordinate"],
+            #                lddt_mask=label_dict["lddt_mask"],
+            #                diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
+            #                )  # it's faster is not OOM
+            #                }
+            #        )
+            #elif self.configs.loss.diffusion_sparse_loss_enable:
+            #    loss_fns.update(
+            #        {
+            #            "smooth_lddt_loss": lambda: self.smooth_lddt_loss.sparse_forward(
+            #                pred_coordinate=pred_dict["coordinate"],
+            #                true_coordinate=label_dict["coordinate"],
+            #                lddt_mask=label_dict["lddt_mask"],
+            #                diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
+            #            )
+            #        }
+            #    )
+            #else:
+            #    loss_fns.update(
+            #        {
+            #            "smooth_lddt_loss": lambda: self.smooth_lddt_loss(
+            #                pred_distance=pred_dict["distance"],
+            #                true_distance=label_dict["distance"],
+            #                distance_mask=label_dict["distance_mask"],
+            #                lddt_mask=label_dict["lddt_mask"],
+            #                diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
+            #            )
+            #            }
+            #        )
             loss_fns.update(
                 {
                     "mse_loss": lambda: self.mse_loss(

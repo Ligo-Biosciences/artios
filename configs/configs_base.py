@@ -90,7 +90,7 @@ model_configs = {
     "c_s_inputs": 416,  # c_s_inputs == c_token + 32
     "c_atom": 128, # 64
     "c_atompair": 16, # 16
-    "c_token": 384, # 192
+    "c_token": 768, # 192
     "n_blocks": 48, # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
@@ -186,7 +186,7 @@ model_configs = {
         "diffusion_module": {
             "use_fine_grained_checkpoint": True,
             "sigma_data": GlobalConfigValue("sigma_data"),
-            "c_token": 384, # 768
+            "c_token": GlobalConfigValue("c_token"), 
             "c_atom": GlobalConfigValue("c_atom"),
             "c_atompair": GlobalConfigValue("c_atompair"),
             "c_z": GlobalConfigValue("c_z"),

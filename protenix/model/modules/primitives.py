@@ -266,11 +266,14 @@ class LayerNorm(nn.Module):
                 self.eps
             )
         else:
-            # Manual implementation
-            mean = x.mean(dim=-1, keepdim=True)
-            var = x.var(dim=-1, unbiased=False, keepdim=True)
-            x_norm = (x - mean) / torch.sqrt(var + self.eps)
-            return self.weight * x_norm + self.bias
+            # Manual implementation using torch.functional
+            return F.layer_norm(
+                x,
+                self.normalized_shape,
+                self.weight if self.elementwise_affine else None,
+                self.bias if self.elementwise_affine else None,
+                self.eps
+            )
 
 
 class SwiGLU(nn.Module):

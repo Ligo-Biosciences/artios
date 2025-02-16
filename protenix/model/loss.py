@@ -511,7 +511,6 @@ class MSELoss(nn.Module):
             )
 
         # Compute u(t) 
-        print("timestep shape", timestep.shape)
         timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
         u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
 
@@ -525,9 +524,6 @@ class MSELoss(nn.Module):
 
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
-
-        print("u_t shape", u_t.shape)
-        print("per_sample_weighted_mse shape", per_sample_weighted_mse.shape)
 
         weighted_align_mse_loss = (self.weight_mse / u_t.exp()) * (per_sample_weighted_mse) + u_t
 

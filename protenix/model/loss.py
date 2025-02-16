@@ -525,7 +525,6 @@ class MSELoss(nn.Module):
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
 
-        print("self.weight_mse shape", self.weight_mse.shape)
         print("u_t shape", u_t.shape)
         print("per_sample_weighted_mse shape", per_sample_weighted_mse.shape)
 

@@ -221,8 +221,11 @@ class ArtiosLigand(nn.Module):
             timesteps=timesteps,
             inplace_safe=inplace_safe,
         )
-        pred_dict["timestep"] = timesteps
-        
+
+        # TODO: commenting needed here
+        timestep = timesteps[-1]  # Get final timestep
+        pred_dict["timestep"] = timestep.expand(*pred_dict["coordinate"].shape[:-2])  # Expand to [..., N_sample]
+
         step_diffusion = time.time()
 
         time_tracker.update({"diffusion": step_diffusion - step_trunk})

@@ -218,30 +218,34 @@ class BiasInitLinear(Linear):
         )
 
 
-class LayerNorm(nn.LayerNorm):
+class LayerNorm(nn.Module):
     """LayerNorm with bias=False by default."""
     def __init__(
             self,
             normalized_shape: Union[int, Tuple[int, ...]],
             eps: float = 1e-5,
-            elementwise_affine: bool = True,
+            elementwise_affine: bool = True, 
             bias: bool = False,
             device: Optional[torch.device] = None,
             dtype: Optional[torch.dtype] = None
     ):
-        super().__init__(
-            normalized_shape=normalized_shape,
-            eps=eps,
-            elementwise_affine=elementwise_affine,
-            bias=bias,
-            device=device,
-            dtype=dtype
-        )
-        # Create zero bias tensor if bias is None
-        if self.bias is None and self.weight is not None:
-            self.zero_bias = self.weight.new_zeros(self.weight.shape)
+        super().__init__()
+        
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+
+        if elementwise_affine:
+            self.weight = nn.Parameter(torch.ones(normalized_shape, device=device, dtype=dtype))
+            if bias:
+                self.bias = nn.Parameter(torch.zeros(normalized_shape, device=device, dtype=dtype))
+            else:
+                self.register_buffer('bias', torch.zeros(normalized_shape, device=device, dtype=dtype))
         else:
-            self.zero_bias = None
+            self.register_buffer('weight', torch.ones(normalized_shape, device=device, dtype=dtype))
+            self.register_buffer('bias', torch.zeros(normalized_shape, device=device, dtype=dtype))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass using optimized kernel on GPU, regular layernorm on CPU.
@@ -255,21 +259,18 @@ class LayerNorm(nn.LayerNorm):
         if CUDA_AVAILABLE and x.is_cuda and x.dtype in [torch.float32, torch.float16, torch.bfloat16]:
             # Use optimized CUDA kernel implementation
             return FusedLayerNormAffineFunction.apply(
-                x, 
+                x,
                 self.weight,
-                self.bias if self.bias is not None else self.zero_bias,
+                self.bias,
                 self.normalized_shape,
                 self.eps
             )
         else:
-            # Use standard PyTorch implementation
-            return F.layer_norm(
-                x,
-                self.normalized_shape,
-                self.weight,
-                self.bias,
-                self.eps
-            )
+            # Manual implementation
+            mean = x.mean(dim=-1, keepdim=True)
+            var = x.var(dim=-1, unbiased=False, keepdim=True)
+            x_norm = (x - mean) / torch.sqrt(var + self.eps)
+            return self.weight * x_norm + self.bias
 
 
 class SwiGLU(nn.Module):

@@ -511,6 +511,7 @@ class MSELoss(nn.Module):
             )
 
         # Compute u(t) 
+        print("timestep shape", timestep.shape)
         timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
         u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
 

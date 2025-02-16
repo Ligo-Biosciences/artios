@@ -711,8 +711,8 @@ class AtomAttentionEncoder(nn.Module):
         )  # [..., n_blocks, n_queries, n_keys, C_atompair]
 
         # Line5-Line6: Embed pairwise inverse squared distances, and the valid mask with appropiate masking
-        invd_emb = mul(self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))), v_lm)
-        mask_emb = mul(self.linear_no_bias_v(v_lm.to(dtype=p_lm.dtype)), v_lm)
+        invd_emb = mul(self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))), v_lm, inplace_safe=inplace_safe)
+        mask_emb = mul(self.linear_no_bias_v(v_lm.to(dtype=p_lm.dtype)), v_lm, inplace_safe=inplace_safe)
 
         p_lm = add(p_lm, invd_emb, inplace_safe=inplace_safe)
         p_lm = add(p_lm, mask_emb, inplace_safe=inplace_safe)

@@ -20,7 +20,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy.stats import truncnorm
-from functools import partialmethod
 import numpy as np
 
 from protenix.model.utils import (
@@ -31,6 +30,14 @@ from protenix.model.utils import (
     add
 )
 from protenix.openfold_local.utils.chunk_utils import chunk_layer
+
+
+# Optimized layer norm
+try:
+    from protenix.model.layer_norm.layer_norm import FusedLayerNormAffineFunction
+    CUDA_AVAILABLE = True
+except OSError:
+    CUDA_AVAILABLE = False
 
 
 # Linear layer utilities
@@ -230,6 +237,39 @@ class LayerNorm(nn.LayerNorm):
             device=device,
             dtype=dtype
         )
+        # Create zero bias tensor if bias is None
+        if self.bias is None and self.weight is not None:
+            self.zero_bias = self.weight.new_zeros(self.weight.shape)
+        else:
+            self.zero_bias = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass using optimized kernel on GPU, regular layernorm on CPU.
+        
+        Args:
+            x (torch.Tensor): Input tensor
+            
+        Returns:
+            torch.Tensor: Normalized tensor
+        """
+        if CUDA_AVAILABLE and x.is_cuda and x.dtype in [torch.float32, torch.float16, torch.bfloat16]:
+            # Use optimized CUDA kernel implementation
+            return FusedLayerNormAffineFunction.apply(
+                x, 
+                self.weight,
+                self.bias if self.bias is not None else self.zero_bias,
+                self.normalized_shape,
+                self.eps
+            )
+        else:
+            # Use standard PyTorch implementation
+            return F.layer_norm(
+                x,
+                self.normalized_shape,
+                self.weight,
+                self.bias,
+                self.eps
+            )
 
 
 class SwiGLU(nn.Module):

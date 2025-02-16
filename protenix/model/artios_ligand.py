@@ -221,7 +221,8 @@ class ArtiosLigand(nn.Module):
             timesteps=timesteps,
             inplace_safe=inplace_safe,
         )
-        
+
+        # TODO: commenting needed here
         timestep = timesteps[-1]  # Get final timestep
         pred_dict["timestep"] = timestep.expand(*pred_dict["coordinate"].shape[:-2])  # Expand to [..., N_sample]
 

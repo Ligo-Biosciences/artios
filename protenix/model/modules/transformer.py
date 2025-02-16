@@ -81,7 +81,7 @@ class AttentionPairBias(nn.Module):
             c_v=c_a,
             c_hidden=c_a // n_heads,
             num_heads=n_heads,
-            gating=True,
+            gating=False,  # disable gating
             q_linear_bias=True,
             local_attention_method=self.local_attention_method,
         )

@@ -710,12 +710,13 @@ class ProtenixLoss(nn.Module):
         else:
             # No scale is required
             diffusion_per_sample_scale = None
-
+        
         if self.configs.train_confidence_only and mode == "train":
             # Skip Diffusion Loss and distogram loss
             loss_fns = {}
         else:
             loss_fns = {}
+            '''
             if self.configs.loss.diffusion_lddt_loss_dense:
                 loss_fns.update(
                     {
@@ -750,6 +751,8 @@ class ProtenixLoss(nn.Module):
                         )
                     }
                 )
+            '''
+        
             loss_fns.update(
                 {
                     "mse_loss": lambda: self.mse_loss(

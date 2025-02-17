@@ -71,9 +71,9 @@ optim_configs = {
     "adam": {
         "beta1": 0.9,
         "beta2": 0.95,
-        "weight_decay": 1e-8,
+        "weight_decay": 1e-2,  # 1e-8
         "lr": GlobalConfigValue("lr"),
-        "use_adamw": False,
+        "use_adamw": True,  # False
     },
     # Optim - LRScheduler
     "af3_lr_scheduler": {
@@ -110,10 +110,10 @@ model_configs = {
     "dtype": "bf16",  # default training dtype: bf16
     "loss_metrics_sparse_enable": True,  # the swicth for both sparse lddt metrics and sparse bond/smooth lddt loss
     "skip_amp": {
-        "sample_diffusion": True,
-        "confidence_head": True,
-        "sample_diffusion_training": True,
-        "loss": True,
+        "sample_diffusion": False,  # True
+        "confidence_head": False,  # True
+        "sample_diffusion_training": False,  # True
+        "loss": False,  # True
     },
     "infer_setting": {
         "chunk_size": ValueMaybeNone(
@@ -308,13 +308,6 @@ loss_configs = {
         },
         "diffusion": {
             "mse": {
-                "weight_mse": 1 / 3,
-                "weight_dna": 5.0,
-                "weight_rna": 5.0,
-                "weight_ligand": 10.0,
-                "eps": 1e-6,
-            },
-            "flow_matching": {
                 "weight_mse": 1 / 3,
                 "weight_dna": 5.0,
                 "weight_rna": 5.0,

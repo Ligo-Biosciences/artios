@@ -716,7 +716,7 @@ class ProtenixLoss(nn.Module):
             loss_fns = {}
         else:
             loss_fns = {}
-            '''
+            
             if self.configs.loss.diffusion_lddt_loss_dense:
                 loss_fns.update(
                     {
@@ -751,7 +751,7 @@ class ProtenixLoss(nn.Module):
                         )
                     }
                 )
-            '''
+            
         
             loss_fns.update(
                 {

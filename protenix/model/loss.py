@@ -78,6 +78,7 @@ class SmoothLDDTLoss(nn.Module):
         dist_diff_epsilon = 0
         for threshold in [0.5, 1, 2, 4]:
             dist_diff_epsilon = add(dist_diff_epsilon, mul(0.25, torch.sigmoid(threshold - dist_diff), inplace_safe=True), inplace_safe=True)
+        dist_diff_epsilon = torch.nan_to_num(dist_diff_epsilon, 0.0)
 
         # Compute mean
         if c_lm is not None:

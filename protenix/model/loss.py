@@ -215,178 +215,6 @@ class SmoothLDDTLoss(nn.Module):
         final_loss = 1 - loss_reduction(lddt, method=self.reduction)
         return final_loss
 
-    def sparse_forward(
-        self,
-        pred_coordinate: torch.Tensor,
-        true_coordinate: torch.Tensor,
-        lddt_mask: torch.Tensor,
-        diffusion_chunk_size: Optional[int] = None,
-    ) -> torch.Tensor:
-        """SmoothLDDTLoss sparse implementation
-
-        Args:
-            pred_coordinate (torch.Tensor): the diffusion denoised atom coordinates
-                [..., N_sample, N_atom, 3]
-            true_coordinate (torch.Tensor): the ground truth atom coordinates
-                [..., N_atom, 3]
-            lddt_mask (torch.Tensor, optional): whether true distance is within radius (30A for nuc and 15A for others)
-                [N_atom, N_atom]
-            diffusion_chunk_size (Optional[int]): Chunk size over the N_sample dimension. Defaults to None.
-
-        Returns:
-            torch.Tensor: the smooth lddt loss
-                [...] if reduction is None else []
-        """
-        lddt_indices = torch.nonzero(lddt_mask, as_tuple=True)
-        true_coords_l = true_coordinate.index_select(-2, lddt_indices[0])
-        true_coords_m = true_coordinate.index_select(-2, lddt_indices[1])
-        true_distance_sparse_lm = torch.norm(true_coords_l - true_coords_m, p=2, dim=-1)
-        if diffusion_chunk_size is None:
-            pred_coords_l = pred_coordinate.index_select(-2, lddt_indices[0])
-            pred_coords_m = pred_coordinate.index_select(-2, lddt_indices[1])
-            # \delta x_{lm} and \delta x_{lm}^{GT} in the Algorithm 27
-            pred_distance_sparse_lm = torch.norm(
-                pred_coords_l - pred_coords_m, p=2, dim=-1
-            )
-            lddt = self._chunk_forward(
-                pred_distance_sparse_lm, true_distance_sparse_lm, c_lm=None
-            )
-        else:
-            checkpoint_fn = get_checkpoint_fn()
-            lddt = []
-            N_sample = pred_coordinate.shape[-3]
-            no_chunks = N_sample // diffusion_chunk_size + (
-                N_sample % diffusion_chunk_size != 0
-            )
-            for i in range(no_chunks):
-                pred_coords_i_l = pred_coordinate[
-                    i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size, :, :
-                ].index_select(-2, lddt_indices[0])
-                pred_coords_i_m = pred_coordinate[
-                    i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size, :, :
-                ].index_select(-2, lddt_indices[1])
-
-                # \delta x_{lm} and \delta x_{lm}^{GT} in the Algorithm 27
-                pred_distance_sparse_i_lm = torch.norm(
-                    pred_coords_i_l - pred_coords_i_m, p=2, dim=-1
-                )
-                lddt_i = checkpoint_fn(
-                    self._chunk_forward,
-                    pred_distance_sparse_i_lm,
-                    true_distance_sparse_lm,
-                )
-                lddt.append(lddt_i)
-            lddt = torch.cat(lddt, dim=-1)
-
-        lddt = lddt.mean(dim=-1)  # [...]
-        return 1 - loss_reduction(lddt, method=self.reduction)
-
-    def dense_forward(
-        self,
-        pred_coordinate: torch.Tensor,
-        true_coordinate: torch.Tensor,
-        lddt_mask: torch.Tensor,
-        diffusion_chunk_size: Optional[int] = None,
-    ) -> torch.Tensor:
-        """SmoothLDDTLoss sparse implementation
-
-        Args:
-            pred_coordinate (torch.Tensor): the diffusion denoised atom coordinates
-                [..., N_sample, N_atom, 3]
-            true_coordinate (torch.Tensor): the ground truth atom coordinates
-                [..., N_atom, 3]
-            lddt_mask (torch.Tensor, optional): whether true distance is within radius (30A for nuc and 15A for others)
-                [N_atom, N_atom]
-            diffusion_chunk_size (Optional[int]): Chunk size over the N_sample dimension. Defaults to None.
-
-        Returns:
-            torch.Tensor: the smooth lddt loss
-                [...] if reduction is None else []
-        """
-        c_lm = lddt_mask.bool().unsqueeze(dim=-3).detach()  # [..., 1, N_atom, N_atom]
-        # Compute distance error
-        # [...,  N_sample , N_atom, N_atom]
-        true_distance = torch.cdist(true_coordinate, true_coordinate)
-        if diffusion_chunk_size is None:
-            pred_distance = torch.cdist(pred_coordinate, pred_coordinate)
-            lddt = self._chunk_forward(
-                pred_distance=pred_distance, true_distance=true_distance, c_lm=c_lm
-            )
-        else:
-            checkpoint_fn = get_checkpoint_fn()
-            lddt = []
-            N_sample = pred_coordinate.shape[-3]
-            no_chunks = N_sample // diffusion_chunk_size + (
-                N_sample % diffusion_chunk_size != 0
-            )
-            for i in range(no_chunks):
-                pred_distance_i = torch.cdist(
-                    pred_coordinate[
-                        i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
-                        :,
-                        :,
-                    ],
-                    pred_coordinate[
-                        i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
-                        :,
-                        :,
-                    ],
-                )
-                lddt_i = checkpoint_fn(
-                    self._chunk_forward,
-                    pred_distance_i,
-                    true_distance,
-                    c_lm,
-                )
-                lddt.append(lddt_i)
-            lddt = torch.cat(lddt, dim=-1)
-
-        lddt = lddt.mean(dim=-1)  # [...]
-        return 1 - loss_reduction(lddt, method=self.reduction)
-
-
-def compute_lddt_mask(
-    true_distance: torch.Tensor,
-    distance_mask: torch.Tensor,
-    is_nucleotide: torch.Tensor,
-    is_nucleotide_threshold: float = 30.0,
-    is_not_nucleotide_threshold: float = 15.0,
-) -> torch.Tensor:
-    """calculate the atom pair mask with the bespoke radius
-
-    Args:
-        true_distance (torch.Tensor): the ground truth coordinates
-            [..., N_atom, N_atom]
-        distance_mask (torch.Tensor): whether true coordinates exist.
-            [..., N_atom, N_atom] or [N_atom, N_atom]
-        is_nucleotide (torch.Tensor): Indicator for nucleotide atoms.
-            [..., N_atom] or [N_atom]
-        is_nucleotide_threshold (float): Threshold distance for nucleotide atoms. Defaults to 30.0.
-        is_not_nucleotide_threshold (float): Threshold distance for non-nucleotide atoms. Defaults to 15.0.
-
-    Returns:
-        c_lm (torch.Tenson): the atom pair mask c_lm, not symmetric
-            [..., N_atom, N_atom]
-    """
-    # Restrict to bespoke inclusion radius
-    is_nucleotide_mask = is_nucleotide.bool()
-    c_lm = (true_distance < is_nucleotide_threshold) * is_nucleotide_mask[..., None] + (
-        true_distance < is_not_nucleotide_threshold
-    ) * (
-        ~is_nucleotide_mask[..., None]
-    )  # [..., N_atom, N_atom]
-
-    # Zero-out diagonals of c_lm and cast to float
-    c_lm = c_lm * (
-        1 - torch.eye(n=c_lm.size(-1), device=c_lm.device, dtype=true_distance.dtype)
-    )
-    # Zero-out atom pairs without true coordinates
-    # Note: the sparsity of c_lm is ~10% in 5000 atom-pairs,
-    # and becomes more sparse as the number of atoms increases,
-    # change to sparse implementation can reduce cuda memory
-    c_lm = c_lm * distance_mask  # [..., N_atom, N_atom]
-    return c_lm
-
 
 def softmax_cross_entropy(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     """Softmax cross entropy
@@ -630,72 +458,6 @@ class ProtenixLoss(nn.Module):
         # self.fm_loss = FMLoss(**configs.loss.diffusion.flow_matching)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
-        #self.distogram_loss = DistogramLoss(**configs.loss.distogram)
-
-    def calculate_label( 
-        self,
-        feat_dict: dict[str, Any],
-        label_dict: dict[str, Any],
-    ) -> dict[str, Any]:
-        """calculate true distance, and atom pair mask
-
-        Args:
-            feat_dict (dict): Feature dictionary containing additional features.
-            label_dict (dict): Label dictionary containing ground truth data.
-
-        Returns:
-            label_dict (dict): with the following updates:
-                distance (torch.Tensor): true atom-atom distance.
-                    [..., N_atom, N_atom]
-                distance_mask (torch.Tensor): atom-atom mask indicating whether true distance exists.
-                    [..., N_atom, N_atom]
-        """
-        # Distance mask
-        distance_mask = (
-            label_dict["coordinate_mask"][..., None]
-            * label_dict["coordinate_mask"][..., None, :]
-        )
-        # Distances for all atom pairs
-        # Note: we convert to bf16 for saving cuda memory, if performance drops, do not convert it
-        distance = (
-            cdist(label_dict["coordinate"], label_dict["coordinate"]) * distance_mask
-        ).to(
-            label_dict["coordinate"].dtype
-        )  # [..., N_atom, N_atom]
-
-        lddt_mask = compute_lddt_mask( 
-            true_distance=distance,
-            distance_mask=distance_mask,
-            is_nucleotide=feat_dict["is_rna"].bool() + feat_dict["is_dna"].bool(),
-            **self.lddt_radius,
-        )
-
-        label_dict["lddt_mask"] = lddt_mask 
-        label_dict["distance_mask"] = distance_mask
-        if not self.configs.loss_metrics_sparse_enable:
-            label_dict["distance"] = distance
-        del distance, distance_mask, lddt_mask
-        return label_dict
-
-    def calculate_prediction(  
-        self,
-        pred_dict: dict[str, torch.Tensor],
-    ) -> dict[str, torch.Tensor]:
-        """get more predictions used for calculating difference losses
-
-        Args:
-            pred_dict (dict[str, torch.Tensor]): raw prediction dict given by the model
-
-        Returns:
-            dict[str, torch.Tensor]: updated predictions
-        """
-        if not self.configs.loss_metrics_sparse_enable:
-            pred_dict["distance"] = torch.cdist(
-                pred_dict["coordinate"], pred_dict["coordinate"]
-            ).to(
-                pred_dict["coordinate"].dtype
-            )  # [..., N_atom, N_atom]
-        return pred_dict
 
     def aggregate_losses(  
         self, loss_fns: dict, has_valid_resolution: Optional[torch.Tensor] = None
@@ -858,11 +620,6 @@ class ProtenixLoss(nn.Module):
         """
         diffusion_chunk_size = self.configs.loss.diffusion_chunk_size_outer
         assert mode in ["train", "eval", "inference"]
-        # Pre-computations
-        with torch.no_grad():
-            label_dict = self.calculate_label(feat_dict, label_dict)
-
-        pred_dict = self.calculate_prediction(pred_dict)
 
         if diffusion_chunk_size <= 0:
             # Calculate losses
@@ -907,7 +664,6 @@ class ProtenixLoss(nn.Module):
                         ]
                     else:
                         pred_dict_i[key] = value
-                pred_dict_i = self.calculate_prediction(pred_dict_i)
                 cum_loss_i, losses_i = self.calculate_losses(
                     feat_dict=feat_dict,
                     pred_dict=pred_dict_i,

@@ -110,6 +110,10 @@ class SmoothLDDTLoss(nn.Module):
                 - neighbor_distances: Distances to k-nearest neighbors for each atom
                     [..., N_atom, k]
         """
+        # Get number of atoms and limit k
+        n_atoms = true_coordinates.shape[-2]
+        k = min(k, n_atoms - 1)  # -1 to exclude self
+        
         # Compute pairwise distances between all atoms
         distances = torch.cdist(true_coordinates, true_coordinates)  # [..., N_atom, N_atom]
         
@@ -159,43 +163,27 @@ class SmoothLDDTLoss(nn.Module):
         *batch_dims, n_samples, n_atoms, _ = pred_coordinates.shape
 
         # Expand pred_coordinates to include neighbor dimension
-        # [..., N_sample, N_atom, 3] -> [..., N_sample, N_atom, 1, 3] -> [..., N_sample, N_atom, k, 3]
-        pred_coordinates = pred_coordinates.unsqueeze(-2).expand(
-            *batch_dims, n_samples, n_atoms, n_neighbors, 3
-        )
-        if torch.isnan(pred_coordinates).any():
-            print("NaN detected in expanded pred_coordinates")
+        # [..., N_sample, N_atom, 3] -> [..., N_sample, N_atom, k, 3]
+        pred_coordinates = expand_at_dim(x=pred_coordinates, dim=-2, n=n_neighbors)
 
         # Expand neighbour indices and distances to include N_sample dimension
-        indices_expanded = neighbor_indices.unsqueeze(-3).expand(
-            *batch_dims, n_samples, n_atoms, n_neighbors
-        )  # [..., N_atom, k] -> [..., N_sample, N_atom, k]
-        indices_expanded = indices_expanded.unsqueeze(-1).expand(
-            *batch_dims, n_samples, n_atoms, n_neighbors, 3
-        )  # [..., N_sample, N_atom, k] -> [..., N_sample, N_atom, k, 3]
-        if torch.isnan(indices_expanded).any():
-            print("NaN detected in indices_expanded")
+        # [..., N_atom, k] -> [..., N_sample, N_atom, k]
+        indices_expanded = expand_at_dim(x=neighbor_indices, dim=-3, n=n_samples)
+        # [..., N_sample, N_atom, k] -> [..., N_sample, N_atom, k, 3]
+        indices_expanded = expand_at_dim(x=indices_expanded, dim=-1, n=3)
 
         pred_neighbor_coords = torch.gather(
             pred_coordinates,
             dim=-3,
             index=indices_expanded
         )  # [..., N_sample, N_atom, k, 3]
-        if torch.isnan(pred_neighbor_coords).any():
-            print("NaN detected in pred_neighbor_coords")
         
         # Expand true_neighbor_distances to include N_sample dimension
         # [..., N_atom, k] -> [..., N_sample, N_atom, k]
-        true_neighbor_distances = true_neighbor_distances.unsqueeze(-3).expand(
-            *batch_dims, n_samples, n_atoms, n_neighbors
-        )
-        if torch.isnan(true_neighbor_distances).any():
-            print("NaN detected in expanded true_neighbor_distances")
+        true_neighbor_distances = expand_at_dim(x=true_neighbor_distances, dim=-3, n=n_samples)
 
         # Compute predicted neighbour distances
         pred_distance = torch.sqrt(torch.sum((pred_coordinates - pred_neighbor_coords)**2, dim=-1))  # [..., N_sample, N_atom, k]
-        if torch.isnan(pred_distance).any():
-            print("NaN detected in pred_distance")
 
         # Compute distance error
         # [..., N_sample, N_atom, k]
@@ -203,8 +191,7 @@ class SmoothLDDTLoss(nn.Module):
             lddt = self._chunk_forward(
                 pred_distance=pred_distance, true_distance=true_neighbor_distances, c_lm=c_lm
             )
-            if torch.isnan(lddt).any():
-                print("NaN detected in lddt (no chunks)")
+
         else:
             # Default use checkpoint for saving memory
             checkpoint_fn = get_checkpoint_fn()
@@ -228,17 +215,9 @@ class SmoothLDDTLoss(nn.Module):
                     print(f"NaN detected in lddt chunk {i}")
                 lddt.append(lddt_i)
             lddt = torch.cat(lddt, dim=-1)
-            if torch.isnan(lddt).any():
-                print("NaN detected in concatenated lddt")
 
         lddt = lddt.mean(dim=-1)  # [...]
-        if torch.isnan(lddt).any():
-            print("NaN detected in mean lddt")
-
         final_loss = 1 - loss_reduction(lddt, method=self.reduction)
-        if torch.isnan(final_loss).any():
-            print("NaN detected in final loss")
-        
         return final_loss
 
     def sparse_forward(

@@ -187,12 +187,14 @@ class AF3Trainer(object):
         self.lr_scheduler = get_lr_scheduler(self.configs, self.optimizer, **kwargs)
 
     def init_data(self):
+        print("beginning init_data...")
         self.train_dl, self.test_dls = get_dataloaders(
             self.configs,
             DIST_WRAPPER.world_size,
             seed=self.configs.seed,
             error_dir=self.error_dir,
         )
+        print("finished init_data")
 
     def init_sampler(self): 
         #TODO: here we should perhaps initialise some sampler object with some sampler configs

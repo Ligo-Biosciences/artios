@@ -660,20 +660,6 @@ class Featurizer(object):
         mask_features = self.get_mask_features()
         features.update(mask_features)
         return features
-    
-    '''
-    def get_lddt_loss_labels(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Get smooth LDDT loss labels. Computes the distances and indices of the 300 closest atoms for each atom.
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: distances and indices.
-        """
-        kdtree = KDTree(self.cropped_atom_array.coord)
-        n_atoms = self.cropped_atom_array.coord.shape[0]  
-        distances, indices = kdtree.query(self.cropped_atom_array.coord, k=min(300, n_atoms))  # 300 closest atoms
-        return distances, indices
-    '''
 
     def get_labels(self) -> dict[str, torch.Tensor]:
         """
@@ -689,25 +675,14 @@ class Featurizer(object):
         labels = {}
 
         # Check coordinates
-        coords = self.cropped_atom_array.coord
-        if np.any(np.isnan(coords)):
-            raise ValueError("NaN values detected in atomic coordinates")
-        labels["coordinate"] = torch.Tensor(coords)  # [N_atom, 3]
+        labels["coordinate"] = torch.Tensor(
+            self.cropped_atom_array.coord
+        )  # [N_atom, 3]
 
         # Check coordinate mask 
-        coord_mask = self.cropped_atom_array.is_resolved.astype(int)
-        if np.any(np.isnan(coord_mask)):
-            raise ValueError("NaN values detected in coordinate mask")
-        labels["coordinate_mask"] = torch.Tensor(coord_mask).long()  # [N_atom]
-
-        # Add LDDT loss labels
-        #distances, indices = self.get_lddt_loss_labels()
-        #labels["nearest_neighbor_dists"] = torch.from_numpy(
-        #    distances
-        #) # [N_atom, k]
-        #labels["nearest_neighbor_indices"] = torch.from_numpy(
-        #    indices
-        #).long()  # [N_atom, k]
+        labels["coordinate_mask"] = torch.Tensor(
+            self.cropped_atom_array.is_resolved.astype(int)
+        ).long()  # [N_atom]
         return labels
 
     def get_atom_permutation_list(

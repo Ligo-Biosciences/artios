@@ -352,11 +352,11 @@ class ArtiosLigand(nn.Module):
                 "timestep": timestep, 
             }
         )
-        label_dict.update(
-            {
-                "coordinate": x_target_augment,
-            }
-        )
+        #label_dict.update(
+        #    {
+        #        "coordinate": x_target_augment,
+        #    }
+        #)
 
         # Permute symmetric atom/chain in each sample to match true structure
         # Note: currently chains cannot be permuted since label is cropped

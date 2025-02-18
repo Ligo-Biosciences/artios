@@ -669,7 +669,8 @@ class Featurizer(object):
             tuple[torch.Tensor, torch.Tensor]: distances and indices.
         """
         kdtree = KDTree(self.cropped_atom_array.coord)
-        distances, indices = kdtree.query(self.cropped_atom_array.coord, k=300)  # 300 closest atoms
+        n_atoms = self.cropped_atom_array.coord.shape[0]  
+        distances, indices = kdtree.query(self.cropped_atom_array.coord, k=min(300, n_atoms))  # 300 closest atoms
         return distances, indices
 
     def get_labels(self) -> dict[str, torch.Tensor]:
@@ -692,12 +693,12 @@ class Featurizer(object):
 
         # Add LDDT loss labels
         distances, indices = self.get_lddt_loss_labels()
-        labels["nearest_neighbor_dists"] = torch.Tensor(
+        labels["nearest_neighbor_dists"] = torch.from_numpy(
             distances
-        ) # [N_atom, 300]
-        labels["nearest_neighbor_indices"] = torch.Tensor(
+        ) # [N_atom, k]
+        labels["nearest_neighbor_indices"] = torch.from_numpy(
             indices
-        ).long()  # [N_atom, 300]
+        ).long()  # [N_atom, k]
         return labels
 
     def get_atom_permutation_list(

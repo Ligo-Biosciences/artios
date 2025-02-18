@@ -148,19 +148,14 @@ class SmoothLDDTLoss(nn.Module):
                 [...] if reduction is None else []
         """
         # Get the indices and distances of the k closest atoms for each atom in the true coordinates
-        print(f"true_coordinates.shape: {true_coordinates.shape}") #FIXME: this is outputting torch.Size([48, 992, 3])
         neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates, k=300)
-        print(f"neighbor_indices.shape: {neighbor_indices.shape}")
-        print(f"true_neighbor_distances.shape: {true_neighbor_distances.shape}")
         
         # Compute mask for the atoms that have true coordinates
         n_neighbors = neighbor_indices.shape[-1]
         c_lm = coordinate_mask[neighbor_indices].bool().unsqueeze(-3).detach()  # [..., 1, N_atom, 300]
-        if torch.isnan(c_lm).any():
-            print("NaN detected in c_lm")
 
-        # Get dimension sizes
-        *batch_dims, n_samples, n_atoms, _ = pred_coordinates.shape
+        # Get N_sample dimension size
+        n_samples = pred_coordinates.shape[-3]
 
         # Expand pred_coordinates to include neighbor dimension
         # [..., N_sample, N_atom, 3] -> [..., N_sample, N_atom, k, 3]

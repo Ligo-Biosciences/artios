@@ -668,7 +668,7 @@ class Featurizer(object):
         Returns:
             tuple[torch.Tensor, torch.Tensor]: distances and indices.
         """
-        kdtree = KDTree(self.cropped_atom_array.coord)
+        kdtree = KDTree(self.cropped_atom_array.coord, copy_data=True)
         n_atoms = self.cropped_atom_array.coord.shape[0]  
         distances, indices = kdtree.query(self.cropped_atom_array.coord, k=min(300, n_atoms))  # 300 closest atoms
         return distances, indices

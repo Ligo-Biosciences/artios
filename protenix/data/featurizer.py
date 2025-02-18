@@ -668,8 +668,9 @@ class Featurizer(object):
         Returns:
             tuple[torch.Tensor, torch.Tensor]: distances and indices.
         """
-        kdtree = KDTree(self.cropped_atom_array.coord)
-        distances, indices = kdtree.query(self.cropped_atom_array.coord, k=300)  # 300 closest atoms
+        kdtree = KDTree(self.cropped_atom_array.coord, copy_data=True)
+        n_atoms = self.cropped_atom_array.coord.shape[0]  
+        distances, indices = kdtree.query(self.cropped_atom_array.coord, k=min(300, n_atoms))  # 300 closest atoms
         return distances, indices
 
     def get_labels(self) -> dict[str, torch.Tensor]:
@@ -704,8 +705,8 @@ class Featurizer(object):
         if np.any(np.isnan(indices)):
             raise ValueError("NaN values detected in nearest neighbor indices")
             
-        labels["nearest_neighbor_dists"] = torch.Tensor(distances)  # [N_atom, 300]
-        labels["nearest_neighbor_indices"] = torch.Tensor(indices).long()  # [N_atom, 300]
+        labels["nearest_neighbor_dists"] = torch.from_numpy(distances)  # [N_atom, 300]
+        labels["nearest_neighbor_indices"] = torch.from_numpy(indices).long()  # [N_atom, 300]
         return labels
 
     def get_atom_permutation_list(

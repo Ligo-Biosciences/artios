@@ -77,7 +77,7 @@ class Featurizer(object):
         Ref: AlphaFold3 SI Table 5 "restype"
         One-hot encoding of the sequence. 32 possible values: 20 amino acids + unknown,
         4 RNA nucleotides + unknown, 4 DNA nucleotides + unknown, and gap.
-        Ligands represented as “unknown amino acid”.
+        Ligands represented as "unknown amino acid".
 
         Args:
             restype_list (List[str]): A list of residue types.
@@ -221,8 +221,8 @@ class Featurizer(object):
     ) -> TokenArray:
         """
         Ref: AlphaFold3 SI Chapter 4.3.2
-        The atoms (a_i, b_i, c_i) used to construct token i’s frame depend on the chain type of i:
-        Protein tokens use their residue’s backbone (N, Cα, C),
+        The atoms (a_i, b_i, c_i) used to construct token i's frame depend on the chain type of i:
+        Protein tokens use their residue's backbone (N, Cα, C),
         while DNA and RNA tokens use (C1′, C3′, C4′) atoms of their residue.
         All other tokens (small molecules, glycans, ions) contain only one atom per token.
         The token atom is assigned to b_i, the closest atom to the token atom is a_i,
@@ -669,7 +669,7 @@ class Featurizer(object):
         Returns:
             tuple[torch.Tensor, torch.Tensor]: distances and indices.
         """
-        kdtree = KDTree(self.cropped_atom_array.coord, copy_data=True)
+        kdtree = KDTree(self.cropped_atom_array.coord)
         n_atoms = self.cropped_atom_array.coord.shape[0]  
         distances, indices = kdtree.query(self.cropped_atom_array.coord, k=min(300, n_atoms))  # 300 closest atoms
         return distances, indices
@@ -678,20 +678,27 @@ class Featurizer(object):
     def get_labels(self) -> dict[str, torch.Tensor]:
         """
         Get the input labels required for the training phase.
+        Includes NaN checking to ensure valid tensors.
 
         Returns:
             Dict[str, torch.Tensor]: a dict of labels.
+            
+        Raises:
+            ValueError: If any of the label tensors contain NaN values.
         """
-
         labels = {}
 
-        labels["coordinate"] = torch.Tensor(
-            self.cropped_atom_array.coord
-        )  # [N_atom, 3]
+        # Check coordinates
+        coords = self.cropped_atom_array.coord
+        if np.any(np.isnan(coords)):
+            raise ValueError("NaN values detected in atomic coordinates")
+        labels["coordinate"] = torch.Tensor(coords)  # [N_atom, 3]
 
-        labels["coordinate_mask"] = torch.Tensor(
-            self.cropped_atom_array.is_resolved.astype(int)
-        ).long()  # [N_atom]
+        # Check coordinate mask 
+        coord_mask = self.cropped_atom_array.is_resolved.astype(int)
+        if np.any(np.isnan(coord_mask)):
+            raise ValueError("NaN values detected in coordinate mask")
+        labels["coordinate_mask"] = torch.Tensor(coord_mask).long()  # [N_atom]
 
         # Add LDDT loss labels
         #distances, indices = self.get_lddt_loss_labels()

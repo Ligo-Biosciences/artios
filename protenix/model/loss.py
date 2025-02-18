@@ -89,12 +89,42 @@ class SmoothLDDTLoss(nn.Module):
             # It's for sparse forward mode
             lddt = torch.mean(dist_diff_epsilon, dim=-1)
         return lddt
+    
+    def query_neighbors(
+        self,
+        true_coordinates: torch.Tensor,
+        k: int = 300,
+        inf: float = 1e9
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Find k-nearest neighbors for each atom based on their coordinates.
+        
+        Args:
+            true_coordinates (torch.Tensor): Atom coordinates
+                [..., N_atom, 3]
+            k (int, optional): Number of neighbors to find. Defaults to 300.
+                
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]:
+                - neighbor_indices: Indices of k-nearest neighbors for each atom
+                    [..., N_atom, k]
+                - neighbor_distances: Distances to k-nearest neighbors for each atom
+                    [..., N_atom, k]
+        """
+        # Compute pairwise distances between all atoms
+        distances = torch.cdist(true_coordinates, true_coordinates)  # [..., N_atom, N_atom]
+        
+        # Set diagonal to infinity to exclude self-pairs
+        distances = distances + torch.eye(distances.shape[-1], device=distances.device) * inf
+        
+        # Get k smallest distances and their indices for each atom
+        neighbor_distances, neighbor_indices = torch.topk(distances, k=k, dim=-1, largest=False)
+        
+        return neighbor_indices, neighbor_distances
 
     def forward(
         self,
         pred_coordinates: torch.Tensor,
-        neighbor_indices: torch.Tensor,
-        true_neighbor_distances: torch.Tensor,
+        true_coordinates: torch.Tensor,
         coordinate_mask: torch.Tensor,
         diffusion_chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
@@ -115,8 +145,11 @@ class SmoothLDDTLoss(nn.Module):
             torch.Tensor: the smooth lddt loss
                 [...] if reduction is None else []
         """
-        n_neighbors = neighbor_indices.shape[-1]
+        # Get the indices and distances of the k closest atoms for each atom in the true coordinates
+        neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates, k=300)
+        
         # Compute mask for the atoms that have true coordinates
+        n_neighbors = neighbor_indices.shape[-1]
         c_lm = coordinate_mask[neighbor_indices].bool().unsqueeze(-3).detach()  # [..., 1, N_atom, 300]
         if torch.isnan(c_lm).any():
             print("NaN detected in c_lm")
@@ -781,8 +814,7 @@ class ProtenixLoss(nn.Module):
                 {
                     "smooth_lddt_loss": lambda: self.smooth_lddt_loss.forward(
                         pred_coordinates=pred_dict["coordinate"],
-                        neighbor_indices=label_dict["nearest_neighbor_indices"],
-                        true_neighbor_distances=label_dict["nearest_neighbor_dists"], 
+                        true_coordinates=label_dict["coordinate"],
                         coordinate_mask=label_dict["coordinate_mask"],
                         diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
                     )

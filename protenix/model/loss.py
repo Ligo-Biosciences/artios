@@ -588,7 +588,8 @@ class ProtenixLoss(nn.Module):
             * label_dict["coordinate_mask"][..., None, :]
         )
         # Distances for all atom pairs
-        # Note: we convert to bf16 for saving cuda memory, if performance drops, do not convert it
+        # Note: we convert to bf16 for saving cuda memory, if performance drops, do not convert it 
+        # TODO: i think this is the memory bottleneck - calculating the distance matrix 
         distance = (
             cdist(label_dict["coordinate"], label_dict["coordinate"]) * distance_mask
         ).to(

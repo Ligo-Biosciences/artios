@@ -144,7 +144,7 @@ class SmoothLDDTLoss(nn.Module):
                 [...] if reduction is None else []
         """
         # Get the indices and distances of the k closest atoms for each atom in the true coordinates
-        print(f"true_coordinates.shape: {true_coordinates.shape}")
+        print(f"true_coordinates.shape: {true_coordinates.shape}") #FIXME: this is outputting torch.Size([48, 992, 3])
         neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates, k=300)
         print(f"neighbor_indices.shape: {neighbor_indices.shape}")
         print(f"true_neighbor_distances.shape: {true_neighbor_distances.shape}")

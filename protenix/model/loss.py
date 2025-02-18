@@ -596,7 +596,7 @@ class ProtenixLoss(nn.Module):
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
         # self.fm_loss = FMLoss(**configs.loss.diffusion.flow_matching)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
-        self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
+        # self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
         #self.distogram_loss = DistogramLoss(**configs.loss.distogram)
 
     def calculate_label( 
@@ -751,7 +751,7 @@ class ProtenixLoss(nn.Module):
             loss_fns = {}
         else:
             loss_fns = {}
-            
+            '''
             loss_fns.update(
                 {
                     "smooth_lddt_loss": lambda: self.smooth_lddt_loss.forward(
@@ -763,7 +763,7 @@ class ProtenixLoss(nn.Module):
                     )
                 }
             )
-
+            '''
             loss_fns.update(
                 {
                     "mse_loss": lambda: self.mse_loss(

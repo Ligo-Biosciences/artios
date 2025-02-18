@@ -133,10 +133,8 @@ class SmoothLDDTLoss(nn.Module):
         Args:
             pred_coordinates (torch.Tensor): the diffusion denoised atom coordinates
                 [..., N_sample, N_atom, 3]
-            neighbor_indices (torch.Tensor): the indices of the 300 closest atoms for each atom
-                [..., N_atom, 300]
-            true_neighbor_distances (torch.Tensor): the distances to the 300 closest atoms for each atom
-                [..., N_atom, 300]
+            true_coordinates (torch.Tensor): the ground truth atom coordinates
+                [..., N_atom, 3]
             coordinate_mask (torch.Tensor): whether true coordinates exist
                 [..., N_atom]
             diffusion_chunk_size (Optional[int]): Chunk size over the N_sample dimension. Defaults to None.
@@ -146,7 +144,10 @@ class SmoothLDDTLoss(nn.Module):
                 [...] if reduction is None else []
         """
         # Get the indices and distances of the k closest atoms for each atom in the true coordinates
+        print(f"true_coordinates.shape: {true_coordinates.shape}")
         neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates, k=300)
+        print(f"neighbor_indices.shape: {neighbor_indices.shape}")
+        print(f"true_neighbor_distances.shape: {true_neighbor_distances.shape}")
         
         # Compute mask for the atoms that have true coordinates
         n_neighbors = neighbor_indices.shape[-1]

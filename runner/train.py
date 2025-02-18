@@ -381,7 +381,7 @@ class AF3Trainer(object):
                     batch, _ = self.model_forward(batch, mode=mode)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict, batch = self.get_loss(batch, mode="eval")
-                    # lDDT metrics
+                    # lDDT metrics TODO: now with our modified lddt calculations this will need fixing
                     lddt_dict = self.get_metrics(batch)
                     lddt_metrics = self.aggregate_metrics(lddt_dict, batch)
                     simple_metrics.update(

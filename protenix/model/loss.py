@@ -91,43 +91,77 @@ class SmoothLDDTLoss(nn.Module):
 
     def forward(
         self,
-        pred_distance: torch.Tensor,
-        true_distance: torch.Tensor,
-        distance_mask: torch.Tensor,
-        lddt_mask: torch.Tensor,
+        pred_coordinates: torch.Tensor,
+        neighbor_indices: torch.Tensor,
+        true_neighbor_distances: torch.Tensor,
+        coordinate_mask: torch.Tensor,
         diffusion_chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
         """SmoothLDDTLoss
 
         Args:
-            pred_distance (torch.Tensor): the diffusion denoised atom-atom distance
-                [..., N_sample, N_atom, N_atom]
-            true_distance (torch.Tensor): the ground truth coordinates
-                [..., N_atom, N_atom]
-            distance_mask (torch.Tensor): whether true coordinates exist.
-                [N_atom, N_atom]
-            lddt_mask (torch.Tensor, optional): whether true distance is within radius (30A for nuc and 15A for others)
-                [N_atom, N_atom]
+            pred_coordinates (torch.Tensor): the diffusion denoised atom coordinates
+                [..., N_sample, N_atom, 3]
+            neighbor_indices (torch.Tensor): the indices of the 300 closest atoms for each atom
+                [..., N_atom, 300]
+            true_neighbor_distances (torch.Tensor): the distances to the 300 closest atoms for each atom
+                [..., N_atom, 300]
+            coordinate_mask (torch.Tensor): whether true coordinates exist
+                [..., N_atom]
             diffusion_chunk_size (Optional[int]): Chunk size over the N_sample dimension. Defaults to None.
 
         Returns:
             torch.Tensor: the smooth lddt loss
                 [...] if reduction is None else []
         """
-        c_lm = lddt_mask.bool().unsqueeze(dim=-3).detach()  # [..., 1, N_atom, N_atom]
+        n_neighbors = neighbor_indices.shape[-1]
+        # Compute mask for the atoms that have true coordinates
+        c_lm = coordinate_mask[neighbor_indices].bool().unsqueeze(-3).detach()  # [..., 1, N_atom, 300]
+
+        # Get dimension sizes
+        *batch_dims, n_samples, n_atoms, _ = pred_coordinates.shape
+
+        # Expand pred_coordinates to include neighbor dimension
+        # [..., N_sample, N_atom, 3] -> [..., N_sample, N_atom, 1, 3] -> [..., N_sample, N_atom, k, 3]
+        pred_coordinates = pred_coordinates.unsqueeze(-2).expand(
+            *batch_dims, n_samples, n_atoms, n_neighbors, 3
+        )
+
+        # Expand neighbour indices and distances to include N_sample dimension
+        indices_expanded = neighbor_indices.unsqueeze(-3).expand(
+            *batch_dims, n_samples, n_atoms, n_neighbors
+        )  # [..., N_atom, k] -> [..., N_sample, N_atom, k]
+        indices_expanded = indices_expanded.unsqueeze(-1).expand(
+            *batch_dims, n_samples, n_atoms, n_neighbors, 3
+        )  # [..., N_sample, N_atom, k] -> [..., N_sample, N_atom, k, 3]
+
+        pred_neighbor_coords = torch.gather(
+            pred_coordinates,
+            dim=-3,
+            index=indices_expanded
+        )  # [..., N_sample, N_atom, k, 3]
+        
+        # Expand true_neighbor_distances to include N_sample dimension
+        # [..., N_atom, k] -> [..., N_sample, N_atom, k]
+        true_neighbor_distances = true_neighbor_distances.unsqueeze(-3).expand(
+            *batch_dims, n_samples, n_atoms, n_neighbors
+        )
+
+        # Compute predicted neighbour distances
+        pred_distance = torch.sqrt(torch.sum((pred_coordinates - pred_neighbor_coords)**2, dim=-1))  # [..., N_sample, N_atom, k]
+
         # Compute distance error
-        # [...,  N_sample , N_atom, N_atom]
+        # [..., N_sample, N_atom, k]
         if diffusion_chunk_size is None:
             lddt = self._chunk_forward(
-                pred_distance=pred_distance, true_distance=true_distance, c_lm=c_lm
+                pred_distance=pred_distance, true_distance=true_neighbor_distances, c_lm=c_lm
             )
         else:
             # Default use checkpoint for saving memory
             checkpoint_fn = get_checkpoint_fn()
             lddt = []
-            N_sample = pred_distance.shape[-3]
-            no_chunks = N_sample // diffusion_chunk_size + (
-                N_sample % diffusion_chunk_size != 0
+            no_chunks = n_samples // diffusion_chunk_size + (
+                n_samples % diffusion_chunk_size != 0
             )
             for i in range(no_chunks):
                 lddt_i = checkpoint_fn(
@@ -138,7 +172,7 @@ class SmoothLDDTLoss(nn.Module):
                         :,
                         :,
                     ],
-                    true_distance,
+                    true_neighbor_distances,
                     c_lm,
                 )
                 lddt.append(lddt_i)
@@ -716,43 +750,19 @@ class ProtenixLoss(nn.Module):
             loss_fns = {}
         else:
             loss_fns = {}
-            '''
-            if self.configs.loss.diffusion_lddt_loss_dense:
-                loss_fns.update(
-                    {
-                        "smooth_lddt_loss": lambda: self.smooth_lddt_loss.dense_forward(
-                            pred_coordinate=pred_dict["coordinate"],
-                            true_coordinate=label_dict["coordinate"],
-                            lddt_mask=label_dict["lddt_mask"],
-                            diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
-                        )  # it's faster is not OOM
-                    }
-                )
-            elif self.configs.loss.diffusion_sparse_loss_enable:
-                loss_fns.update(
-                    {
-                        "smooth_lddt_loss": lambda: self.smooth_lddt_loss.sparse_forward(
-                            pred_coordinate=pred_dict["coordinate"],
-                            true_coordinate=label_dict["coordinate"],
-                            lddt_mask=label_dict["lddt_mask"],
-                            diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
-                        )
-                    }
-                )
-            else:
-                loss_fns.update(
-                    {
-                        "smooth_lddt_loss": lambda: self.smooth_lddt_loss(
-                            pred_distance=pred_dict["distance"],
-                            true_distance=label_dict["distance"],
-                            distance_mask=label_dict["distance_mask"],
-                            lddt_mask=label_dict["lddt_mask"],
-                            diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
-                        )
-                    }
-                )
-            '''
-        
+            
+            loss_fns.update(
+                {
+                    "smooth_lddt_loss": lambda: self.smooth_lddt_loss.forward(
+                        pred_coordinates=pred_dict["coordinate"],
+                        neighbor_indices=label_dict["nearest_neighbor_indices"],
+                        true_neighbor_distances=label_dict["nearest_neighbor_dists"], 
+                        coordinate_mask=label_dict["coordinate_mask"],
+                        diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
+                    )
+                }
+            )
+
             loss_fns.update(
                 {
                     "mse_loss": lambda: self.mse_loss(

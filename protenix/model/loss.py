@@ -61,6 +61,7 @@ class SmoothLDDTLoss(nn.Module):
         self,
         eps: float = 1e-10,
         reduction: str = "mean",
+        k: int = 300
     ) -> None:
         """SmoothLDDTLoss
 
@@ -71,6 +72,7 @@ class SmoothLDDTLoss(nn.Module):
         super(SmoothLDDTLoss, self).__init__()
         self.eps = eps
         self.reduction = reduction
+        self.k = k
 
     def _chunk_forward(self, pred_distance, true_distance, c_lm=None):
         dist_diff = torch.abs(pred_distance - true_distance)
@@ -93,7 +95,6 @@ class SmoothLDDTLoss(nn.Module):
     def query_neighbors(
         self,
         true_coordinates: torch.Tensor,
-        k: int = 300,
         inf: float = 1e9
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Find k-nearest neighbors for each atom based on their coordinates.
@@ -112,7 +113,7 @@ class SmoothLDDTLoss(nn.Module):
         """
         # Get number of atoms and limit k
         n_atoms = true_coordinates.shape[-2]
-        k = min(k, n_atoms - 1)  # -1 to exclude self
+        k = min(self.k, n_atoms - 1)  # -1 to exclude self
         
         # Compute pairwise distances between all atoms
         distances = torch.cdist(true_coordinates, true_coordinates)  # [..., N_atom, N_atom]
@@ -148,7 +149,7 @@ class SmoothLDDTLoss(nn.Module):
                 [...] if reduction is None else []
         """
         # Get the indices and distances of the k closest atoms for each atom in the true coordinates
-        neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates, k=300)
+        neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates)
         
         # Compute mask for the atoms that have true coordinates
         n_neighbors = neighbor_indices.shape[-1]

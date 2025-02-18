@@ -320,6 +320,7 @@ loss_configs = {
             },
             "smooth_lddt": {
                 "eps": 1e-6,
+                "k": 300,
             },
         },
         "distogram": {

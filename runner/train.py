@@ -382,11 +382,11 @@ class AF3Trainer(object):
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict, batch = self.get_loss(batch, mode="eval")
                     # lDDT metrics TODO: now with our modified lddt calculations this will need fixing
-                    lddt_dict = self.get_metrics(batch)
-                    lddt_metrics = self.aggregate_metrics(lddt_dict, batch)
-                    simple_metrics.update(
-                        {k: v for k, v in lddt_metrics.items() if "diff" not in k}
-                    )
+                    #lddt_dict = self.get_metrics(batch)
+                    #lddt_metrics = self.aggregate_metrics(lddt_dict, batch)
+                    #simple_metrics.update(
+                    #    {k: v for k, v in lddt_metrics.items() if "diff" not in k}
+                    #)
                     simple_metrics.update(loss_dict)
 
                 # Metrics
@@ -396,8 +396,7 @@ class AF3Trainer(object):
                     )
                 
                 # Visualise the first structure in the validation batch in wandb
-                # TODO: just temporary sampling logic for intial training runs
-                # TODO: this is commented out for early tests, will add back in later
+                # FIXME: just temporary sampling logic for intial training runs
                 if index == 0:
                     pdb_str = to_pdb(batch["pred_dict"]["coordinate"], batch["input_feature_dict"])
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:

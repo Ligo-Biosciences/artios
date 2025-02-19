@@ -84,7 +84,7 @@ class LDDTMetrics(nn.Module):
         lddt = self.lddt_base.forward(
             pred_coordinate=pred_dict["coordinate"],
             true_coordinate=label_dict["coordinate"],
-            lddt_mask=label_dict["lddt_mask"],
+            #lddt_mask=label_dict["lddt_mask"],
             chunk_size=self.chunk_size,
         )  # [N_sample]
         out["complex"] = lddt

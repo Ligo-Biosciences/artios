@@ -256,24 +256,24 @@ class LayerNorm(nn.Module):
         Returns:
             torch.Tensor: Normalized tensor
         """
-        #if CUDA_AVAILABLE and x.is_cuda and x.dtype in [torch.float32, torch.float16, torch.bfloat16]:
+        if CUDA_AVAILABLE and x.is_cuda and x.dtype in [torch.float32, torch.float16, torch.bfloat16]:
             # Use optimized CUDA kernel implementation
-        #    return FusedLayerNormAffineFunction.apply(
-        #        x,
-        #        self.weight,
-        #        self.bias,
-        #        self.normalized_shape,
-        #        self.eps
-        #    )
-        #else:
+            return FusedLayerNormAffineFunction.apply(
+                x,
+                self.weight,
+                self.bias,
+                self.normalized_shape,
+                self.eps
+            )
+        else:
             # Manual implementation using torch.functional
-        return F.layer_norm(
-            x,
-            self.normalized_shape,
-            self.weight if self.elementwise_affine else None,
-            self.bias if self.elementwise_affine else None,
-            self.eps
-        )
+            return F.layer_norm(
+                x,
+                self.normalized_shape,
+                self.weight if self.elementwise_affine else None,
+                self.bias if self.elementwise_affine else None,
+                self.eps
+            )
 
 class SwiGLU(nn.Module):
     """SwiGLU layer that computes swish(Linear(a)) * Linear(b)"""

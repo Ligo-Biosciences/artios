@@ -49,12 +49,10 @@ class SimpleMetricAggregator(object):
             # First detach and move to CPU, then convert to numpy
             try:
                 value = value.detach()
-                if value.is_cuda:
-                    value = value.cpu()
                 if value.dim() == 0:
-                    value = np.array([value.item()])
+                    value = np.array([value.cpu().item()])
                 else:
-                    value = value.numpy()
+                    value = value.cpu().numpy()
             except RuntimeError as e:
                 raise RuntimeError(f"Error converting tensor for key {key}: {str(e)}")
         elif isinstance(value, np.ndarray):

@@ -151,10 +151,7 @@ data_configs = {
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR, "indices/recentPDB_low_homology_maxtoken1536.csv"
             ),
-            "pdb_list": os.path.join(
-                DATA_ROOT_DIR,
-                "indices/recentPDB_low_homology_maxtoken1024_sample384_pdb_id.txt", #FIXME: this currently doesn't exist in our datapipeline
-            ),
+            "pdb_list": "",
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
             "sort_by_n_token": False,
             "group_by_pdb_id": True,
@@ -175,6 +172,8 @@ data_configs = {
             "find_pocket": False,
             "find_all_pockets": False,
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
+            "group_by_pdb_id": True,
+            "find_eval_chain_interface": True,
         },
         **deepcopy(default_test_configs),
     },

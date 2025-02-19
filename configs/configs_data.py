@@ -44,7 +44,7 @@ default_weighted_pdb_configs = {
         },
         "alpha_dict": {
             "prot": 1,  # AF3: 3
-            "nuc": 0,  # AF3: 3
+            "nuc": -100,  # AF3: 3
             "ligand": 1,  # AF3: 1
         },
         "force_recompute_weight": True,

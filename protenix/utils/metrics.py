@@ -46,10 +46,17 @@ class SimpleMetricAggregator(object):
         if isinstance(value, (float, int)):
             value = np.array([value])
         elif isinstance(value, torch.Tensor):
-            if value.dim() == 0:
-                value = np.array([value.item()])
-            else:
-                value = value.detach().cpu().numpy()
+            # First detach and move to CPU, then convert to numpy
+            try:
+                value = value.detach()
+                if value.is_cuda:
+                    value = value.cpu()
+                if value.dim() == 0:
+                    value = np.array([value.item()])
+                else:
+                    value = value.numpy()
+            except RuntimeError as e:
+                raise RuntimeError(f"Error converting tensor for key {key}: {str(e)}")
         elif isinstance(value, np.ndarray):
             pass
         else:

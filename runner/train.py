@@ -468,7 +468,7 @@ class AF3Trainer(object):
         for key, value in loss_dict.items():
             if "loss" not in key:
                 continue
-            self.train_metric_wrapper.add(key, value, namespace="train")
+            self.train_metric_wrapper.add(key, value, namespace="train") #FIXME: getting illegel CUDA memory access here 
         torch.cuda.empty_cache()
 
     def progress_bar(self, desc: str = ""):

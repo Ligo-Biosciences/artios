@@ -664,7 +664,6 @@ class Featurizer(object):
     def get_labels(self) -> dict[str, torch.Tensor]:
         """
         Get the input labels required for the training phase.
-        Includes NaN checking to ensure valid tensors.
 
         Returns:
             Dict[str, torch.Tensor]: a dict of labels.

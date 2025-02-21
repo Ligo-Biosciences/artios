@@ -398,7 +398,7 @@ class AF3Trainer(object):
                 # Visualise the first structure in the validation batch in wandb
                 # FIXME: just temporary sampling logic for intial training runs
                 if index == 0:
-                    pdb_str = to_pdb(batch["pred_dict"]["coordinate"], batch["input_feature_dict"])
+                    pdb_str = to_pdb(batch["pred_dict"]["coordinate_mini"], batch["input_feature_dict"])  # output of the mini-rollout
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                         wandb.log({
                            f"{ema_suffix}structure_{test_name}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")

@@ -149,7 +149,7 @@ data_configs = {
                 DATA_ROOT_DIR, "recentPDB_bioassembly"
             ),
             "indices_fpath": os.path.join(
-                DATA_ROOT_DIR, "indices/recentPDB_low_homology_maxtoken1536.csv"
+                DATA_ROOT_DIR, "indices/recentPDB_low_homology_maxtoken1536_no_nucleic.csv"
             ),
             "pdb_list": "",
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data

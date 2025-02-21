@@ -52,6 +52,11 @@ class ArtiosLigand(nn.Module):
         self.diffusion_module = DiffusionModule(
             **configs.model.diffusion_module
         )
+
+        if configs.compile_model:
+            self.diffusion_module = torch.compile(self.diffusion_module)
+            self.input_feature_embedder = torch.compile(self.input_feature_embedder)
+
         self.sigma_data = configs.sigma_data
 
     def sample_diffusion(self, **kwargs) -> torch.Tensor:
@@ -393,7 +398,7 @@ class ArtiosLigand(nn.Module):
         inplace_safe = not (self.training or torch.is_grad_enabled())
         chunk_size = self.configs.infer_setting.chunk_size if inplace_safe else None
 
-        if mode == "train":
+        if mode == "train" or mode == "eval":
             nc_rng = np.random.RandomState(current_step)
             assert self.training
             assert label_dict is not None
@@ -419,6 +424,7 @@ class ArtiosLigand(nn.Module):
             )
             log_dict.update({"time": time_tracker})
         elif mode == "eval":
+            # NOTE: this is not accessed for now, eval is the same as training
             if label_dict is not None:
                 assert (
                     label_dict["coordinate"].size()

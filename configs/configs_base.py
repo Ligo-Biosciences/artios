@@ -71,9 +71,9 @@ optim_configs = {
     "adam": {
         "beta1": 0.9,
         "beta2": 0.95,
-        "weight_decay": 1e-2,  # 1e-8
+        "weight_decay": 1e-2,
         "lr": GlobalConfigValue("lr"),
-        "use_adamw": True,  # False
+        "use_adamw": True,
     },
     # Optim - LRScheduler
     "af3_lr_scheduler": {
@@ -95,6 +95,7 @@ model_configs = {
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
     "sigma_data": 16.0,
+    "compile_model": False,
     "diffusion_batch_size": 48, # 12
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(

@@ -174,7 +174,6 @@ class DiffusionModule(nn.Module):
         atom_decoder: dict[str, int] = {"n_blocks": 3, "n_heads": 4},
         blocks_per_ckpt: Optional[int] = None,
         use_fine_grained_checkpoint: bool = False,
-        initialization: Optional[dict[str, Union[str, float, bool]]] = None,
     ) -> None:
         """
         Args:
@@ -193,7 +192,6 @@ class DiffusionModule(nn.Module):
                 checkpoints, and trades memory for speed. If None, no checkpointing is performed.
             use_fine_grained_checkpoint: whether use fine-gained checkpoint for finetuning stage 2
                 only effective if blocks_per_ckpt is not None.
-            initialization: initialize the diffusion module according to initialization config.
         """
 
         super(DiffusionModule, self).__init__()

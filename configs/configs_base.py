@@ -96,6 +96,7 @@ model_configs = {
     "no_bins": 64,
     "sigma_data": 16.0,
     "diffusion_batch_size": 48, # 12
+    "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
         1

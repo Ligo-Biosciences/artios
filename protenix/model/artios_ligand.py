@@ -391,7 +391,6 @@ class ArtiosLigand(nn.Module):
 
         if mode == "train" or mode == "eval":
             nc_rng = np.random.RandomState(current_step)
-            # assert self.training
             assert label_dict is not None
             assert symmetric_permutation is not None
 

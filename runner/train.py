@@ -48,6 +48,14 @@ from io import StringIO
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
+PDB_TO_VISUALISE = [
+    "7xzr", "7uaw", "7zhd", "7x0b", 
+    "7vkq", "7pk0", "7ugk", "7vkr", 
+    "7uo8", "7uq1", "7wcf", "7oas", 
+    "8dik", "7te2", "8ajp", "7r0t", 
+    "8dl3", "7u1o", "7qa0", "7pd7",
+    "8dp7", "7z05", "7t7h", "7ulc"
+]
 
 class AF3Trainer(object):
     def __init__(self, configs):
@@ -397,9 +405,9 @@ class AF3Trainer(object):
                 
                 # Visualise selected structures in wandb
                 # FIXME: just temporary sampling logic for intial training runs
-                if pid in ["7xzr", "7uaw", "7zhd"]:
+                if pid in PDB_TO_VISUALISE:
                     pdb_str = to_pdb(batch["pred_dict"]["coordinate_mini"], batch["input_feature_dict"])  # output of the mini-rollout
-                    if self.configs.use_wandb:
+                    if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                         wandb.log({
                            f"{ema_suffix}structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
                         }, step=self.step)

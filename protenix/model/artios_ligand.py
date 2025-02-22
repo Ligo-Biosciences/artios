@@ -413,6 +413,8 @@ class ArtiosLigand(nn.Module):
                 symmetric_permutation=None,
             )
             log_dict.update({"time": time_tracker})
+            
+        '''
         elif mode == "eval":
             # NOTE: this is not accessed for now, eval is the same as training
             if label_dict is not None:
@@ -432,5 +434,6 @@ class ArtiosLigand(nn.Module):
                 symmetric_permutation=symmetric_permutation,
             )
             log_dict.update({"time": time_tracker})
+        '''
 
         return pred_dict, label_dict, log_dict

@@ -380,7 +380,7 @@ class AF3Trainer(object):
                     # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, batch = self.get_loss(batch, mode="eval")
+                    loss, loss_dict, batch = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
                     # lDDT metrics TODO: now with our modified lddt calculations this will need fixing
                     #lddt_dict = self.get_metrics(batch)
                     #lddt_metrics = self.aggregate_metrics(lddt_dict, batch)
@@ -397,7 +397,7 @@ class AF3Trainer(object):
                 
                 # Visualise selected structures in wandb
                 # FIXME: just temporary sampling logic for intial training runs
-                if pid in ["7eoz", "7euu", "8ayj"]:
+                if pid in ["7xzr", "7uaw", "7zhd"]:
                     pdb_str = to_pdb(batch["pred_dict"]["coordinate_mini"], batch["input_feature_dict"])  # output of the mini-rollout
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                         wandb.log({

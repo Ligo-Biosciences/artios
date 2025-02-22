@@ -399,7 +399,7 @@ class AF3Trainer(object):
                 # FIXME: just temporary sampling logic for intial training runs
                 if pid in ["7xzr", "7uaw", "7zhd"]:
                     pdb_str = to_pdb(batch["pred_dict"]["coordinate_mini"], batch["input_feature_dict"])  # output of the mini-rollout
-                    if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                    if self.configs.use_wandb:
                         wandb.log({
                            f"{ema_suffix}structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
                         }, step=self.step)

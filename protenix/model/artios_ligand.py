@@ -57,6 +57,7 @@ class ArtiosLigand(nn.Module):
             self.diffusion_module = torch.compile(self.diffusion_module)
             self.input_feature_embedder = torch.compile(self.input_feature_embedder)
 
+        
         self.sigma_data = configs.sigma_data
 
     def sample_diffusion(self, **kwargs) -> torch.Tensor:

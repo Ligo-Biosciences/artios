@@ -83,7 +83,8 @@ def _calculate_velocity_and_score(
     t: torch.Tensor,
     attn_chunk_size: Optional[int] = None,
     inplace_safe: bool = False,
-    guiding_net: Optional[Callable] = None,
+    guiding_denoise_net: Optional[Callable] = None,
+    guiding_s_inputs: Optional[torch.Tensor] = None,
     guidance_weight: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Calculate velocity and scaled score for the diffusion process for a single timestep.
@@ -98,7 +99,8 @@ def _calculate_velocity_and_score(
             [..., N_sample]
         attn_chunk_size: Chunk size for attention operation
         inplace_safe: Whether to use inplace operations
-        guiding_net: Optional guiding network
+        guiding_denoise_net: Optional guiding network
+        guiding_s_inputs: Optional guiding single embedding tensor
         guidance_weight: Weight for guidance
 
     Returns:
@@ -121,19 +123,20 @@ def _calculate_velocity_and_score(
     scaled_score = (t_cur * velocity_pred - x_noisy)
 
     # Apply guidance if specified
-    if guiding_net is not None:
-        guidance_coords_pred = guiding_net(
+    if guiding_denoise_net is not None:
+        guidance_coords_pred = guiding_denoise_net(
             x_noisy=x_noisy,
             timestep=t,
             input_feature_dict=input_feature_dict,
-            s_inputs=s_inputs,
+            s_inputs=guiding_s_inputs,
             chunk_size=attn_chunk_size,
             inplace_safe=inplace_safe,
         )
+        
 
         guidance_velocity_pred = (guidance_coords_pred - x_noisy) / (1 - t_cur)
         scaled_guidance_score = (t_cur * guidance_velocity_pred - x_noisy)
-
+        
         velocity_pred = guidance_weight * velocity_pred + (1 - guidance_weight) * guidance_velocity_pred
         scaled_score = guidance_weight * scaled_score + (1 - guidance_weight) * scaled_guidance_score
 
@@ -154,7 +157,8 @@ def sample_diffusion(
     inplace_safe: bool = False,
     attn_chunk_size: Optional[int] = None,
     second_order: bool = False,
-    guiding_net : Optional[Callable] = None,
+    guiding_denoise_net : Optional[Callable] = None,
+    guiding_s_inputs : Optional[torch.Tensor] = None,
     guidance_weight : float = 1.0,
 ) -> torch.Tensor:
     """Implements Algorithm 18 in AF3.
@@ -249,7 +253,8 @@ def sample_diffusion(
                 t=t,
                 attn_chunk_size=attn_chunk_size,
                 inplace_safe=inplace_safe,
-                guiding_net=guiding_net,
+                guiding_denoise_net=guiding_denoise_net,
+                guiding_s_inputs=guiding_s_inputs,
                 guidance_weight=guidance_weight,
             )
 
@@ -279,7 +284,8 @@ def sample_diffusion(
                     t=t,
                     attn_chunk_size=attn_chunk_size,
                     inplace_safe=inplace_safe,
-                    guiding_net=guiding_net,
+                    guiding_denoise_net=guiding_denoise_net,
+                    guiding_s_inputs=guiding_s_inputs,
                     guidance_weight=guidance_weight,
                 )
 

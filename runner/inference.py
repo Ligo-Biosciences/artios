@@ -137,7 +137,7 @@ class InferenceRunner(object):
             self.print(f"Finished loading guiding net.")
 
     def init_dumper(
-        self, need_atom_confidence: bool = False, sorted_by_ranking_score: bool = True
+        self, need_atom_confidence: bool = False, sorted_by_ranking_score: bool = False
     ):
         self.dumper = DataDumper(
             base_dir=self.dump_dir,

@@ -33,7 +33,7 @@ guidance_model_configs = {
     "no_bins": 64,
     "sigma_data": 16.0,
     "diffusion_batch_size": 48, # 12
-    "compile_model": False,
+    "compile_model": True,
     "diffusion_chunk_size": 48,  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": 1,  # NOTE: Number of blocks in each activation checkpoint, if None, no checkpointing is performed.
     # switch of kernels
@@ -119,12 +119,12 @@ inference_configs = {
     "seeds": ListValue([101]),
     "dump_dir": "./output",
     "need_atom_confidence": False,
-    "sorted_by_ranking_score": True,
+    "sorted_by_ranking_score": False,
     "input_json_path": RequiredValue(str),
     "load_checkpoint_path": os.path.join(
         code_directory, "./release_data/checkpoint/model_v0.2.0.pt"
     ),
     "num_workers": 16,
-    "use_msa": True, # TODO: false
+    "use_msa": False,
     "guidance_model_configs": guidance_model_configs,
 }

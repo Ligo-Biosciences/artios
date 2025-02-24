@@ -40,34 +40,19 @@ class ArtiosLigand(nn.Module):
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
         # Model 
-        if configs.guiding_net_path is None:
-            self.c_s, self.c_z, self.c_s_inputs = (
-                configs.c_s,
-                configs.c_z,
-                configs.c_s_inputs,
-            )
+        self.c_s, self.c_z, self.c_s_inputs = (
+            configs.c_s,
+            configs.c_z,
+            configs.c_s_inputs,
+        )
 
-            self.input_feature_embedder = InputFeatureEmbedder(
-                **configs.model.input_embedder
-            )
+        self.input_feature_embedder = InputFeatureEmbedder(
+            **configs.model.input_embedder
+        )
 
-            self.diffusion_module = DiffusionModule(
-                **configs.model.diffusion_module
-            )
-        else: 
-            self.c_s, self.c_z, self.c_s_inputs = (
-                configs.guiding_net_configs.c_s,
-                configs.guiding_net_configs.c_z,
-                configs.guiding_net_configs.c_s_inputs,
-            )
-
-            self.input_feature_embedder = InputFeatureEmbedder(
-                **configs.guiding_net_configs.model.input_embedder
-            )
-
-            self.diffusion_module = DiffusionModule(
-                **configs.guiding_net_configs.model.diffusion_module
-            )
+        self.diffusion_module = DiffusionModule(
+            **configs.model.diffusion_module
+        )
 
         if configs.compile_model:
             self.diffusion_module = torch.compile(self.diffusion_module)
@@ -118,7 +103,7 @@ class ArtiosLigand(nn.Module):
         chunk_size: Optional[int] = 4,
         N_model_seed: int = 1,
         symmetric_permutation: SymmetricPermutation = None,
-        guiding_net: Optional[Callable] = None,
+        guiding_net: Optional[nn.Module] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         Main inference loop (multiple model seeds) for the Alphafold3 model.
@@ -193,7 +178,7 @@ class ArtiosLigand(nn.Module):
 
         Returns:
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
-        """
+        """        
         step_st = time.time()
         N_token = input_feature_dict["residue_index"].shape[-1]
 
@@ -201,12 +186,26 @@ class ArtiosLigand(nn.Module):
         pred_dict = {}
         time_tracker = {}
 
-        # Embed input features 
+        # Embed input features
         s_inputs = self.input_feature_embedder(
             input_feature_dict=input_feature_dict,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
+
+        # Extract guidance modules
+        guiding_s_inputs = None
+        guiding_diffusion_module = None
+        if guiding_net is not None:
+            guiding_input_embedder = guiding_net.input_feature_embedder
+            guiding_diffusion_module = guiding_net.diffusion_module
+
+            # Embed input features for guiding net
+            guiding_s_inputs = guiding_input_embedder(
+                input_feature_dict=input_feature_dict,
+                inplace_safe=inplace_safe,
+                chunk_size=chunk_size,
+            )
 
         if mode == "inference":
             keys_to_delete = []
@@ -243,7 +242,8 @@ class ArtiosLigand(nn.Module):
             N_sample=N_sample,
             timesteps=timesteps,
             inplace_safe=inplace_safe,
-            guiding_net=guiding_net,
+            guiding_denoise_net=guiding_diffusion_module,
+            guiding_s_inputs=guiding_s_inputs,
         )
 
         # TODO: commenting needed here

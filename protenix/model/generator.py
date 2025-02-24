@@ -132,11 +132,12 @@ def _calculate_velocity_and_score(
             chunk_size=attn_chunk_size,
             inplace_safe=inplace_safe,
         )
-        
 
+        # Calculate velocity and scaled score for guidance
         guidance_velocity_pred = (guidance_coords_pred - x_noisy) / (1 - t_cur)
         scaled_guidance_score = (t_cur * guidance_velocity_pred - x_noisy)
         
+        # Velocity and score interpolation for guidance
         velocity_pred = guidance_weight * velocity_pred + (1 - guidance_weight) * guidance_velocity_pred
         scaled_score = guidance_weight * scaled_score + (1 - guidance_weight) * scaled_guidance_score
 
@@ -182,7 +183,8 @@ def sample_diffusion(
         inplace_safe (bool): Whether to use inplace operations safely. Defaults to False.
         attn_chunk_size (Optional[int]): Chunk size for attention operation. Defaults to None.
         second_order (bool): Whether to use second order Euler-Maruyama. Defaults to False.
-        guiding_net (Optional[Callable]): The guiding network to use for guidance. Defaults to None.
+        guiding_denoise_net (Optional[Callable]): The guiding network to use for guidance. Defaults to None.
+        guiding_s_inputs (Optional[torch.Tensor]): The guiding single embedding from InputFeatureEmbedder. Defaults to None.
         guidance_weight (float): The weight to use for guidance. Defaults to 1.0.
     Returns:
         torch.Tensor: the denoised coordinates of x in inference stage

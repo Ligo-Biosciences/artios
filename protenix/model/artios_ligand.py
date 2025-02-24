@@ -193,13 +193,10 @@ class ArtiosLigand(nn.Module):
             chunk_size=chunk_size,
         )
 
-        # Extract guidance modules
+        # Embed guidance input features
         guiding_s_inputs = None
-        guiding_diffusion_module = None
         if guiding_net is not None:
             guiding_input_embedder = guiding_net.input_feature_embedder
-            guiding_diffusion_module = guiding_net.diffusion_module
-
             # Embed input features for guiding net
             guiding_s_inputs = guiding_input_embedder(
                 input_feature_dict=input_feature_dict,
@@ -227,6 +224,11 @@ class ArtiosLigand(nn.Module):
         time_tracker.update({"input_embed": step_trunk - step_st})
 
         ### Diffusion
+        # Initialise guiding diffusion module
+        guiding_diffusion_module = None
+        if guiding_net is not None:
+            guiding_diffusion_module = guiding_net.diffusion_module
+
         # Number of samples to generate from the same conditioning
         N_sample = self.configs.sample_diffusion["N_sample"]
         N_step = self.configs.sample_diffusion["N_step"]
@@ -246,7 +248,6 @@ class ArtiosLigand(nn.Module):
             guiding_s_inputs=guiding_s_inputs,
         )
 
-        # TODO: commenting needed here
         timestep = timesteps[-1]  # Get final timestep
         pred_dict["timestep"] = timestep.expand(*pred_dict["coordinate"].shape[:-2])  # Expand to [..., N_sample]
 

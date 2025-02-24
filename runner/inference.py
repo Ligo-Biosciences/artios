@@ -98,7 +98,7 @@ class InferenceRunner(object):
         self.model = ArtiosLigand(self.configs).to(self.device)
         self.guiding_net = None
         if self.configs.guiding_net_path is not None:
-            self.guiding_net = ArtiosLigand(self.configs.guiding_net_configs).to(self.device)
+            self.guiding_net = ArtiosLigand(self.configs.guidance_model_configs).to(self.device)
 
     def load_checkpoint(self) -> None:
         def _load_checkpoint(checkpoint_path: str, guiding = False):
@@ -130,11 +130,11 @@ class InferenceRunner(object):
                 self.guiding_net.eval()
         
         _load_checkpoint(self.configs.load_checkpoint_path, guiding=False)
-        self.print(f"Finish loading checkpoint.")
+        self.print(f"Finished loading checkpoint.")
 
         if self.configs.guiding_net_path is not None:
             _load_checkpoint(self.configs.guiding_net_path, guiding=True)
-            self.print(f"Finish loading guiding net.")
+            self.print(f"Finished loading guiding net.")
 
     def init_dumper(
         self, need_atom_confidence: bool = False, sorted_by_ranking_score: bool = True

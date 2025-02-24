@@ -35,6 +35,7 @@ basic_configs = {
     "load_ema_checkpoint_path": "",
     "load_strict": True,
     "load_params_only": True,
+    "guiding_net_path": None,
     "skip_load_step": False,
     "skip_load_optimizer": False,
     "skip_load_scheduler": False,
@@ -146,6 +147,7 @@ model_configs = {
         "sigma_data": GlobalConfigValue("sigma_data"),
         "second_order_train": False,
         "second_order_inference": False,
+        "guidance_weight": 2.0,
     },
     "model": {
         "N_model_seed": 1,  # for inference
@@ -226,6 +228,21 @@ model_configs = {
         },
     },
 }
+
+guiding_net_configs = model_configs.copy()
+guiding_net_configs.update({ #TODO: will this change the global configs as well? I think not
+    "c_s": 192,  
+    "c_z": 64,   
+    "c_s_inputs": 224,  
+    "c_atom": 64,  
+    "c_atompair": 8,  
+    "c_token": 384,  
+    "n_blocks": 48, 
+})
+model_configs.update({
+    "guiding_net_configs": guiding_net_configs
+})
+
 perm_configs = {
     # Chain and Atom Permutation
     "chain_permutation": {

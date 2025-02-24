@@ -21,6 +21,7 @@ from .modules.diffusion import DiffusionModule
 from .modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
 from protenix.utils.torch_utils import autocasting_disable_decorator
 from protenix.model.utils import add
+from typing import Callable
 
 
 class ArtiosLigand(nn.Module):
@@ -39,25 +40,39 @@ class ArtiosLigand(nn.Module):
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
         # Model 
-        self.c_s, self.c_z, self.c_s_inputs = (
-            configs.c_s,
-            configs.c_z,
-            configs.c_s_inputs,
-        )
+        if configs.guiding_net_path is None:
+            self.c_s, self.c_z, self.c_s_inputs = (
+                configs.c_s,
+                configs.c_z,
+                configs.c_s_inputs,
+            )
 
-        self.input_feature_embedder = InputFeatureEmbedder(
-            **configs.model.input_embedder
-        )
+            self.input_feature_embedder = InputFeatureEmbedder(
+                **configs.model.input_embedder
+            )
 
-        self.diffusion_module = DiffusionModule(
-            **configs.model.diffusion_module
-        )
+            self.diffusion_module = DiffusionModule(
+                **configs.model.diffusion_module
+            )
+        else: 
+            self.c_s, self.c_z, self.c_s_inputs = (
+                configs.guiding_net_configs.c_s,
+                configs.guiding_net_configs.c_z,
+                configs.guiding_net_configs.c_s_inputs,
+            )
+
+            self.input_feature_embedder = InputFeatureEmbedder(
+                **configs.guiding_net_configs.model.input_embedder
+            )
+
+            self.diffusion_module = DiffusionModule(
+                **configs.guiding_net_configs.model.diffusion_module
+            )
 
         if configs.compile_model:
             self.diffusion_module = torch.compile(self.diffusion_module)
             self.input_feature_embedder = torch.compile(self.input_feature_embedder)
 
-        
         self.sigma_data = configs.sigma_data
 
     def sample_diffusion(self, **kwargs) -> torch.Tensor:
@@ -74,6 +89,7 @@ class ArtiosLigand(nn.Module):
                 "alpha",
                 "gamma",
                 "sigma_data",
+                "guidance_weight",
             ]
         }
         _configs.update({
@@ -87,6 +103,7 @@ class ArtiosLigand(nn.Module):
             ),
             "second_order": self.configs.sample_diffusion.second_order_train if self.training 
             else self.configs.sample_diffusion.second_order_inference
+
         })
         return autocasting_disable_decorator(self.configs.skip_amp.sample_diffusion)(
             sample_diffusion
@@ -101,6 +118,7 @@ class ArtiosLigand(nn.Module):
         chunk_size: Optional[int] = 4,
         N_model_seed: int = 1,
         symmetric_permutation: SymmetricPermutation = None,
+        guiding_net: Optional[Callable] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         Main inference loop (multiple model seeds) for the Alphafold3 model.
@@ -113,6 +131,7 @@ class ArtiosLigand(nn.Module):
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to 4.
             N_model_seed (int): Number of model seeds. Defaults to 1.
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object. Defaults to None.
+            guiding_net (Optional[Callable]): Guiding net. Defaults to None.
 
         Returns:
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
@@ -128,6 +147,7 @@ class ArtiosLigand(nn.Module):
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
                 symmetric_permutation=symmetric_permutation,
+                guiding_net=guiding_net,
             )
             pred_dicts.append(pred_dict)
             log_dicts.append(log_dict)
@@ -166,6 +186,7 @@ class ArtiosLigand(nn.Module):
         inplace_safe: bool = True,
         chunk_size: Optional[int] = 4,
         symmetric_permutation: SymmetricPermutation = None,
+        guiding_net: Optional[nn.Module] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         Main inference loop (single model seed) for the Alphafold3 model.
@@ -222,6 +243,7 @@ class ArtiosLigand(nn.Module):
             N_sample=N_sample,
             timesteps=timesteps,
             inplace_safe=inplace_safe,
+            guiding_net=guiding_net,
         )
 
         # TODO: commenting needed here
@@ -369,6 +391,7 @@ class ArtiosLigand(nn.Module):
         mode: str = "inference",
         current_step: Optional[int] = None,
         symmetric_permutation: SymmetricPermutation = None,
+        guiding_net: Optional[nn.Module] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         Forward pass of the Alphafold3 model.
@@ -412,6 +435,7 @@ class ArtiosLigand(nn.Module):
                 chunk_size=chunk_size,
                 N_model_seed=self.N_model_seed,
                 symmetric_permutation=None,
+                guiding_net=guiding_net,
             )
             log_dict.update({"time": time_tracker})
             

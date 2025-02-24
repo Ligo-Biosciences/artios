@@ -423,6 +423,7 @@ class MSELoss(nn.Module):
 
         weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
 
+        # Balance grads between timesteps during training
         if self.training:
             weighted_align_mse_loss = (weighted_align_mse_loss / u_t.exp()) + u_t
 

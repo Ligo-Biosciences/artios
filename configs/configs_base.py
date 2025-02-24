@@ -151,40 +151,10 @@ model_configs = {
     },
     "model": {
         "N_model_seed": 1,  # for inference
-        "N_cycle": 4, # TODO: not used anymore
         "input_embedder": {
             "c_atom": GlobalConfigValue("c_atom"),
             "c_atompair": GlobalConfigValue("c_atompair"),
             "c_token": GlobalConfigValue("c_token"),
-        },
-        "relative_position_encoding": { 
-            "r_max": 32,
-            "s_max": 2,
-            "c_z": GlobalConfigValue("c_z"),
-        },
-        "template_embedder": { # TODO: delete
-            "c": 64,
-            "c_z": GlobalConfigValue("c_z"),
-            "n_blocks": 0,
-            "dropout": 0.25,
-            "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
-        },
-        "msa_module": { # TODO: delete 
-            "c_m": 64,
-            "c_z": GlobalConfigValue("c_z"),
-            "c_s_inputs": GlobalConfigValue("c_s_inputs"),
-            "n_blocks": 4,
-            "msa_dropout": 0.15,
-            "pair_dropout": 0.25,
-            "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
-        },
-        "pairformer": { # TODO: delete 
-            "n_blocks": GlobalConfigValue("n_blocks"),
-            "c_z": GlobalConfigValue("c_z"),
-            "c_s": GlobalConfigValue("c_s"),
-            "n_heads": 16,
-            "dropout": 0.25,
-            "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
         "diffusion_module": {
             "use_fine_grained_checkpoint": True,
@@ -209,39 +179,8 @@ model_configs = {
             },
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
-        "confidence_head": { 
-            "c_z": GlobalConfigValue("c_z"),
-            "c_s": GlobalConfigValue("c_s"),
-            "c_s_inputs": GlobalConfigValue("c_s_inputs"),
-            "n_blocks": 4,
-            "max_atoms_per_token": GlobalConfigValue("max_atoms_per_token"),
-            "pairformer_dropout": 0.0,
-            "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
-            "distance_bin_start": 3.25,
-            "distance_bin_end": 52.0,
-            "distance_bin_step": 1.25,
-            "stop_gradient": True,
-        },
-        "distogram_head": { 
-            "c_z": GlobalConfigValue("c_z"),
-            "no_bins": GlobalConfigValue("no_bins"),
-        },
     },
 }
-
-guiding_net_configs = model_configs.copy()
-guiding_net_configs.update({ #TODO: will this change the global configs as well? I think not
-    "c_s": 192,  
-    "c_z": 64,   
-    "c_s_inputs": 224,  
-    "c_atom": 64,  
-    "c_atompair": 8,  
-    "c_token": 384,  
-    "n_blocks": 48, 
-})
-model_configs.update({
-    "guiding_net_configs": guiding_net_configs
-})
 
 perm_configs = {
     # Chain and Atom Permutation

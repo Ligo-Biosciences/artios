@@ -458,7 +458,6 @@ class ProtenixLoss(nn.Module):
         #self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
         #self.pae_loss = PAELoss(**configs.loss.pae)
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
-        # self.fm_loss = FMLoss(**configs.loss.diffusion.flow_matching)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
 

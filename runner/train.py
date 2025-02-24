@@ -406,7 +406,8 @@ class AF3Trainer(object):
                 # Visualise selected structures in wandb
                 # FIXME: just temporary sampling logic for intial training runs
                 if pid in PDB_TO_VISUALISE:
-                    pdb_str = to_pdb(batch["pred_dict"]["coordinate_mini"], batch["input_feature_dict"])  # output of the mini-rollout
+                    coords = batch["pred_dict"]["coordinate_mini"].unsqueeze(-3)  # [..., 1, N_atom, 3] -> [..., N_atom, 3]
+                    pdb_str = to_pdb(coords, batch["input_feature_dict"])  # output of the mini-rollout
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                         wandb.log({
                            f"{ema_suffix}structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")

@@ -271,7 +271,7 @@ class ArtiosLigand(nn.Module):
         chunk_size: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
-        Main training loop for the Alphafold3 model.
+        Main training (and evaluation) loop for the ArtiosLigand model.
 
         Args:
             input_feature_dict (dict[str, Any]): Input features dictionary.
@@ -303,13 +303,14 @@ class ArtiosLigand(nn.Module):
                 "N_sample_mini_rollout"
             ]  # =1
             N_step_mini_rollout = self.configs.sample_diffusion["N_step_mini_rollout"]
+            N_step = self.configs.sample_diffusion["N_step"]
 
             coordinate_mini = self.sample_diffusion( 
                 denoise_net=self.diffusion_module,
                 input_feature_dict=input_feature_dict,
                 s_inputs=s_inputs.detach(),
                 timesteps=self.inference_timestep_scheduler(
-                    N_step=N_step_mini_rollout,
+                    N_step=N_step_mini_rollout if self.training else N_step,  # during eval, use full N_step
                     device=s_inputs.device,
                     dtype=s_inputs.dtype,
                 ),

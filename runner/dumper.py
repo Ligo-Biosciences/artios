@@ -139,13 +139,13 @@ class DataDumper:
             b_factor=b_factor,
         )
         # Dump confidence
-        self._save_confidence(
-            data=pred_dict,
-            prediction_save_dir=prediction_save_dir,
-            sample_name=pdb_id,
-            seed=seed,
-            sorted_indices=sorted_indices,
-        )
+        #self._save_confidence(
+        #    data=pred_dict,
+        #    prediction_save_dir=prediction_save_dir,
+        #    sample_name=pdb_id,
+        #    seed=seed,
+        #    sorted_indices=sorted_indices,
+        #)
 
     def _save_structure(
         self,

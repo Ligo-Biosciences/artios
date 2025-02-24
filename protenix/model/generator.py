@@ -278,7 +278,7 @@ def sample_diffusion(
 
                 # Calculate update at intermediate point
                 velocity_pred_2, scaled_score_2 = _calculate_velocity_and_score(
-                    x_noisy=x_middle,
+                    x_noisy=x_middle.to(dtype),
                     t_cur=t_cur,
                     denoise_net=denoise_net,
                     input_feature_dict=input_feature_dict,

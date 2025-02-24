@@ -35,7 +35,7 @@ basic_configs = {
     "load_ema_checkpoint_path": "",
     "load_strict": True,
     "load_params_only": True,
-    "guiding_net_path": None,
+    "guiding_net_path": ValueMaybeNone(""),
     "skip_load_step": False,
     "skip_load_optimizer": False,
     "skip_load_scheduler": False,

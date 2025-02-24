@@ -51,10 +51,10 @@ guidance_model_configs = {
         "loss": False,  # True
     },
     "infer_setting": {
-        "chunk_size": None,  # should set to null for normal training and small dataset eval [for efficiency]
-        "sample_diffusion_chunk_size": None,  # should set to null for normal training and small dataset eval [for efficiency]
+        "chunk_size": ValueMaybeNone(64),  # should set to null for normal training and small dataset eval [for efficiency]
+        "sample_diffusion_chunk_size": ValueMaybeNone(1),  # should set to null for normal training and small dataset eval [for efficiency]
         "lddt_metrics_sparse_enable": True,
-        "lddt_metrics_chunk_size": None,  # only works if loss_metrics_sparse_enable, can set as default 1
+        "lddt_metrics_chunk_size": ValueMaybeNone(1),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
     "train_timestep_sampler": { 
         "loc": 0.0,

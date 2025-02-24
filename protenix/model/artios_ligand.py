@@ -17,8 +17,9 @@ from protenix.model.generator import (
 from protenix.model.utils import simple_merge_dict_list
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.model.modules.primitives import LinearNoBias
-from .modules.diffusion import DiffusionModule
-from .modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
+from protenix.model.modules.diffusion import DiffusionModule
+from protenix.model.modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
+from protenix.model.loss import ProtenixLoss
 from protenix.utils.torch_utils import autocasting_disable_decorator
 from protenix.model.utils import add
 
@@ -52,6 +53,9 @@ class ArtiosLigand(nn.Module):
         self.diffusion_module = DiffusionModule(
             **configs.model.diffusion_module
         )
+
+        # Initialize loss as part of model for checkpointing and uncertainty learning
+        self.loss = ProtenixLoss(configs)
 
         if configs.compile_model:
             self.diffusion_module = torch.compile(self.diffusion_module)

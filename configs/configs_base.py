@@ -113,7 +113,7 @@ model_configs = {
     "skip_amp": {
         "sample_diffusion": True,  # True
         "confidence_head": True,  # True
-        "sample_diffusion_training": True,  # True
+        "sample_diffusion_training": False,  # True
         "loss": True,  # True
     },
     "infer_setting": {

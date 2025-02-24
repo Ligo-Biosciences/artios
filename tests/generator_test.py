@@ -145,7 +145,8 @@ class TestGenerator:
             s_inputs=s_inputs,
             timesteps=timesteps,
             N_sample=n_samples,
-            guiding_net=mock_guiding_net,
+            guiding_denoise_net=mock_guiding_net,
+            guiding_s_inputs=s_inputs,
             guidance_weight=0.5
         )
         

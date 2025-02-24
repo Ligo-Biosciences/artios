@@ -33,7 +33,7 @@ guidance_model_configs = {
     "no_bins": 64,
     "sigma_data": 16.0,
     "diffusion_batch_size": 48, # 12
-    "compile_model": False,
+    "compile_model": True,
     "diffusion_chunk_size": 48,  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": 1,  # NOTE: Number of blocks in each activation checkpoint, if None, no checkpointing is performed.
     # switch of kernels

@@ -119,12 +119,12 @@ inference_configs = {
     "seeds": ListValue([101]),
     "dump_dir": "./output",
     "need_atom_confidence": False,
-    "sorted_by_ranking_score": True,
+    "sorted_by_ranking_score": False,
     "input_json_path": RequiredValue(str),
     "load_checkpoint_path": os.path.join(
         code_directory, "./release_data/checkpoint/model_v0.2.0.pt"
     ),
     "num_workers": 16,
-    "use_msa": True, # TODO: false
+    "use_msa": False,
     "guidance_model_configs": guidance_model_configs,
 }

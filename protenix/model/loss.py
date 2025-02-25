@@ -74,6 +74,9 @@ class SmoothLDDTLoss(nn.Module):
         self.reduction = reduction
         self.k = k
 
+        # Learnable parameter with single value
+        self.uncertainty = nn.Parameter(torch.zeros(1))
+
     def _chunk_forward(self, pred_distance, true_distance, c_lm=None):
         dist_diff = torch.abs(pred_distance - true_distance)
         # For save cuda memory we use inplace op
@@ -213,6 +216,8 @@ class SmoothLDDTLoss(nn.Module):
 
         lddt = lddt.mean(dim=-1)  # [...]
         final_loss = 1 - loss_reduction(lddt, method=self.reduction)
+        if self.training:
+            final_loss = final_loss / self.uncertainty.exp() + self.uncertainty
         return final_loss
 
 

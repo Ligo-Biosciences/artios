@@ -195,12 +195,13 @@ def sample_diffusion(
     device = s_inputs.device
     dtype = s_inputs.dtype
 
-    # Stochasticity schedule g (scaled by 1-t for numerical stability)
+    # Stochasticity schedule g (scaled by 1/(1-t) for numerical stability)
     stoch_schedules = {
         "deterministic": lambda t: torch.zeros_like(t) / (1 - t),
         "constant": lambda t: torch.ones_like(t) * (0.5 * (alpha**2)) / (1 - t),
         "non_singular": lambda t: torch.ones_like(t) * 0.5 * (alpha**2),
         "zero_ends": lambda t: 0.5 * (alpha**2) * t,
+        #TODO: check the divergence minimising choice used in ma et al.
         #"proteina": lambda t: alpha / (t + 0.01)
     }
 

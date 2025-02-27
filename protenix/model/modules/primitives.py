@@ -21,6 +21,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy.stats import truncnorm
 import numpy as np
+from protenix.model.modules.rope import apply_rotary_emb
 
 from protenix.model.utils import (
     flatten_final_dims,
@@ -869,7 +870,11 @@ class Attention(nn.Module):
         return x.view(x.shape[:-1] + (self.num_heads, -1))
 
     def _prep_qkv(
-        self, q_x: torch.Tensor, kv_x: torch.Tensor, apply_scale: bool = True
+        self, 
+        q_x: torch.Tensor, 
+        kv_x: torch.Tensor, 
+        freqs_cis: torch.Tensor,
+        apply_scale: bool = True, 
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Prepare qkv
 
@@ -879,8 +884,9 @@ class Attention(nn.Module):
             kv_x (torch.Tensor): the input x for kv
                 [..., c_k]
                 [..., c_v]
+            freqs_cis (torch.Tensor): precomputed rotary embeddings frequency.
+                [..., c_hidden // 2] #TODO: right size?
             apply_scale (bool, optional): apply scale to dot product qk. Defaults to True.
-
         Returns:
             tuple[torch.Tensor, torch.Tensor, torch.Tensor]: the return q/k/v
                 # [..., H, Q/K/V, C_hidden]
@@ -894,6 +900,9 @@ class Attention(nn.Module):
         q = self.split_heads(q)
         k = self.split_heads(k)
         v = self.split_heads(v)
+
+        # Apply rotary embeddings
+        q, k = apply_rotary_emb(q, k, freqs_cis=freqs_cis)
 
         # [*, H, Q/K/V, C_hidden]
         q = q.transpose(-2, -3)
@@ -936,6 +945,7 @@ class Attention(nn.Module):
         self,
         q_x: torch.Tensor,
         kv_x: torch.Tensor,
+        freqs_cis: torch.Tensor,
         attn_bias: Optional[torch.Tensor] = None,
         trunked_attn_bias: Optional[torch.Tensor] = None,
         n_queries: Optional[int] = None,
@@ -951,6 +961,8 @@ class Attention(nn.Module):
                 [..., Q, C_q]
             kv_x (torch.Tensor): the input x for k/v
                 [..., K, C_k]
+            freqs_cis (torch.Tensor, optional): precomputed rotary embeddings frequency.
+                [..., c_hidden // 2]
             attn_bias (torch.Tensor, optional): the input biases for attention. Defaults to None.
                 [..., H, Q, K] or [..., Q, K]
             trunked_attn_bias (torch.Tensor, optional): the input biases where shape has been rearranged to dense trunks. Defaults to None.
@@ -963,7 +975,7 @@ class Attention(nn.Module):
                 [*, Q, C_q]
         """
 
-        q, k, v = self._prep_qkv(q_x=q_x, kv_x=kv_x, apply_scale=True)
+        q, k, v = self._prep_qkv(q_x=q_x, kv_x=kv_x, freqs_cis=freqs_cis, apply_scale=True)
 
         if attn_bias is not None:
             if len(attn_bias.shape) == len(q.shape):

@@ -37,7 +37,7 @@ from protenix.model.modules.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import checkpoint_blocks
 
 
-class AttentionPairBias(nn.Module): #TODO: probably dont need at all, with no pair bias just use standard attention in DiT block
+class AttentionPairBias(nn.Module):
     """
     Implements Algorithm 24 in AF3
     """
@@ -166,8 +166,8 @@ class AttentionPairBias(nn.Module): #TODO: probably dont need at all, with no pa
         """
 
         # Multi-head attention bias
-        bias = self.linear_nobias_z(self.layernorm_z(z)) 
-        bias = permute_final_dims(bias, [2, 0, 1])  # [..., n_heads, N_token, N_token] 
+        bias = self.linear_nobias_z(self.layernorm_z(z))
+        bias = permute_final_dims(bias, [2, 0, 1])  # [..., n_heads, N_token, N_token]
 
         # Line 11: Multi-head attention with attention bias & gating (and optionally local attention)
         a = self.attention(q_x=a, kv_x=a, attn_bias=bias, inplace_safe=inplace_safe)
@@ -178,7 +178,7 @@ class AttentionPairBias(nn.Module): #TODO: probably dont need at all, with no pa
         self,
         a: torch.Tensor,
         s: torch.Tensor,
-        z: torch.Tensor, 
+        z: torch.Tensor,
         n_queries: Optional[int] = None,
         n_keys: Optional[int] = None,
         inplace_safe: bool = False,
@@ -237,19 +237,9 @@ class DiffusionTransformerBlock(nn.Module):
         self.c_a = c_a
         self.c_s = c_s
         self.c_z = c_z
-        self.attention_pair_bias = AttentionPairBias( #TODO: remove
+        self.attention_pair_bias = AttentionPairBias(
             has_s=True, n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z, biasinit=biasinit
         )
-        self.attention_with_rope = Attention(
-            c_q=c_a,
-            c_k=c_a,
-            c_v=c_a,
-            c_hidden=c_a // n_heads,
-            num_heads=n_heads,
-            gating=False,  # disable gating
-            q_linear_bias=True,
-        )
-        
         self.conditioned_transition_block = ConditionedTransitionBlock(
             n=2, c_a=c_a, c_s=c_s, biasinit=biasinit
         )
@@ -258,8 +248,7 @@ class DiffusionTransformerBlock(nn.Module):
         self,
         a: torch.Tensor,
         s: torch.Tensor,
-        z: torch.Tensor, #TODO: remove
-        freqs_cis: torch.Tensor,
+        z: torch.Tensor,
         n_queries: Optional[int] = None,
         n_keys: Optional[int] = None,
         inplace_safe: bool = False,
@@ -271,10 +260,8 @@ class DiffusionTransformerBlock(nn.Module):
                 [..., N, c_a]
             s (torch.Tensor): single embedding
                 [..., N, c_s]
-            z (torch.Tensor): pair embedding #TODO: remove
+            z (torch.Tensor): pair embedding
                 [..., N, N, c_z] or [..., n_block, n_queries, n_keys, c_z]
-            freqs_cis (torch.Tensor): precomputed rotary embeddings frequency.
-                [..., c_hidden // 2] #TODO: what dimension do we want this to be?
             n_queries (int, optional): local window size of query tensor. If not None, will perform local attention. Defaults to None.
             n_keys (int, optional): local window size of key tensor. Defaults to None.
             inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
@@ -284,19 +271,21 @@ class DiffusionTransformerBlock(nn.Module):
             torch.Tensor: the output of DiffusionTransformerBlock
                 [..., N, c_a]
         """
-        attn_out = self.attention_with_rope(
-            q_x=a, 
-            kv_x=a, 
-            freqs_cis=freqs_cis, 
-            inplace_safe=inplace_safe
-        ) #TODO: check!
-
+        attn_out = self.attention_pair_bias(
+            a=a,
+            s=s,
+            z=z,
+            n_queries=n_queries,
+            n_keys=n_keys,
+            inplace_safe=inplace_safe,
+            chunk_size=chunk_size,
+        )
         attn_out = add(attn_out, a, inplace_safe=inplace_safe) 
         ff_out = self.conditioned_transition_block(a=attn_out, s=s)
         out_a = add(ff_out, attn_out)
         # Avoid s/z to be deleted by torch.utils.checkpoint
-        return out_a, s, z #TODO: remove z
-
+        return out_a, s, z
+    
 
 class DiffusionTransformer(nn.Module):
     """
@@ -307,7 +296,7 @@ class DiffusionTransformer(nn.Module):
         self,
         c_a: int,  # could be 128 or 768 in AF3
         c_s: int,  # could be c_s or c_atom
-        c_z: int,  # could be c_z or c_atompair #TODO: remove
+        c_z: int,  # could be c_z or c_atompair
         n_blocks: int,  # could be 3 or 24 in AF3
         n_heads: int,  # could be 16 or 4 or ... in AF3
         blocks_per_ckpt: Optional[int] = None,
@@ -316,7 +305,7 @@ class DiffusionTransformer(nn.Module):
         Args:
             c_a (int): single embedding dimension.
             c_s (int): single embedding dimension.
-            c_z (int): pair embedding dimension. #TODO: remove
+            c_z (int): pair embedding dimension.
             n_blocks (int): number of blocks in DiffusionTransformer.
             n_heads (int): number of heads in attention.
             blocks_per_ckpt: number of DiffusionTransformer blocks in each activation checkpoint
@@ -326,17 +315,17 @@ class DiffusionTransformer(nn.Module):
         self.n_heads = n_heads
         self.c_a = c_a
         self.c_s = c_s
-        self.c_z = c_z #TODO: remove
+        self.c_z = c_z
         self.blocks_per_ckpt = blocks_per_ckpt
 
         self.blocks = nn.ModuleList()
         for _ in range(n_blocks):
             block = DiffusionTransformerBlock(
-                n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z #TODO: remove c_z
+                n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z
             )
             self.blocks.append(block)
 
-    def _prep_blocks( #TODO: fix block logic to now take differnet attn inputs as well as freqs_cis
+    def _prep_blocks(
         self,
         n_queries: Optional[int] = None,
         n_keys: Optional[int] = None,
@@ -367,7 +356,7 @@ class DiffusionTransformer(nn.Module):
         self,
         a: torch.Tensor,
         s: torch.Tensor,
-        z: torch.Tensor, #TODO: remove
+        z: torch.Tensor,
         n_queries: Optional[int] = None,
         n_keys: Optional[int] = None,
         inplace_safe: bool = False,
@@ -379,7 +368,7 @@ class DiffusionTransformer(nn.Module):
                 [..., N, c_a]
             s (torch.Tensor): single embedding
                 [..., N, c_s]
-            z (torch.Tensor): pair embedding #TODO: remove
+            z (torch.Tensor): pair embedding
                 [..., N, N, c_z]
             n_queries (int, optional): local window size of query tensor. If not None, will perform local attention. Defaults to None.
             n_keys (int, optional): local window size of key tensor. Defaults to None.
@@ -388,11 +377,11 @@ class DiffusionTransformer(nn.Module):
             torch.Tensor: the output of DiffusionTransformer
                 [..., N, c_a]
         """
-        if z.shape[-2] > 2000 and (not self.training): #TODO: remove z
+        if z.shape[-2] > 2000 and (not self.training):
             clear_cache_between_blocks = True
         else:
             clear_cache_between_blocks = False
-        blocks = self._prep_blocks( #TODO: fix block logic to now take differnet attn inputs as well as freqs_cis
+        blocks = self._prep_blocks(
             n_queries=n_queries,
             n_keys=n_keys,
             inplace_safe=inplace_safe,
@@ -402,7 +391,7 @@ class DiffusionTransformer(nn.Module):
         blocks_per_ckpt = self.blocks_per_ckpt
         if not torch.is_grad_enabled():
             blocks_per_ckpt = None
-        a, s, z = checkpoint_blocks( #TODO: remove z
+        a, s, z = checkpoint_blocks(
             blocks, args=(a, s, z), blocks_per_ckpt=blocks_per_ckpt
         )
         del s, z

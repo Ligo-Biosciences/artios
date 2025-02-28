@@ -21,8 +21,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy.stats import truncnorm
 import numpy as np
-from protenix.model.modules.rotary import apply_rotary_emb
-
+from protenix.model.modules.rotary import apply_rotary_emb, precompute_freqs
 
 from protenix.model.utils import (
     flatten_final_dims,
@@ -1047,10 +1046,7 @@ class Attention(nn.Module):
 
 
 class AttentionWithRoPE(nn.Module):
-    """Standard multi-head attention
-    Ref to openfold:
-    https://github.com/aqlaboratory/openfold/blob/feb45a521e11af1db241a33d58fb175e207f8ce0/openfold/model/primitives.py#L340
-    """
+    """Standard multi-head attention with RoPE instead of pair bias."""
 
     def __init__(
         self,
@@ -1061,7 +1057,6 @@ class AttentionWithRoPE(nn.Module):
         num_heads: int,
         gating: bool = True,
         q_linear_bias: bool = False,
-        local_attention_method: str = "global_attention_with_bias",
         attn_weight_dropout_p: float = 0.0,
     ) -> None:
         """
@@ -1101,7 +1096,6 @@ class AttentionWithRoPE(nn.Module):
         self.c_hidden = c_hidden
         self.num_heads = num_heads
         self.gating = gating
-        self.local_attention_method = local_attention_method
         self.attn_weight_dropout_p = attn_weight_dropout_p
 
         # DISCREPANCY: c_hidden is not the per-head channel dimension, as
@@ -1118,6 +1112,9 @@ class AttentionWithRoPE(nn.Module):
         if self.gating:
             self.linear_g = LinearNoBias(self.c_q, self.c_hidden * self.num_heads)
             self.sigmoid = nn.Sigmoid()
+
+        # Frequency tensor
+        self.freqs = precompute_freqs(dim=self.c_hidden * self.num_heads // 2)  # 
     
     def split_heads(self, x: torch.Tensor) -> torch.Tensor:
         """Split heads of tensor along the last dimension."""
@@ -1126,11 +1123,10 @@ class AttentionWithRoPE(nn.Module):
     def _prep_qkv(
         self, 
         q_x: torch.Tensor, 
-        kv_x: torch.Tensor, 
-        freqs: Optional[torch.Tensor] = None,
+        kv_x: torch.Tensor,
         residue_index: Optional[torch.Tensor] = None,
         token_index: Optional[torch.Tensor] = None,
-        apply_scale: bool = True, 
+        apply_scale: bool = False, 
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Prepare qkv
 
@@ -1140,8 +1136,6 @@ class AttentionWithRoPE(nn.Module):
             kv_x (torch.Tensor): the input x for kv
                 [..., seq_len, c_k]
                 [..., seq_len, c_v]
-            freqs (torch.Tensor): precomputed frequency tensor for complex exponentials (cis) with given dimensions.
-                [dim // 2] where dim is c_hidden * num_heads
             residue_index (torch.Tensor): residue index
                 [..., seq_len]
             token_index (torch.Tensor): token index
@@ -1151,6 +1145,9 @@ class AttentionWithRoPE(nn.Module):
             tuple[torch.Tensor, torch.Tensor, torch.Tensor]: the return q/k/v
                 # [..., H, Q/K/V, C_hidden]
         """
+        # Ship the freqs to device
+        self.freqs = self.freqs.to(q_x.device)
+
         # [*, Q/K/V, H * C_hidden]
         q = self.linear_q(q_x)
         k = self.linear_k(kv_x)
@@ -1159,11 +1156,10 @@ class AttentionWithRoPE(nn.Module):
         # Split q, k, and freqs into two groups along last dimension
         q1, q2 = torch.split(q, q.shape[-1] // 2, dim=-1)
         k1, k2 = torch.split(k, k.shape[-1] // 2, dim=-1)
-        freqs1, freqs2 = torch.split(freqs, freqs.shape[-1] // 2, dim=-1)  
 
         # Apply rotary embeddings with different indices
-        q1, k1 = apply_rotary_emb(q1, k1, freqs=freqs1, scalars=residue_index)
-        q2, k2 = apply_rotary_emb(q2, k2, freqs=freqs2, scalars=token_index)
+        q1, k1 = apply_rotary_emb(q1, k1, freqs=self.freqs, scalars=residue_index)
+        q2, k2 = apply_rotary_emb(q2, k2, freqs=self.freqs, scalars=token_index)
 
         # Concatenate back
         q = torch.cat([q1, q2], dim=-1)
@@ -1215,7 +1211,6 @@ class AttentionWithRoPE(nn.Module):
         self,
         q_x: torch.Tensor,
         kv_x: torch.Tensor,
-        freqs: Optional[torch.Tensor] = None,
         residue_index: Optional[torch.Tensor] = None,
         token_index: Optional[torch.Tensor] = None,
         inplace_safe: bool = False,
@@ -1244,7 +1239,6 @@ class AttentionWithRoPE(nn.Module):
         q, k, v = self._prep_qkv(
             q_x=q_x, 
             kv_x=kv_x, 
-            freqs=freqs, 
             residue_index=residue_index, 
             token_index=token_index, 
             apply_scale=False

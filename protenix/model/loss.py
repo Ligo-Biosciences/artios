@@ -61,7 +61,8 @@ class SmoothLDDTLoss(nn.Module):
         self,
         eps: float = 1e-10,
         reduction: str = "mean",
-        k: int = 300
+        k: int = 300,
+        uncertainty_embed_dim: int = 64,
     ) -> None:
         """SmoothLDDTLoss
 
@@ -75,7 +76,9 @@ class SmoothLDDTLoss(nn.Module):
         self.k = k
 
         # Learnable parameter with single value
-        self.uncertainty = nn.Parameter(torch.zeros(1))
+        self.uncertainty_embed_dim = uncertainty_embed_dim
+        self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
+        self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def _chunk_forward(self, pred_distance, true_distance, c_lm=None):
         dist_diff = torch.abs(pred_distance - true_distance)
@@ -133,6 +136,7 @@ class SmoothLDDTLoss(nn.Module):
         pred_coordinates: torch.Tensor,
         true_coordinates: torch.Tensor,
         coordinate_mask: torch.Tensor,
+        timestep: torch.Tensor,
         diffusion_chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
         """SmoothLDDTLoss
@@ -144,6 +148,8 @@ class SmoothLDDTLoss(nn.Module):
                 [..., N_atom, 3]
             coordinate_mask (torch.Tensor): whether true coordinates exist
                 [..., N_atom]
+            timestep (torch.Tensor): the timestep for the current sample.
+                [..., N_sample]
             diffusion_chunk_size (Optional[int]): Chunk size over the N_sample dimension. Defaults to None.
 
         Returns:
@@ -214,10 +220,17 @@ class SmoothLDDTLoss(nn.Module):
                 lddt.append(lddt_i)
             lddt = torch.cat(lddt, dim=-1)
 
-        lddt = lddt.mean(dim=-1)  # [...]
-        final_loss = 1 - loss_reduction(lddt, method=self.reduction)
+        loss = 1 - lddt  # [..., N_sample]
         if self.training:
-            final_loss = final_loss / self.uncertainty.exp() + self.uncertainty
+            # Compute uncertainty scaling u(t)
+            timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
+            u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
+            print("loss shape", loss.shape)
+            print("u_t shape", u_t.shape)
+            loss = loss / u_t.exp() + u_t 
+
+        final_loss = loss_reduction(loss, method=self.reduction) 
+
         return final_loss
 
 

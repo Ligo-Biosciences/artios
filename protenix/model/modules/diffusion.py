@@ -22,12 +22,13 @@ from protenix.model.modules.primitives import LinearNoBias, Transition
 from protenix.model.modules.transformer import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
+)
+from protenix.model.modules.transformer_rope import (
     DiffusionTransformer,
 )
 from protenix.model.utils import expand_at_dim, add
 from protenix.model.modules.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
-
 
 class DiffusionConditioning(nn.Module):
     """
@@ -223,11 +224,10 @@ class DiffusionModule(nn.Module):
         # Alg20: line4
         self.layernorm_s = LayerNorm(c_s)
         self.linear_no_bias_s = LinearNoBias(in_features=c_s, out_features=c_token)
-        self.diffusion_transformer = DiffusionTransformer(
+        self.diffusion_transformer_rope = DiffusionTransformer(
             **transformer,
             c_a=c_token,
             c_s=c_s,
-            c_z=c_z, #TODO: remove
             blocks_per_ckpt=blocks_per_ckpt,
         )
         self.layernorm_a = LayerNorm(c_token)
@@ -269,6 +269,12 @@ class DiffusionModule(nn.Module):
         """
         N_sample = r_noisy.size(-3)
         assert timestep.size(-1) == N_sample
+
+        # Expand residue_index and token_index to match N_sample
+        token_index = input_feature_dict["token_index"]  # [..., N_token]
+        residue_index = input_feature_dict["residue_index"]  # [..., N_token]
+        token_index = expand_at_dim(token_index, dim=-2, n=N_sample)
+        residue_index = expand_at_dim(residue_index, dim=-2, n=N_sample)
 
         blocks_per_ckpt = self.blocks_per_ckpt
         if not torch.is_grad_enabled():
@@ -327,10 +333,11 @@ class DiffusionModule(nn.Module):
             inplace_safe=inplace_safe
         ) # [..., N_sample, N_token, c_token]
         
-        a_token = self.diffusion_transformer(
+        a_token = self.diffusion_transformer_rope(
             a=a_token,
             s=s,
-            z=z, #TODO: remove
+            residue_index=residue_index,
+            token_index=token_index,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )

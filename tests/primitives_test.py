@@ -363,7 +363,6 @@ class TestAttentionWithRoPE:
         # Create test inputs
         q_x = torch.randn(batch_size, seq_len, c_q)
         kv_x = torch.randn(batch_size, seq_len, c_k)
-        freqs = torch.randn(c_hidden * num_heads // 2)
         residue_index = torch.arange(seq_len).expand(batch_size, -1)
         token_index = torch.arange(seq_len).expand(batch_size, -1)
 
@@ -377,7 +376,6 @@ class TestAttentionWithRoPE:
             'num_heads': num_heads,
             'q_x': q_x,
             'kv_x': kv_x,
-            'freqs': freqs,
             'residue_index': residue_index,
             'token_index': token_index
         }
@@ -396,7 +394,6 @@ class TestAttentionWithRoPE:
         q, k, v = attn._prep_qkv(
             q_x=attention_inputs['q_x'],
             kv_x=attention_inputs['kv_x'],
-            freqs=attention_inputs['freqs'],
             residue_index=attention_inputs['residue_index'],
             token_index=attention_inputs['token_index'],
             apply_scale=True
@@ -423,7 +420,6 @@ class TestAttentionWithRoPE:
         output = attn.forward(
             q_x=attention_inputs['q_x'],
             kv_x=attention_inputs['kv_x'],
-            freqs=attention_inputs['freqs'],
             residue_index=attention_inputs['residue_index'],
             token_index=attention_inputs['token_index'],
             inplace_safe=False
@@ -442,7 +438,6 @@ class TestAttentionWithRoPE:
         output_inplace = attn.forward(
             q_x=attention_inputs['q_x'],
             kv_x=attention_inputs['kv_x'],
-            freqs=attention_inputs['freqs'],
             residue_index=attention_inputs['residue_index'],
             token_index=attention_inputs['token_index'],
             inplace_safe=True

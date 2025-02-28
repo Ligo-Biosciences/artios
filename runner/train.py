@@ -155,7 +155,7 @@ class AF3Trainer(object):
         logging.info("Finished init ENV.")
 
     def init_loss(self):
-        self.loss = ProtenixLoss(self.configs)
+        # self.loss = ProtenixLoss(self.configs)
         self.symmetric_permutation = SymmetricPermutation(
             self.configs, error_dir=self.error_dir
         )
@@ -163,6 +163,7 @@ class AF3Trainer(object):
 
     def init_model(self):
         self.raw_model = ArtiosLigand(self.configs).to(self.device)
+        self.loss = self.raw_model.loss
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
             self.print(f"Using DDP")

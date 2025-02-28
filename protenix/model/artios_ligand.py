@@ -20,6 +20,7 @@ from protenix.model.modules.primitives import LinearNoBias
 from .modules.diffusion import DiffusionModule
 from .modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
 from protenix.utils.torch_utils import autocasting_disable_decorator
+from protenix.model.loss import ProtenixLoss
 from protenix.model.utils import add
 from typing import Callable
 
@@ -53,6 +54,9 @@ class ArtiosLigand(nn.Module):
         self.diffusion_module = DiffusionModule(
             **configs.model.diffusion_module
         )
+
+        # Initialize loss as part of model for checkpointing and uncertainty learning
+        self.loss = ProtenixLoss(configs)
 
         if configs.compile_model:
             self.diffusion_module = torch.compile(self.diffusion_module)

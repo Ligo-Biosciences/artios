@@ -21,7 +21,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy.stats import truncnorm
 import numpy as np
-from protenix.model.modules.rope import apply_rotary_emb
+from protenix.model.modules.rotary import apply_rotary_emb
+
 
 from protenix.model.utils import (
     flatten_final_dims,
@@ -873,7 +874,7 @@ class Attention(nn.Module):
         self, 
         q_x: torch.Tensor, 
         kv_x: torch.Tensor, 
-        freqs_cis: torch.Tensor,
+        freqs: torch.Tensor,
         apply_scale: bool = True, 
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Prepare qkv
@@ -884,8 +885,8 @@ class Attention(nn.Module):
             kv_x (torch.Tensor): the input x for kv
                 [..., c_k]
                 [..., c_v]
-            freqs_cis (torch.Tensor): precomputed rotary embeddings frequency.
-                [..., c_hidden // 2] #TODO: right size?
+            freqs (torch.Tensor): precomputed frequency tensor for complex exponentials (cis) with given dimensions.
+                [..., c_hidden // 2]
             apply_scale (bool, optional): apply scale to dot product qk. Defaults to True.
         Returns:
             tuple[torch.Tensor, torch.Tensor, torch.Tensor]: the return q/k/v
@@ -902,7 +903,7 @@ class Attention(nn.Module):
         v = self.split_heads(v)
 
         # Apply rotary embeddings
-        q, k = apply_rotary_emb(q, k, freqs_cis=freqs_cis)
+        q, k = apply_rotary_emb(q, k, freqs=freqs)
 
         # [*, H, Q/K/V, C_hidden]
         q = q.transpose(-2, -3)

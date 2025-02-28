@@ -132,7 +132,7 @@ class InferenceRunner(object):
         _load_checkpoint(self.configs.load_checkpoint_path, guiding=False)
         self.print(f"Finished loading checkpoint.")
 
-        if self.configs.guiding_net_path is not None:
+        if self.configs.guiding_net_path is not None and self.configs.guiding_net_path != "":
             _load_checkpoint(self.configs.guiding_net_path, guiding=True)
             self.print(f"Finished loading guiding net.")
 

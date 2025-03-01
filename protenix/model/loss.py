@@ -227,9 +227,9 @@ class SmoothLDDTLoss(nn.Module):
             u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
 
             # Apply uncertainty scaling
-            loss = loss / u_t.exp() + u_t 
+            loss = loss / u_t.exp() + u_t # [..., N_sample]
 
-        final_loss = loss_reduction(loss, method=self.reduction) 
+        final_loss = loss_reduction(loss, method=self.reduction)
 
         return final_loss
 

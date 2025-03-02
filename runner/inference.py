@@ -39,7 +39,7 @@ from protenix.web_service.dependency_url import URL
 logger = logging.getLogger(__name__)
 
 
-class InferenceRunner(object):
+class InferenceRunner(object): # TODO: add post hoc ema logic here.
     def __init__(self, configs: Any) -> None:
         self.configs = configs
         self.init_env()

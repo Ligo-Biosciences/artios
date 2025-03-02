@@ -320,40 +320,40 @@ class ArtiosLigand(nn.Module):
         log_dict = {}
         pred_dict = {}
 
-        ### Mini-rollout
-        # Mini rollout is performed for confidence and label permutation
-        with torch.no_grad():
-            # [..., 1, N_atom, 3]
-            N_sample_mini_rollout = self.configs.sample_diffusion[
-                "N_sample_mini_rollout"
-            ]  # =1
-            N_step_mini_rollout = self.configs.sample_diffusion["N_step_mini_rollout"]
-            N_step = self.configs.sample_diffusion["N_step"]
+        ### Mini-rollout for evaluation
+        if not self.training:
+            # Rollout for visualizing the structures during evaluation
+            with torch.no_grad():
+                # [..., 1, N_atom, 3]
+                N_sample_mini_rollout = self.configs.sample_diffusion[
+                    "N_sample_mini_rollout"
+                ]  # =1
+                N_step = self.configs.sample_diffusion["N_step"]
 
-            coordinate_mini = self.sample_diffusion( 
-                denoise_net=self.diffusion_module,
-                input_feature_dict=input_feature_dict,
-                s_inputs=s_inputs.detach(),
-                timesteps=self.inference_timestep_scheduler(
-                    N_step=N_step_mini_rollout if self.training else N_step,  # during eval, use full N_step
-                    device=s_inputs.device,
-                    dtype=s_inputs.dtype,
-                ),
-                N_sample=N_sample_mini_rollout
-            )
-            coordinate_mini.detach_()
-            pred_dict["coordinate_mini"] = coordinate_mini
-
-            # Permute ground truth to match mini-rollout prediction
-            label_dict, perm_log_dict = (
-                symmetric_permutation.permute_label_to_match_mini_rollout(
-                    coordinate_mini,
-                    input_feature_dict,
-                    label_dict,
-                    label_full_dict,
+                coordinate_mini = self.sample_diffusion( 
+                    denoise_net=self.diffusion_module,
+                    input_feature_dict=input_feature_dict,
+                    s_inputs=s_inputs.detach(),
+                    timesteps=self.inference_timestep_scheduler(
+                        N_step=N_step,
+                        device=s_inputs.device,
+                        dtype=s_inputs.dtype,
+                    ),
+                    N_sample=N_sample_mini_rollout
                 )
-            )
-            log_dict.update(perm_log_dict)
+                coordinate_mini.detach_()
+                pred_dict["coordinate_mini"] = coordinate_mini
+
+                # Permute ground truth to match mini-rollout prediction
+                label_dict, perm_log_dict = (
+                    symmetric_permutation.permute_label_to_match_mini_rollout(
+                        coordinate_mini,
+                        input_feature_dict,
+                        label_dict,
+                        label_full_dict,
+                    )
+                )
+                log_dict.update(perm_log_dict)
 
         ### Diffusion training
         N_sample = self.diffusion_batch_size

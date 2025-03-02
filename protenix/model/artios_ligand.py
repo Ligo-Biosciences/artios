@@ -17,8 +17,9 @@ from protenix.model.generator import (
 from protenix.model.utils import simple_merge_dict_list
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.model.modules.primitives import LinearNoBias
-from .modules.diffusion import DiffusionModule
-from .modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
+from protenix.model.modules.diffusion import DiffusionModule
+from protenix.model.modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
+from protenix.model.loss import ProtenixLoss
 from protenix.utils.torch_utils import autocasting_disable_decorator
 from protenix.model.loss import ProtenixLoss
 from protenix.model.utils import add
@@ -295,7 +296,7 @@ class ArtiosLigand(nn.Module):
         chunk_size: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
-        Main training loop for the Alphafold3 model.
+        Main training (and evaluation) loop for the ArtiosLigand model.
 
         Args:
             input_feature_dict (dict[str, Any]): Input features dictionary.
@@ -327,13 +328,14 @@ class ArtiosLigand(nn.Module):
                 "N_sample_mini_rollout"
             ]  # =1
             N_step_mini_rollout = self.configs.sample_diffusion["N_step_mini_rollout"]
+            N_step = self.configs.sample_diffusion["N_step"]
 
             coordinate_mini = self.sample_diffusion( 
                 denoise_net=self.diffusion_module,
                 input_feature_dict=input_feature_dict,
                 s_inputs=s_inputs.detach(),
                 timesteps=self.inference_timestep_scheduler(
-                    N_step=N_step_mini_rollout,
+                    N_step=N_step_mini_rollout if self.training else N_step,  # during eval, use full N_step
                     device=s_inputs.device,
                     dtype=s_inputs.dtype,
                 ),

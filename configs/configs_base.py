@@ -112,10 +112,10 @@ model_configs = {
     "dtype": "bf16",  # default training dtype: bf16
     "loss_metrics_sparse_enable": True,  # the swicth for both sparse lddt metrics and sparse bond/smooth lddt loss
     "skip_amp": {
-        "sample_diffusion": False,  # True
-        "confidence_head": False,  # True
+        "sample_diffusion": True,  # True
+        "confidence_head": True,  # True
         "sample_diffusion_training": False,  # True
-        "loss": False,  # True
+        "loss": True,  # True
     },
     "infer_setting": {
         "chunk_size": ValueMaybeNone(
@@ -139,7 +139,7 @@ model_configs = {
     "sample_diffusion": { 
         "N_step": 50, # 25
         "N_sample": 1, # 1
-        "N_step_mini_rollout": 25, # 10
+        "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type": "non_singular",
         "alpha": 1.0,

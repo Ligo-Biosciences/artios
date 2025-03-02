@@ -74,6 +74,9 @@ class SmoothLDDTLoss(nn.Module):
         self.reduction = reduction
         self.k = k
 
+        # Learnable parameter with single value
+        self.uncertainty = nn.Parameter(torch.zeros(1))
+
     def _chunk_forward(self, pred_distance, true_distance, c_lm=None):
         dist_diff = torch.abs(pred_distance - true_distance)
         # For save cuda memory we use inplace op
@@ -213,6 +216,8 @@ class SmoothLDDTLoss(nn.Module):
 
         lddt = lddt.mean(dim=-1)  # [...]
         final_loss = 1 - loss_reduction(lddt, method=self.reduction)
+        if self.training:
+            final_loss = final_loss / self.uncertainty.exp() + self.uncertainty
         return final_loss
 
 
@@ -421,7 +426,11 @@ class MSELoss(nn.Module):
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
 
-        weighted_align_mse_loss = (self.weight_mse / u_t.exp()) * (per_sample_weighted_mse) + u_t
+        weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
+
+        # Balance grads between timesteps during training
+        if self.training:
+            weighted_align_mse_loss = (weighted_align_mse_loss / u_t.exp()) + u_t
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
 
@@ -455,7 +464,6 @@ class ProtenixLoss(nn.Module):
         #self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
         #self.pae_loss = PAELoss(**configs.loss.pae)
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
-        # self.fm_loss = FMLoss(**configs.loss.diffusion.flow_matching)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
 

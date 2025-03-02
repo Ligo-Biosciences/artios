@@ -574,6 +574,7 @@ class ProtenixLoss(nn.Module):
                     "smooth_lddt_loss": lambda: self.smooth_lddt_loss.forward(
                         pred_coordinates=pred_dict["coordinate"],
                         true_coordinates=label_dict["coordinate"],
+                        timestep=pred_dict["timestep"],
                         coordinate_mask=label_dict["coordinate_mask"],
                         diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
                     )

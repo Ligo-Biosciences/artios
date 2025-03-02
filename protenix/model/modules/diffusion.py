@@ -238,6 +238,22 @@ class DiffusionModule(nn.Module):
             c_atompair=c_atompair,
             blocks_per_ckpt=blocks_per_ckpt,
         )
+    
+    def get_rope_indices(
+            self, input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]], n_sample: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Get the token and residue indices for the rotary embeddings.
+        """
+        # Expand residue_index and token_index to match N_sample
+        token_index = input_feature_dict["token_index"]  # [..., N_token]
+        residue_index = input_feature_dict["residue_index"]  # [..., N_token]
+        entity_id = input_feature_dict["entity_id"]  # [..., N_token]
+
+        # Increment based on chain id and expand to match N_sample
+        token_index = expand_at_dim(token_index + entity_id * 100, dim=-2, n=n_sample)
+        residue_index = expand_at_dim(residue_index + entity_id * 100, dim=-2, n=n_sample)
+        return token_index, residue_index
 
     def f_forward(
         self,
@@ -270,11 +286,8 @@ class DiffusionModule(nn.Module):
         N_sample = r_noisy.size(-3)
         assert timestep.size(-1) == N_sample
 
-        # Expand residue_index and token_index to match N_sample
-        token_index = input_feature_dict["token_index"]  # [..., N_token]
-        residue_index = input_feature_dict["residue_index"]  # [..., N_token]
-        token_index = expand_at_dim(token_index, dim=-2, n=N_sample)
-        residue_index = expand_at_dim(residue_index, dim=-2, n=N_sample)
+        # Get RoPE indices
+        token_index, residue_index = self.get_rope_indices(input_feature_dict, N_sample)
 
         blocks_per_ckpt = self.blocks_per_ckpt
         if not torch.is_grad_enabled():

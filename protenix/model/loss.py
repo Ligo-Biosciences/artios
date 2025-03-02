@@ -156,6 +156,11 @@ class SmoothLDDTLoss(nn.Module):
             torch.Tensor: the smooth lddt loss
                 [...] if reduction is None else []
         """
+        print(f"pred_coordinates shape: {pred_coordinates.shape}")
+        print(f"true_coordinates shape: {true_coordinates.shape}")
+        print(f"coordinate_mask shape: {coordinate_mask.shape}")
+        print(f"timestep shape: {timestep.shape}")
+
         # Get the indices and distances of the k closest atoms for each atom in the true coordinates
         neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates)
         
@@ -221,6 +226,8 @@ class SmoothLDDTLoss(nn.Module):
             lddt = torch.cat(lddt, dim=-1)
 
         loss = 1 - lddt  # [..., N_sample]
+
+        print(f"loss shape: {loss.shape}")
 
         # Training time uncertainty scaling
         if self.training:

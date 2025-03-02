@@ -221,8 +221,9 @@ class SmoothLDDTLoss(nn.Module):
             lddt = torch.cat(lddt, dim=-1)
 
         loss = 1 - lddt  # [..., N_sample]
+
+        # Training time uncertainty scaling
         if self.training:
-            # Compute uncertainty scaling u(t)
             timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
             u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
 

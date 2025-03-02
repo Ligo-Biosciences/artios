@@ -13,9 +13,11 @@
 # limitations under the License.
 
 import inspect
+import os
 
 import torch
 import torch.distributed as dist
+
 
 
 def get_adamw(
@@ -116,3 +118,45 @@ def is_loss_nan_check(loss: torch.Tensor) -> bool:
     if nan_flag.item() > 0.0:
         return True
     return False
+
+
+def extract_gamma_step(checkpoint_path: str) -> tuple[int, float]:
+    """
+    Extract step and gamma values from checkpoint path.
+    
+    Args:
+        checkpoint_path: Path string of form "{checkpoint_dir}/{step}ema{gamma}.pt"
+        
+    Returns:
+        Tuple of (step, gamma)
+        
+    Example:
+        >>> extract_gamma_step("/path/to/checkpoints/1000ema6.94.pt")
+        (1000, 6.94)
+    """
+    try:
+        # Get filename without directory and extension
+        filename = os.path.basename(checkpoint_path)
+        filename = os.path.splitext(filename)[0]  # Remove .pt
+        
+        # Split on "ema"
+        step_str, gamma_str = filename.split("ema")
+        
+        # Convert to appropriate types
+        step = int(step_str)
+        gamma = float(gamma_str)
+        
+        return step, gamma
+
+    except (ValueError, IndexError) as e:
+        raise ValueError(f"Invalid checkpoint path format: {checkpoint_path}. Expected format: '{{step}}ema{{gamma}}.pt'") from e
+    
+
+def plot_post_hoc_ema(weights: list[float], gamma_r: list[float], t_i: list[int], gamma_i: list[float]):
+    """
+    Plot the post hoc ema weights. I want this to be a copy of fig 4 from Karras et al.
+    This function should be a 2d plot of the ema curve that we got (which will use weights
+    and gamma_i and t_i) over the top of the ema curve we were trying to get (which will use gamma_r).
+    The function will save this figure.
+    """
+    pass

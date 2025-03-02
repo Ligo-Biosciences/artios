@@ -20,6 +20,7 @@ from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
+import numpy as np
 import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
@@ -41,8 +42,8 @@ from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
-from protenix.utils.training import get_optimizer, is_loss_nan_check
-from runner.ema import EMAWrapper
+from protenix.utils.training import get_optimizer, is_loss_nan_check, extract_gamma_step, plot_post_hoc_ema
+from runner.ema import EMAWrapper, PowerLawEMAWrapper, solve_weights
 from protenix.data.utils import to_pdb
 from io import StringIO
 
@@ -178,14 +179,17 @@ class AF3Trainer(object):
         else:
             self.model = self.raw_model
 
-        if self.configs.get("ema_decay", -1) > 0:
-            assert self.configs.ema_decay < 1
-            self.ema_wrapper = EMAWrapper(
-                self.model,
-                self.configs.ema_decay,
-                self.configs.ema_mutable_param_keywords,
-            )
-            self.ema_wrapper.register()
+        if self.configs.get("power_law_ema_decay", []):  # Check if list is not empty
+            self.power_law_ema_wrappers = []  # Store wrappers in a list
+            for gamma in self.configs.power_law_ema_decay:
+                wrapper = PowerLawEMAWrapper(
+                    self.model,
+                    gamma,
+                    self.configs.ema_mutable_param_keywords,
+                )
+                wrapper.register()
+                self.power_law_ema_wrappers.append(wrapper)
+            self.print(f"Initialized {len(self.power_law_ema_wrappers)} power law EMA wrappers with decays: {self.configs.power_law_ema_decay}")
 
         torch.cuda.empty_cache()
         self.optimizer = get_optimizer(self.configs, self.model)
@@ -226,6 +230,7 @@ class AF3Trainer(object):
             }
             torch.save(checkpoint, path)
             self.print(f"Saved checkpoint to {path}")
+            return path  # Return the saved path
 
     def try_load_checkpoint(self):
 
@@ -271,15 +276,45 @@ class AF3Trainer(object):
                     self.init_scheduler(last_epoch=self.step - 1)
             self.print(f"Finish loading checkpoint, current step: {self.step}")
 
-        # Load EMA model parameters
-        if self.configs.load_ema_checkpoint_path:
-            _load_checkpoint(
-                self.configs.load_ema_checkpoint_path,
-                load_params_only=True,
-            )
-            self.ema_wrapper.register()
+        # Load EMA model parameters from directory
+        if self.configs.load_ema_checkpoint_paths_directory:
+            checkpoint_dir = self.configs.load_ema_checkpoint_paths_directory
+            if not os.path.exists(checkpoint_dir):
+                raise Exception(f"EMA checkpoint directory does not exist: {checkpoint_dir}")
+            
+            # Get all checkpoint files from directory
+            checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pt')]
+            self.print(f"Found {len(checkpoint_files)} EMA checkpoints in {checkpoint_dir}")
+            
+            # Create mapping of gamma values to their corresponding wrappers
+            gamma_to_wrapper = {wrapper.gamma: wrapper for wrapper in self.power_law_ema_wrappers}
 
-        # Load model
+            # Load each checkpoint and match with corresponding wrapper
+            for checkpoint_file in checkpoint_files:
+                # Extract gamma value from filename (assuming format like "*_ema_6.94.pt")
+                try:
+                    gamma_str = checkpoint_file.split('_ema_')[-1].replace('.pt', '')
+                    gamma = float(gamma_str)
+                except (IndexError, ValueError):
+                    self.print(f"Warning: Could not extract a gamma value from checkpoint filename: {checkpoint_file}")
+                    continue
+                
+                if gamma not in gamma_to_wrapper:
+                    self.print(f"Warning: No matching wrapper found for gamma={gamma} in checkpoint: {checkpoint_file}")
+                    continue
+                
+                checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
+                _load_checkpoint(
+                    checkpoint_path,
+                    load_params_only=True,
+                )
+                
+                # Register only the wrapper corresponding to this gamma
+                matching_wrapper = gamma_to_wrapper[gamma]
+                matching_wrapper.register()
+                self.print(f"Loaded and registered EMA checkpoint for gamma={gamma}: {checkpoint_file}")
+
+        # Load model parameters (With no EMA) from checkpoint 
         if self.configs.load_checkpoint_path:
             _load_checkpoint(
                 self.configs.load_checkpoint_path,
@@ -343,13 +378,16 @@ class AF3Trainer(object):
     def evaluate(self, mode: str = "eval"):
         if not self.configs.eval_ema_only:
             self._evaluate()
-        if hasattr(self, "ema_wrapper"):
-            self.ema_wrapper.apply_shadow()
-            self._evaluate(ema_suffix=f"ema{self.ema_wrapper.decay}_", mode=mode)
-            self.ema_wrapper.restore()
+        if hasattr(self, "power_law_ema_wrappers"): 
+            for wrapper in self.power_law_ema_wrappers:
+                wrapper.apply_shadow() 
+                self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}_", mode=mode) 
+                wrapper.restore() 
+            
+            #TODO: insert logic to perform evaluation on the post hoc ema's
 
     @torch.no_grad()
-    def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):
+    def _evaluate(self, ema_suffix: str = "", mode: str = "eval"): 
         # Init Metric Aggregator
         simple_metric_wrapper = SimpleMetricAggregator(["avg"])
         eval_precision = {
@@ -476,7 +514,7 @@ class AF3Trainer(object):
         for key, value in loss_dict.items():
             if "loss" not in key:
                 continue
-            self.train_metric_wrapper.add(key, value, namespace="train") #FIXME: getting illegel CUDA memory access here 
+            self.train_metric_wrapper.add(key, value, namespace="train") 
         torch.cuda.empty_cache()
 
     def progress_bar(self, desc: str = ""):
@@ -500,6 +538,73 @@ class AF3Trainer(object):
             f"[step {self.step}: {step}/{self.iters_to_accumulate * self.configs.eval_interval}] {desc}"
         )
         return
+    
+    def calc_post_hoc_ema(self):
+        print(f"Calculating post hoc ema's")
+        # 1. load the gamma and step for all checkpoints
+        gamma_step_pairs = [extract_gamma_step(path) for path in self.ema_checkpoint_paths]
+
+        # 2. Create the timesteps, gamma values and post hoc gamma values to be given to solve_weights
+        t_i = [step for step, _ in gamma_step_pairs]
+        gamma_i = [gamma for _, gamma in gamma_step_pairs]
+        gamma_r = np.linspace(self.configs.post_hoc_ema_start, 
+                              self.configs.post_hoc_ema_end,
+                              self.configs.post_hoc_ema_num)
+
+        # 3. Calculate the weights vector x_i for each post hoc gamma value
+        weights = solve_weights(t_i, gamma_i, gamma_r) # [len(t_i)*len(gamma_i), len(gamma_r)]
+
+        # 4. Calculate the post hoc ema parameters for each gamma value
+        for i, ph_gamma in enumerate(gamma_r):
+            # 4a. order the weights vector to be aligned with ordering of the paths
+            ordered_weights = []
+            for gamma, step in gamma_step_pairs:
+                # Get gamma index 
+                gamma_index = np.where(self.configs.power_law_ema_decay == gamma)[0][0]
+                # Get step index
+                step_index = np.where(t_i == step)[0][0]
+                # Get weight value
+                weight = weights[gamma_index * len(t_i) + step_index, i]
+                # Append weight to ordered_weights
+                ordered_weights.append(weight)
+
+            # 4b. Initialise post hoc ema parameters 
+            final_weights = None
+
+            # 4c. Process each checkpoint in turn to avoid memory issues
+            for path, weight in zip(self.ema_checkpoint_paths, ordered_weights):
+                checkpoint = torch.load(path)
+                state_dict = checkpoint["state_dict"]
+
+                if final_weights is None:
+                    # Initialize final_checkpoint with weighted values
+                    final_weights = {k: v * weight for k, v in state_dict.items()}
+                else:
+                    # Accumulate weighted sum
+                    for k in final_weights.keys():
+                        final_weights[k] += state_dict[k] * weight
+
+                del checkpoint  # Free memory
+                torch.cuda.empty_cache()  # Clear GPU memory if needed
+
+            # 7. Save the final post hoc ema checkpoints
+            path = f"{self.checkpoint_dir}/{self.step}post_hoc_ema{ph_gamma}.pt"
+            checkpoint = {
+                "model": final_weights,
+                "optimizer": self.optimizer.state_dict(),
+                "scheduler": (
+                    self.lr_scheduler.state_dict()
+                    if self.lr_scheduler is not None
+                    else None
+                ),
+                "step": self.step,
+            }
+            torch.save(checkpoint, path)
+            self.print(f"Saved post hoc ema checkpoint to {path}")
+
+        
+
+        print(f"Finished calculating post hoc ema's")
 
     def run(self):
         """
@@ -511,8 +616,11 @@ class AF3Trainer(object):
             self.evaluate()
             if self.configs.eval_only:
                 return
-        use_ema = hasattr(self, "ema_wrapper")
-        self.print(f"Using ema: {use_ema}")
+        use_ema = hasattr(self, "power_law_ema_wrappers")
+        self.print(f"Using power law ema's: {use_ema}") 
+
+        # Initialize list to store checkpoint paths for each gamma
+        self.ema_checkpoint_paths = []
 
         while True:
             for batch in self.train_dl:
@@ -524,7 +632,7 @@ class AF3Trainer(object):
                     self.configs.eval_interval > 0
                     and (self.step + 1) % self.configs.eval_interval == 0
                 )
-                step_need_save = (
+                step_need_save = ( 
                     self.configs.checkpoint_interval > 0
                     and (self.step + 1) % self.configs.checkpoint_interval == 0
                 )
@@ -538,7 +646,8 @@ class AF3Trainer(object):
                 self.progress_bar()
                 self.train_step(batch)
                 if use_ema:
-                    self.ema_wrapper.update()
+                    for wrapper in self.power_law_ema_wrappers:
+                        wrapper.update()
                 if step_need_log or is_last_step:
                     metrics = self.train_metric_wrapper.calc()
                     self.print(f"Step {self.step} train: {metrics}")
@@ -554,13 +663,19 @@ class AF3Trainer(object):
                         wandb.log(metrics, step=self.step)
 
                 if step_need_save or is_last_step:
-                    self.save_checkpoint()
+                    self.save_checkpoint() # Saves non-ema checkpoint
                     if use_ema:
-                        self.ema_wrapper.apply_shadow()
-                        self.save_checkpoint(
-                            ema_suffix=f"_ema_{self.ema_wrapper.decay}"
-                        )
-                        self.ema_wrapper.restore()
+                        for wrapper in self.power_law_ema_wrappers:
+                            wrapper.apply_shadow()
+                            checkpoint_path = self.save_checkpoint(
+                                ema_suffix=f"ema{wrapper.gamma}"
+                            )
+                            if checkpoint_path is not None:  # Only store path if save was successful
+                                self.ema_checkpoint_paths.append(checkpoint_path)
+                            wrapper.restore()
+
+                    if self.configs.calc_post_hoc_ema_during_training or is_last_step:
+                        self.calc_post_hoc_ema()
 
                 if step_need_eval or is_last_step:
                     self.evaluate()

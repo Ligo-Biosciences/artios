@@ -146,7 +146,7 @@ def extract_gamma_step(checkpoint_path: str) -> tuple[int, float]:
         step = int(step_str)
         gamma = float(gamma_str)
         
-        return step, gamma
+        return gamma, step
 
     except (ValueError, IndexError) as e:
         raise ValueError(f"Invalid checkpoint path format: {checkpoint_path}. Expected format: '{{step}}ema{{gamma}}.pt'") from e

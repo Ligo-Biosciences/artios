@@ -393,8 +393,7 @@ class AF3Trainer(object):
                 wrapper.restore() 
             
             # Evaluate post-hoc EMA checkpoints
-            checkpoint_dir = self.checkpoint_dir
-            post_hoc_checkpoints = [f for f in os.listdir(checkpoint_dir) if f"post_hoc_ema" in f and f.endswith('.pt')]
+            post_hoc_checkpoints = [f for f in os.listdir(self.post_hoc_ema_checkpoint_dir) if f"post_hoc_ema" in f and f.endswith('.pt')]
             
             if post_hoc_checkpoints:
                 self.print(f"Found {len(post_hoc_checkpoints)} post-hoc EMA checkpoints to evaluate")
@@ -407,7 +406,7 @@ class AF3Trainer(object):
                     gamma = float(checkpoint_file.split('post_hoc_ema')[-1].replace('.pt', ''))
                     
                     # Load and evaluate the post-hoc EMA checkpoint
-                    checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
+                    checkpoint_path = os.path.join(self.post_hoc_ema_checkpoint_dir, checkpoint_file)
                     checkpoint = torch.load(checkpoint_path, map_location=self.device)
                     
                     # Load post-hoc EMA weights

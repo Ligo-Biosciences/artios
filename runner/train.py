@@ -42,7 +42,7 @@ from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
-from protenix.utils.training import get_optimizer, is_loss_nan_check, extract_gamma_step, plot_post_hoc_ema
+from protenix.utils.training import get_optimizer, is_loss_nan_check, extract_gamma_step
 from runner.ema import EMAWrapper, PowerLawEMAWrapper, solve_weights
 from protenix.data.utils import to_pdb
 from io import StringIO
@@ -450,7 +450,7 @@ class AF3Trainer(object):
                 # TEMPORARY RESTRICTION ON VALIDATION SIZE
                 if index >= 40:
                     break
-                
+
                 batch = to_device(batch, self.device)
                 pid = batch["basic"]["pdb_id"]
 

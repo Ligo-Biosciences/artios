@@ -393,8 +393,10 @@ class AF3Trainer(object):
                 wrapper.restore() 
             
             # Evaluate post-hoc EMA checkpoints
-            post_hoc_checkpoints = [f for f in os.listdir(self.post_hoc_ema_checkpoint_dir) if f"post_hoc_ema" in f and f.endswith('.pt')]
-            
+            if self.configs.calc_post_hoc_ema_during_training:
+                self.calc_post_hoc_ema()
+                post_hoc_checkpoints = [f for f in os.listdir(self.post_hoc_ema_checkpoint_dir) if f"post_hoc_ema" in f and f.endswith('.pt')]
+                
             if post_hoc_checkpoints:
                 self.print(f"Found {len(post_hoc_checkpoints)} post-hoc EMA checkpoints to evaluate")
 
@@ -581,6 +583,10 @@ class AF3Trainer(object):
         Having it elsewhere would allow for us to use it after training.
         In this case, the input it needs includes:
             - an ema_checkpoint_dir
+            - the gamma's used during training
+            - the gamma's wanted for post hoc ema
+            - post hoc ema checkpoint dir
+            - access to the optimizer and lr_scheduler
         """
         print(f"Calculating post hoc ema's")
         # Create list of the ema checkpoint paths from the ema_checkpoint_dir
@@ -710,8 +716,8 @@ class AF3Trainer(object):
                             )
                             wrapper.restore()
 
-                        if self.configs.calc_post_hoc_ema_during_training or is_last_step:
-                            self.calc_post_hoc_ema()
+                        #if self.configs.calc_post_hoc_ema_during_training or is_last_step:
+                        #    self.calc_post_hoc_ema()
 
                 if step_need_eval or is_last_step:
                     self.evaluate()

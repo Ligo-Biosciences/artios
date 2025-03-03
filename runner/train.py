@@ -603,10 +603,9 @@ class AF3Trainer(object):
             # 1. Find each path's weight in the weights vector by ordering the weights vector to match the gamma_step_pairs
             ordered_weights = []
             for gamma, step in gamma_step_pairs:
-                # Get gamma index 
-                gamma_index = np.where(gamma_i == gamma)[0]
-                # Get step index
-                step_index = np.where(t_i == step)[0]
+                # Get gamma index and step index using list.index()
+                gamma_index = gamma_i.index(gamma)
+                step_index = t_i.index(step)
                 # Get weight value
                 weight = weights[gamma_index * len(t_i) + step_index, i]
                 # Append weight to ordered_weights

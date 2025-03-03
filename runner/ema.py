@@ -74,7 +74,6 @@ class PowerLawEMAWrapper(EMAWrapper):
             self, 
             model: torch.nn.Module, 
             gamma: float = 6.94, 
-            delta_t: int = 1000,
             mutable_param_keywords=None):
         """
         model: (torch.nn.Module) a pytorch model to apply power law EMA
@@ -84,7 +83,6 @@ class PowerLawEMAWrapper(EMAWrapper):
         """
         self.model = model
         self.gamma = gamma
-        self.delta_t = delta_t
 
         self.mutable_param_keywords = [
             s.strip() for s in mutable_param_keywords if s.strip()
@@ -94,7 +92,6 @@ class PowerLawEMAWrapper(EMAWrapper):
 
     def beta_power_law(self, t):
         """Calculate the timestep-dependent power law beta parameter."""
-        #return 0 if t_next == self.delta_t else (1 - self.delta_t / t_next) ** (self.gamma + 1)
         return 0 if t == 1 else (1 - 1 / t) ** (self.gamma + 1)
     
     def update(self, t):

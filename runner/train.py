@@ -189,7 +189,6 @@ class AF3Trainer(object):
                 wrapper = PowerLawEMAWrapper(
                     model=self.model,
                     gamma=gamma,
-                    delta_t=self.configs.checkpoint_interval,
                     mutable_param_keywords=self.configs.ema_mutable_param_keywords,
                 )
                 wrapper.register()
@@ -695,7 +694,7 @@ class AF3Trainer(object):
                 self.train_step(batch)
                 if use_ema:
                     for wrapper in self.power_law_ema_wrappers:
-                        wrapper.update(t=self.step + 1)
+                        wrapper.update(t=self.step+1)
                 if step_need_log or is_last_step:
                     metrics = self.train_metric_wrapper.calc()
                     self.print(f"Step {self.step} train: {metrics}")
@@ -724,8 +723,6 @@ class AF3Trainer(object):
                 if step_need_eval or is_last_step:
                     self.evaluate()
                 self.global_step += 1
-                #if step_need_save:
-                #    self.next_checkpoint_time = self.step + self.configs.checkpoint_interval
                 if self.global_step % self.iters_to_accumulate == 0:
                     self.step += 1               
                 if self.step >= self.configs.max_steps:

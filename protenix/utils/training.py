@@ -150,13 +150,3 @@ def extract_gamma_step(checkpoint_path: str) -> tuple[int, float]:
 
     except (ValueError, IndexError) as e:
         raise ValueError(f"Invalid checkpoint path format: {checkpoint_path}. Expected format: '{{step}}ema{{gamma}}.pt'") from e
-    
-
-def plot_post_hoc_ema(weights: list[float], gamma_r: list[float], t_i: list[int], gamma_i: list[float]):
-    """
-    Plot the post hoc ema weights. I want this to be a copy of fig 4 from Karras et al.
-    This function should be a 2d plot of the ema curve that we got (which will use weights
-    and gamma_i and t_i) over the top of the ema curve we were trying to get (which will use gamma_r).
-    The function will save this figure.
-    """
-    pass

@@ -112,7 +112,7 @@ class PowerLawEMAWrapper(EMAWrapper):
 
             beta = self.beta_power_law(t)
             new_average = (1.0 - beta) * param.data + beta * self.shadow[name]
-            self.shadow[name] = new_average.clone()
+            self.shadow[name] = new_average.to(param.dtype)  # Ensure same dtype as parameter
 
     def apply_shadow(self):
         for name, param in self.model.named_parameters():

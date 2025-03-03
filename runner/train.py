@@ -650,7 +650,7 @@ class AF3Trainer(object):
         self.print(f"Using power law ema's: {use_ema}") 
 
         # Initialize list to store checkpoint paths for each gamma
-        self.ema_checkpoint_paths = []
+        self.ema_checkpoint_paths = [] #TODO: improve this logic, so instead of storing paths, we just extract them from the appropiate directory 
 
         while True:
             for batch in self.train_dl:

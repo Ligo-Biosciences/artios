@@ -420,6 +420,7 @@ class AF3Trainer(object):
                 self.model.load_state_dict(checkpoint['model'])
                 
                 # Evaluate
+                print(f"Beginning evaluation for post-hoc ema {gamma}")
                 self._evaluate(ema_suffix=f"post_hoc_ema{gamma}_", mode=mode)
                 
                 del checkpoint, current_state

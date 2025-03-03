@@ -112,6 +112,8 @@ class PowerLawEMAWrapper(EMAWrapper):
 
             beta = self.beta_power_law(t)
             new_average = (1.0 - beta) * param.data + beta * self.shadow[name]
+            if param.dtype != torch.bfloat16 or param.dtype != torch.float32:
+                print(f"name: {name}, dtype: {param.dtype}")
             self.shadow[name] = new_average.to(param.dtype)  # Ensure same dtype as parameter
 
     def apply_shadow(self):

@@ -697,8 +697,7 @@ class AF3Trainer(object):
                 self.train_step(batch)
                 if use_ema:
                     for wrapper in self.power_law_ema_wrappers:
-                        next_checkpoint_time = (self.step + self.configs.checkpoint_interval) // self.configs.checkpoint_interval
-                        wrapper.update(t_next=next_checkpoint_time)
+                        wrapper.update(t_next=self.next_checkpoint_time)
                 if step_need_log or is_last_step:
                     metrics = self.train_metric_wrapper.calc()
                     self.print(f"Step {self.step} train: {metrics}")
@@ -723,9 +722,6 @@ class AF3Trainer(object):
                                 ema_suffix=f"ema{wrapper.gamma}"
                             )
                             wrapper.restore()
-
-                        #if self.configs.calc_post_hoc_ema_during_training or is_last_step:
-                        #    self.calc_post_hoc_ema()
 
                 if step_need_eval or is_last_step:
                     self.evaluate()

@@ -585,11 +585,9 @@ class AF3Trainer(object):
         gamma_step_pairs = [extract_gamma_step(path) for path in ema_checkpoint_paths]
 
         # 2. Create the timesteps, gamma values and post hoc gamma values to be given to solve_weights
-        t_i = [step for step, _ in gamma_step_pairs]
-        gamma_i = [gamma for _, gamma in gamma_step_pairs]
-        gamma_r = np.linspace(self.configs.post_hoc_ema_start, 
-                              self.configs.post_hoc_ema_end,
-                              self.configs.post_hoc_ema_num)
+        t_i = sorted(list(set(step for step, _ in gamma_step_pairs)))  # The timesteps we have checkpoints at
+        gamma_i = self.configs.power_law_ema_decay  
+        gamma_r = self.configs.post_hoc_ema_decay
 
         # 3. Calculate the weights vector x_i for each post hoc gamma value
         weights = solve_weights(t_i, gamma_i, gamma_r) # [len(t_i)*len(gamma_i), len(gamma_r)]

@@ -92,6 +92,10 @@ class PowerLawEMAWrapper(EMAWrapper):
         self.shadow = {}
         self.backup = {}
 
+    def beta_power_law(self, t):
+        """Calculate the timestep-dependent power law beta parameter."""
+        return 0 if t == 0 else (1 - self.delta_t / t) ** (self.gamma + 1)
+
     def update(self, t):
         """
         Update the EMA weights using the power law decay.
@@ -106,7 +110,7 @@ class PowerLawEMAWrapper(EMAWrapper):
                 continue
             assert name in self.shadow
 
-            beta = beta_power_law(self.gamma, t, self.delta_t)
+            beta = self.beta_power_law(t)
             new_average = (1.0 - beta) * param.data + beta * self.shadow[name]
             self.shadow[name] = new_average.clone()
 
@@ -202,6 +206,3 @@ def solve_weights(t_i, gamma_i, gamma_r):
     # Solve system for each gamma_r
     return np.linalg.solve(A, B)
 
-
-def beta_power_law(gamma, t, delta_t):
-    return 0 if t == 0 else (1 - delta_t / t) ** (gamma + 1)

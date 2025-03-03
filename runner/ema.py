@@ -194,5 +194,4 @@ def solve_weights(t_i, gamma_i, gamma_r):
 
 
 def beta_power_law(gamma, t, delta_t):
-    beta = (1 - delta_t / t) ** (gamma + 1)
-    return beta 
+    return 0 if t == 0 else (1 - delta_t / t) ** (gamma + 1)

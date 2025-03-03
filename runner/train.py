@@ -604,9 +604,9 @@ class AF3Trainer(object):
             ordered_weights = []
             for gamma, step in gamma_step_pairs:
                 # Get gamma index 
-                gamma_index = np.where(gamma_i == np.array(gamma))[0][0]
+                gamma_index = np.where(gamma_i == gamma)[0]
                 # Get step index
-                step_index = np.where(t_i == np.array(step))[0][0]
+                step_index = np.where(t_i == step)[0]
                 # Get weight value
                 weight = weights[gamma_index * len(t_i) + step_index, i]
                 # Append weight to ordered_weights

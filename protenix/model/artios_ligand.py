@@ -317,6 +317,7 @@ class ArtiosLigand(nn.Module):
 
         ### Mini-rollout
         # Mini rollout is performed for confidence and label permutation
+        """
         with torch.no_grad():
             # [..., 1, N_atom, 3]
             N_sample_mini_rollout = self.configs.sample_diffusion[
@@ -348,6 +349,7 @@ class ArtiosLigand(nn.Module):
                 )
             )
             log_dict.update(perm_log_dict)
+        """
 
         ### Diffusion training
         N_sample = self.diffusion_batch_size

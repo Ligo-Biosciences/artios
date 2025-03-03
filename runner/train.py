@@ -575,9 +575,16 @@ class AF3Trainer(object):
         return
     
     def calc_post_hoc_ema(self):
+        """
+        Notes:
+        This function could live outside of the trainer class.
+        Having it elsewhere would allow for us to use it after training.
+        In this case, the input it needs includes:
+            - an ema_checkpoint_dir
+        """
         print(f"Calculating post hoc ema's")
         # Create list of the ema checkpoint paths from the ema_checkpoint_dir
-        ema_checkpoint_paths = [f for f in os.listdir(self.ema_checkpoint_dir) if f.endswith('.pt')]
+        ema_checkpoint_paths = [os.path.join(self.ema_checkpoint_dir, f) for f in os.listdir(self.ema_checkpoint_dir) if f.endswith('.pt')]
         self.print(f"Found {len(ema_checkpoint_paths)} ema checkpoints in {self.ema_checkpoint_dir}")
 
         # load the gamma and step for all checkpoints
@@ -596,15 +603,7 @@ class AF3Trainer(object):
             # 1. Find each path's weight in the weights vector by ordering the weights vector to match the gamma_step_pairs
             ordered_weights = []
             for gamma, step in gamma_step_pairs:
-                print(f"In our current gamma_step_pairs gamma: {gamma}, step: {step}")
-                print(f"We are looking for gamma in gamma_i: {gamma_i}")
-                print(f"We are looking for step in t_i: {t_i}")
-
                 # Get gamma index 
-                print("before converting to array")
-                print(np.where(gamma_i == gamma))
-                print("after converting to array")
-                print(np.where(gamma_i == np.array(gamma)))
                 gamma_index = np.where(gamma_i == np.array(gamma))[0][0]
                 # Get step index
                 step_index = np.where(t_i == np.array(step))[0][0]

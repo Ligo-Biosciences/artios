@@ -601,9 +601,13 @@ class AF3Trainer(object):
                 print(f"We are looking for step in t_i: {t_i}")
 
                 # Get gamma index 
-                gamma_index = np.where(gamma_i == gamma)[0][0]
+                print("before converting to array")
+                print(np.where(gamma_i == gamma))
+                print("after converting to array")
+                print(np.where(gamma_i == np.array(gamma)))
+                gamma_index = np.where(gamma_i == np.array(gamma))[0][0]
                 # Get step index
-                step_index = np.where(t_i == step)[0][0]
+                step_index = np.where(t_i == np.array(step))[0][0]
                 # Get weight value
                 weight = weights[gamma_index * len(t_i) + step_index, i]
                 # Append weight to ordered_weights

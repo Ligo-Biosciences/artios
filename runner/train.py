@@ -577,28 +577,32 @@ class AF3Trainer(object):
     
     def calc_post_hoc_ema(self):
         print(f"Calculating post hoc ema's")
-        # 0. Create list of the ema checkpoint paths from the ema_checkpoint_dir
+        # Create list of the ema checkpoint paths from the ema_checkpoint_dir
         ema_checkpoint_paths = [f for f in os.listdir(self.ema_checkpoint_dir) if f.endswith('.pt')]
         self.print(f"Found {len(ema_checkpoint_paths)} ema checkpoints in {self.ema_checkpoint_dir}")
 
-        # 1. load the gamma and step for all checkpoints
+        # load the gamma and step for all checkpoints
         gamma_step_pairs = [extract_gamma_step(path) for path in ema_checkpoint_paths]
 
-        # 2. Create the timesteps, gamma values and post hoc gamma values to be given to solve_weights
+        # Create the timesteps, gamma values and post hoc gamma values to be given to solve_weights
         t_i = sorted(list(set(step for step, _ in gamma_step_pairs)))  # The timesteps we have checkpoints at
         gamma_i = self.configs.power_law_ema_decay  
         gamma_r = self.configs.post_hoc_ema_decay
 
-        # 3. Calculate the weights vector x_i for each post hoc gamma value
+        # Calculate the weights vector x_i for each post hoc gamma value
         weights = solve_weights(t_i, gamma_i, gamma_r) # [len(t_i)*len(gamma_i), len(gamma_r)]
 
-        # 4. Calculate the post hoc ema parameters for each gamma value
+        # Calculate the post hoc ema network parameters for each gamma value
         for i, ph_gamma in enumerate(gamma_r):
-            # 4a. order the weights vector to be aligned with ordering of the paths
+            # 1. Find each path's weight in the weights vector by ordering the weights vector to match the gamma_step_pairs
             ordered_weights = []
             for gamma, step in gamma_step_pairs:
+                print(f"In our current gamma_step_pairs gamma: {gamma}, step: {step}")
+                print(f"We are looking for gamma in gamma_i: {gamma_i}")
+                print(f"We are looking for step in t_i: {t_i}")
+
                 # Get gamma index 
-                gamma_index = np.where(self.configs.power_law_ema_decay == gamma)[0][0]
+                gamma_index = np.where(gamma_i == gamma)[0][0]
                 # Get step index
                 step_index = np.where(t_i == step)[0][0]
                 # Get weight value
@@ -606,11 +610,11 @@ class AF3Trainer(object):
                 # Append weight to ordered_weights
                 ordered_weights.append(weight)
 
-            # 4b. Initialise post hoc ema parameters 
+            # 2. Initialise post hoc ema parameters 
             final_weights = None
 
-            # 4c. Process each checkpoint in turn to avoid memory issues
-            for path, weight in zip(self.ema_checkpoint_paths, ordered_weights):
+            # 3. Process each checkpoint in turn to avoid memory issues
+            for path, weight in zip(ema_checkpoint_paths, ordered_weights):
                 checkpoint = torch.load(path)
                 state_dict = checkpoint["state_dict"]
 
@@ -625,7 +629,7 @@ class AF3Trainer(object):
                 del checkpoint  # Free memory
                 torch.cuda.empty_cache()  # Clear GPU memory if needed
 
-            # 7. Save the final post hoc ema checkpoints
+            # 4. Save the final post hoc ema checkpoints
             path = f"{self.post_hoc_ema_checkpoint_dir}/{self.step}post_hoc_ema{ph_gamma}.pt"
             checkpoint = {
                 "model": final_weights,

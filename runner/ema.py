@@ -189,6 +189,11 @@ def solve_weights(t_i, gamma_i, gamma_r):
     A = p_dot_p(t_i_row, gamma_i_row, t_i_col, gamma_i_col)
     B = p_dot_p(t_i_row, gamma_i_row, t_r_col, gamma_r_col)
 
+    print("t_i", t_i)
+    print("gamma_i", gamma_i)
+    print("t_r", t_r)
+    print("gamma_r", gamma_r)
+
     print("A:")
     print(A)
     print("B:")

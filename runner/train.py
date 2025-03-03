@@ -77,8 +77,6 @@ class AF3Trainer(object):
         self.start_step = 0
         # Add for grad accumulation, it can increase real batch size
         self.iters_to_accumulate = self.configs.iters_to_accumulate
-        # Initialise next checkpoint time
-        self.next_checkpoint_time = self.configs.checkpoint_interval
 
         self.run_name = self.configs.run_name + "_" + time.strftime("%Y%m%d_%H%M%S")
         run_names = DIST_WRAPPER.all_gather_object(
@@ -697,7 +695,7 @@ class AF3Trainer(object):
                 self.train_step(batch)
                 if use_ema:
                     for wrapper in self.power_law_ema_wrappers:
-                        wrapper.update(t_next=self.next_checkpoint_time)
+                        wrapper.update(t=self.step + 1)
                 if step_need_log or is_last_step:
                     metrics = self.train_metric_wrapper.calc()
                     self.print(f"Step {self.step} train: {metrics}")
@@ -726,8 +724,8 @@ class AF3Trainer(object):
                 if step_need_eval or is_last_step:
                     self.evaluate()
                 self.global_step += 1
-                if step_need_save:
-                    self.next_checkpoint_time = self.step + self.configs.checkpoint_interval
+                #if step_need_save:
+                #    self.next_checkpoint_time = self.step + self.configs.checkpoint_interval
                 if self.global_step % self.iters_to_accumulate == 0:
                     self.step += 1               
                 if self.step >= self.configs.max_steps:

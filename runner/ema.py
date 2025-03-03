@@ -92,17 +92,17 @@ class PowerLawEMAWrapper(EMAWrapper):
         self.shadow = {}
         self.backup = {}
 
-    def beta_power_law(self, t_next):
+    def beta_power_law(self, t):
         """Calculate the timestep-dependent power law beta parameter."""
         #return 0 if t_next == self.delta_t else (1 - self.delta_t / t_next) ** (self.gamma + 1)
-        return (1 - self.delta_t / t_next) ** (self.gamma + 1)
+        return 0 if t == 1 else (1 - 1 / t) ** (self.gamma + 1)
     
-    def update(self, t_next):
+    def update(self, t):
         """
         Update the EMA weights using the power law decay.
         
         Args:
-            t_next (int): The time of the next checkpoint.
+            t (int): The current training step.
         """
         for name, param in self.model.named_parameters():
             if self.mutable_param_keywords and not any(
@@ -111,9 +111,9 @@ class PowerLawEMAWrapper(EMAWrapper):
                 continue
             assert name in self.shadow
 
-            beta = self.beta_power_law(t_next)
+            beta = self.beta_power_law(t)
             if isinstance(beta, complex) or (isinstance(beta, float) and not np.isreal(beta)):
-                raise ValueError(f"Beta value {beta} is complex at step {t_next}. This should not happen with valid gamma={self.gamma} and delta_t={self.delta_t}")
+                raise ValueError(f"Beta value {beta} is complex at step {t}. This should not happen with valid gamma={self.gamma} and delta_t={self.delta_t}")
             new_average = (1.0 - beta) * param.data + beta * self.shadow[name]
             self.shadow[name] = new_average.to(param.dtype)  # Ensure same dtype as parameter
 

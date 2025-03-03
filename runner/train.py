@@ -183,9 +183,10 @@ class AF3Trainer(object):
             self.power_law_ema_wrappers = []  # Store wrappers in a list
             for gamma in self.configs.power_law_ema_decay:
                 wrapper = PowerLawEMAWrapper(
-                    self.model,
-                    gamma,
-                    self.configs.ema_mutable_param_keywords,
+                    model=self.model,
+                    gamma=gamma,
+                    delta_t=self.configs.checkpoint_interval,
+                    mutable_param_keywords=self.configs.ema_mutable_param_keywords,
                 )
                 wrapper.register()
                 self.power_law_ema_wrappers.append(wrapper)
@@ -391,7 +392,7 @@ class AF3Trainer(object):
             
             if post_hoc_checkpoints:
                 self.print(f"Found {len(post_hoc_checkpoints)} post-hoc EMA checkpoints to evaluate")
-                
+
                 # Store current model state
                 current_state = {k: v.clone() for k, v in self.model.state_dict().items()}
                 

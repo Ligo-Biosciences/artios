@@ -76,7 +76,6 @@ class PowerLawEMAWrapper(EMAWrapper):
             gamma: float = 6.94, 
             delta_t: int = 1000,
             mutable_param_keywords=None):
-        super().__init__(model, gamma, mutable_param_keywords)
         """
         model: (torch.nn.Module) a pytorch model to apply power law EMA
         gamma: (float) decay rate for the power law

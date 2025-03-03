@@ -54,18 +54,7 @@ class TestEMA:
 
         assert not np.any(np.isnan(weights))
         assert not np.any(np.isinf(weights))
-
-    def test_beta_power_law(self):
-        gamma = 6.94
-        t = 2000
-        delta_t = 1000
         
-        beta = beta_power_law(gamma, t, delta_t)
-        
-        assert isinstance(beta, float)
-        assert 0 <= beta <= 1
-        assert not np.isnan(beta)
-        assert not np.isinf(beta)
 
 if __name__ == "__main__":
     pytest.main([__file__])

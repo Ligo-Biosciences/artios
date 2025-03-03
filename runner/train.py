@@ -382,14 +382,17 @@ class AF3Trainer(object):
     @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
         all_eval_metrics = {}
-        if not self.configs.eval_ema_only:
-            all_eval_metrics["None-EMA"] = self._evaluate()
-        if hasattr(self, "power_law_ema_wrappers"):
-            # Evaluate regular EMA checkpoints
-            for wrapper in self.power_law_ema_wrappers:
-                wrapper.apply_shadow() 
-                all_eval_metrics[f"train_ema{wrapper.gamma}_"] = self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}_", mode=mode) 
-                wrapper.restore() 
+        #if not self.configs.eval_ema_only:
+        #    # Evaluate None-EMA
+        #    metrics = self._evaluate()
+        #    all_eval_metrics["None-EMA"] = metrics
+        #if hasattr(self, "power_law_ema_wrappers"):
+        #    # Evaluate regular EMA checkpoints
+        #    for wrapper in self.power_law_ema_wrappers:
+        #        wrapper.apply_shadow() 
+        #        metrics = self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}_", mode=mode) 
+        #        all_eval_metrics[f"train_ema{wrapper.gamma}_"] = metrics
+        #        wrapper.restore() 
             
         # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:
@@ -419,7 +422,8 @@ class AF3Trainer(object):
                 
                 # Evaluate
                 print(f"Beginning evaluation for post-hoc ema {gamma}")
-                all_eval_metrics[f"post_hoc_ema{gamma}_"] = self._evaluate(ema_suffix=f"post_hoc_ema{gamma}_", mode=mode)
+                metrics = self._evaluate(ema_suffix=f"post_hoc_ema{gamma}_", mode=mode)
+                all_eval_metrics[f"post_hoc_ema{gamma}_"] = metrics
                 
                 del checkpoint
                 torch.cuda.empty_cache()

@@ -238,7 +238,6 @@ class AF3Trainer(object):
             }
             torch.save(checkpoint, path)
             self.print(f"Saved checkpoint to {path}")
-            return path  # Return the saved path
 
     def try_load_checkpoint(self):
 
@@ -578,8 +577,12 @@ class AF3Trainer(object):
     
     def calc_post_hoc_ema(self):
         print(f"Calculating post hoc ema's")
+        # 0. Create list of the ema checkpoint paths from the ema_checkpoint_dir
+        ema_checkpoint_paths = [f for f in os.listdir(self.ema_checkpoint_dir) if f.endswith('.pt')]
+        self.print(f"Found {len(ema_checkpoint_paths)} ema checkpoints in {self.ema_checkpoint_dir}")
+
         # 1. load the gamma and step for all checkpoints
-        gamma_step_pairs = [extract_gamma_step(path) for path in self.ema_checkpoint_paths]
+        gamma_step_pairs = [extract_gamma_step(path) for path in ema_checkpoint_paths]
 
         # 2. Create the timesteps, gamma values and post hoc gamma values to be given to solve_weights
         t_i = [step for step, _ in gamma_step_pairs]
@@ -654,9 +657,6 @@ class AF3Trainer(object):
         use_ema = hasattr(self, "power_law_ema_wrappers")
         self.print(f"Using power law ema's: {use_ema}") 
 
-        # Initialize list to store checkpoint paths for each gamma
-        self.ema_checkpoint_paths = [] #TODO: improve this logic, so instead of storing paths, we just extract them from the appropiate directory 
-
         while True:
             for batch in self.train_dl:
                 is_update_step = (self.global_step + 1) % self.iters_to_accumulate == 0
@@ -702,11 +702,9 @@ class AF3Trainer(object):
                     if use_ema:
                         for wrapper in self.power_law_ema_wrappers:
                             wrapper.apply_shadow()
-                            checkpoint_path = self.save_checkpoint(
+                            self.save_checkpoint(
                                 ema_suffix=f"ema{wrapper.gamma}"
                             )
-                            if checkpoint_path is not None:  # Only store path if save was successful
-                                self.ema_checkpoint_paths.append(checkpoint_path)
                             wrapper.restore()
 
                         if self.configs.calc_post_hoc_ema_during_training or is_last_step:

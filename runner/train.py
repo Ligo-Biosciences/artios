@@ -592,8 +592,8 @@ class AF3Trainer(object):
 
         # Create the timesteps, gamma values and post hoc gamma values to be given to solve_weights
         t_i = sorted(list(set(step for _, step in gamma_step_pairs)))  # The timesteps we have checkpoints at
-        gamma_i = self.configs.power_law_ema_decay  
-        gamma_r = self.configs.post_hoc_ema_decay
+        gamma_i = list(self.configs.power_law_ema_decay)      
+        gamma_r = list(self.configs.post_hoc_ema_decay)
 
         # Calculate the weights vector x_i for each post hoc gamma value
         weights = solve_weights(t_i, gamma_i, gamma_r) # [len(t_i)*len(gamma_i), len(gamma_r)]
@@ -617,7 +617,7 @@ class AF3Trainer(object):
             # 3. Process each checkpoint in turn to avoid memory issues
             for path, weight in zip(ema_checkpoint_paths, ordered_weights):
                 checkpoint = torch.load(path)
-                state_dict = checkpoint["state_dict"]
+                state_dict = checkpoint["model"]
 
                 if final_weights is None:
                     # Initialize final_checkpoint with weighted values

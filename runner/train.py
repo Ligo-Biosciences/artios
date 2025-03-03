@@ -712,7 +712,7 @@ class AF3Trainer(object):
                         wandb.log(metrics, step=self.step)
 
                 if step_need_save or is_last_step:
-                    print(f"Saving checkpoint at step {self.step}")
+                    self.print(f"beginning Saving checkpoint at step {self.step}")
                     self.save_checkpoint() # Saves non-ema checkpoint
                     if use_ema:
                         for wrapper in self.power_law_ema_wrappers:

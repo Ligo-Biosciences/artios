@@ -592,15 +592,15 @@ class AF3Trainer(object):
 
         # Create the timesteps, gamma values and post hoc gamma values to be given to solve_weights
         t_i = sorted(list(set(step for _, step in gamma_step_pairs)))  # The timesteps we have checkpoints at
-        gamma_i = list(self.configs.power_law_ema_decay)      
-        gamma_r = list(self.configs.post_hoc_ema_decay)
+        gamma_i = list(self.configs.power_law_ema_decay) # The gamma values we have checkpoints at
+        gamma_r = list(self.configs.post_hoc_ema_decay) # The post hoc gamma values
 
-        # Calculate the weights vector x_i for each post hoc gamma value
+        # Calculate the weights vector x_i to be ascrined to the checkpoints for each post hoc gamma value
         weights = solve_weights(t_i, gamma_i, gamma_r) # [len(t_i)*len(gamma_i), len(gamma_r)]
 
         # Calculate the post hoc ema network parameters for each gamma value
         for i, ph_gamma in enumerate(gamma_r):
-            # 1. Find each path's weight in the weights vector by ordering the weights vector to match the gamma_step_pairs
+            # Find each path's weight in the weights vector by ordering the weights vector to match the gamma_step_pairs
             ordered_weights = []
             for gamma, step in gamma_step_pairs:
                 # Get gamma index and step index using list.index()
@@ -611,10 +611,10 @@ class AF3Trainer(object):
                 # Append weight to ordered_weights
                 ordered_weights.append(weight)
 
-            # 2. Initialise post hoc ema parameters 
+            # Initialise post hoc ema parameters 
             final_weights = None
 
-            # 3. Process each checkpoint in turn to avoid memory issues
+            # Process each checkpoint in turn to avoid memory issues
             for path, weight in zip(ema_checkpoint_paths, ordered_weights):
                 checkpoint = torch.load(path)
                 state_dict = checkpoint["model"]
@@ -630,7 +630,7 @@ class AF3Trainer(object):
                 del checkpoint  # Free memory
                 torch.cuda.empty_cache()  # Clear GPU memory if needed
 
-            # 4. Save the final post hoc ema checkpoints
+            # Save the final post hoc ema checkpoints
             path = f"{self.post_hoc_ema_checkpoint_dir}/{self.step}post_hoc_ema{ph_gamma}.pt"
             checkpoint = {
                 "model": final_weights,

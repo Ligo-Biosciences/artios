@@ -591,6 +591,9 @@ class AF3Trainer(object):
         print(f"Calculating post hoc ema's")
         # Create list of the ema checkpoint paths from the ema_checkpoint_dir
         ema_checkpoint_paths = [os.path.join(self.ema_checkpoint_dir, f) for f in os.listdir(self.ema_checkpoint_dir) if f.endswith('.pt')]
+        if len(ema_checkpoint_paths) == 0:
+            self.print(f"No ema checkpoints found in {self.ema_checkpoint_dir}")
+            return
         self.print(f"Found {len(ema_checkpoint_paths)} ema checkpoints in {self.ema_checkpoint_dir}")
 
         # load the gamma and step for all checkpoints

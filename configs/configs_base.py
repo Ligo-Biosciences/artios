@@ -48,7 +48,7 @@ basic_configs = {
     "calc_post_hoc_ema_during_training": False,
     "post_hoc_ema_start": 5.0,
     "post_hoc_ema_end": 15.0,
-    "post_hoc_ema_num": 5.0,
+    "post_hoc_ema_num": 5,
     "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],
 }

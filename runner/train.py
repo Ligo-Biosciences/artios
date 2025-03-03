@@ -85,7 +85,8 @@ class AF3Trainer(object):
         self.run_name = [name for name in run_names if name is not None][0]
         self.run_dir = f"{self.configs.base_dir}/{self.run_name}"
         self.checkpoint_dir = f"{self.run_dir}/checkpoints"
-        self.ema_checkpoint_dir = f"{self.checkpoint_dir}/ema_checkpoints"
+        self.ema_checkpoint_dir = f"{self.run_dir}/ema_checkpoints"
+        self.post_hoc_ema_checkpoint_dir = f"{self.run_dir}/post_hoc_ema_checkpoints"
         self.prediction_dir = f"{self.run_dir}/predictions"
         self.structure_dir = f"{self.run_dir}/structures"
         self.dump_dir = f"{self.run_dir}/dumps"
@@ -95,6 +96,7 @@ class AF3Trainer(object):
             os.makedirs(self.run_dir)
             os.makedirs(self.checkpoint_dir)
             os.makedirs(self.ema_checkpoint_dir)
+            os.makedirs(self.post_hoc_ema_checkpoint_dir)
             os.makedirs(self.prediction_dir)
             os.makedirs(self.structure_dir)
             os.makedirs(self.dump_dir)
@@ -106,7 +108,7 @@ class AF3Trainer(object):
 
         self.print(
             f"Using run name: {self.run_name}, run dir: {self.run_dir}, checkpoint_dir: "
-            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, structure_dir: "
+            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, post_hoc_ema_checkpoint_dir: {self.post_hoc_ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, structure_dir: "
             + f"{self.structure_dir}, error_dir: {self.error_dir}"
         )
 
@@ -220,7 +222,10 @@ class AF3Trainer(object):
 
     def save_checkpoint(self, ema_suffix=""):
         if DIST_WRAPPER.rank == 0:
-            path = f"{self.checkpoint_dir}/{self.step}{ema_suffix}.pt"
+            if ema_suffix:
+                path = f"{self.ema_checkpoint_dir}/{self.step}{ema_suffix}.pt"
+            else:
+                path = f"{self.checkpoint_dir}/{self.step}.pt"
             checkpoint = {
                 "model": self.model.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
@@ -620,7 +625,7 @@ class AF3Trainer(object):
                 torch.cuda.empty_cache()  # Clear GPU memory if needed
 
             # 7. Save the final post hoc ema checkpoints
-            path = f"{self.checkpoint_dir}/{self.step}post_hoc_ema{ph_gamma}.pt"
+            path = f"{self.post_hoc_ema_checkpoint_dir}/{self.step}post_hoc_ema{ph_gamma}.pt"
             checkpoint = {
                 "model": final_weights,
                 "optimizer": self.optimizer.state_dict(),

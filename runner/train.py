@@ -381,14 +381,15 @@ class AF3Trainer(object):
 
     @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
-        #if not self.configs.eval_ema_only:
-        #    self._evaluate()
-        #if hasattr(self, "power_law_ema_wrappers"):
-        #    # Evaluate regular EMA checkpoints
-        #    for wrapper in self.power_law_ema_wrappers:
-        #        wrapper.apply_shadow() 
-        #        self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}_", mode=mode) 
-        #        wrapper.restore() 
+        all_eval_metrics = {}
+        if not self.configs.eval_ema_only:
+            all_eval_metrics["None-EMA"] = self._evaluate()
+        if hasattr(self, "power_law_ema_wrappers"):
+            # Evaluate regular EMA checkpoints
+            for wrapper in self.power_law_ema_wrappers:
+                wrapper.apply_shadow() 
+                all_eval_metrics[f"train_ema{wrapper.gamma}_"] = self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}_", mode=mode) 
+                wrapper.restore() 
             
         # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:
@@ -418,13 +419,31 @@ class AF3Trainer(object):
                 
                 # Evaluate
                 print(f"Beginning evaluation for post-hoc ema {gamma}")
-                self._evaluate(ema_suffix=f"post_hoc_ema{gamma}_", mode=mode)
+                all_eval_metrics[f"post_hoc_ema{gamma}_"] = self._evaluate(ema_suffix=f"post_hoc_ema{gamma}_", mode=mode)
                 
                 del checkpoint
                 torch.cuda.empty_cache()
             
             # Restore original model state
             self.model.load_state_dict(current_state)
+
+            # Plot all the metrics on wandb
+            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                # Create separate plots for each metric
+                for metric_name in next(iter(all_eval_metrics.values())).keys():
+                    metric_data = {
+                        model_name: metrics[metric_name] 
+                        for model_name, metrics in all_eval_metrics.items()
+                    }
+                    wandb.log({
+                        f"comparison/{metric_name}": wandb.plot.line_series(
+                            xs=list(range(len(metric_data))),
+                            ys=list(metric_data.values()),
+                            keys=list(metric_data.keys()),
+                            title=f"Comparison of {metric_name}",
+                            xname="Step"
+                        )
+                    })
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"): 
@@ -501,8 +520,10 @@ class AF3Trainer(object):
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
-            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                wandb.log(metrics, step=self.step)
+            #if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            #    wandb.log(metrics, step=self.step)
+
+            return metrics
 
     def update(self):
         # Clip the gradient

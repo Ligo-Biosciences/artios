@@ -111,9 +111,9 @@ class PowerLawEMAWrapper(EMAWrapper):
             assert name in self.shadow
 
             beta = self.beta_power_law(t)
+            if isinstance(beta, complex) or (isinstance(beta, float) and not np.isreal(beta)):
+                raise ValueError(f"Beta value {beta} is complex at step {t}. This should not happen with valid gamma={self.gamma} and delta_t={self.delta_t}")
             new_average = (1.0 - beta) * param.data + beta * self.shadow[name]
-            if param.dtype not in [torch.bfloat16, torch.float32]:
-                print(f"name: {name}, dtype: {param.dtype}")
             self.shadow[name] = new_average.to(param.dtype)  # Ensure same dtype as parameter
 
     def apply_shadow(self):

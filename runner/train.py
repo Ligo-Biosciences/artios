@@ -694,7 +694,7 @@ class AF3Trainer(object):
                 self.train_step(batch)
                 if use_ema:
                     for wrapper in self.power_law_ema_wrappers:
-                        wrapper.update(t=self.step)
+                        wrapper.update(t=self.step + 1)
                 if step_need_log or is_last_step:
                     metrics = self.train_metric_wrapper.calc()
                     self.print(f"Step {self.step} train: {metrics}")

@@ -32,7 +32,7 @@ basic_configs = {
     "iters_to_accumulate": 1,
     "eval_only": False,
     "load_checkpoint_path": "",
-    "load_ema_checkpoint_path": "",
+    "load_ema_checkpoint_paths_directory": "",
     "load_strict": False,
     "load_params_only": True,
     "guiding_net_path": ValueMaybeNone(""),

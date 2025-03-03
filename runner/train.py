@@ -394,11 +394,15 @@ class AF3Trainer(object):
             
             # Evaluate post-hoc EMA checkpoints
             if self.configs.calc_post_hoc_ema_during_training:
+                # Perform post hoc ema calculation
+                self.print(f"Calculating post-hoc EMA checkpoints")
                 self.calc_post_hoc_ema()
-                post_hoc_checkpoints = [f for f in os.listdir(self.post_hoc_ema_checkpoint_dir) if f"post_hoc_ema" in f and f.endswith('.pt')]
-                
-            if post_hoc_checkpoints:
-                self.print(f"Found {len(post_hoc_checkpoints)} post-hoc EMA checkpoints to evaluate")
+                self.print(f"Finished calculating post-hoc EMA checkpoints")
+
+                # Get post hoc ema checkpoint paths
+                post_hoc_checkpoints = [f for f in os.listdir(self.post_hoc_ema_checkpoint_dir) 
+                                        if f"post_hoc_ema" in f and f.endswith('.pt')]
+                self.print(f"There are {len(post_hoc_checkpoints)} post-hoc EMA checkpoints to evaluate")
 
                 # Store current model state
                 current_state = {k: v.clone() for k, v in self.model.state_dict().items()}
@@ -588,7 +592,6 @@ class AF3Trainer(object):
             - post hoc ema checkpoint dir
             - access to the optimizer and lr_scheduler
         """
-        print(f"Calculating post hoc ema's")
         # Create list of the ema checkpoint paths from the ema_checkpoint_dir
         ema_checkpoint_paths = [os.path.join(self.ema_checkpoint_dir, f) for f in os.listdir(self.ema_checkpoint_dir) if f.endswith('.pt')]
         if len(ema_checkpoint_paths) == 0:
@@ -654,8 +657,6 @@ class AF3Trainer(object):
             torch.save(checkpoint, path)
             self.print(f"Saved post hoc ema checkpoint to {path}")
 
-        print(f"Finished calculating post hoc ema's")
-
     def run(self):
         """
         Main entry for the AF3Trainer.
@@ -682,6 +683,7 @@ class AF3Trainer(object):
                 step_need_save = ( 
                     self.configs.checkpoint_interval > 0
                     and (self.step + 1) % self.configs.checkpoint_interval == 0
+                    #and (self.step + 1) != 1 # Don't need to checkpoint initialisation
                 )
 
                 is_last_step &= is_update_step
@@ -710,6 +712,7 @@ class AF3Trainer(object):
                         wandb.log(metrics, step=self.step)
 
                 if step_need_save or is_last_step:
+                    print(f"Saving checkpoint at step {self.step}")
                     self.save_checkpoint() # Saves non-ema checkpoint
                     if use_ema:
                         for wrapper in self.power_law_ema_wrappers:

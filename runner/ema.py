@@ -94,8 +94,9 @@ class PowerLawEMAWrapper(EMAWrapper):
 
     def beta_power_law(self, t_next):
         """Calculate the timestep-dependent power law beta parameter."""
-        return 0 if t_next == self.delta_t else (1 - self.delta_t / t_next) ** (self.gamma + 1)
-
+        #return 0 if t_next == self.delta_t else (1 - self.delta_t / t_next) ** (self.gamma + 1)
+        return (1 - self.delta_t / t_next) ** (self.gamma + 1)
+    
     def update(self, t_next):
         """
         Update the EMA weights using the power law decay.

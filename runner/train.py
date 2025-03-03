@@ -384,49 +384,49 @@ class AF3Trainer(object):
 
     @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
-        if not self.configs.eval_ema_only:
-            self._evaluate()
-        if hasattr(self, "power_law_ema_wrappers"):
-            # Evaluate regular EMA checkpoints
-            for wrapper in self.power_law_ema_wrappers:
-                wrapper.apply_shadow() 
-                self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}_", mode=mode) 
-                wrapper.restore() 
+        #if not self.configs.eval_ema_only:
+        #    self._evaluate()
+        #if hasattr(self, "power_law_ema_wrappers"):
+        #    # Evaluate regular EMA checkpoints
+        #    for wrapper in self.power_law_ema_wrappers:
+        #        wrapper.apply_shadow() 
+        #        self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}_", mode=mode) 
+        #        wrapper.restore() 
             
-            # Evaluate post-hoc EMA checkpoints
-            if self.configs.calc_post_hoc_ema_during_training:
-                # Perform post hoc ema calculation
-                self.print(f"Calculating post-hoc EMA checkpoints")
-                self.calc_post_hoc_ema()
-                self.print(f"Finished calculating post-hoc EMA checkpoints")
+        # Evaluate post-hoc EMA checkpoints
+        if self.configs.calc_post_hoc_ema_during_training:
+            # Perform post hoc ema calculation
+            self.print(f"Calculating post-hoc EMA checkpoints")
+            self.calc_post_hoc_ema()
+            self.print(f"Finished calculating post-hoc EMA checkpoints")
 
-                # Get post hoc ema checkpoint paths
-                post_hoc_checkpoints = [f for f in os.listdir(self.post_hoc_ema_checkpoint_dir) 
-                                        if f"post_hoc_ema" in f and f.endswith('.pt')]
-                self.print(f"There are {len(post_hoc_checkpoints)} post-hoc EMA checkpoints to evaluate")
+            # Get post hoc ema checkpoint paths
+            post_hoc_checkpoints = [f for f in os.listdir(self.post_hoc_ema_checkpoint_dir) 
+                                    if f"post_hoc_ema" in f and f.endswith('.pt')]
+            self.print(f"There are {len(post_hoc_checkpoints)} post-hoc EMA checkpoints to evaluate")
 
-                # Store current model state
-                current_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+            # Store current model state
+            current_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+            
+            for checkpoint_file in post_hoc_checkpoints:
+                # Extract gamma value from filename
+                gamma = float(checkpoint_file.split('post_hoc_ema')[-1].replace('.pt', ''))
                 
-                for checkpoint_file in post_hoc_checkpoints:
-                    # Extract gamma value from filename
-                    gamma = float(checkpoint_file.split('post_hoc_ema')[-1].replace('.pt', ''))
-                    
-                    # Load and evaluate the post-hoc EMA checkpoint
-                    checkpoint_path = os.path.join(self.post_hoc_ema_checkpoint_dir, checkpoint_file)
-                    checkpoint = torch.load(checkpoint_path, map_location=self.device)
-                    
-                    # Load post-hoc EMA weights
-                    self.model.load_state_dict(checkpoint['model'])
-                    
-                    # Evaluate
-                    self._evaluate(ema_suffix=f"post_hoc_ema{gamma}_", mode=mode)
-                    
-                    del checkpoint, current_state
-                    torch.cuda.empty_cache()
+                # Load and evaluate the post-hoc EMA checkpoint
+                checkpoint_path = os.path.join(self.post_hoc_ema_checkpoint_dir, checkpoint_file)
+                checkpoint = torch.load(checkpoint_path, map_location=self.device)
                 
-                # Restore original model state
-                self.model.load_state_dict(current_state)
+                # Load post-hoc EMA weights
+                self.model.load_state_dict(checkpoint['model'])
+                
+                # Evaluate
+                self._evaluate(ema_suffix=f"post_hoc_ema{gamma}_", mode=mode)
+                
+                del checkpoint, current_state
+                torch.cuda.empty_cache()
+            
+            # Restore original model state
+            self.model.load_state_dict(current_state)
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"): 
@@ -586,12 +586,12 @@ class AF3Trainer(object):
         Notes:
         This function could live outside of the trainer class.
         Having it elsewhere would allow for us to use it after training.
-        In this case, the input it needs includes:
+        In the case it lives outside, the inputs must include:
             - an ema_checkpoint_dir
             - the gamma's used during training
             - the gamma's wanted for post hoc ema
             - post hoc ema checkpoint dir
-            - access to the optimizer and lr_scheduler
+            - access to the current model's optimizer and lr_scheduler
         """
         # Create list of the ema checkpoint paths from the ema_checkpoint_dir
         ema_checkpoint_paths = [os.path.join(self.ema_checkpoint_dir, f) for f in os.listdir(self.ema_checkpoint_dir) if f.endswith('.pt')]
@@ -684,7 +684,6 @@ class AF3Trainer(object):
                 step_need_save = ( 
                     self.configs.checkpoint_interval > 0
                     and (self.step + 1) % self.configs.checkpoint_interval == 0
-                    #and (self.step + 1) != 1 # Don't need to checkpoint initialisation
                 )
 
                 is_last_step &= is_update_step

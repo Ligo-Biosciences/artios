@@ -433,25 +433,13 @@ class AF3Trainer(object):
 
             # Plot all the metrics on wandb
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                # Create separate plots for each metric
-                print("all_eval_metrics.keys(): ", all_eval_metrics.keys())
-                print("The metrics are: ", next(iter(all_eval_metrics.values())).keys())
-
                 for metric_name in next(iter(all_eval_metrics.values())).keys():
-                    print("metric_name: ", metric_name)
-                    metric_data = {
-                        model_name: metrics[metric_name] 
-                        for model_name, metrics in all_eval_metrics.items()
-                    }
                     wandb.log({
-                        f"comparison/{metric_name}": wandb.plot.line_series(
-                            xs=list(range(len(metric_data))),
-                            ys=list(metric_data.values()),
-                            keys=list(metric_data.keys()),
-                            title=f"Comparison of {metric_name}",
-                            xname="Step"
-                        )
-                    })
+                        f"comparison/{metric_name}": {
+                            f"{model_name}_{metric_name}": metrics[metric_name]
+                            for model_name, metrics in all_eval_metrics.items()
+                        }
+                    }, step=self.step)
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"): 

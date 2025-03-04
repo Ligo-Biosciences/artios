@@ -66,8 +66,15 @@ class EMAWrapper(object):
 
 class PowerLawEMAWrapper(EMAWrapper):
     """"
-    A wrapper class for EMA that uses a power law decay. See equation (119) and (127) of 
-    Karras et al. "Analyzing and Improving the Training Dynamics of Diffusion Models"
+    A wrapper class for EMA that uses a power law decay. 
+
+    A power law decay has two favourable properties over traditional EMA:
+     1. It puts zero weight on the random initialization of the model, allowing longer averaging 
+        without contribution from the initial random weights.
+     2. It is self-similar, so stretching the training time by a factor of k will stretch the 
+        averaging profile by a factor of k.
+    
+    See equation (119) and (127) of Karras et al. "Analyzing and Improving the Training Dynamics of Diffusion Models"
     for more details.
     """
     def __init__(
@@ -195,4 +202,3 @@ def solve_weights(t_i, gamma_i, gamma_r):
 
     # Solve system for each gamma_r
     return np.linalg.solve(A, B)
-

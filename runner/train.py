@@ -395,14 +395,6 @@ class AF3Trainer(object):
             # Evaluate None-EMA
             metrics = self._evaluate()
             all_eval_metrics["None-EMA"] = metrics
-        
-        #if hasattr(self, "power_law_ema_wrappers"):
-            # Evaluate regular EMA checkpoints
-        #    for wrapper in self.power_law_ema_wrappers:
-        #        wrapper.apply_shadow() 
-        #        metrics = self._evaluate(ema_suffix=f"power_law_ema_{wrapper.gamma}", mode=mode) 
-        #        all_eval_metrics[f"train_ema_{wrapper.gamma}"] = metrics
-        #        wrapper.restore() 
             
         # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:
@@ -428,11 +420,11 @@ class AF3Trainer(object):
                 all_eval_metrics[f"post_hoc_ema{gamma}_"] = metrics
                 
                 del checkpoint
-                torch.cuda.empty_cache()
-            
+                os.remove(checkpoint_path)
+
             # Restore original model state
             self.model.load_state_dict(current_state)
-
+                    
             # Plot all the metrics on wandb
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 for metric_name in next(iter(all_eval_metrics.values())).keys():

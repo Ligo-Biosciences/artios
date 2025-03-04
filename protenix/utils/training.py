@@ -156,7 +156,8 @@ def log_validation_curves(metrics_dict, step):
     """
     Logs one WandB plot per loss type, with multiple lines for each EMA variant.
     
-    :param metrics_dict: A dictionary of the form:
+    Args:
+        metrics_dict (dict[str, dict[str, float]]): A dictionary of the form:
         {
             'train_ema6.94_': {
                 'weighted_smooth_lddt_loss.avg': 3.2192340016365053,
@@ -172,7 +173,7 @@ def log_validation_curves(metrics_dict, step):
             },
             ...
         }
-    :param step: The current validation step (integer) or epoch number.
+        step (int): The current validation step (integer) or epoch number.
     """
     if not metrics_dict:
         return  # Safety check: no data to log

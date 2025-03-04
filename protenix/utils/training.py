@@ -175,25 +175,22 @@ def log_validation_curves(metrics_dict, step):
     :param step: The current validation step (integer) or epoch number.
     """
     if not metrics_dict:
-        return  # Safety check: no data to log
+        return
     
-    # Gather the set of EMAs (dictionary keys) and the set of loss keys
     ema_names = list(metrics_dict.keys())
-    # Assume all EMA sub-dicts share the same set of loss keys:
     loss_keys = list(metrics_dict[ema_names[0]].keys())
     
-    # We'll build a single dictionary of all the metrics we want to log at this step
-    log_dict = {}
-    
-    # For each loss metric, we add one entry per EMA
     for loss_key in loss_keys:
+        table = wandb.Table(columns=["step", "ema", "value"])
         for ema_name in ema_names:
-            metric_value = metrics_dict[ema_name][loss_key]
-            # This naming ensures that:
-            #   - "val/{loss_key}" is the parent grouping in W&B (one plot per loss type)
-            #   - The final "/{ema_name}" part gives each line (EMA variant) within that plot.
-            metric_name = f"val/{loss_key}/{ema_name}"
-            log_dict[metric_name] = metric_value
-    
-    # Log everything at once under the specified step
-    wandb.log(log_dict, step=step)
+            val = metrics_dict[ema_name][loss_key]
+            table.add_data(step, ema_name, val)
+        
+        line_plot = wandb.plot.line(
+            table,
+            x="step",
+            y="value",
+            stroke="ema",
+            title=f"Validation {loss_key}"
+        )
+        wandb.log({f"{loss_key}_plot": line_plot}, step=step)

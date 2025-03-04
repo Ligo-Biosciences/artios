@@ -437,11 +437,12 @@ class AF3Trainer(object):
                 print("The metrics are: ", next(iter(all_eval_metrics.values())).keys())
                 print("all_eval_metrics: ", all_eval_metrics)
                 for metric_name in next(iter(all_eval_metrics.values())).keys():
+                    metric_dict = {}
+                    for model_name, metrics in all_eval_metrics.items():
+                        metric_dict[f"{metric_name}/{model_name}"] = metrics[metric_name]
+                    print("metric_dict: ", metric_dict)
                     wandb.log({
-                        f"{metric_name}": {
-                            f"{model_name}": metrics[metric_name]
-                            for model_name, metrics in all_eval_metrics.items()
-                        }
+                        f"{metric_name}": metric_dict
                     }, step=self.step)
 
     @torch.no_grad()

@@ -434,6 +434,7 @@ class AF3Trainer(object):
 
             # Plot all the metrics on wandb
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                """
                 print("all_eval_metrics.keys(): ", all_eval_metrics.keys())
                 print("The metrics are: ", next(iter(all_eval_metrics.values())).keys())
                 print("all_eval_metrics: ", all_eval_metrics)
@@ -445,6 +446,15 @@ class AF3Trainer(object):
                     wandb.log({
                         f"{metric_name}": metric_dict
                     }, step=self.step)
+                """
+
+                for model_name, metrics in all_eval_metrics.items():
+                    for metric_name, value in metrics.items():
+                        wandb.log({
+                            f"{metric_name}/{model_name}": value
+                        }, step=self.step)
+
+                
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"): 

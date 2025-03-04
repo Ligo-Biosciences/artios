@@ -474,9 +474,11 @@ class AF3Trainer(object):
             evaluated_pids = []
             total_batch_num = len(test_dl)
             for index, batch in enumerate(tqdm(test_dl)):
+                ###
                 # TEMPORARY RESTRICTION ON VALIDATION SIZE
                 if index >= 40:
                     break
+                ###
 
                 batch = to_device(batch, self.device)
                 pid = batch["basic"]["pdb_id"]

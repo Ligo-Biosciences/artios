@@ -417,10 +417,11 @@ class AF3Trainer(object):
                 # Evaluate
                 print(f"Beginning evaluation for post-hoc ema {gamma}")
                 metrics = self._evaluate(ema_suffix=f"_post_hoc_ema_{gamma}", mode=mode)
-                all_eval_metrics[f"post_hoc_ema{gamma}_"] = metrics
+                all_eval_metrics[f"post_hoc_ema_{gamma}"] = metrics
                 
+                # Delete post-hoc checkpoint from RAM and disk
                 del checkpoint
-                os.remove(checkpoint_path)
+                os.remove(checkpoint_path)  
 
             # Restore original model state
             self.model.load_state_dict(current_state)

@@ -174,57 +174,26 @@ def log_validation_curves(metrics_dict, step):
         }
     :param step: The current validation step (integer) or epoch number.
     """
-    # Make sure there is at least one EMA variant in the dictionary
     if not metrics_dict:
-        return
+        return  # Safety check: no data to log
     
-    # We'll assume all EMA sub-dicts share the same set of keys (loss types).
-    ema_names = list(metrics_dict.keys()) # e.g. ["train_ema6.94_", "train_ema16.97_", ...]
-    loss_keys = list(metrics_dict[ema_names[0]].keys())  # e.g. ["mse_loss.avg", "loss.avg", ...]
+    # Gather the set of EMAs (dictionary keys) and the set of loss keys
+    ema_names = list(metrics_dict.keys())
+    # Assume all EMA sub-dicts share the same set of loss keys:
+    loss_keys = list(metrics_dict[ema_names[0]].keys())
     
-    # For each loss key, we log exactly one plot
+    # We'll build a single dictionary of all the metrics we want to log at this step
+    log_dict = {}
+    
+    # For each loss metric, we add one entry per EMA
     for loss_key in loss_keys:
-        """
-        # Create a table with columns: [step, ema, metric_value]
-        table = wandb.Table(columns=["step", "ema", loss_key])
-        
-        # Populate the table rows
         for ema_name in ema_names:
             metric_value = metrics_dict[ema_name][loss_key]
-            table.add_data(step, ema_name, metric_value)
-        
-        # Create a multi-line plot using stroke='ema'
-        line_plot = wandb.plot.line(
-            table, 
-            x="step", 
-            y=loss_key, 
-            stroke="ema", 
-            title=f"{loss_key}"
-        )
-        
-        # Log the plot under a key that indicates which loss metric it corresponds to
-        wandb.log({f"{loss_key}_plot": line_plot}, step=step)
-        """
-        if not metrics_dict:
-            return  # Safety check: no data to log
-        
-        # Gather the set of EMAs (dictionary keys) and the set of loss keys
-        ema_names = list(metrics_dict.keys())
-        # Assume all EMA sub-dicts share the same set of loss keys:
-        loss_keys = list(metrics_dict[ema_names[0]].keys())
-        
-        # We'll build a single dictionary of all the metrics we want to log at this step
-        log_dict = {}
-        
-        # For each loss metric, we add one entry per EMA
-        for loss_key in loss_keys:
-            for ema_name in ema_names:
-                metric_value = metrics_dict[ema_name][loss_key]
-                # This naming ensures that:
-                #   - "val/{loss_key}" is the parent grouping in W&B (one plot per loss type)
-                #   - The final "/{ema_name}" part gives each line (EMA variant) within that plot.
-                metric_name = f"val/{loss_key}/{ema_name}"
-                log_dict[metric_name] = metric_value
-        
-        # Log everything at once under the specified step
-        wandb.log(log_dict, step=step)
+            # This naming ensures that:
+            #   - "val/{loss_key}" is the parent grouping in W&B (one plot per loss type)
+            #   - The final "/{ema_name}" part gives each line (EMA variant) within that plot.
+            metric_name = f"val/{loss_key}/{ema_name}"
+            log_dict[metric_name] = metric_value
+    
+    # Log everything at once under the specified step
+    wandb.log(log_dict, step=step)

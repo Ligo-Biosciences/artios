@@ -443,7 +443,7 @@ class AF3Trainer(object):
                     for model_name, metrics in all_eval_metrics.items():
                         metric_dict[model_name] = metrics[metric_name]
                     print("metric_dict: ", metric_dict)
-                    wandb.log({metric_name: metric_dict}, step=self.step)
+                    wandb.log({f"validation/{metric_name}": metric_dict}, step=self.step)
 
                 """
                 for model_name, metrics in all_eval_metrics.items():

@@ -185,7 +185,8 @@ class AF3Trainer(object):
 
         if self.configs.get("power_law_ema_decay", []):  # Check if list is not empty
             self.power_law_ema_wrappers = []  # Store wrappers in a list
-            for gamma in self.configs.power_law_ema_decay:
+            for gamma in self.configs.power_law_ema_decay: # #TODO: change to sigma in self.configs.power_law_ema_sigma
+                #TODO: insert conversion of sigma to gamma
                 wrapper = PowerLawEMAWrapper(
                     model=self.model,
                     gamma=gamma,
@@ -193,7 +194,7 @@ class AF3Trainer(object):
                 )
                 wrapper.register()
                 self.power_law_ema_wrappers.append(wrapper)
-            self.print(f"Initialized {len(self.power_law_ema_wrappers)} power law EMA wrappers with decays: {self.configs.power_law_ema_decay}")
+            self.print(f"Initialized {len(self.power_law_ema_wrappers)} power law EMA wrappers with decays: {self.configs.power_law_ema_decay}") #TODO: change to sigmas 
 
         torch.cuda.empty_cache()
         self.optimizer = get_optimizer(self.configs, self.model)
@@ -439,7 +440,7 @@ class AF3Trainer(object):
                 for metric_name in next(iter(all_eval_metrics.values())).keys():
                     metric_dict = {}
                     for model_name, metrics in all_eval_metrics.items():
-                        metric_dict[f"{metric_name}/{model_name}"] = metrics[metric_name]
+                        metric_dict[f"{model_name}"] = metrics[metric_name]
                     print("metric_dict: ", metric_dict)
                     wandb.log({
                         f"{metric_name}": metric_dict

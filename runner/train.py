@@ -42,7 +42,7 @@ from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
-from protenix.utils.training import get_optimizer, is_loss_nan_check, extract_gamma_step
+from protenix.utils.training import get_optimizer, is_loss_nan_check, extract_gamma_step, log_validation_curves
 from runner.ema import EMAWrapper, PowerLawEMAWrapper, solve_weights
 from protenix.data.utils import to_pdb
 from io import StringIO
@@ -455,7 +455,7 @@ class AF3Trainer(object):
                             f"{metric_name}/{model_name}": value
                         }, step=self.step)
                 """
-                self.log_validation_curves(all_eval_metrics, self.step)
+                log_validation_curves(all_eval_metrics, self.step)
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"): 
@@ -537,58 +537,6 @@ class AF3Trainer(object):
             #    wandb.log(metrics, step=self.step)
 
             return metrics
-        
-    def log_validation_curves(self, metrics_dict, step):
-        """
-        Logs one WandB plot per loss type, with multiple lines for each EMA variant.
-        
-        :param metrics_dict: A dictionary of the form:
-            {
-                'train_ema6.94_': {
-                    'weighted_smooth_lddt_loss.avg': 3.2192340016365053,
-                    'mse_loss.avg': 0.9385715276002884,
-                    'loss.avg': 6.973520064353943,
-                    ...
-                },
-                'train_ema16.97_': {
-                    'weighted_smooth_lddt_loss.avg': 3.2052199482917785,
-                    'mse_loss.avg': 0.9485592111945153,
-                    'loss.avg': 6.999456799030304,
-                    ...
-                },
-                ...
-            }
-        :param step: The current validation step (integer) or epoch number.
-        """
-        # Make sure there is at least one EMA variant in the dictionary
-        if not metrics_dict:
-            return
-        
-        # We'll assume all EMA sub-dicts share the same set of keys (loss types).
-        ema_names = list(metrics_dict.keys()) # e.g. ["train_ema6.94_", "train_ema16.97_", ...]
-        loss_keys = list(metrics_dict[ema_names[0]].keys())  # e.g. ["mse_loss.avg", "loss.avg", ...]
-        
-        # For each loss key, we log exactly one plot
-        for loss_key in loss_keys:
-            # Create a table with columns: [step, ema, metric_value]
-            table = wandb.Table(columns=["step", "ema", loss_key])
-            
-            # Populate the table rows
-            for ema_name in ema_names:
-                metric_value = metrics_dict[ema_name][loss_key]
-                table.add_data(step, ema_name, metric_value)
-            
-            # Create a multi-line plot using stroke='ema'
-            line_plot = wandb.plot.line(
-                table, 
-                x="step", 
-                y=loss_key, 
-                stroke="ema", 
-                title=f"{loss_key}"
-            )
-            
-            # Log the plot under a key that indicates which loss metric it corresponds to
-            wandb.log({f"{loss_key}_plot": line_plot}, step=step)
 
     def update(self):
         # Clip the gradient

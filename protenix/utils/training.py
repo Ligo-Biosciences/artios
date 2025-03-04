@@ -152,45 +152,88 @@ def extract_gamma_step(checkpoint_path: str) -> tuple[int, float]:
         raise ValueError(f"Invalid checkpoint path format: {checkpoint_path}. Expected format: '{{step}}ema{{gamma}}.pt'") from e
     
 
-def log_validation_curves(metrics_dict, step):
+class ValidationLogger:
     """
-    Logs one WandB plot per loss type, with multiple lines for each EMA variant.
-    
-    :param metrics_dict: A dictionary of the form:
-        {
-            'train_ema6.94_': {
-                'weighted_smooth_lddt_loss.avg': 3.2192340016365053,
-                'mse_loss.avg': 0.9385715276002884,
-                'loss.avg': 6.973520064353943,
-                ...
-            },
-            'train_ema16.97_': {
-                'weighted_smooth_lddt_loss.avg': 3.2052199482917785,
-                'mse_loss.avg': 0.9485592111945153,
-                'loss.avg': 6.999456799030304,
-                ...
-            },
-            ...
-        }
-    :param step: The current validation step (integer) or epoch number.
+    A class to track validation loss history across steps and ensure proper logging.
     """
-    if not metrics_dict:
-        return
+    def __init__(self):
+        self.tables = {}  # Dictionary of wandb.Table objects (one per loss type)
     
-    ema_names = list(metrics_dict.keys())
-    loss_keys = list(metrics_dict[ema_names[0]].keys())
+    def update(self, metrics_dict, step):
+        """
+        Updates the stored tables with new metrics and returns the updated plots.
+
+        Args:
+            metrics_dict (dict): A dictionary of the form:
+                {
+                    'train_ema6.94_': {'mse_loss.avg': 0.93, 'loss.avg': 6.97, ...},
+                    'train_ema10.0_': {'mse_loss.avg': 0.89, 'loss.avg': 6.85, ...},
+                }
+            step (int): The current validation step.
+
+        Returns:
+            dict: A dictionary of {loss_metric_name: wandb_plot_object} to be logged.
+        """
+        if not metrics_dict:
+            return {}
+
+        # Get list of EMA names and loss metric names
+        ema_names = list(metrics_dict.keys())
+        loss_keys = list(metrics_dict[ema_names[0]].keys())
+
+        plots = {}
+
+        for loss_key in loss_keys:
+            # Create table if not exists
+            if loss_key not in self.tables:
+                self.tables[loss_key] = wandb.Table(columns=["step", "ema", "value"])
+
+            table = self.tables[loss_key]
+
+            # Add new step's data
+            for ema_name in ema_names:
+                val = metrics_dict[ema_name][loss_key]
+                table.add_data(step, ema_name, val)
+
+            # Create the line plot for this metric
+            line_plot = wandb.plot.line(
+                table,
+                x="step",
+                y="value",
+                stroke="ema",  # This ensures separate lines for each EMA
+                title=f"Validation {loss_key}"
+            )
+
+            plots[f"{loss_key}_plot"] = line_plot
+
+        return plots
     
-    for loss_key in loss_keys:
-        table = wandb.Table(columns=["step", "ema", "value"])
-        for ema_name in ema_names:
-            val = metrics_dict[ema_name][loss_key]
-            table.add_data(step, ema_name, val)
-        
-        line_plot = wandb.plot.line(
-            table,
-            x="step",
-            y="value",
-            stroke="ema",
-            title=f"Validation {loss_key}"
-        )
-        wandb.log({f"{loss_key}_plot": line_plot}, step=step)
+
+def log_validation_curves(logger: ValidationLogger, metrics_dict, step):
+    """
+    Logs validation loss curves to WandB.
+    
+    Args:
+        logger (ValidationLogger): The logging object tracking history.
+        metrics_dict (dict): A dictionary of the form:
+            {
+                'train_ema6.94_': {
+                    'weighted_smooth_lddt_loss.avg': 3.2192340016365053,
+                    'mse_loss.avg': 0.9385715276002884,
+                    'loss.avg': 6.973520064353943,
+                    ...
+                },
+                'train_ema16.97_': {
+                    'weighted_smooth_lddt_loss.avg': 3.2052199482917785,
+                    'mse_loss.avg': 0.9485592111945153,
+                    'loss.avg': 6.999456799030304,
+                    ...
+                },
+                ...
+            }
+        step (int): The current validation step.
+
+    """
+    plots = logger.update(metrics_dict, step)  # Update tables and get plots
+    if plots:
+        wandb.log(plots, step=step)  # Log updated plots

@@ -383,17 +383,17 @@ class AF3Trainer(object):
     @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
         all_eval_metrics = {}
-        if not self.configs.eval_ema_only:
-            # Evaluate None-EMA
-            metrics = self._evaluate()
-            all_eval_metrics["None-EMA"] = metrics
-        if hasattr(self, "power_law_ema_wrappers"):
-            # Evaluate regular EMA checkpoints
-            for wrapper in self.power_law_ema_wrappers:
-                wrapper.apply_shadow() 
-                metrics = self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}_", mode=mode) #TODO: wrapper.sigma
-                all_eval_metrics[f"train_ema{wrapper.gamma}_"] = metrics #TODO: wrapper.sigma
-                wrapper.restore() 
+        #if not self.configs.eval_ema_only:
+        #    # Evaluate None-EMA
+        #    metrics = self._evaluate()
+        #    all_eval_metrics["None-EMA"] = metrics
+        #if hasattr(self, "power_law_ema_wrappers"):
+        #    # Evaluate regular EMA checkpoints
+        #    for wrapper in self.power_law_ema_wrappers:
+        #        wrapper.apply_shadow() 
+        #        metrics = self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}", mode=mode) #TODO: wrapper.sigma
+        #        all_eval_metrics[f"train_ema{wrapper.gamma}"] = metrics #TODO: wrapper.sigma
+        #        wrapper.restore() 
             
         # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:
@@ -423,8 +423,8 @@ class AF3Trainer(object):
                 
                 # Evaluate
                 print(f"Beginning evaluation for post-hoc ema {gamma}") #TODO: change to sigma
-                metrics = self._evaluate(ema_suffix=f"post_hoc_ema{gamma}_", mode=mode) #TODO: change to sigma
-                all_eval_metrics[f"post_hoc_ema{gamma}_"] = metrics #TODO: change to sigma
+                metrics = self._evaluate(ema_suffix=f"post_hoc_ema{gamma}", mode=mode) #TODO: change to sigma
+                all_eval_metrics[f"post_hoc_ema{gamma}"] = metrics #TODO: change to sigma
                 
                 del checkpoint
                 torch.cuda.empty_cache()

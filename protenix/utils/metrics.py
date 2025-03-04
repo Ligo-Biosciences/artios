@@ -71,7 +71,7 @@ class SimpleMetricAggregator(object):
         for agg_name, agg_func in self.aggregators.items():
             for namespace, value_dict in metric_data.items():
                 for key, data in value_dict.items():
-                    plain_key = key
+                    plain_key = f"{namespace}/{key}" if namespace != "default" else key
                     plain_key = f"{plain_key}.{agg_name}"
                     results[plain_key] = agg_func(np.concatenate(data, axis=0))
         if self.need_gather and not self.gather_before_calc:  # need gather after calc

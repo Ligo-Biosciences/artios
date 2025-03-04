@@ -436,7 +436,7 @@ class AF3Trainer(object):
                 for metric_name in next(iter(all_eval_metrics.values())).keys():
                     wandb.log({
                         f"comparison/{metric_name}": {
-                            f"{model_name}_{metric_name}": metrics[metric_name]
+                            f"{model_name}": metrics[metric_name]
                             for model_name, metrics in all_eval_metrics.items()
                         }
                     }, step=self.step)

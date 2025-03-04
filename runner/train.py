@@ -538,7 +538,7 @@ class AF3Trainer(object):
 
             return metrics
         
-    def log_validation_curves(metrics_dict, step):
+    def log_validation_curves(self, metrics_dict, step):
         """
         Logs one WandB plot per loss type, with multiple lines for each EMA variant.
         
@@ -565,7 +565,7 @@ class AF3Trainer(object):
             return
         
         # We'll assume all EMA sub-dicts share the same set of keys (loss types).
-        ema_names = list(metrics_dict.keys())
+        ema_names = list(metrics_dict.keys()) # e.g. ["train_ema6.94_", "train_ema16.97_", ...]
         loss_keys = list(metrics_dict[ema_names[0]].keys())  # e.g. ["mse_loss.avg", "loss.avg", ...]
         
         # For each loss key, we log exactly one plot

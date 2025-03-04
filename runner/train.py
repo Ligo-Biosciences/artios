@@ -443,6 +443,7 @@ class AF3Trainer(object):
                     for model_name, metrics in all_eval_metrics.items():
                         metric_dict[model_name] = metrics[metric_name]
                     print("metric_dict: ", metric_dict)
+                    print("metric_name: ", metric_name)
                     wandb.log({f"validation/{metric_name}": metric_dict}, step=self.step)
 
                 """
@@ -518,14 +519,12 @@ class AF3Trainer(object):
                 
                 # Visualise selected structures in wandb
                 # FIXME: just temporary sampling logic for intial training runs
-                """
                 if pid in PDB_TO_VISUALISE:
                     pdb_str = to_pdb(batch["pred_dict"]["coordinate_mini"], batch["input_feature_dict"])  # output of the mini-rollout
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                         wandb.log({
                            f"{ema_suffix}structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
                         }, step=self.step)
-                """
                 del batch, simple_metrics
                 if index % 5 == 0:
                     # Release some memory periodically

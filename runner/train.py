@@ -435,10 +435,11 @@ class AF3Trainer(object):
             # Plot all the metrics on wandb
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 
-                """
+                
                 print("all_eval_metrics.keys(): ", all_eval_metrics.keys())
                 print("The metrics are: ", next(iter(all_eval_metrics.values())).keys())
                 print("all_eval_metrics: ", all_eval_metrics)
+                """
                 for metric_name in next(iter(all_eval_metrics.values())).keys():
                     metric_dict = {}
                     for model_name, metrics in all_eval_metrics.items():
@@ -446,8 +447,8 @@ class AF3Trainer(object):
                     print("metric_dict: ", metric_dict)
                     print("metric_name: ", metric_name)
                     wandb.log({f"validation/{metric_name}": metric_dict}, step=self.step)
-
                 """
+                
                 """
                 for model_name, metrics in all_eval_metrics.items():
                     for metric_name, value in metrics.items():

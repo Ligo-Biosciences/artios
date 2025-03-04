@@ -221,22 +221,29 @@ class AF3Trainer(object):
         # They do this via a "batch". #TODO: determine how they get batch and what is stored inside it.
         pass
 
-    def save_checkpoint(self, ema_suffix=""):
+    def save_checkpoint(self, ema_suffix="", save_model_only=False):
         if DIST_WRAPPER.rank == 0:
             if ema_suffix:
                 path = f"{self.ema_checkpoint_dir}/{self.step}_{ema_suffix}.pt"
             else:
                 path = f"{self.checkpoint_dir}/{self.step}.pt"
-            checkpoint = {
-                "model": self.model.state_dict(),
-                "optimizer": self.optimizer.state_dict(),
-                "scheduler": (
-                    self.lr_scheduler.state_dict()
-                    if self.lr_scheduler is not None
-                    else None
-                ),
-                "step": self.step,
-            }
+
+            if not save_model_only:
+                # Save model, optimizer, scheduler, and step
+                checkpoint = {
+                    "model": self.model.state_dict(),
+                    "optimizer": self.optimizer.state_dict(),
+                    "scheduler": (
+                        self.lr_scheduler.state_dict()
+                        if self.lr_scheduler is not None
+                        else None
+                    ),
+                    "step": self.step,
+                }
+            else:
+                # Save model and step (used for EMA wrappers)
+                checkpoint = {"model": self.model.state_dict(), "step": self.step}
+
             torch.save(checkpoint, path)
             self.print(f"Saved checkpoint to {path}")
 
@@ -690,7 +697,8 @@ class AF3Trainer(object):
                         for wrapper in self.power_law_ema_wrappers:
                             wrapper.apply_shadow()
                             self.save_checkpoint(
-                                ema_suffix=f"ema_{wrapper.gamma}"
+                                ema_suffix=f"ema_{wrapper.gamma}", 
+                                save_model_only=True
                             )
                             wrapper.restore()
 

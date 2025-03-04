@@ -184,6 +184,7 @@ def log_validation_curves(metrics_dict, step):
     
     # For each loss key, we log exactly one plot
     for loss_key in loss_keys:
+        """
         # Create a table with columns: [step, ema, metric_value]
         table = wandb.Table(columns=["step", "ema", loss_key])
         
@@ -203,3 +204,12 @@ def log_validation_curves(metrics_dict, step):
         
         # Log the plot under a key that indicates which loss metric it corresponds to
         wandb.log({f"{loss_key}_plot": line_plot}, step=step)
+        """
+        metric_dict = {}
+        # Create a dictionary for this specific metric across all EMA variants
+        metric_dict = {
+            ema_name: metrics_dict[ema_name][loss_key]
+            for ema_name in ema_names
+        }
+        # Log this specific metric
+        wandb.log({loss_key: metric_dict}, step=step)

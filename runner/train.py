@@ -433,9 +433,12 @@ class AF3Trainer(object):
 
             # Plot all the metrics on wandb
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                print("all_eval_metrics.keys(): ", all_eval_metrics.keys())
+                print("The metrics are: ", next(iter(all_eval_metrics.values())).keys())
+                print("all_eval_metrics: ", all_eval_metrics)
                 for metric_name in next(iter(all_eval_metrics.values())).keys():
                     wandb.log({
-                        f"comparison/{metric_name}": {
+                        f"{metric_name}": {
                             f"{model_name}": metrics[metric_name]
                             for model_name, metrics in all_eval_metrics.items()
                         }

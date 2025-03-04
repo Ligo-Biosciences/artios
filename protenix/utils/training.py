@@ -152,88 +152,48 @@ def extract_gamma_step(checkpoint_path: str) -> tuple[int, float]:
         raise ValueError(f"Invalid checkpoint path format: {checkpoint_path}. Expected format: '{{step}}ema{{gamma}}.pt'") from e
     
 
-class ValidationLogger:
+def log_validation_curves(metrics_dict, step):
     """
-    A class to track validation loss history across steps and ensure proper logging.
-    """
-    def __init__(self):
-        self.tables = {}  # Dictionary of wandb.Table objects (one per loss type)
+    Logs one WandB plot per loss type, with multiple lines for each EMA variant.
     
-    def update(self, metrics_dict, step):
-        """
-        Updates the stored tables with new metrics and returns the updated plots.
-
-        Args:
-            metrics_dict (dict): A dictionary of the form:
-                {
-                    'train_ema6.94_': {'mse_loss.avg': 0.93, 'loss.avg': 6.97, ...},
-                    'train_ema10.0_': {'mse_loss.avg': 0.89, 'loss.avg': 6.85, ...},
-                }
-            step (int): The current validation step.
-
-        Returns:
-            dict: A dictionary of {loss_metric_name: wandb_plot_object} to be logged.
-        """
-        if not metrics_dict:
-            return {}
-
-        # Get list of EMA names and loss metric names
-        ema_names = list(metrics_dict.keys())
-        loss_keys = list(metrics_dict[ema_names[0]].keys())
-
-        plots = {}
-
-        for loss_key in loss_keys:
-            # Create table if not exists
-            if loss_key not in self.tables:
-                self.tables[loss_key] = wandb.Table(columns=["step", "ema", "value"])
-
-            table = self.tables[loss_key]
-
-            # Add new step's data
-            for ema_name in ema_names:
-                val = metrics_dict[ema_name][loss_key]
-                table.add_data(step, ema_name, val)
-
-            # Create the line plot for this metric
-            line_plot = wandb.plot.line(
-                table,
-                x="step",
-                y="value",
-                stroke="ema",  # This ensures separate lines for each EMA
-                title=f"Validation {loss_key}"
-            )
-
-            plots[f"{loss_key}_plot"] = line_plot
-
-        return plots
-    
-
-def log_validation_curves(logger: ValidationLogger, metrics_dict, step):
-    """
-    Logs validation loss curves to WandB.
-    
-    Args:
-        logger (ValidationLogger): The logging object tracking history.
-        metrics_dict (dict): A dictionary of the form:
-            {
-                'train_ema6.94_': {
-                    'weighted_smooth_lddt_loss.avg': 3.2192340016365053,
-                    'mse_loss.avg': 0.9385715276002884,
-                    'loss.avg': 6.973520064353943,
-                    ...
-                },
-                'train_ema16.97_': {
-                    'weighted_smooth_lddt_loss.avg': 3.2052199482917785,
-                    'mse_loss.avg': 0.9485592111945153,
-                    'loss.avg': 6.999456799030304,
-                    ...
-                },
+    :param metrics_dict: A dictionary of the form:
+        {
+            'train_ema6.94_': {
+                'weighted_smooth_lddt_loss.avg': 3.2192340016365053,
+                'mse_loss.avg': 0.9385715276002884,
+                'loss.avg': 6.973520064353943,
                 ...
-            }
-        step (int): The current validation step.
-
+            },
+            'train_ema16.97_': {
+                'weighted_smooth_lddt_loss.avg': 3.2052199482917785,
+                'mse_loss.avg': 0.9485592111945153,
+                'loss.avg': 6.999456799030304,
+                ...
+            },
+            ...
+        }
+    :param step: The current validation step (integer) or epoch number.
     """
-    plots = logger.update(metrics_dict, step)  # Update tables and get plots
-    if plots:
-        wandb.log(plots, step=step)  # Log updated plots
+    if not metrics_dict:
+        return  # Safety check: no data to log
+    
+    # Gather the set of EMAs (dictionary keys) and the set of loss keys
+    ema_names = list(metrics_dict.keys())
+    # Assume all EMA sub-dicts share the same set of loss keys:
+    loss_keys = list(metrics_dict[ema_names[0]].keys())
+    
+    # We'll build a single dictionary of all the metrics we want to log at this step
+    log_dict = {}
+    
+    # For each loss metric, we add one entry per EMA
+    for loss_key in loss_keys:
+        for ema_name in ema_names:
+            metric_value = metrics_dict[ema_name][loss_key]
+            # This naming ensures that:
+            #   - "val/{loss_key}" is the parent grouping in W&B (one plot per loss type)
+            #   - The final "/{ema_name}" part gives each line (EMA variant) within that plot.
+            metric_name = f"val/{loss_key}/{ema_name}"
+            log_dict[metric_name] = metric_value
+    
+    # Log everything at once under the specified step
+    wandb.log(log_dict, step=step)

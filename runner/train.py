@@ -24,6 +24,7 @@ import numpy as np
 import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
+from pathlib import Path
 import rootutils
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -44,6 +45,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check, extract_gamma_step
 from runner.ema import EMAWrapper, PowerLawEMAWrapper, solve_weights
+from protenix.utils.ema_utils import calculate_post_hoc_ema
 from protenix.data.utils import to_pdb
 from io import StringIO
 
@@ -222,7 +224,7 @@ class AF3Trainer(object):
     def save_checkpoint(self, ema_suffix=""):
         if DIST_WRAPPER.rank == 0:
             if ema_suffix:
-                path = f"{self.ema_checkpoint_dir}/{self.step}{ema_suffix}.pt"
+                path = f"{self.ema_checkpoint_dir}/{self.step}_{ema_suffix}.pt"
             else:
                 path = f"{self.checkpoint_dir}/{self.step}.pt"
             checkpoint = {
@@ -390,31 +392,23 @@ class AF3Trainer(object):
             # Evaluate regular EMA checkpoints
             for wrapper in self.power_law_ema_wrappers:
                 wrapper.apply_shadow() 
-                metrics = self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}_", mode=mode) 
-                all_eval_metrics[f"train_ema{wrapper.gamma}_"] = metrics
+                metrics = self._evaluate(ema_suffix=f"power_law_ema_{wrapper.gamma}", mode=mode) 
+                all_eval_metrics[f"train_ema_{wrapper.gamma}"] = metrics
                 wrapper.restore() 
             
         # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:
             # Perform post hoc ema calculation
-            self.print(f"Calculating post-hoc EMA checkpoints")
-            self.calc_post_hoc_ema()
-            self.print(f"Finished calculating post-hoc EMA checkpoints")
-
-            # Get post hoc ema checkpoint paths
-            post_hoc_checkpoints = [f for f in os.listdir(self.post_hoc_ema_checkpoint_dir) 
-                                    if f"post_hoc_ema" in f and f.endswith('.pt')]
-            self.print(f"There are {len(post_hoc_checkpoints)} post-hoc EMA checkpoints to evaluate")
+            post_hoc_checkpoints = self.calc_post_hoc_ema()
 
             # Store current model state
             current_state = {k: v.clone() for k, v in self.model.state_dict().items()}
             
-            for checkpoint_file in post_hoc_checkpoints:
+            for checkpoint_path in post_hoc_checkpoints:
                 # Extract gamma value from filename
-                gamma = float(checkpoint_file.split('post_hoc_ema')[-1].replace('.pt', ''))
+                gamma = float(checkpoint_path.stem.split('_post_hoc_ema_')[-1])
                 
                 # Load and evaluate the post-hoc EMA checkpoint
-                checkpoint_path = os.path.join(self.post_hoc_ema_checkpoint_dir, checkpoint_file)
                 checkpoint = torch.load(checkpoint_path, map_location=self.device)
                 
                 # Load post-hoc EMA weights
@@ -422,7 +416,7 @@ class AF3Trainer(object):
                 
                 # Evaluate
                 print(f"Beginning evaluation for post-hoc ema {gamma}")
-                metrics = self._evaluate(ema_suffix=f"post_hoc_ema{gamma}_", mode=mode)
+                metrics = self._evaluate(ema_suffix=f"_post_hoc_ema_{gamma}", mode=mode)
                 all_eval_metrics[f"post_hoc_ema{gamma}_"] = metrics
                 
                 del checkpoint
@@ -433,14 +427,10 @@ class AF3Trainer(object):
 
             # Plot all the metrics on wandb
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                print("all_eval_metrics.keys(): ", all_eval_metrics.keys())
-                print("The metrics are: ", next(iter(all_eval_metrics.values())).keys())
-                print("all_eval_metrics: ", all_eval_metrics)
                 for metric_name in next(iter(all_eval_metrics.values())).keys():
                     metric_dict = {}
                     for model_name, metrics in all_eval_metrics.items():
                         metric_dict[f"{metric_name}/{model_name}"] = metrics[metric_name]
-                    print("metric_dict: ", metric_dict)
                     wandb.log({
                         f"{metric_name}": metric_dict
                     }, step=self.step)
@@ -512,7 +502,7 @@ class AF3Trainer(object):
                     pdb_str = to_pdb(batch["pred_dict"]["coordinate_mini"], batch["input_feature_dict"])  # output of the mini-rollout
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                         wandb.log({
-                           f"{ema_suffix}structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
+                           f"{ema_suffix}_structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
                         }, step=self.step)
 
                 del batch, simple_metrics
@@ -608,80 +598,37 @@ class AF3Trainer(object):
     
     def calc_post_hoc_ema(self):
         """
-        Notes:
-        This function could live outside of the trainer class.
-        Having it elsewhere would allow for us to use it after training.
-        In the case it lives outside, the inputs must include:
-            - an ema_checkpoint_dir
-            - the gamma's used during training
-            - the gamma's wanted for post hoc ema
-            - post hoc ema checkpoint dir
-            - access to the current model's optimizer and lr_scheduler
+        Calculate post-hoc EMA checkpoints using the utility function from ema_utils.
+        This combines checkpoints with different gamma values to create new EMA profiles
+        with target gamma values specified in configs.post_hoc_ema_decay.
         """
-        # Create list of the ema checkpoint paths from the ema_checkpoint_dir
-        ema_checkpoint_paths = [os.path.join(self.ema_checkpoint_dir, f) for f in os.listdir(self.ema_checkpoint_dir) if f.endswith('.pt')]
+        # Get all EMA checkpoint paths
+        ema_checkpoint_paths = [
+            Path(os.path.join(self.ema_checkpoint_dir, f)) 
+            for f in os.listdir(self.ema_checkpoint_dir) 
+            if f.endswith('.pt')
+        ]
+        
         if len(ema_checkpoint_paths) == 0:
-            self.print(f"No ema checkpoints found in {self.ema_checkpoint_dir}")
+            self.print(f"No EMA checkpoints found in {self.ema_checkpoint_dir}")
             return
-        self.print(f"Found {len(ema_checkpoint_paths)} ema checkpoints in {self.ema_checkpoint_dir}")
+        
+        self.print(f"Found {len(ema_checkpoint_paths)} EMA checkpoints in {self.ema_checkpoint_dir}")
+        
+        # Calculate post-hoc EMA checkpoints
+        save_dir = Path(self.post_hoc_ema_checkpoint_dir)
+        target_gamma_values = self.configs.post_hoc_ema_decay
+        
+        # Use the utility function to calculate post-hoc EMA checkpoints
+        output_paths = calculate_post_hoc_ema(
+            ema_checkpoint_paths=ema_checkpoint_paths,
+            target_gamma_values=target_gamma_values,
+            save_dir=save_dir
+        )
+        
+        self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
 
-        # load the gamma and step for all checkpoints
-        gamma_step_pairs = [extract_gamma_step(path) for path in ema_checkpoint_paths]
-
-        # Create the timesteps, gamma values and post hoc gamma values to be given to solve_weights
-        t_i = sorted(list(set(step for _, step in gamma_step_pairs)))  # The timesteps we have checkpoints at
-        gamma_i = list(self.configs.power_law_ema_decay) # The gamma values we have checkpoints at
-        gamma_r = list(self.configs.post_hoc_ema_decay) # The post hoc gamma values
-
-        # Calculate the weights vector x_i to be ascrined to the checkpoints for each post hoc gamma value
-        weights = solve_weights(t_i, gamma_i, gamma_r) # [len(t_i)*len(gamma_i), len(gamma_r)]
-
-        # Calculate the post hoc ema network parameters for each gamma value
-        for i, ph_gamma in enumerate(gamma_r):
-            # Find each path's weight in the weights vector by ordering the weights vector to match the gamma_step_pairs
-            ordered_weights = []
-            for gamma, step in gamma_step_pairs:
-                # Get gamma index and step index using list.index()
-                gamma_index = gamma_i.index(gamma)
-                step_index = t_i.index(step)
-                # Get weight value
-                weight = weights[gamma_index * len(t_i) + step_index, i]
-                # Append weight to ordered_weights
-                ordered_weights.append(weight)
-
-            # Initialise post hoc ema parameters 
-            final_weights = None
-
-            # Process each checkpoint in turn to avoid memory issues
-            for path, weight in zip(ema_checkpoint_paths, ordered_weights):
-                checkpoint = torch.load(path)
-                state_dict = checkpoint["model"]
-
-                if final_weights is None:
-                    # Initialize final_checkpoint with weighted values
-                    final_weights = {k: v * weight for k, v in state_dict.items()}
-                else:
-                    # Accumulate weighted sum
-                    for k in final_weights.keys():
-                        final_weights[k] += state_dict[k] * weight
-
-                del checkpoint  # Free memory
-                torch.cuda.empty_cache()  # Clear GPU memory if needed
-
-            # Save the final post hoc ema checkpoints
-            path = f"{self.post_hoc_ema_checkpoint_dir}/{self.step}post_hoc_ema{ph_gamma}.pt"
-            checkpoint = {
-                "model": final_weights,
-                "optimizer": self.optimizer.state_dict(),
-                "scheduler": (
-                    self.lr_scheduler.state_dict()
-                    if self.lr_scheduler is not None
-                    else None
-                ),
-                "step": self.step,
-            }
-            torch.save(checkpoint, path)
-            self.print(f"Saved post hoc ema checkpoint to {path}")
+        return output_paths
 
     def run(self):
         """
@@ -743,7 +690,7 @@ class AF3Trainer(object):
                         for wrapper in self.power_law_ema_wrappers:
                             wrapper.apply_shadow()
                             self.save_checkpoint(
-                                ema_suffix=f"ema{wrapper.gamma}"
+                                ema_suffix=f"ema_{wrapper.gamma}"
                             )
                             wrapper.restore()
 

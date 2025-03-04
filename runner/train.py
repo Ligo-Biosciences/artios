@@ -42,7 +42,7 @@ from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
-from protenix.utils.training import get_optimizer, is_loss_nan_check, extract_gamma_step, log_validation_curves, ValidationLogger
+from protenix.utils.training import get_optimizer, is_loss_nan_check, extract_gamma_step, log_validation_curves
 from runner.ema import EMAWrapper, PowerLawEMAWrapper, solve_weights
 from protenix.data.utils import to_pdb
 from io import StringIO
@@ -77,8 +77,6 @@ class AF3Trainer(object):
         self.start_step = 0
         # Add for grad accumulation, it can increase real batch size
         self.iters_to_accumulate = self.configs.iters_to_accumulate
-        # Initialise validation logger
-        self.val_logger = ValidationLogger()
 
         self.run_name = self.configs.run_name + "_" + time.strftime("%Y%m%d_%H%M%S")
         run_names = DIST_WRAPPER.all_gather_object(
@@ -437,11 +435,10 @@ class AF3Trainer(object):
             # Plot all the metrics on wandb
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 
-                
+                """
                 print("all_eval_metrics.keys(): ", all_eval_metrics.keys())
                 print("The metrics are: ", next(iter(all_eval_metrics.values())).keys())
                 print("all_eval_metrics: ", all_eval_metrics)
-                """
                 for metric_name in next(iter(all_eval_metrics.values())).keys():
                     metric_dict = {}
                     for model_name, metrics in all_eval_metrics.items():
@@ -449,8 +446,8 @@ class AF3Trainer(object):
                     print("metric_dict: ", metric_dict)
                     print("metric_name: ", metric_name)
                     wandb.log({f"validation/{metric_name}": metric_dict}, step=self.step)
+
                 """
-                
                 """
                 for model_name, metrics in all_eval_metrics.items():
                     for metric_name, value in metrics.items():
@@ -458,7 +455,7 @@ class AF3Trainer(object):
                             f"{metric_name}/{model_name}": value
                         }, step=self.step)
                 """
-                log_validation_curves(self.val_logger, all_eval_metrics, self.step)
+                log_validation_curves(all_eval_metrics, self.step)
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"): 

@@ -395,13 +395,14 @@ class AF3Trainer(object):
             # Evaluate None-EMA
             metrics = self._evaluate()
             all_eval_metrics["None-EMA"] = metrics
-        if hasattr(self, "power_law_ema_wrappers"):
+        
+        #if hasattr(self, "power_law_ema_wrappers"):
             # Evaluate regular EMA checkpoints
-            for wrapper in self.power_law_ema_wrappers:
-                wrapper.apply_shadow() 
-                metrics = self._evaluate(ema_suffix=f"power_law_ema_{wrapper.gamma}", mode=mode) 
-                all_eval_metrics[f"train_ema_{wrapper.gamma}"] = metrics
-                wrapper.restore() 
+        #    for wrapper in self.power_law_ema_wrappers:
+        #        wrapper.apply_shadow() 
+        #        metrics = self._evaluate(ema_suffix=f"power_law_ema_{wrapper.gamma}", mode=mode) 
+        #        all_eval_metrics[f"train_ema_{wrapper.gamma}"] = metrics
+        #        wrapper.restore() 
             
         # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:

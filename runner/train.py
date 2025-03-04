@@ -383,17 +383,17 @@ class AF3Trainer(object):
     @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
         all_eval_metrics = {}
-        #if not self.configs.eval_ema_only:
-        #    # Evaluate None-EMA
-        #    metrics = self._evaluate()
-        #    all_eval_metrics["None-EMA"] = metrics
-        #if hasattr(self, "power_law_ema_wrappers"):
-        #    # Evaluate regular EMA checkpoints
-        #    for wrapper in self.power_law_ema_wrappers:
-        #        wrapper.apply_shadow() 
-        #        metrics = self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}", mode=mode) #TODO: wrapper.sigma
-        #        all_eval_metrics[f"train_ema{wrapper.gamma}"] = metrics #TODO: wrapper.sigma
-        #        wrapper.restore() 
+        if not self.configs.eval_ema_only:
+            # Evaluate None-EMA
+            metrics = self._evaluate()
+            all_eval_metrics["None-EMA"] = metrics
+        if hasattr(self, "power_law_ema_wrappers"):
+            # Evaluate regular EMA checkpoints
+            for wrapper in self.power_law_ema_wrappers:
+                wrapper.apply_shadow() 
+                metrics = self._evaluate(ema_suffix=f"power_law_ema{wrapper.gamma}", mode=mode) #TODO: wrapper.sigma
+                all_eval_metrics[f"train_ema{wrapper.gamma}"] = metrics #TODO: wrapper.sigma
+                wrapper.restore() 
             
         # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:
@@ -434,27 +434,6 @@ class AF3Trainer(object):
 
             # Plot all the metrics on wandb
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                
-                """
-                print("all_eval_metrics.keys(): ", all_eval_metrics.keys())
-                print("The metrics are: ", next(iter(all_eval_metrics.values())).keys())
-                print("all_eval_metrics: ", all_eval_metrics)
-                for metric_name in next(iter(all_eval_metrics.values())).keys():
-                    metric_dict = {}
-                    for model_name, metrics in all_eval_metrics.items():
-                        metric_dict[model_name] = metrics[metric_name]
-                    print("metric_dict: ", metric_dict)
-                    print("metric_name: ", metric_name)
-                    wandb.log({f"validation/{metric_name}": metric_dict}, step=self.step)
-
-                """
-                """
-                for model_name, metrics in all_eval_metrics.items():
-                    for metric_name, value in metrics.items():
-                        wandb.log({
-                            f"{metric_name}/{model_name}": value
-                        }, step=self.step)
-                """
                 log_validation_curves(all_eval_metrics, self.step)
 
     @torch.no_grad()
@@ -480,7 +459,7 @@ class AF3Trainer(object):
             for index, batch in enumerate(tqdm(test_dl)):
                 ###
                 # TEMPORARY RESTRICTION ON VALIDATION SIZE
-                if index >= 40:
+                if index >= 50:
                     break
                 ###
 
@@ -515,17 +494,19 @@ class AF3Trainer(object):
                 # Metrics
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(
-                        key, value, namespace=test_name
-                    )
+                        key, value
+                    ) # TODO: namespace=test_name
                 
                 # Visualise selected structures in wandb
                 # FIXME: just temporary sampling logic for intial training runs
+                """
                 if pid in PDB_TO_VISUALISE:
                     pdb_str = to_pdb(batch["pred_dict"]["coordinate_mini"], batch["input_feature_dict"])  # output of the mini-rollout
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                         wandb.log({
                            f"{ema_suffix}structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
                         }, step=self.step)
+                """
                 del batch, simple_metrics
                 if index % 5 == 0:
                     # Release some memory periodically

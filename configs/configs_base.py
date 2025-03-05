@@ -45,8 +45,8 @@ basic_configs = {
     "seed": 42,
     "deterministic": False,
     "post_hoc_ema_checkpoint_dir": "",
-    "power_law_ema_decay": ListValue([6.94, 16.97]),
-    "post_hoc_ema_decay": ListValue([6.0, 8.0, 10.0]),
+    "power_law_ema_sigma": ListValue([0.1, 0.2]),
+    "post_hoc_ema_sigma": ListValue([0.05, 0.15]),
     "calc_post_hoc_ema_during_training": True,
     "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],

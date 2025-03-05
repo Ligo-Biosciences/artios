@@ -489,8 +489,8 @@ class AF3Trainer(object):
                 # Metrics
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(
-                        key, value
-                    ) # TODO: namespace=val
+                        key, value, namespace="val"
+                    ) #
                 
                 # Visualise selected structures in wandb
                 # FIXME: just temporary sampling logic for intial training runs

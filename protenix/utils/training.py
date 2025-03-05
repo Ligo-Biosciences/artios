@@ -13,11 +13,9 @@
 # limitations under the License.
 
 import inspect
-import os
 
 import torch
 import torch.distributed as dist
-import wandb
 
 
 def get_adamw(
@@ -118,83 +116,3 @@ def is_loss_nan_check(loss: torch.Tensor) -> bool:
     if nan_flag.item() > 0.0:
         return True
     return False
-
-
-def extract_gamma_step(checkpoint_path: str) -> tuple[int, float]:
-    """
-    Extract step and gamma values from checkpoint path.
-    
-    Args:
-        checkpoint_path: Path string of form "{checkpoint_dir}/{step}ema{gamma}.pt"
-        
-    Returns:
-        Tuple of (step, gamma)
-        
-    Example:
-        >>> extract_gamma_step("/path/to/checkpoints/1000ema6.94.pt")
-        (1000, 6.94)
-    """
-    try:
-        # Get filename without directory and extension
-        filename = os.path.basename(checkpoint_path)
-        filename = os.path.splitext(filename)[0]  # Remove .pt
-        
-        # Split on "ema"
-        step_str, gamma_str = filename.split("ema")
-        
-        # Convert to appropriate types
-        step = int(step_str)
-        gamma = float(gamma_str)
-        
-        return gamma, step
-
-    except (ValueError, IndexError) as e:
-        raise ValueError(f"Invalid checkpoint path format: {checkpoint_path}. Expected format: '{{step}}ema{{gamma}}.pt'") from e
-    
-
-def log_validation_curves(metrics_dict, step):
-    """
-    Logs one WandB plot per loss type, with multiple lines for each EMA variant.
-    
-    Args:
-        metrics_dict (dict[str, dict[str, float]]): A dictionary of the form:
-        {
-            'train_ema6.94_': {
-                'weighted_smooth_lddt_loss.avg': 3.2192340016365053,
-                'mse_loss.avg': 0.9385715276002884,
-                'loss.avg': 6.973520064353943,
-                ...
-            },
-            'train_ema16.97_': {
-                'weighted_smooth_lddt_loss.avg': 3.2052199482917785,
-                'mse_loss.avg': 0.9485592111945153,
-                'loss.avg': 6.999456799030304,
-                ...
-            },
-            ...
-        }
-        step (int): The current validation step (integer) or epoch number.
-    """
-    if not metrics_dict:
-        return  # Safety check: no data to log
-    
-    # Gather the set of EMAs (dictionary keys) and the set of loss keys
-    ema_names = list(metrics_dict.keys())
-    # Assume all EMA sub-dicts share the same set of loss keys:
-    loss_keys = list(metrics_dict[ema_names[0]].keys())
-    
-    # We'll build a single dictionary of all the metrics we want to log at this step
-    log_dict = {}
-    
-    # For each loss metric, we add one entry per EMA
-    for loss_key in loss_keys:
-        for ema_name in ema_names:
-            metric_value = metrics_dict[ema_name][loss_key]
-            # This naming ensures that:
-            #   - "val/{loss_key}" is the parent grouping in W&B (one plot per loss type)
-            #   - The final "/{ema_name}" part gives each line (EMA variant) within that plot.
-            metric_name = f"{loss_key}.{ema_name}"
-            log_dict[metric_name] = metric_value
-    
-    # Log everything at once under the specified step
-    wandb.log(log_dict, step=step)

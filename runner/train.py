@@ -185,17 +185,17 @@ class AF3Trainer(object):
         else:
             self.model = self.raw_model
 
-        if self.configs.get("power_law_ema_decay", []):  # Check if list is not empty
+        if self.configs.get("power_law_ema_sigma", []):  # Check if list is not empty
             self.power_law_ema_wrappers = []  # Store wrappers in a list
-            for gamma in self.configs.power_law_ema_decay: # #TODO: change to sigma in self.configs.power_law_ema_sigma
+            for sigma in self.configs.power_law_ema_sigma: 
                 wrapper = PowerLawEMAWrapper( 
                     model=self.model,
-                    gamma=gamma, #TODO: change to sigma
+                    sigma=sigma,
                     mutable_param_keywords=self.configs.ema_mutable_param_keywords,
                 )
                 wrapper.register()
                 self.power_law_ema_wrappers.append(wrapper)
-            self.print(f"Initialized {len(self.power_law_ema_wrappers)} power law EMA wrappers with decays: {self.configs.power_law_ema_decay}") #TODO: change to sigmas 
+            self.print(f"Initialized {len(self.power_law_ema_wrappers)} power law EMA wrappers with standard deviations: {self.configs.power_law_ema_sigma}")
 
         torch.cuda.empty_cache()
         self.optimizer = get_optimizer(self.configs, self.model)
@@ -300,21 +300,21 @@ class AF3Trainer(object):
             checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pt')]
             self.print(f"Found {len(checkpoint_files)} EMA checkpoints in {checkpoint_dir}")
             
-            # Create mapping of gamma values to their corresponding wrappers
-            gamma_to_wrapper = {wrapper.gamma: wrapper for wrapper in self.power_law_ema_wrappers} #TODO: change to sigma
+            # Create mapping of sigma values to their corresponding wrappers
+            sigma_to_wrapper = {wrapper.sigma: wrapper for wrapper in self.power_law_ema_wrappers}
 
             # Load each checkpoint and match with corresponding wrapper
             for checkpoint_file in checkpoint_files:
-                # Extract gamma value from filename (assuming format like "*_ema_6.94.pt")
+                # Extract sigma value from filename (assuming format like "*_ema_6.94.pt")
                 try:
-                    gamma_str = checkpoint_file.split('_ema_')[-1].replace('.pt', '') # TODO: sigma str
-                    gamma = float(gamma_str) #TODO: sigma 
+                    sigma_str = checkpoint_file.split('_ema_')[-1].replace('.pt', '')
+                    sigma = float(sigma_str)
                 except (IndexError, ValueError):
-                    self.print(f"Warning: Could not extract a gamma value from checkpoint filename: {checkpoint_file}") #TODO: could not extract sigma
+                    self.print(f"Warning: Could not extract a sigma value from checkpoint filename: {checkpoint_file}")
                     continue
                 
-                if gamma not in gamma_to_wrapper:
-                    self.print(f"Warning: No matching wrapper found for gamma={gamma} in checkpoint: {checkpoint_file}") #TODO: could not extract sigma
+                if sigma not in sigma_to_wrapper:
+                    self.print(f"Warning: No matching wrapper found for sigma={sigma} in checkpoint: {checkpoint_file}")
                     continue
                 
                 checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
@@ -323,10 +323,10 @@ class AF3Trainer(object):
                     load_params_only=True,
                 )
                 
-                # Register only the wrapper corresponding to this gamma
-                matching_wrapper = gamma_to_wrapper[gamma] #TODO: change to sigma
+                # Register only the wrapper corresponding to this sigma
+                matching_wrapper = sigma_to_wrapper[sigma] 
                 matching_wrapper.register()
-                self.print(f"Loaded and registered EMA checkpoint for gamma={gamma}: {checkpoint_file}") #TODO: change to sigma
+                self.print(f"Loaded and registered EMA checkpoint for sigma={sigma}: {checkpoint_file}")
 
         # Load model parameters (With no EMA) from checkpoint 
         if self.configs.load_checkpoint_path:
@@ -405,8 +405,8 @@ class AF3Trainer(object):
             current_state = {k: v.clone() for k, v in self.model.state_dict().items()}
             
             for checkpoint_path in post_hoc_checkpoints:
-                # Extract gamma value from filename
-                gamma = float(checkpoint_path.stem.split('_post_hoc_ema_')[-1])
+                # Extract sigma value from filename
+                sigma = float(checkpoint_path.stem.split('_post_hoc_ema_')[-1])
                 
                 # Load and evaluate the post-hoc EMA checkpoint
                 checkpoint = torch.load(checkpoint_path, map_location=self.device)
@@ -415,9 +415,9 @@ class AF3Trainer(object):
                 self.model.load_state_dict(checkpoint['model'])
                 
                 # Evaluate
-                print(f"Beginning evaluation for post-hoc ema {gamma}")
-                metrics = self._evaluate(ema_suffix=f"_post_hoc_ema_{gamma}", mode=mode)
-                all_eval_metrics[f"post_hoc_ema_{gamma}"] = metrics
+                print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
+                metrics = self._evaluate(ema_suffix=f"_post_hoc_ema_{sigma}", mode=mode)
+                all_eval_metrics[f"post_hoc_ema_{sigma}"] = metrics
                 
                 # Delete post-hoc checkpoint from RAM and disk
                 del checkpoint
@@ -595,8 +595,8 @@ class AF3Trainer(object):
     def calc_post_hoc_ema(self):
         """
         Calculate post-hoc EMA checkpoints using the utility function from ema_utils.
-        This combines checkpoints with different gamma values to create new EMA profiles #TODO: sigma values
-        with target gamma values specified in configs.post_hoc_ema_decay. #TODO: sigma 
+        This combines checkpoints with different sigma values to create new EMA profiles 
+        with target sigma values specified in configs.post_hoc_ema_decay. 
         """
         # Get all EMA checkpoint paths
         ema_checkpoint_paths = [
@@ -613,12 +613,12 @@ class AF3Trainer(object):
         
         # Calculate post-hoc EMA checkpoints
         save_dir = Path(self.post_hoc_ema_checkpoint_dir)
-        target_gamma_values = self.configs.post_hoc_ema_decay # TODO: sigma values
+        target_sigma_values = self.configs.post_hoc_ema_sigma
         
         # Use the utility function to calculate post-hoc EMA checkpoints
         output_paths = calculate_post_hoc_ema(
             ema_checkpoint_paths=ema_checkpoint_paths,
-            target_gamma_values=target_gamma_values, # TODO: sigma values
+            target_sigma_values=target_sigma_values,
             save_dir=save_dir
         )
         
@@ -686,7 +686,7 @@ class AF3Trainer(object):
                         for wrapper in self.power_law_ema_wrappers:
                             wrapper.apply_shadow()
                             self.save_checkpoint(
-                                ema_suffix=f"ema_{wrapper.gamma}", # TODO: wrapper.sigma
+                                ema_suffix=f"ema_{wrapper.sigma}",
                                 save_model_only=True
                             )
                             wrapper.restore()

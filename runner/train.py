@@ -490,7 +490,7 @@ class AF3Trainer(object):
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(
                         key, value
-                    ) # TODO: namespace=test_name
+                    ) # TODO: namespace=val
                 
                 # Visualise selected structures in wandb
                 # FIXME: just temporary sampling logic for intial training runs

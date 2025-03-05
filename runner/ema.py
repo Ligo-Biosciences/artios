@@ -80,7 +80,7 @@ class PowerLawEMAWrapper(EMAWrapper):
     def __init__(
             self, 
             model: torch.nn.Module, 
-            gamma: float = 6.94, 
+            gamma: float = 10.0, #TODO: change to sigma
             mutable_param_keywords=None):
         """
         model: (torch.nn.Module) a pytorch model to apply power law EMA

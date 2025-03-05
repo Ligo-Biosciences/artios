@@ -188,10 +188,9 @@ class AF3Trainer(object):
         if self.configs.get("power_law_ema_decay", []):  # Check if list is not empty
             self.power_law_ema_wrappers = []  # Store wrappers in a list
             for gamma in self.configs.power_law_ema_decay: # #TODO: change to sigma in self.configs.power_law_ema_sigma
-                #TODO: insert conversion of sigma to gamma
-                wrapper = PowerLawEMAWrapper(
+                wrapper = PowerLawEMAWrapper( 
                     model=self.model,
-                    gamma=gamma,
+                    gamma=gamma, #TODO: change to sigma
                     mutable_param_keywords=self.configs.ema_mutable_param_keywords,
                 )
                 wrapper.register()
@@ -596,8 +595,8 @@ class AF3Trainer(object):
     def calc_post_hoc_ema(self):
         """
         Calculate post-hoc EMA checkpoints using the utility function from ema_utils.
-        This combines checkpoints with different gamma values to create new EMA profiles
-        with target gamma values specified in configs.post_hoc_ema_decay.
+        This combines checkpoints with different gamma values to create new EMA profiles #TODO: sigma values
+        with target gamma values specified in configs.post_hoc_ema_decay. #TODO: sigma 
         """
         # Get all EMA checkpoint paths
         ema_checkpoint_paths = [
@@ -614,12 +613,12 @@ class AF3Trainer(object):
         
         # Calculate post-hoc EMA checkpoints
         save_dir = Path(self.post_hoc_ema_checkpoint_dir)
-        target_gamma_values = self.configs.post_hoc_ema_decay
+        target_gamma_values = self.configs.post_hoc_ema_decay # TODO: sigma values
         
         # Use the utility function to calculate post-hoc EMA checkpoints
         output_paths = calculate_post_hoc_ema(
             ema_checkpoint_paths=ema_checkpoint_paths,
-            target_gamma_values=target_gamma_values,
+            target_gamma_values=target_gamma_values, # TODO: sigma values
             save_dir=save_dir
         )
         
@@ -687,7 +686,7 @@ class AF3Trainer(object):
                         for wrapper in self.power_law_ema_wrappers:
                             wrapper.apply_shadow()
                             self.save_checkpoint(
-                                ema_suffix=f"ema_{wrapper.gamma}", 
+                                ema_suffix=f"ema_{wrapper.gamma}", # TODO: wrapper.sigma
                                 save_model_only=True
                             )
                             wrapper.restore()

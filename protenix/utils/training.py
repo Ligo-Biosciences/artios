@@ -193,7 +193,7 @@ def log_validation_curves(metrics_dict, step):
             # This naming ensures that:
             #   - "val/{loss_key}" is the parent grouping in W&B (one plot per loss type)
             #   - The final "/{ema_name}" part gives each line (EMA variant) within that plot.
-            metric_name = f"val/{loss_key}.{ema_name}"
+            metric_name = f"{loss_key}.{ema_name}"
             log_dict[metric_name] = metric_value
     
     # Log everything at once under the specified step

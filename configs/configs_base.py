@@ -187,7 +187,7 @@ perm_configs = {
     "chain_permutation": {
         "train": {
             "mini_rollout": True,
-            "diffusion_sample": False,
+            "diffusion_sample": True,  # False
         },
         "test": {
             "diffusion_sample": True,
@@ -204,7 +204,7 @@ perm_configs = {
     "atom_permutation": {
         "train": {
             "mini_rollout": True,
-            "diffusion_sample": False,
+            "diffusion_sample": True,  # False
         },
         "test": {
             "diffusion_sample": True,

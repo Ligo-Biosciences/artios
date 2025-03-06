@@ -160,6 +160,7 @@ class DataDumper:
     ):
         assert atom_array is not None
         N_sample = pred_coordinates.shape[0]
+        N_atom = len(atom_array)
         if sorted_indices is None:
             sorted_indices = range(N_sample)  # do not rank the output file
         for idx, rank in enumerate(sorted_indices):
@@ -170,6 +171,8 @@ class DataDumper:
             if b_factor is not None:
                 # b_factor.shape == [N_sample, N_atom]
                 atom_array.set_annotation("b_factor", np.round(b_factor[idx], 2))
+            else:
+                atom_array.set_annotation("b_factor", np.zeros(N_atom)) # TODO: assign dummy b-factors
 
             save_structure_cif(
                 atom_array=atom_array,

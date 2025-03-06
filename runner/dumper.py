@@ -172,7 +172,7 @@ class DataDumper:
                 # b_factor.shape == [N_sample, N_atom]
                 atom_array.set_annotation("b_factor", np.round(b_factor[idx], 2))
             else:
-                atom_array.set_annotation("b_factor", np.zeros(N_atom)) # TODO: assign dummy b-factors
+                atom_array.set_annotation("b_factor", np.zeros(N_atom)) # NOTE: have assigned dummy b-factors to appease mmCIF parsing downstream
 
             save_structure_cif(
                 atom_array=atom_array,

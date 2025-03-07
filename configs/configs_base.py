@@ -44,7 +44,7 @@ basic_configs = {
     "wandb_id": "", #TODO 
     "seed": 42,
     "deterministic": False,
-    "ema_decay": -1.0,
+    "ema_decay": 0.999,
     "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],
 }

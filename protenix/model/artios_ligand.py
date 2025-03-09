@@ -60,8 +60,8 @@ class ArtiosLigand(nn.Module):
         self.loss = ProtenixLoss(configs)
 
         if configs.compile_model:
-            self.diffusion_module = torch.compile(self.diffusion_module)
-            self.input_feature_embedder = torch.compile(self.input_feature_embedder)
+            self.diffusion_module.diffusion_transformer = torch.compile(self.diffusion_module.diffusion_transformer)
+            # self.input_feature_embedder = torch.compile(self.input_feature_embedder)
 
         self.sigma_data = configs.sigma_data
 

@@ -274,7 +274,7 @@ def sample_diffusion(
             # Euler step
             if not second_order:
                 x = x + update + torch.sqrt(2 * step * g_t * gamma) * noise
-            else:
+            else: #FIXME: my current issue with this is that we add nosie twice essentially: our initial update already uses noise. 
                 # Calculate intermediate prediction
                 x_middle = x + update
 

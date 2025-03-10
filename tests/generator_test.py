@@ -64,7 +64,7 @@ class TestGenerator:
         assert torch.all(torch.diff(timesteps) > 0)  # Monotonically increasing
         assert not torch.isnan(timesteps).any()
 
-    def test_sample_diffusion(self, device, input_dict, sample_data):
+    def test_sample_diffusion_basic(self, device, input_dict, sample_data):
         # Mock denoise network
         def mock_denoise_net(x_noisy, timestep, input_feature_dict, s_inputs, chunk_size=None, inplace_safe=False):
             return torch.zeros_like(x_noisy)
@@ -80,7 +80,36 @@ class TestGenerator:
         s_inputs = torch.randn((*batch_shape, n_tokens, c_s_inputs), device=device)
         timesteps = torch.linspace(0, 1, n_steps, device=device)
         
-        # Test different stochasticity types
+        # Test basic functionality
+        coords_pred = sample_diffusion(
+            denoise_net=mock_denoise_net,
+            input_feature_dict=input_dict,
+            s_inputs=s_inputs,
+            timesteps=timesteps,
+            N_sample=n_samples,
+            sigma_data=16.0,
+            alpha=1.0,
+            gamma=1.0
+        )
+        
+        # Check output shape and values
+        assert coords_pred.shape == (*batch_shape, n_samples, n_atoms, 3)
+        assert not torch.isnan(coords_pred).any()
+
+    def test_sample_diffusion_stochastic_types(self, device, input_dict, sample_data):
+        def mock_denoise_net(x_noisy, timestep, input_feature_dict, s_inputs, chunk_size=None, inplace_safe=False):
+            return torch.zeros_like(x_noisy)
+        
+        n_atoms = input_dict["atom_to_token_idx"].size(-1)
+        batch_shape = input_dict["atom_to_token_idx"].shape[:-1]
+        n_tokens = sample_data["input_feature_dict"]["atom_to_token_idx"].size(-1)
+        c_s_inputs = 416
+        n_steps = 5
+        n_samples = 3
+        
+        s_inputs = torch.randn((*batch_shape, n_tokens, c_s_inputs), device=device)
+        timesteps = torch.linspace(0, 1, n_steps, device=device)
+
         for stoch_type in ["deterministic", "constant", "non_singular", "zero_ends"]:
             coords_pred = sample_diffusion(
                 denoise_net=mock_denoise_net,
@@ -90,10 +119,66 @@ class TestGenerator:
                 N_sample=n_samples,
                 stoch_type=stoch_type
             )
-            
-            # Check output shape and values
             assert coords_pred.shape == (*batch_shape, n_samples, n_atoms, 3)
             assert not torch.isnan(coords_pred).any()
+
+    def test_sample_diffusion_with_guidance(self, device, input_dict, sample_data):
+        def mock_denoise_net(x_noisy, timestep, input_feature_dict, s_inputs, chunk_size=None, inplace_safe=False):
+            return torch.zeros_like(x_noisy)
+            
+        def mock_guiding_net(x_noisy, timestep, input_feature_dict, s_inputs, chunk_size=None, inplace_safe=False):
+            return torch.ones_like(x_noisy)
+            
+        n_atoms = input_dict["atom_to_token_idx"].size(-1)
+        batch_shape = input_dict["atom_to_token_idx"].shape[:-1]
+        n_tokens = sample_data["input_feature_dict"]["atom_to_token_idx"].size(-1)
+        c_s_inputs = 416
+        n_steps = 5
+        n_samples = 3
+        
+        s_inputs = torch.randn((*batch_shape, n_tokens, c_s_inputs), device=device)
+        timesteps = torch.linspace(0, 1, n_steps, device=device)
+
+        coords_pred = sample_diffusion(
+            denoise_net=mock_denoise_net,
+            input_feature_dict=input_dict,
+            s_inputs=s_inputs,
+            timesteps=timesteps,
+            N_sample=n_samples,
+            guiding_denoise_net=mock_guiding_net,
+            guiding_s_inputs=s_inputs,
+            guidance_weight=0.5
+        )
+        
+        assert coords_pred.shape == (*batch_shape, n_samples, n_atoms, 3)
+        assert not torch.isnan(coords_pred).any()
+
+    def test_sample_diffusion_second_order(self, device, input_dict, sample_data):
+        def mock_denoise_net(x_noisy, timestep, input_feature_dict, s_inputs, chunk_size=None, inplace_safe=False):
+            return torch.zeros_like(x_noisy)
+            
+        n_atoms = input_dict["atom_to_token_idx"].size(-1)
+        batch_shape = input_dict["atom_to_token_idx"].shape[:-1]
+        n_tokens = sample_data["input_feature_dict"]["atom_to_token_idx"].size(-1)
+        c_s_inputs = 416
+        n_steps = 5
+        n_samples = 3
+        
+        s_inputs = torch.randn((*batch_shape, n_tokens, c_s_inputs), device=device)
+        timesteps = torch.linspace(0, 1, n_steps, device=device)
+
+        # Test with second order solver
+        coords_pred = sample_diffusion(
+            denoise_net=mock_denoise_net,
+            input_feature_dict=input_dict,
+            s_inputs=s_inputs,
+            timesteps=timesteps,
+            N_sample=n_samples,
+            second_order=True
+        )
+        
+        assert coords_pred.shape == (*batch_shape, n_samples, n_atoms, 3)
+        assert not torch.isnan(coords_pred).any()
 
     def test_sample_diffusion_training(self, device, input_dict, label_dict, sample_data):
         # Mock denoise network

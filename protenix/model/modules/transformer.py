@@ -285,7 +285,7 @@ class DiffusionTransformerBlock(nn.Module):
         out_a = add(ff_out, attn_out)
         # Avoid s/z to be deleted by torch.utils.checkpoint
         return out_a, s, z
-
+    
 
 class DiffusionTransformer(nn.Module):
     """

@@ -167,6 +167,8 @@ class ConfigManager(object):
                 continue
             full_key = f"{prefix}.{key}" if prefix else key
             dtype, default_value, allow_none, required = self.config_infos[full_key]
+            if dtype is None:
+                print(f"Warning: None dtype for key {full_key}, value: {value}")
             if full_key in new_configs and not isinstance(
                 new_configs[full_key], ArgumentNotSet
             ):

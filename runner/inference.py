@@ -96,31 +96,48 @@ class InferenceRunner(object):
 
     def init_model(self) -> None:
         self.model = ArtiosLigand(self.configs).to(self.device)
+        self.guiding_net = None
+        if self.configs.guiding_net_path is not None and self.configs.guiding_net_path != "":
+            self.guiding_net = ArtiosLigand(self.configs.guidance_model_configs).to(self.device)
 
     def load_checkpoint(self) -> None:
-        checkpoint_path = self.configs.load_checkpoint_path
-        if not os.path.exists(checkpoint_path):
-            raise Exception(f"Given checkpoint path not exist [{checkpoint_path}]")
-        self.print(
-            f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}"
-        )
-        checkpoint = torch.load(checkpoint_path, self.device)
+        def _load_checkpoint(checkpoint_path: str, guiding = False):
+            if not os.path.exists(checkpoint_path):
+                raise Exception(f"Given checkpoint path not exist [{checkpoint_path}]")
+            self.print(
+                f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}"
+            )
+            checkpoint = torch.load(checkpoint_path, self.device)
 
-        sample_key = [k for k in checkpoint["model"].keys()][0]
-        self.print(f"Sampled key: {sample_key}")
-        if sample_key.startswith("module."):  # DDP checkpoint has module. prefix
-            checkpoint["model"] = {
-                k[len("module.") :]: v for k, v in checkpoint["model"].items()
-            }
-        self.model.load_state_dict(
-            state_dict=checkpoint["model"],
-            strict=self.configs.load_strict,
-        )
-        self.model.eval()
-        self.print(f"Finish loading checkpoint.")
+            sample_key = [k for k in checkpoint["model"].keys()][0]
+            self.print(f"Sampled key: {sample_key}")
+            if sample_key.startswith("module."):  # DDP checkpoint has module. prefix
+                checkpoint["model"] = {
+                    k[len("module.") :]: v for k, v in checkpoint["model"].items()
+                }
+
+            if not guiding:
+                self.model.load_state_dict(
+                    state_dict=checkpoint["model"],
+                    strict=self.configs.load_strict,
+                )
+                self.model.eval()
+            else:
+                self.guiding_net.load_state_dict(
+                    state_dict=checkpoint["model"],
+                    strict=self.configs.load_strict,
+                )
+                self.guiding_net.eval()
+        
+        _load_checkpoint(self.configs.load_checkpoint_path, guiding=False)
+        self.print(f"Finished loading checkpoint.")
+
+        if self.configs.guiding_net_path is not None:
+            _load_checkpoint(self.configs.guiding_net_path, guiding=True)
+            self.print(f"Finished loading guiding net.")
 
     def init_dumper(
-        self, need_atom_confidence: bool = False, sorted_by_ranking_score: bool = True
+        self, need_atom_confidence: bool = False, sorted_by_ranking_score: bool = False
     ):
         self.dumper = DataDumper(
             base_dir=self.dump_dir,
@@ -150,6 +167,7 @@ class InferenceRunner(object):
                 label_full_dict=None,
                 label_dict=None,
                 mode="inference",
+                guiding_net=self.guiding_net,
             )
 
         return prediction
@@ -297,7 +315,7 @@ def run() -> None:
     configs = parse_configs(
         configs=configs,
         arg_str=parse_sys_args(),
-        fill_required_with_null=True,
+        fill_required_with_null=False,
     )
     download_infercence_cache(configs, model_version="v0.2.0")
     main(configs)

@@ -17,10 +17,13 @@ from protenix.model.generator import (
 from protenix.model.utils import simple_merge_dict_list
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.model.modules.primitives import LinearNoBias
-from .modules.diffusion import DiffusionModule
-from .modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
+from protenix.model.modules.diffusion import DiffusionModule
+from protenix.model.modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
+from protenix.model.loss import ProtenixLoss
 from protenix.utils.torch_utils import autocasting_disable_decorator
+from protenix.model.loss import ProtenixLoss
 from protenix.model.utils import add
+from typing import Callable
 
 
 class ArtiosLigand(nn.Module):
@@ -39,7 +42,7 @@ class ArtiosLigand(nn.Module):
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
         # Model 
-        self.c_s, self.c_z, self.c_s_inputs = (
+        self.c_s, self.c_z, self.c_s_inputs = ( #TODO: remove c_Z
             configs.c_s,
             configs.c_z,
             configs.c_s_inputs,
@@ -52,6 +55,14 @@ class ArtiosLigand(nn.Module):
         self.diffusion_module = DiffusionModule(
             **configs.model.diffusion_module
         )
+
+        # Initialize loss as part of model for checkpointing and uncertainty learning
+        self.loss = ProtenixLoss(configs)
+
+        if configs.compile_model:
+            self.diffusion_module.diffusion_transformer = torch.compile(self.diffusion_module.diffusion_transformer)
+            # self.input_feature_embedder = torch.compile(self.input_feature_embedder)
+
         self.sigma_data = configs.sigma_data
 
     def sample_diffusion(self, **kwargs) -> torch.Tensor:
@@ -68,6 +79,7 @@ class ArtiosLigand(nn.Module):
                 "alpha",
                 "gamma",
                 "sigma_data",
+                "guidance_weight",
             ]
         }
         _configs.update({
@@ -81,6 +93,7 @@ class ArtiosLigand(nn.Module):
             ),
             "second_order": self.configs.sample_diffusion.second_order_train if self.training 
             else self.configs.sample_diffusion.second_order_inference
+
         })
         return autocasting_disable_decorator(self.configs.skip_amp.sample_diffusion)(
             sample_diffusion
@@ -95,6 +108,7 @@ class ArtiosLigand(nn.Module):
         chunk_size: Optional[int] = 4,
         N_model_seed: int = 1,
         symmetric_permutation: SymmetricPermutation = None,
+        guiding_net: Optional[nn.Module] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         Main inference loop (multiple model seeds) for the Alphafold3 model.
@@ -107,6 +121,7 @@ class ArtiosLigand(nn.Module):
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to 4.
             N_model_seed (int): Number of model seeds. Defaults to 1.
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object. Defaults to None.
+            guiding_net (Optional[Callable]): Guiding net. Defaults to None.
 
         Returns:
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
@@ -122,6 +137,7 @@ class ArtiosLigand(nn.Module):
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
                 symmetric_permutation=symmetric_permutation,
+                guiding_net=guiding_net,
             )
             pred_dicts.append(pred_dict)
             log_dicts.append(log_dict)
@@ -160,30 +176,38 @@ class ArtiosLigand(nn.Module):
         inplace_safe: bool = True,
         chunk_size: Optional[int] = 4,
         symmetric_permutation: SymmetricPermutation = None,
+        guiding_net: Optional[nn.Module] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         Main inference loop (single model seed) for the Alphafold3 model.
 
         Returns:
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
-        """
+        """        
         step_st = time.time()
         N_token = input_feature_dict["residue_index"].shape[-1]
-        if N_token <= 16:
-            deepspeed_evo_attention_condition_satisfy = False
-        else:
-            deepspeed_evo_attention_condition_satisfy = True
 
         log_dict = {}
         pred_dict = {}
         time_tracker = {}
 
-        # Embed input features 
+        # Embed input features
         s_inputs = self.input_feature_embedder(
             input_feature_dict=input_feature_dict,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
+
+        # Embed guidance input features
+        guiding_s_inputs = None
+        if guiding_net is not None:
+            guiding_input_embedder = guiding_net.input_feature_embedder
+            # Embed input features for guiding net
+            guiding_s_inputs = guiding_input_embedder(
+                input_feature_dict=input_feature_dict,
+                inplace_safe=inplace_safe,
+                chunk_size=chunk_size,
+            )
 
         if mode == "inference":
             keys_to_delete = []
@@ -205,6 +229,11 @@ class ArtiosLigand(nn.Module):
         time_tracker.update({"input_embed": step_trunk - step_st})
 
         ### Diffusion
+        # Initialise guiding diffusion module
+        guiding_diffusion_module = None
+        if guiding_net is not None:
+            guiding_diffusion_module = guiding_net.diffusion_module
+
         # Number of samples to generate from the same conditioning
         N_sample = self.configs.sample_diffusion["N_sample"]
         N_step = self.configs.sample_diffusion["N_step"]
@@ -220,9 +249,10 @@ class ArtiosLigand(nn.Module):
             N_sample=N_sample,
             timesteps=timesteps,
             inplace_safe=inplace_safe,
+            guiding_denoise_net=guiding_diffusion_module,
+            guiding_s_inputs=guiding_s_inputs,
         )
 
-        # TODO: commenting needed here
         timestep = timesteps[-1]  # Get final timestep
         pred_dict["timestep"] = timestep.expand(*pred_dict["coordinate"].shape[:-2])  # Expand to [..., N_sample]
 
@@ -266,7 +296,7 @@ class ArtiosLigand(nn.Module):
         chunk_size: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
-        Main training loop for the Alphafold3 model.
+        Main training (and evaluation) loop for the ArtiosLigand model.
 
         Args:
             input_feature_dict (dict[str, Any]): Input features dictionary.
@@ -280,11 +310,6 @@ class ArtiosLigand(nn.Module):
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
                 Prediction, updated label, and log dictionaries.
         """
-        N_token = input_feature_dict["residue_index"].shape[-1]
-        if N_token <= 16:
-            deepspeed_evo_attention_condition_satisfy = False
-        else:
-            deepspeed_evo_attention_condition_satisfy = True
 
         s_inputs = self.input_feature_embedder(
             input_feature_dict=input_feature_dict,
@@ -295,39 +320,40 @@ class ArtiosLigand(nn.Module):
         log_dict = {}
         pred_dict = {}
 
-        ### Mini-rollout
-        # Mini rollout is performed for confidence and label permutation
-        with torch.no_grad():
-            # [..., 1, N_atom, 3]
-            N_sample_mini_rollout = self.configs.sample_diffusion[
-                "N_sample_mini_rollout"
-            ]  # =1
-            N_step_mini_rollout = self.configs.sample_diffusion["N_step_mini_rollout"]
+        ### Mini-rollout for evaluation
+        if not self.training:
+            # Rollout for visualizing the structures during evaluation
+            with torch.no_grad():
+                # [..., 1, N_atom, 3]
+                N_sample_mini_rollout = self.configs.sample_diffusion[
+                    "N_sample_mini_rollout"
+                ]  # =1
+                N_step = self.configs.sample_diffusion["N_step"]
 
-            coordinate_mini = self.sample_diffusion( 
-                denoise_net=self.diffusion_module,
-                input_feature_dict=input_feature_dict,
-                s_inputs=s_inputs.detach(),
-                timesteps=self.inference_timestep_scheduler(
-                    N_step=N_step_mini_rollout,
-                    device=s_inputs.device,
-                    dtype=s_inputs.dtype,
-                ),
-                N_sample=N_sample_mini_rollout
-            )
-            coordinate_mini.detach_()
-            pred_dict["coordinate_mini"] = coordinate_mini
-
-            # Permute ground truth to match mini-rollout prediction
-            label_dict, perm_log_dict = (
-                symmetric_permutation.permute_label_to_match_mini_rollout(
-                    coordinate_mini,
-                    input_feature_dict,
-                    label_dict,
-                    label_full_dict,
+                coordinate_mini = self.sample_diffusion( 
+                    denoise_net=self.diffusion_module,
+                    input_feature_dict=input_feature_dict,
+                    s_inputs=s_inputs.detach(),
+                    timesteps=self.inference_timestep_scheduler(
+                        N_step=N_step,
+                        device=s_inputs.device,
+                        dtype=s_inputs.dtype,
+                    ),
+                    N_sample=N_sample_mini_rollout
                 )
-            )
-            log_dict.update(perm_log_dict)
+                coordinate_mini.detach_()
+                pred_dict["coordinate_mini"] = coordinate_mini
+
+                # Permute ground truth to match mini-rollout prediction
+                label_dict, perm_log_dict = (
+                    symmetric_permutation.permute_label_to_match_mini_rollout(
+                        coordinate_mini,
+                        input_feature_dict,
+                        label_dict,
+                        label_full_dict,
+                    )
+                )
+                log_dict.update(perm_log_dict)
 
         ### Diffusion training
         N_sample = self.diffusion_batch_size
@@ -352,11 +378,6 @@ class ArtiosLigand(nn.Module):
                 "timestep": timestep, 
             }
         )
-        label_dict.update(
-            {
-                "coordinate": x_target_augment,
-            }
-        )
 
         # Permute symmetric atom/chain in each sample to match true structure
         # Note: currently chains cannot be permuted since label is cropped
@@ -377,6 +398,7 @@ class ArtiosLigand(nn.Module):
         mode: str = "inference",
         current_step: Optional[int] = None,
         symmetric_permutation: SymmetricPermutation = None,
+        guiding_net: Optional[nn.Module] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         Forward pass of the Alphafold3 model.
@@ -398,9 +420,8 @@ class ArtiosLigand(nn.Module):
         inplace_safe = not (self.training or torch.is_grad_enabled())
         chunk_size = self.configs.infer_setting.chunk_size if inplace_safe else None
 
-        if mode == "train":
+        if mode == "train" or mode == "eval":
             nc_rng = np.random.RandomState(current_step)
-            assert self.training
             assert label_dict is not None
             assert symmetric_permutation is not None
 
@@ -421,9 +442,13 @@ class ArtiosLigand(nn.Module):
                 chunk_size=chunk_size,
                 N_model_seed=self.N_model_seed,
                 symmetric_permutation=None,
+                guiding_net=guiding_net,
             )
             log_dict.update({"time": time_tracker})
+            
+        '''
         elif mode == "eval":
+            # NOTE: this is not accessed for now, eval is the same as training
             if label_dict is not None:
                 assert (
                     label_dict["coordinate"].size()
@@ -441,5 +466,6 @@ class ArtiosLigand(nn.Module):
                 symmetric_permutation=symmetric_permutation,
             )
             log_dict.update({"time": time_tracker})
+        '''
 
         return pred_dict, label_dict, log_dict

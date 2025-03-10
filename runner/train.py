@@ -48,6 +48,14 @@ from io import StringIO
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
+PDB_TO_VISUALISE = [
+    "7xzr", "7uaw", "7zhd", "7x0b", 
+    "7vkq", "7pk0", "7ugk", "7vkr", 
+    "7uo8", "7uq1", "7wcf", "7oas", 
+    "8dik", "7te2", "8ajp", "7r0t", 
+    "8dl3", "7u1o", "7qa0", "7pd7",
+    "8dp7", "7z05", "7t7h", "7ulc"
+]
 
 class AF3Trainer(object):
     def __init__(self, configs):
@@ -144,10 +152,13 @@ class AF3Trainer(object):
             assert (
                 env is not None
             ), "if use ds4sci, set env as https://www.deepspeed.ai/tutorials/ds4sci_evoformerattention/"
+        
+        # Set high precision for tensor core matmul
+        torch.set_float32_matmul_precision('high')
         logging.info("Finished init ENV.")
 
     def init_loss(self):
-        self.loss = ProtenixLoss(self.configs)
+        # self.loss = ProtenixLoss(self.configs)
         self.symmetric_permutation = SymmetricPermutation(
             self.configs, error_dir=self.error_dir
         )
@@ -155,6 +166,7 @@ class AF3Trainer(object):
 
     def init_model(self):
         self.raw_model = ArtiosLigand(self.configs).to(self.device)
+        self.loss = self.raw_model.loss
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
             self.print(f"Using DDP")
@@ -187,12 +199,14 @@ class AF3Trainer(object):
         self.lr_scheduler = get_lr_scheduler(self.configs, self.optimizer, **kwargs)
 
     def init_data(self):
+        print("beginning init_data...")
         self.train_dl, self.test_dls = get_dataloaders(
             self.configs,
             DIST_WRAPPER.world_size,
             seed=self.configs.seed,
             error_dir=self.error_dir,
         )
+        print("finished init_data")
 
     def init_sampler(self): 
         #TODO: here we should perhaps initialise some sampler object with some sampler configs
@@ -378,13 +392,13 @@ class AF3Trainer(object):
                     # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, batch = self.get_loss(batch, mode="eval")
-                    # lDDT metrics
-                    lddt_dict = self.get_metrics(batch)
-                    lddt_metrics = self.aggregate_metrics(lddt_dict, batch)
-                    simple_metrics.update(
-                        {k: v for k, v in lddt_metrics.items() if "diff" not in k}
-                    )
+                    loss, loss_dict, batch = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
+                    # lDDT metrics TODO: now with our modified lddt calculations this will need fixing
+                    #lddt_dict = self.get_metrics(batch)
+                    #lddt_metrics = self.aggregate_metrics(lddt_dict, batch)
+                    #simple_metrics.update(
+                    #    {k: v for k, v in lddt_metrics.items() if "diff" not in k}
+                    #)
                     simple_metrics.update(loss_dict)
 
                 # Metrics
@@ -393,14 +407,14 @@ class AF3Trainer(object):
                         f"{ema_suffix}{key}", value, namespace=test_name
                     )
                 
-                # Visualise the first structure in the validation batch in wandb
-                # TODO: just temporary sampling logic for intial training runs
-                # TODO: this is commented out for early tests, will add back in later
-                if index == 0:
-                    pdb_str = to_pdb(batch["pred_dict"]["coordinate"], batch["input_feature_dict"])
+                # Visualise selected structures in wandb
+                # FIXME: just temporary sampling logic for intial training runs
+                if pid in PDB_TO_VISUALISE:
+                    coords = batch["pred_dict"]["coordinate_mini"].unsqueeze(-3)  # [..., 1, N_atom, 3] -> [..., N_atom, 3]
+                    pdb_str = to_pdb(coords, batch["input_feature_dict"])  # output of the mini-rollout
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                         wandb.log({
-                           f"{ema_suffix}structure_{test_name}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
+                           f"{ema_suffix}structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
                         }, step=self.step)
 
                 del batch, simple_metrics
@@ -467,7 +481,7 @@ class AF3Trainer(object):
         for key, value in loss_dict.items():
             if "loss" not in key:
                 continue
-            self.train_metric_wrapper.add(key, value, namespace="train")
+            self.train_metric_wrapper.add(key, value, namespace="train") #FIXME: getting illegel CUDA memory access here 
         torch.cuda.empty_cache()
 
     def progress_bar(self, desc: str = ""):

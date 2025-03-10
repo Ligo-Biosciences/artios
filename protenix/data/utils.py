@@ -850,12 +850,19 @@ def to_pdb(coords, input_feature_dict):
             res_idx = ref_space_uid[atom_idx] # TODO: I'm not 100% sure this is right when there's multiple chains
             element = atom_id_to_type(atom_name, atom_dict=None)  # Get element type NICE_TO_HAVE: pass in an atom_dict to handle weirded atom namings if needed
             
-            # Updated format to include element symbol in columns 77-78
-            record = (
-                f'ATOM  {atom_idx:>5} {atom_name:<4} GLY A{res_idx+1:>4}    '
-                f'{coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}'
-                f"{occupancy:>6.2f}{temp_factor:>6.2f}          {element:>2}"
-            ).ljust(80)
+            # For ligand atoms, use LIG instead of GLY
+            if element not in {'C', 'N', 'O', 'H', 'S'}:  # If not a standard protein atom
+                record = (
+                    f'HETATM{atom_idx:>5} {atom_name:<4} LIG A{res_idx+1:>4}    '
+                    f'{coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}'
+                    f"{occupancy:>6.2f}{temp_factor:>6.2f}          {element:>2}"
+                ).ljust(80)
+            else:
+                record = (
+                    f'ATOM  {atom_idx:>5} {atom_name:<4} GLY A{res_idx+1:>4}    '
+                    f'{coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}'
+                    f"{occupancy:>6.2f}{temp_factor:>6.2f}          {element:>2}"
+                ).ljust(80)
             
             pdb_lines.append(record)
             

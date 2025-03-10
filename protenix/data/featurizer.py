@@ -77,7 +77,7 @@ class Featurizer(object):
         Ref: AlphaFold3 SI Table 5 "restype"
         One-hot encoding of the sequence. 32 possible values: 20 amino acids + unknown,
         4 RNA nucleotides + unknown, 4 DNA nucleotides + unknown, and gap.
-        Ligands represented as “unknown amino acid”.
+        Ligands represented as "unknown amino acid".
 
         Args:
             restype_list (List[str]): A list of residue types.
@@ -221,8 +221,8 @@ class Featurizer(object):
     ) -> TokenArray:
         """
         Ref: AlphaFold3 SI Chapter 4.3.2
-        The atoms (a_i, b_i, c_i) used to construct token i’s frame depend on the chain type of i:
-        Protein tokens use their residue’s backbone (N, Cα, C),
+        The atoms (a_i, b_i, c_i) used to construct token i's frame depend on the chain type of i:
+        Protein tokens use their residue's backbone (N, Cα, C),
         while DNA and RNA tokens use (C1′, C3′, C4′) atoms of their residue.
         All other tokens (small molecules, glycans, ions) contain only one atom per token.
         The token atom is assigned to b_i, the closest atom to the token atom is a_i,
@@ -667,14 +667,18 @@ class Featurizer(object):
 
         Returns:
             Dict[str, torch.Tensor]: a dict of labels.
+            
+        Raises:
+            ValueError: If any of the label tensors contain NaN values.
         """
-
         labels = {}
 
+        # Check coordinates
         labels["coordinate"] = torch.Tensor(
             self.cropped_atom_array.coord
         )  # [N_atom, 3]
 
+        # Check coordinate mask 
         labels["coordinate_mask"] = torch.Tensor(
             self.cropped_atom_array.is_resolved.astype(int)
         ).long()  # [N_atom]

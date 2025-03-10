@@ -35,6 +35,7 @@ basic_configs = {
     "load_ema_checkpoint_path": "",
     "load_strict": True,
     "load_params_only": True,
+    "guiding_net_path": ValueMaybeNone(""),
     "skip_load_step": False,
     "skip_load_optimizer": False,
     "skip_load_scheduler": False,
@@ -43,8 +44,8 @@ basic_configs = {
     "wandb_id": "", #TODO 
     "seed": 42,
     "deterministic": False,
-    "ema_decay": -1.0,
-    "eval_ema_only": False,  # whether wandb only tracking ema checkpoint metrics
+    "ema_decay": 0.999,
+    "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],
 }
 data_configs = {
@@ -71,9 +72,9 @@ optim_configs = {
     "adam": {
         "beta1": 0.9,
         "beta2": 0.95,
-        "weight_decay": 1e-2,  # 1e-8
+        "weight_decay": 1e-2,
         "lr": GlobalConfigValue("lr"),
-        "use_adamw": True,  # False
+        "use_adamw": True,
     },
     # Optim - LRScheduler
     "af3_lr_scheduler": {
@@ -87,7 +88,7 @@ model_configs = {
     # Model
     "c_s": 384, # 192
     "c_z": 128, # 64
-    "c_s_inputs": 416,  # c_s_inputs == c_token + 32
+    "c_s_inputs": 800,  # c_s_inputs == c_token + 32
     "c_atom": 128, # 64
     "c_atompair": 16, # 16
     "c_token": 768, # 192
@@ -96,6 +97,7 @@ model_configs = {
     "no_bins": 64,
     "sigma_data": 16.0,
     "diffusion_batch_size": 48, # 12
+    "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
         1
@@ -110,10 +112,10 @@ model_configs = {
     "dtype": "bf16",  # default training dtype: bf16
     "loss_metrics_sparse_enable": True,  # the swicth for both sparse lddt metrics and sparse bond/smooth lddt loss
     "skip_amp": {
-        "sample_diffusion": False,  # True
-        "confidence_head": False,  # True
+        "sample_diffusion": True,  # True
+        "confidence_head": True,  # True
         "sample_diffusion_training": False,  # True
-        "loss": False,  # True
+        "loss": True,  # True
     },
     "infer_setting": {
         "chunk_size": ValueMaybeNone(
@@ -136,8 +138,8 @@ model_configs = {
     },
     "sample_diffusion": { 
         "N_step": 50, # 25
-        "N_sample": 5, # 1
-        "N_step_mini_rollout": 25, # 10
+        "N_sample": 1, # 1
+        "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type": "non_singular",
         "alpha": 1.0,
@@ -145,43 +147,14 @@ model_configs = {
         "sigma_data": GlobalConfigValue("sigma_data"),
         "second_order_train": False,
         "second_order_inference": False,
+        "guidance_weight": 2.0,
     },
     "model": {
         "N_model_seed": 1,  # for inference
-        "N_cycle": 4, # TODO: not used anymore
         "input_embedder": {
             "c_atom": GlobalConfigValue("c_atom"),
             "c_atompair": GlobalConfigValue("c_atompair"),
             "c_token": GlobalConfigValue("c_token"),
-        },
-        "relative_position_encoding": { 
-            "r_max": 32,
-            "s_max": 2,
-            "c_z": GlobalConfigValue("c_z"),
-        },
-        "template_embedder": { # TODO: delete
-            "c": 64,
-            "c_z": GlobalConfigValue("c_z"),
-            "n_blocks": 0,
-            "dropout": 0.25,
-            "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
-        },
-        "msa_module": { # TODO: delete 
-            "c_m": 64,
-            "c_z": GlobalConfigValue("c_z"),
-            "c_s_inputs": GlobalConfigValue("c_s_inputs"),
-            "n_blocks": 4,
-            "msa_dropout": 0.15,
-            "pair_dropout": 0.25,
-            "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
-        },
-        "pairformer": { # TODO: delete 
-            "n_blocks": GlobalConfigValue("n_blocks"),
-            "c_z": GlobalConfigValue("c_z"),
-            "c_s": GlobalConfigValue("c_s"),
-            "n_heads": 16,
-            "dropout": 0.25,
-            "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
         "diffusion_module": {
             "use_fine_grained_checkpoint": True,
@@ -192,17 +165,6 @@ model_configs = {
             "c_z": GlobalConfigValue("c_z"),
             "c_s": GlobalConfigValue("c_s"),
             "c_s_inputs": GlobalConfigValue("c_s_inputs"),
-            "initialization": {
-                "zero_init_condition_transition": False,
-                "zero_init_atom_encoder_residual_linear": False,
-                "he_normal_init_atom_encoder_small_mlp": False,
-                "he_normal_init_atom_encoder_output": False,
-                "glorot_init_self_attention": False,
-                "zero_init_adaln": True,
-                "zero_init_residual_condition_transition": False,
-                "zero_init_dit_output": True,
-                "zero_init_atom_decoder_linear": False,
-            },
             "atom_encoder": {
                 "n_blocks": 3,
                 "n_heads": 4,
@@ -217,31 +179,15 @@ model_configs = {
             },
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
-        "confidence_head": { 
-            "c_z": GlobalConfigValue("c_z"),
-            "c_s": GlobalConfigValue("c_s"),
-            "c_s_inputs": GlobalConfigValue("c_s_inputs"),
-            "n_blocks": 4,
-            "max_atoms_per_token": GlobalConfigValue("max_atoms_per_token"),
-            "pairformer_dropout": 0.0,
-            "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
-            "distance_bin_start": 3.25,
-            "distance_bin_end": 52.0,
-            "distance_bin_step": 1.25,
-            "stop_gradient": True,
-        },
-        "distogram_head": { 
-            "c_z": GlobalConfigValue("c_z"),
-            "no_bins": GlobalConfigValue("no_bins"),
-        },
     },
 }
+
 perm_configs = {
     # Chain and Atom Permutation
     "chain_permutation": {
         "train": {
             "mini_rollout": True,
-            "diffusion_sample": False,
+            "diffusion_sample": True,  # False
         },
         "test": {
             "diffusion_sample": True,
@@ -258,7 +204,7 @@ perm_configs = {
     "atom_permutation": {
         "train": {
             "mini_rollout": True,
-            "diffusion_sample": False,
+            "diffusion_sample": True,  # False
         },
         "test": {
             "diffusion_sample": True,
@@ -320,6 +266,7 @@ loss_configs = {
             },
             "smooth_lddt": {
                 "eps": 1e-6,
+                "k": 300,
             },
         },
         "distogram": {

@@ -48,7 +48,7 @@ class DataDumper:
         self,
         base_dir,
         need_atom_confidence: bool = False,
-        sorted_by_ranking_score: bool = True,
+        sorted_by_ranking_score: bool = False,
     ) -> None:
         self.base_dir = base_dir
         self.need_atom_confidence = need_atom_confidence
@@ -139,13 +139,13 @@ class DataDumper:
             b_factor=b_factor,
         )
         # Dump confidence
-        self._save_confidence(
-            data=pred_dict,
-            prediction_save_dir=prediction_save_dir,
-            sample_name=pdb_id,
-            seed=seed,
-            sorted_indices=sorted_indices,
-        )
+        #self._save_confidence(
+        #    data=pred_dict,
+        #    prediction_save_dir=prediction_save_dir,
+        #    sample_name=pdb_id,
+        #    seed=seed,
+        #    sorted_indices=sorted_indices,
+        #)
 
     def _save_structure(
         self,
@@ -180,7 +180,7 @@ class DataDumper:
             )
 
     def _get_ranker_indices(self, data: dict):
-        N_sample = len(data["summary_confidence"])
+        N_sample = data["coordinate"].shape[-3]
         if self.sorted_by_ranking_score:
             value = torch.tensor(
                 [
@@ -203,7 +203,7 @@ class DataDumper:
         seed: int,
         sorted_indices: None,
     ):
-        N_sample = len(data["summary_confidence"])
+        N_sample = data["coordinate"].shape[-3]  # len(data["summary_confidence"])
         for idx in range(N_sample):
             if self.need_atom_confidence:
                 data["full_data"][idx] = get_clean_full_confidence(

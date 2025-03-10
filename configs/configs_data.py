@@ -129,7 +129,7 @@ data_configs = {
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv", # .gz
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9_no_nucleic.csv", # .gz
             ),
             "pdb_list": "",
             "random_sample_if_failed": True,
@@ -149,12 +149,9 @@ data_configs = {
                 DATA_ROOT_DIR, "recentPDB_bioassembly"
             ),
             "indices_fpath": os.path.join(
-                DATA_ROOT_DIR, "indices/recentPDB_low_homology_maxtoken1536.csv"
+                DATA_ROOT_DIR, "indices/recentPDB_low_homology_maxtoken1536_no_nucleic.csv"
             ),
-            "pdb_list": os.path.join(
-                DATA_ROOT_DIR,
-                "indices/recentPDB_low_homology_maxtoken1024_sample384_pdb_id.txt", #FIXME: this currently doesn't exist in our datapipeline
-            ),
+            "pdb_list": "",
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
             "sort_by_n_token": False,
             "group_by_pdb_id": True,
@@ -175,6 +172,8 @@ data_configs = {
             "find_pocket": False,
             "find_all_pockets": False,
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
+            "group_by_pdb_id": True,
+            "find_eval_chain_interface": True,
         },
         **deepcopy(default_test_configs),
     },

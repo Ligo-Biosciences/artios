@@ -34,11 +34,19 @@ class ArtiosLigand(nn.Module):
         # Some constants 
         self.N_model_seed = self.configs.model.N_model_seed
 
+        # Fixed eval generator for reproducibility
+        self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
+
         # Diffusion 
         self.train_timestep_sampler = TrainingTimestepSampler(**configs.train_timestep_sampler) 
+        self.eval_timestep_scheduler = TrainingTimestepSampler(
+           **configs.train_timestep_sampler,
+           generator=self.eval_generator
+        )
         self.inference_timestep_scheduler = InferenceTimestepScheduler(
            **configs.inference_timestep_scheduler
         )
+        
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
         # Model 
@@ -360,7 +368,7 @@ class ArtiosLigand(nn.Module):
         x_target_augment, coords_pred, timestep = autocasting_disable_decorator( 
             self.configs.skip_amp.sample_diffusion_training
         )(sample_diffusion_training)(
-            timestep_sampler=self.train_timestep_sampler,
+            timestep_sampler=self.train_timestep_sampler if self.training else self.eval_timestep_sampler,
             denoise_net=self.diffusion_module,
             label_dict=label_dict,
             input_feature_dict=input_feature_dict,
@@ -368,6 +376,7 @@ class ArtiosLigand(nn.Module):
             sigma_data=self.sigma_data,
             N_sample=N_sample,
             diffusion_chunk_size=self.configs.diffusion_chunk_size,
+            generator=None if self.training else self.eval_generator
         )
 
         # Update dicts

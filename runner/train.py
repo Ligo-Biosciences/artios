@@ -425,7 +425,7 @@ class AF3Trainer(object):
                 
                 # Delete post-hoc checkpoint from RAM and disk
                 del checkpoint
-                if os.path.exists(checkpoint_path):
+                if DIST_WRAPPER.rank == 0:
                     os.remove(checkpoint_path)
 
             # Restore original model state

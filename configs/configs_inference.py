@@ -134,7 +134,7 @@ evaluation_configs = {
     "designs_cif_dir": RequiredValue(str),
     "working_dir": RequiredValue(str),
     "ligand_mpnn": {
-        "model_type": "ligandmpnn",
+        "model_type": "ligand_mpnn",
         "seed": 42,
         "verbose": 0,
         "temperature": 0.1
@@ -144,6 +144,7 @@ evaluation_configs = {
         "num_diffn_timesteps": 100,
         "num_diffn_samples": 1,
         "seed": 42,
+        "device": "cuda:0",
         "use_esm_embeddings": True,
     },
 }

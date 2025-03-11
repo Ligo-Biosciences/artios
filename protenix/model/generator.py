@@ -28,11 +28,11 @@ class TrainingTimestepSampler:
             self,
             loc: float = 0,
             scale: float = 1,
-            generator: torch.Generator = None,
+            seed: Optional[int] = None,
     ) -> None:
         self.loc = loc
         self.scale = scale
-        self.generator = generator
+        self.seed = seed
 
     def __call__(
         self, 
@@ -50,7 +50,12 @@ class TrainingTimestepSampler:
         Returns:
             torch.Tensor: sampled timestep 
         """
-        return sample_logit_normal(size, device, dtype, self.loc, self.scale, self.generator)
+        # Set seed for reproducibility
+        generator = None
+        if self.seed is not None:
+            generator = torch.Generator(device=device).manual_seed(self.seed)
+
+        return sample_logit_normal(size, device, dtype, self.loc, self.scale, generator)
     
 
 class InferenceTimestepScheduler:
@@ -373,7 +378,7 @@ def sample_diffusion_training(
     # Get timestep for noising
     # timestep: independent timesteps for each sample [..., N_sample]
     timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype) 
-    
+
     # Generate noise
     noise = torch.randn_like(
         x_target_augment, 

@@ -136,7 +136,7 @@ evaluation_configs = {
     "ligand_mpnn": {
         "model_type": "ligandmpnn",
         "seed": 42,
-        "verbose": False,
+        "verbose": 0,
         "temperature": 0.1
     },
     "chai1": {

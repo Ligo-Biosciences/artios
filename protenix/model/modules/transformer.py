@@ -32,6 +32,7 @@ from protenix.model.utils import (
     aggregate_atom_to_token,
     broadcast_token_to_atom,
     permute_final_dims,
+    expand_at_dim
 )
 from protenix.model.modules.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import checkpoint_blocks
@@ -285,7 +286,7 @@ class DiffusionTransformerBlock(nn.Module):
         out_a = add(ff_out, attn_out)
         # Avoid s/z to be deleted by torch.utils.checkpoint
         return out_a, s, z
-
+    
 
 class DiffusionTransformer(nn.Module):
     """

@@ -689,6 +689,12 @@ class AF3Trainer(object):
                                 save_model_only=True
                             )
                             wrapper.restore()
+                        # Add synchronization barrier to ensure all processes wait
+                        if DIST_WRAPPER.world_size > 1:
+                            dist.barrier()
+                            # Add small sleep to ensure filesystem operations complete
+                            time.sleep(2)
+                        
 
                 if step_need_eval or is_last_step:
                     self.evaluate()

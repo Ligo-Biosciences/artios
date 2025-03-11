@@ -32,6 +32,7 @@ from protenix.model.utils import (
     aggregate_atom_to_token,
     broadcast_token_to_atom,
     permute_final_dims,
+    expand_at_dim
 )
 from protenix.model.modules.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import checkpoint_blocks

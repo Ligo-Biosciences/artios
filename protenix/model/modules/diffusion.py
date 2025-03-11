@@ -295,8 +295,8 @@ class DiffusionModule(nn.Module):
 
         # Expand embeddings to match N_sample
         z = expand_at_dim(
-            z, dim=-4, n=N_sample
-        )  # [..., N_sample, N_token, N_token, c_z]
+            z, dim=-4, n=1  # rely on broadcasting for N_sample
+        )  # [..., 1, N_token, N_token, c_z]
 
         # Fine-grained checkpoint for finetuning stage 2 (token num: 768) for avoiding OOM
         if blocks_per_ckpt and self.use_fine_grained_checkpoint:

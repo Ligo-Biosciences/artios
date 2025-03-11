@@ -14,6 +14,7 @@
 
 import numpy as np
 import torch
+from protenix.utils.ema_utils import sigma_to_gamma
 
 
 class EMAWrapper(object):
@@ -80,16 +81,16 @@ class PowerLawEMAWrapper(EMAWrapper):
     def __init__(
             self, 
             model: torch.nn.Module, 
-            gamma: float = 6.94, 
+            sigma: float = 10.0, #TODO: change to sigma
             mutable_param_keywords=None):
         """
         model: (torch.nn.Module) a pytorch model to apply power law EMA
-        gamma: (float) decay rate for the power law
-        delta_t: (int) the number of steps between updates. This is the evaluation interval.
+        sigma: (float) standard deviation of our power law decay (larger sigma => slower decay)
         mutable_param_keywords: (list[str]) keywords of parameters to apply EMA decay, other params will stay untouched
         """
         self.model = model
-        self.gamma = gamma
+        self.sigma = sigma
+        self.gamma = sigma_to_gamma(sigma)
 
         self.mutable_param_keywords = [
             s.strip() for s in mutable_param_keywords if s.strip()

@@ -69,13 +69,23 @@ class InferenceTimestepScheduler:
         self.p = p
 
     def __call__(
-        self, 
+        self,
         N_step: int = 50,
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ) -> torch.Tensor:
-        "Timesteps to be used at inference time."
-        t = (torch.tensor(range(N_step+1), dtype=dtype, device=device) / N_step) ** np.exp(self.p)
+        """Generate timesteps for inference using p-Ligo schedule.
+
+        Args:
+            N_step (int): Number of timesteps. Defaults to 50.
+            device (torch.device): Device to place tensor on. Defaults to CPU.
+            dtype (torch.dtype): Data type of tensor. Defaults to float32.
+
+        Returns:
+            torch.Tensor: Timesteps tensor of shape [N_step + 1] 
+        """
+        steps = torch.arange(N_step + 1, dtype=dtype, device=device)
+        t = (steps / N_step) ** np.exp(self.p)
         return t
     
 
@@ -380,9 +390,10 @@ def sample_diffusion_training(
     timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype) 
 
     # Generate noise
-    noise = torch.randn_like(
-        x_target_augment, 
-        dtype=dtype, 
+    noise = torch.randn(
+        *x_target_augment.shape,
+        dtype=dtype,
+        device=x_target_augment.device,
         generator=generator
     ) * sigma_data  # [..., N_sample, N_atom, 3]
 

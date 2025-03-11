@@ -36,7 +36,7 @@ class ArtiosLigand(nn.Module):
 
         # Diffusion 
         self.train_timestep_sampler = TrainingTimestepSampler(**configs.train_timestep_sampler) 
-        self.eval_timestep_scheduler = TrainingTimestepSampler(
+        self.eval_timestep_sampler = TrainingTimestepSampler(
            **configs.train_timestep_sampler,
            seed=42  # fixed seed for deterministic eval
         )

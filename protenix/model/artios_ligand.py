@@ -34,14 +34,11 @@ class ArtiosLigand(nn.Module):
         # Some constants 
         self.N_model_seed = self.configs.model.N_model_seed
 
-        # Fixed eval generator for reproducibility
-        self.eval_generator = torch.Generator(device=self.device_type).manual_seed(42)
-
         # Diffusion 
         self.train_timestep_sampler = TrainingTimestepSampler(**configs.train_timestep_sampler) 
         self.eval_timestep_scheduler = TrainingTimestepSampler(
            **configs.train_timestep_sampler,
-           generator=self.eval_generator
+           seed=42  # fixed seed for deterministic eval
         )
         self.inference_timestep_scheduler = InferenceTimestepScheduler(
            **configs.inference_timestep_scheduler
@@ -72,11 +69,6 @@ class ArtiosLigand(nn.Module):
             # self.input_feature_embedder = torch.compile(self.input_feature_embedder)
 
         self.sigma_data = configs.sigma_data
-    
-    @property
-    def device_type(self) -> str:
-        """Returns the device type of the model's parameters."""
-        return next(self.parameters()).device
 
     def sample_diffusion(self, **kwargs) -> torch.Tensor:
         """
@@ -381,7 +373,7 @@ class ArtiosLigand(nn.Module):
             sigma_data=self.sigma_data,
             N_sample=N_sample,
             diffusion_chunk_size=self.configs.diffusion_chunk_size,
-            generator=None if self.training else self.eval_generator
+            generator=torch.Generator(s_inputs.device).manual_seed(42) if not self.training else None
         )
 
         # Update dicts

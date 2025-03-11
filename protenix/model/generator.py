@@ -211,11 +211,15 @@ def sample_diffusion(
     dtype = s_inputs.dtype
 
     # Stochasticity schedule g (scaled by 1/(1-t) for numerical stability)
+    # We also normalise by the functions' integral over [0,1].
+    # This allows for the parameter alpha to fully control the level of noise added.
+    # Now, the area under the noise schedule is equal to alpha.
     stoch_schedules = {
         "deterministic": lambda t: torch.zeros_like(t) / (1 - t),
         "constant": lambda t: torch.ones_like(t) * (0.5 * (alpha**2)) / (1 - t),
-        "non_singular": lambda t: torch.ones_like(t) * 0.5 * (alpha**2),
-        "zero_ends": lambda t: 0.5 * (alpha**2) * t,
+        "non_singular": lambda t: 4 * torch.ones_like(t) * 0.5 * (alpha**2), # int_{0}^{1}(non_sing) = 1/4
+        "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t, # int_{0}^{1}(zero_ends) = 1/12
+        #TODO: add in the beta distribution.
         #TODO: check the divergence minimising choice used in ma et al.
         #"proteina": lambda t: alpha / (t + 0.01)
     }
@@ -285,7 +289,7 @@ def sample_diffusion(
             # Euler step
             if not second_order:
                 x = x + update + torch.sqrt(2 * step * g_t * gamma) * noise
-            else:
+            else: #FIXME: my current issue with this is that we add nosie twice essentially: our initial update already uses noise. 
                 # Calculate intermediate prediction
                 x_middle = x + update
 

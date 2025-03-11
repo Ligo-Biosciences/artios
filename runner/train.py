@@ -425,6 +425,8 @@ class AF3Trainer(object):
                 
                 # Delete post-hoc checkpoint from RAM and disk
                 del checkpoint
+                dist.barrier()
+                time.sleep(2)  # Ensure all processes have loaded
                 if DIST_WRAPPER.rank == 0:
                     os.remove(checkpoint_path)
 

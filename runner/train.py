@@ -687,6 +687,7 @@ class AF3Trainer(object):
                 if step_need_save or is_last_step:
                     self.print(f"beginning Saving checkpoint at step {self.step}")
                     self.save_checkpoint() # Saves non-ema checkpoint
+                    assert use_ema, "ema should be used!!"  # TODO: dummy assert for debugging
                     if use_ema:
                         for wrapper in self.power_law_ema_wrappers:
                             wrapper.apply_shadow()

@@ -7,9 +7,8 @@ from protenix.model.modules.primitives import (
     normal_init_, bias_init_fn, Linear, LinearNoBias, BiasInitLinear, LayerNorm, SwiGLU,
     AdaptiveLayerNorm, Transition, Attention, _attention, rearrange_qk_to_dense_trunk,
     optimized_concat_split, rearrange_to_dense_trunk, create_local_attn_bias,
-    gather_pair_embedding_in_dense_trunk
+    gather_pair_embedding_in_dense_trunk, AttentionWithRoPE
 )
-
 
 class TestInitializationFunctions:
     @pytest.fixture
@@ -348,6 +347,104 @@ class TestAttentionHelpers:
         assert torch.allclose(out, out_float), (
             "Output differs when indices are provided as floats compared to integers"
         )
+
+class TestAttentionWithRoPE:
+    @pytest.fixture
+    def attention_inputs(self):
+        # Initialize parameters
+        batch_size = 2
+        seq_len = 8
+        c_q = 32
+        c_k = 32
+        c_v = 32
+        c_hidden = 16
+        num_heads = 4
+
+        # Create test inputs
+        q_x = torch.randn(batch_size, seq_len, c_q)
+        kv_x = torch.randn(batch_size, seq_len, c_k)
+        residue_index = torch.arange(seq_len).expand(batch_size, -1)
+        token_index = torch.arange(seq_len).expand(batch_size, -1)
+
+        return {
+            'batch_size': batch_size,
+            'seq_len': seq_len,
+            'c_q': c_q,
+            'c_k': c_k,
+            'c_v': c_v,
+            'c_hidden': c_hidden,
+            'num_heads': num_heads,
+            'q_x': q_x,
+            'kv_x': kv_x,
+            'residue_index': residue_index,
+            'token_index': token_index
+        }
+
+    def test_prep_qkv(self, attention_inputs):
+        # Initialize attention module
+        attn = AttentionWithRoPE(
+            c_q=attention_inputs['c_q'],
+            c_k=attention_inputs['c_k'],
+            c_v=attention_inputs['c_v'],
+            c_hidden=attention_inputs['c_hidden'],
+            num_heads=attention_inputs['num_heads']
+        )
+
+        # Test _prep_qkv
+        q, k, v = attn._prep_qkv(
+            q_x=attention_inputs['q_x'],
+            kv_x=attention_inputs['kv_x'],
+            residue_index=attention_inputs['residue_index'],
+            token_index=attention_inputs['token_index'],
+            apply_scale=True
+        )
+
+        # Check output shapes
+        expected_shape = (attention_inputs['batch_size'], attention_inputs['num_heads'], 
+                         attention_inputs['seq_len'], attention_inputs['c_hidden'])
+        assert q.shape == expected_shape, f"Query shape mismatch. Expected {expected_shape}, got {q.shape}"
+        assert k.shape == expected_shape, f"Key shape mismatch. Expected {expected_shape}, got {k.shape}"
+        assert v.shape == expected_shape, f"Value shape mismatch. Expected {expected_shape}, got {v.shape}"
+
+    def test_forward(self, attention_inputs):
+        # Initialize attention module
+        attn = AttentionWithRoPE(
+            c_q=attention_inputs['c_q'],
+            c_k=attention_inputs['c_k'],
+            c_v=attention_inputs['c_v'],
+            c_hidden=attention_inputs['c_hidden'],
+            num_heads=attention_inputs['num_heads']
+        )
+
+        # Test forward pass
+        output = attn.forward(
+            q_x=attention_inputs['q_x'],
+            kv_x=attention_inputs['kv_x'],
+            residue_index=attention_inputs['residue_index'],
+            token_index=attention_inputs['token_index'],
+            inplace_safe=False
+        )
+
+        # Check output shape
+        expected_shape = (attention_inputs['batch_size'], attention_inputs['seq_len'], 
+                         attention_inputs['c_q'])
+        assert output.shape == expected_shape, f"Output shape mismatch. Expected {expected_shape}, got {output.shape}"
+
+        # Check output is not None and contains no NaN values
+        assert output is not None, "Output should not be None"
+        assert not torch.isnan(output).any(), "Output contains NaN values"
+
+        # Test with inplace_safe=True
+        output_inplace = attn.forward(
+            q_x=attention_inputs['q_x'],
+            kv_x=attention_inputs['kv_x'],
+            residue_index=attention_inputs['residue_index'],
+            token_index=attention_inputs['token_index'],
+            inplace_safe=True
+        )
+
+        # Check outputs are the same regardless of inplace_safe
+        assert torch.allclose(output, output_inplace), "Outputs differ when using inplace_safe=True"
 
 
 if __name__ == "__main__":

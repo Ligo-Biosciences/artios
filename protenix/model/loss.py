@@ -61,7 +61,8 @@ class SmoothLDDTLoss(nn.Module):
         self,
         eps: float = 1e-10,
         reduction: str = "mean",
-        k: int = 300
+        k: int = 300,
+        uncertainty_embed_dim: int = 64,
     ) -> None:
         """SmoothLDDTLoss
 
@@ -73,6 +74,11 @@ class SmoothLDDTLoss(nn.Module):
         self.eps = eps
         self.reduction = reduction
         self.k = k
+
+        # Learnable parameter with single value
+        self.uncertainty_embed_dim = uncertainty_embed_dim
+        self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
+        self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def _chunk_forward(self, pred_distance, true_distance, c_lm=None):
         dist_diff = torch.abs(pred_distance - true_distance)
@@ -130,6 +136,7 @@ class SmoothLDDTLoss(nn.Module):
         pred_coordinates: torch.Tensor,
         true_coordinates: torch.Tensor,
         coordinate_mask: torch.Tensor,
+        timestep: torch.Tensor,
         diffusion_chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
         """SmoothLDDTLoss
@@ -141,12 +148,15 @@ class SmoothLDDTLoss(nn.Module):
                 [..., N_atom, 3]
             coordinate_mask (torch.Tensor): whether true coordinates exist
                 [..., N_atom]
+            timestep (torch.Tensor): the timestep for the current sample.
+                [..., N_sample]
             diffusion_chunk_size (Optional[int]): Chunk size over the N_sample dimension. Defaults to None.
 
         Returns:
             torch.Tensor: the smooth lddt loss
                 [...] if reduction is None else []
         """
+
         # Get the indices and distances of the k closest atoms for each atom in the true coordinates
         neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates)
         
@@ -210,9 +220,20 @@ class SmoothLDDTLoss(nn.Module):
                     print(f"NaN detected in lddt chunk {i}")
                 lddt.append(lddt_i)
             lddt = torch.cat(lddt, dim=-1)
+            lddt = lddt.mean(dim=-1)
 
-        lddt = lddt.mean(dim=-1)  # [...]
-        final_loss = 1 - loss_reduction(lddt, method=self.reduction)
+        loss = 1 - lddt  # [..., N_sample]
+
+        # Training time uncertainty scaling
+        if self.training:
+            timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
+            u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
+
+            # Apply uncertainty scaling
+            loss = loss / u_t.exp() + u_t # [..., N_sample]
+
+        final_loss = loss_reduction(loss, method=self.reduction)
+
         return final_loss
 
 
@@ -421,7 +442,11 @@ class MSELoss(nn.Module):
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
 
-        weighted_align_mse_loss = (self.weight_mse / u_t.exp()) * (per_sample_weighted_mse) + u_t
+        weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
+
+        # Balance grads between timesteps during training
+        if self.training:
+            weighted_align_mse_loss = (weighted_align_mse_loss / u_t.exp()) + u_t
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
 
@@ -455,7 +480,6 @@ class ProtenixLoss(nn.Module):
         #self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
         #self.pae_loss = PAELoss(**configs.loss.pae)
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
-        # self.fm_loss = FMLoss(**configs.loss.diffusion.flow_matching)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
 
@@ -552,6 +576,7 @@ class ProtenixLoss(nn.Module):
                     "smooth_lddt_loss": lambda: self.smooth_lddt_loss.forward(
                         pred_coordinates=pred_dict["coordinate"],
                         true_coordinates=label_dict["coordinate"],
+                        timestep=pred_dict["timestep"],
                         coordinate_mask=label_dict["coordinate_mask"],
                         diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
                     )

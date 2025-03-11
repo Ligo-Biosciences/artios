@@ -24,10 +24,10 @@ from protenix.model.modules.transformer import (
     AtomAttentionEncoder,
     DiffusionTransformer,
 )
+
 from protenix.model.utils import expand_at_dim, add
 from protenix.model.modules.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
-
 
 class DiffusionConditioning(nn.Module):
     """
@@ -45,14 +45,14 @@ class DiffusionConditioning(nn.Module):
         """
         Args:
             sigma_data (torch.float, optional): the standard deviation of the data. Defaults to 16.0.
-            c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128.
+            c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128. 
             c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
             c_s_inputs (int, optional): input embedding dim from InputEmbedder. Defaults to 449.
             c_noise_embedding (int, optional): noise embedding dim. Defaults to 256.
         """
         super(DiffusionConditioning, self).__init__()
         self.sigma_data = sigma_data
-        self.c_z = c_z
+        self.c_z = c_z 
         self.c_s = c_s
         self.c_s_inputs = c_s_inputs
 
@@ -68,10 +68,10 @@ class DiffusionConditioning(nn.Module):
 
         ### From Diffusion Conditioning
         #  Line 1-2
-        self.relpe = RelativePositionEncoding(c_z=c_z)
-        self.layernorm_z = LayerNorm(2 * self.c_z)
+        self.relpe = RelativePositionEncoding(c_z=c_z) 
+        self.layernorm_z = LayerNorm(2 * self.c_z) 
         self.linear_no_bias_z = LinearNoBias(
-            in_features=2 * self.c_z, out_features=self.c_z
+            in_features=2 * self.c_z, out_features=self.c_z 
         )
         # Line 3-5:
         self.transition_z = Transition(c_in=self.c_z, n=2)
@@ -117,7 +117,7 @@ class DiffusionConditioning(nn.Module):
             self.linear_no_bias_z_init_j(s)[..., None, :, :],
         )  #  [..., N_token, N_token, c_z]
 
-        # Add token bonds to pair embedding (Line 5)
+        # Add token bonds to pair embedding (Line 5) 
         z = add(
             z,
             self.linear_no_bias_token_bonds(input_feature_dict["token_bonds"].unsqueeze(-1)),
@@ -125,18 +125,18 @@ class DiffusionConditioning(nn.Module):
         )
 
         ### Logic from Diffusion Conditioning (Algorithm 21)
-        # Concatenate z_init with relative position encoding and embed (Line 1)
+        # Concatenate z_init with relative position encoding and embed (Line 1) 
         z = torch.cat(
             tensors=[z, self.relpe(input_feature_dict)], dim=-1 
         ) # [..., N_tokens, N_tokens, 2*c_z]
 
-        # Normalise and embed pair embedding (Line 2)
+        # Normalise and embed pair embedding (Line 2) 
         z = self.linear_no_bias_z(self.layernorm_z(z)) 
 
-        # Send pair embedding through one transition (Line 3-5)
+        # Send pair embedding through one transition (Line 3-5) 
         z = add(z, self.transition_z(z), inplace_safe=inplace_safe)
 
-        # Fourier embed the noise level (Line 8) 
+        # Fourier embed the noise level (Line 8)  
         t_hat_timestep = 2 * timestep - 1 # Rescale to [-1, 1] for smoother embedding
         timestep_t = self.fourier_embedding(t_hat_timestep=t_hat_timestep).to(s.dtype)  # [..., N_sample, c_noise_embedding]
         
@@ -167,7 +167,7 @@ class DiffusionModule(nn.Module):
         c_atompair: int = 16,
         c_token: int = 768,
         c_s: int = 384,
-        c_z: int = 128,
+        c_z: int = 128, 
         c_s_inputs: int = 449,
         atom_encoder: dict[str, int] = {"n_blocks": 3, "n_heads": 4},
         transformer: dict[str, int] = {"n_blocks": 24, "n_heads": 16},
@@ -201,7 +201,7 @@ class DiffusionModule(nn.Module):
         self.c_token = c_token
         self.c_s_inputs = c_s_inputs
         self.c_s = c_s
-        self.c_z = c_z
+        self.c_z = c_z 
 
         # Grad checkpoint setting
         self.blocks_per_ckpt = blocks_per_ckpt
@@ -217,7 +217,7 @@ class DiffusionModule(nn.Module):
             c_token=c_token,
             has_coords=True,
             c_s=c_s,
-            c_z=c_z,
+            c_z=c_z, 
             blocks_per_ckpt=blocks_per_ckpt,
         )
         # Alg20: line4
@@ -278,7 +278,7 @@ class DiffusionModule(nn.Module):
         # use checkpoint here if blocks_per_ckpt is not None.
         if blocks_per_ckpt:
             checkpoint_fn = get_checkpoint_fn()
-            s, z = checkpoint_fn(
+            s, z = checkpoint_fn( 
                 self.diffusion_conditioning,
                 timestep,
                 input_feature_dict,
@@ -286,7 +286,7 @@ class DiffusionModule(nn.Module):
                 inplace_safe,
             )
         else:
-            s, z = self.diffusion_conditioning(
+            s, z = self.diffusion_conditioning( 
                 timestep=timestep,
                 input_feature_dict=input_feature_dict,
                 s_inputs=s_inputs,
@@ -295,18 +295,18 @@ class DiffusionModule(nn.Module):
 
         # Expand embeddings to match N_sample
         z = expand_at_dim(
-            z, dim=-4, n=N_sample
-        )  # [..., N_sample, N_token, N_token, c_z]
+            z, dim=-4, n=1  # rely on broadcasting for N_sample
+        )  # [..., 1, N_token, N_token, c_z]
 
         # Fine-grained checkpoint for finetuning stage 2 (token num: 768) for avoiding OOM
         if blocks_per_ckpt and self.use_fine_grained_checkpoint:
             checkpoint_fn = get_checkpoint_fn()
-            a_token, q_skip, c_skip, p_skip = checkpoint_fn(
+            a_token, q_skip, c_skip, p_skip = checkpoint_fn( 
                 self.atom_attention_encoder,
                 input_feature_dict,
                 r_noisy,
                 s, # Replaced s_trunk
-                z,
+                z, 
                 inplace_safe,
                 chunk_size,
             )
@@ -316,7 +316,7 @@ class DiffusionModule(nn.Module):
                 input_feature_dict=input_feature_dict,
                 r_l=r_noisy,
                 s=s, # Replaced s_trunk
-                z=z,
+                z=z, 
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
             )
@@ -346,7 +346,7 @@ class DiffusionModule(nn.Module):
                 a_token,
                 q_skip,
                 c_skip,
-                p_skip,
+                p_skip, 
                 inplace_safe,
                 chunk_size,
             )
@@ -357,7 +357,7 @@ class DiffusionModule(nn.Module):
                 a=a_token,
                 q_skip=q_skip,
                 c_skip=c_skip,
-                p_skip=p_skip,
+                p_skip=p_skip, 
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
             )

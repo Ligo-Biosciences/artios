@@ -682,6 +682,7 @@ class Featurizer(object):
         labels["coordinate_mask"] = torch.Tensor(
             self.cropped_atom_array.is_resolved.astype(int)
         ).long()  # [N_atom]
+        
         return labels
 
     def get_atom_permutation_list(

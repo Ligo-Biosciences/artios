@@ -17,9 +17,11 @@ from protenix.model.generator import (
 from protenix.model.utils import simple_merge_dict_list
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.model.modules.primitives import LinearNoBias
-from .modules.diffusion import DiffusionModule
-from .modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
+from protenix.model.modules.diffusion import DiffusionModule
+from protenix.model.modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
+from protenix.model.loss import ProtenixLoss
 from protenix.utils.torch_utils import autocasting_disable_decorator
+from protenix.model.loss import ProtenixLoss
 from protenix.model.utils import add
 from typing import Callable
 
@@ -34,13 +36,18 @@ class ArtiosLigand(nn.Module):
 
         # Diffusion 
         self.train_timestep_sampler = TrainingTimestepSampler(**configs.train_timestep_sampler) 
+        self.eval_timestep_sampler = TrainingTimestepSampler(
+           **configs.train_timestep_sampler,
+           seed=42  # fixed seed for deterministic eval
+        )
         self.inference_timestep_scheduler = InferenceTimestepScheduler(
            **configs.inference_timestep_scheduler
         )
+        
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
         # Model 
-        self.c_s, self.c_z, self.c_s_inputs = (
+        self.c_s, self.c_z, self.c_s_inputs = ( #TODO: remove c_Z
             configs.c_s,
             configs.c_z,
             configs.c_s_inputs,
@@ -54,9 +61,12 @@ class ArtiosLigand(nn.Module):
             **configs.model.diffusion_module
         )
 
+        # Initialize loss as part of model for checkpointing and uncertainty learning
+        self.loss = ProtenixLoss(configs)
+
         if configs.compile_model:
-            self.diffusion_module = torch.compile(self.diffusion_module)
-            self.input_feature_embedder = torch.compile(self.input_feature_embedder)
+            self.diffusion_module.diffusion_transformer = torch.compile(self.diffusion_module.diffusion_transformer)
+            # self.input_feature_embedder = torch.compile(self.input_feature_embedder)
 
         self.sigma_data = configs.sigma_data
 
@@ -291,7 +301,7 @@ class ArtiosLigand(nn.Module):
         chunk_size: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
-        Main training loop for the Alphafold3 model.
+        Main training (and evaluation) loop for the ArtiosLigand model.
 
         Args:
             input_feature_dict (dict[str, Any]): Input features dictionary.
@@ -315,48 +325,47 @@ class ArtiosLigand(nn.Module):
         log_dict = {}
         pred_dict = {}
 
-        ### Mini-rollout
-        # Mini rollout is performed for confidence and label permutation
-        """
-        with torch.no_grad():
-            # [..., 1, N_atom, 3]
-            N_sample_mini_rollout = self.configs.sample_diffusion[
-                "N_sample_mini_rollout"
-            ]  # =1
-            N_step_mini_rollout = self.configs.sample_diffusion["N_step_mini_rollout"]
+        ### Mini-rollout for evaluation
+        if not self.training:
+            # Rollout for visualizing the structures during evaluation
+            with torch.no_grad():
+                # [..., 1, N_atom, 3]
+                N_sample_mini_rollout = self.configs.sample_diffusion[
+                    "N_sample_mini_rollout"
+                ]  # =1
+                N_step = self.configs.sample_diffusion["N_step"]
 
-            coordinate_mini = self.sample_diffusion( 
-                denoise_net=self.diffusion_module,
-                input_feature_dict=input_feature_dict,
-                s_inputs=s_inputs.detach(),
-                timesteps=self.inference_timestep_scheduler(
-                    N_step=N_step_mini_rollout,
-                    device=s_inputs.device,
-                    dtype=s_inputs.dtype,
-                ),
-                N_sample=N_sample_mini_rollout
-            )
-            coordinate_mini.detach_()
-            pred_dict["coordinate_mini"] = coordinate_mini
-
-            # Permute ground truth to match mini-rollout prediction
-            label_dict, perm_log_dict = (
-                symmetric_permutation.permute_label_to_match_mini_rollout(
-                    coordinate_mini,
-                    input_feature_dict,
-                    label_dict,
-                    label_full_dict,
+                coordinate_mini = self.sample_diffusion( 
+                    denoise_net=self.diffusion_module,
+                    input_feature_dict=input_feature_dict,
+                    s_inputs=s_inputs.detach(),
+                    timesteps=self.inference_timestep_scheduler(
+                        N_step=N_step,
+                        device=s_inputs.device,
+                        dtype=s_inputs.dtype,
+                    ),
+                    N_sample=N_sample_mini_rollout
                 )
-            )
-            log_dict.update(perm_log_dict)
-        """
+                coordinate_mini.detach_()
+                pred_dict["coordinate_mini"] = coordinate_mini
+
+                # Permute ground truth to match mini-rollout prediction
+                label_dict, perm_log_dict = (
+                    symmetric_permutation.permute_label_to_match_mini_rollout(
+                        coordinate_mini,
+                        input_feature_dict,
+                        label_dict,
+                        label_full_dict,
+                    )
+                )
+                log_dict.update(perm_log_dict)
 
         ### Diffusion training
         N_sample = self.diffusion_batch_size
         x_target_augment, coords_pred, timestep = autocasting_disable_decorator( 
             self.configs.skip_amp.sample_diffusion_training
         )(sample_diffusion_training)(
-            timestep_sampler=self.train_timestep_sampler,
+            timestep_sampler=self.train_timestep_sampler if self.training else self.eval_timestep_sampler,
             denoise_net=self.diffusion_module,
             label_dict=label_dict,
             input_feature_dict=input_feature_dict,
@@ -364,6 +373,7 @@ class ArtiosLigand(nn.Module):
             sigma_data=self.sigma_data,
             N_sample=N_sample,
             diffusion_chunk_size=self.configs.diffusion_chunk_size,
+            generator=torch.Generator(s_inputs.device).manual_seed(42) if not self.training else None
         )
 
         # Update dicts

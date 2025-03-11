@@ -694,9 +694,13 @@ class AF3Trainer(object):
                                 ema_suffix=f"ema_{wrapper.gamma}", 
                                 save_model_only=True
                             )
-                            print(f"Saved ema_{wrapper.gamma}")
                             wrapper.restore()
-                            # TODO: only 1 checkpoint seems to be saved
+                        # Add synchronization barrier to ensure all processes wait
+                        if DIST_WRAPPER.world_size > 1:
+                            dist.barrier()
+                            # Add small sleep to ensure filesystem operations complete
+                            time.sleep(2)
+                        
 
                 if step_need_eval or is_last_step:
                     self.evaluate()

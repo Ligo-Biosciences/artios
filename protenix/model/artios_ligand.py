@@ -326,6 +326,7 @@ class ArtiosLigand(nn.Module):
         pred_dict = {}
 
         ### Mini-rollout for evaluation
+        '''
         if not self.training:
             # Rollout for visualizing the structures during evaluation
             with torch.no_grad():
@@ -359,6 +360,7 @@ class ArtiosLigand(nn.Module):
                     )
                 )
                 log_dict.update(perm_log_dict)
+        '''
 
         ### Diffusion training
         N_sample = self.diffusion_batch_size

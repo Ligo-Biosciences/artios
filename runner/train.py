@@ -428,7 +428,8 @@ class AF3Trainer(object):
                 
                 # Delete post-hoc checkpoint from RAM and disk
                 del checkpoint
-                wait_for_all_processes()
+                torch.distributed.barrier()  # TODO: 
+                time.sleep(2)  # Ensure all processes have loaded
                 if DIST_WRAPPER.rank == 0:
                     os.remove(checkpoint_path)
 
@@ -600,8 +601,8 @@ class AF3Trainer(object):
         for key, value in loss_dict.items():
             if "loss" not in key:
                 continue
-            if key == "raw_loss_and_timestep":
-                continue
+            if isinstance(loss_dict[key], dict) and "raw_loss_and_timestep" in loss_dict[key]:
+                loss_dict[key].pop("raw_loss_and_timestep", {})  # Remove raw_loss_and_timestep from loss_dict
             self.train_metric_wrapper.add(key, value, namespace="train") 
         torch.cuda.empty_cache()
 

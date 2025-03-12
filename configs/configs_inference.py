@@ -133,7 +133,7 @@ inference_configs = {
 evaluation_configs = {
     "designs_cif_dir": RequiredValue(str),
     "working_dir": RequiredValue(str),
-    "secondary_struc_method": "biopython" # "biopython"
+    "secondary_struc_method": "biopython", # "biopython"
     "eval_type": "secondary_structure_distribution", # "all", "secondary_structure_distribution", "designability"
     "ligand_mpnn": {
         "model_type": "ligand_mpnn",

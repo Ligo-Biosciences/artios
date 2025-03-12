@@ -37,7 +37,7 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.loss import ProtenixLoss
 from protenix.model.artios_ligand import ArtiosLigand
-from protenix.utils.distributed import DIST_WRAPPER
+from protenix.utils.distributed import DIST_WRAPPER, gather_and_merge
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.permutation.permutation import SymmetricPermutation
@@ -48,9 +48,8 @@ from runner.ema import PowerLawEMAWrapper
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.data.utils import to_pdb
 from io import StringIO
-from protenix.utils.monitoring import visualize_loss_histogram
+from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 import matplotlib.pyplot as plt
-
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
@@ -62,6 +61,7 @@ PDB_TO_VISUALISE = [
     "8dl3", "7u1o", "7qa0", "7pd7",
     "8dp7", "7z05", "7t7h", "7ulc"
 ]
+
 
 class AF3Trainer(object):
     def __init__(self, configs):
@@ -585,6 +585,7 @@ class AF3Trainer(object):
             )
             # Unscales the gradients of optimizer's assigned parameters in-place
             scaler.unscale_(self.optimizer)
+            self.on_before_optimizer_step()
             # Do grad clip only
             self.update()
             scaler.step(self.optimizer)
@@ -652,6 +653,24 @@ class AF3Trainer(object):
         self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
 
         return output_paths
+    
+    def on_validation_epoch_end(self):
+        """Hook that is called at the end of each validation epoch."""
+        pass
+
+    def on_before_optimizer_step(self):
+        """Hook that is called before the optimizer step."""
+        if self.configs.monitor.grad_norm:
+            _, total_norm = grad_norm(self.model, norm_type=2)
+
+            # Average across all ranks
+            #def numpy_mean_aggregation(values):
+            #    return float(np.mean(values))  # Convert to float in case of numpy types
+            #total_norm = gather_and_merge(total_norm, numpy_mean_aggregation)
+
+            # Log to wandb
+            if DIST_WRAPPER.rank == 0:
+                wandb.log({"grad_norm": total_norm}, step=self.step)
 
     def run(self):
         """
@@ -726,6 +745,7 @@ class AF3Trainer(object):
 
                 if step_need_eval or is_last_step:
                     self.evaluate()
+                    self.on_validation_epoch_end()
                 self.global_step += 1
                 if self.global_step % self.iters_to_accumulate == 0:
                     self.step += 1               

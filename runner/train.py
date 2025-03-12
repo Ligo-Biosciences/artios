@@ -367,7 +367,7 @@ class AF3Trainer(object):
         assert mode in ["train", "eval"]
         self.loss.to(batch["pred_dict"]["coordinate"].device)  # Move loss to device
 
-        loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
+        loss, loss_dict, raw_loss_and_timestep = autocasting_disable_decorator(self.configs.skip_amp.loss)(
             self.loss
         )(
             feat_dict=batch["input_feature_dict"],
@@ -375,7 +375,7 @@ class AF3Trainer(object):
             label_dict=batch["label_dict"],
             mode=mode,
         )
-        return loss, loss_dict, batch
+        return loss, loss_dict, raw_loss_and_timestep
 
     @torch.no_grad()
     def get_metrics(self, batch: dict) -> dict:
@@ -485,8 +485,7 @@ class AF3Trainer(object):
                     # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, batch = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
-                    raw_loss_and_timestep = loss_dict.pop("raw_loss_and_timestep", {})
+                    loss, loss_dict, raw_loss_and_timestep = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
 
                     # Collect losses and timesteps
                     for loss_name, data in raw_loss_and_timestep.items():
@@ -520,7 +519,7 @@ class AF3Trainer(object):
                            f"{ema_suffix}_structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
                         }, step=self.step)
                 """
-                del batch, simple_metrics
+                del simple_metrics
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()
@@ -578,7 +577,6 @@ class AF3Trainer(object):
         with enable_amp:
             batch, _ = self.model_forward(batch, mode="train")
             loss, loss_dict, _ = self.get_loss(batch, mode="train")
-            del loss_dict["raw_loss_and_timestep"]  # Remove raw_loss_and_timestep from loss_dict
 
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):

@@ -490,7 +490,7 @@ class ProtenixLoss(nn.Module):
 
     def aggregate_losses(  
         self, loss_fns: dict, has_valid_resolution: Optional[torch.Tensor] = None
-    ) -> tuple[torch.Tensor, dict]:
+    ) -> tuple[torch.Tensor, dict, dict]:
         """
         Aggregates multiple loss functions and their respective metrics.
 
@@ -502,6 +502,7 @@ class ProtenixLoss(nn.Module):
             tuple[torch.Tensor, dict]:
                 - cum_loss (torch.Tensor): Cumulative loss.
                 - all_metrics (dict): Dictionary containing all metrics.
+                - raw_loss_and_timestep (dict): Dictionary containing raw loss and timestep for monitoring.
         """
         cum_loss = 0.0
         all_metrics = {}
@@ -509,15 +510,15 @@ class ProtenixLoss(nn.Module):
         for loss_name, loss_fn in loss_fns.items():
             weight = self.loss_weight[loss_name]
             loss_outputs = loss_fn()
+            metrics = {}  # NOTE: dummy metrics
             if isinstance(loss_outputs, tuple):
-                loss, metrics = loss_outputs
+                loss, metric = loss_outputs
                 # Store raw losses and timesteps for plotting
-                if "raw_loss" in metrics:
+                if "raw_loss" in metric:
                     raw_loss_and_timestep[loss_name] = {
-                        "loss": metrics["raw_loss"].detach().clone(),
-                        "timestep": metrics["timestep"].detach().clone()
+                        "loss": metric["raw_loss"].detach().clone(),
+                        "timestep": metric["timestep"].detach().clone()
                     }
-                del metrics["raw_loss"]
             else:
                 assert isinstance(loss_outputs, torch.Tensor)
                 loss, metrics = loss_outputs, {}
@@ -542,10 +543,7 @@ class ProtenixLoss(nn.Module):
             cum_loss = cum_loss + weight * loss
         all_metrics["loss"] = cum_loss.detach().clone()
 
-        # Add raw loss and timestep dict to all_metrics
-        all_metrics["raw_loss_and_timestep"] = raw_loss_and_timestep
-
-        return cum_loss, all_metrics
+        return cum_loss, all_metrics, raw_loss_and_timestep
 
     def calculate_losses(
         self,
@@ -553,7 +551,7 @@ class ProtenixLoss(nn.Module):
         pred_dict: dict[str, torch.Tensor],
         label_dict: dict[str, Any],
         mode: str = "train",
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         """
         Calculate the cumulative loss and aggregated metrics for the given predictions and labels.
 
@@ -564,9 +562,10 @@ class ProtenixLoss(nn.Module):
             mode (str): Mode of operation ('train', 'eval', 'inference'). Defaults to 'train'.
 
         Returns:
-            tuple[torch.Tensor, dict[str, torch.Tensor]]:
+            tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
                 - cum_loss (torch.Tensor): Cumulative loss.
                 - metrics (dict[str, torch.Tensor]): Dictionary containing aggregated metrics.
+                - raw_loss_and_timestep (dict[str, torch.Tensor]): Dictionary containing raw loss and timestep for monitoring.
         """
         assert mode in ["train", "eval", "inference"]
 
@@ -635,9 +634,9 @@ class ProtenixLoss(nn.Module):
                 device=label_dict["coordinate"].device,
             )
 
-        cum_loss, metrics = self.aggregate_losses(loss_fns, has_valid_resolution)
+        cum_loss, metrics, raw_loss_and_timestep = self.aggregate_losses(loss_fns, has_valid_resolution)
 
-        return cum_loss, metrics
+        return cum_loss, metrics, raw_loss_and_timestep
 
     def forward( 
         self,
@@ -663,64 +662,13 @@ class ProtenixLoss(nn.Module):
         diffusion_chunk_size = self.configs.loss.diffusion_chunk_size_outer
         assert mode in ["train", "eval", "inference"]
 
-        if diffusion_chunk_size <= 0:
-            # Calculate losses
-            cum_loss, losses = self.calculate_losses(
-                feat_dict=feat_dict,
-                pred_dict=pred_dict,
-                label_dict=label_dict,
-                mode=mode,
-            )
-        else:
-            if "coordinate" in pred_dict: 
-                N_sample = pred_dict["coordinate"].shape[-3]
-            elif self.configs.train_confidence_only:
-                N_sample = pred_dict["coordinate_mini"].shape[-3]
-            else:
-                raise KeyError("Missing key: coordinate (in pred_dict).")
-            no_chunks = N_sample // diffusion_chunk_size + (
-                N_sample % diffusion_chunk_size != 0
-            )
-            cum_loss = 0.0
-            losses = {}
-            for i in range(no_chunks):
-                cur_sample_num = min(
-                    diffusion_chunk_size, N_sample - i * diffusion_chunk_size
-                )
-                pred_dict_i = {}
-                for key, value in pred_dict.items():
-                    if key in ["coordinate"] and mode == "train": 
-                        pred_dict_i[key] = value[
-                            i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
-                            :,
-                            :,
-                        ]
-                    elif (
-                        key in ["coordinate", "plddt", "pae", "pde", "resolved"] 
-                        and mode != "train"
-                    ):
-                        pred_dict_i[key] = value[
-                            i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
-                            :,
-                            :,
-                        ]
-                    else:
-                        pred_dict_i[key] = value
-                cum_loss_i, losses_i = self.calculate_losses(
-                    feat_dict=feat_dict,
-                    pred_dict=pred_dict_i,
-                    label_dict=label_dict,
-                    mode=mode,
-                )
-                cum_loss += cum_loss_i * cur_sample_num
-                # Aggregate metrics
-                for key, value in losses_i.items():
-                    if key in losses:
-                        losses[key] += value * cur_sample_num
-                    else:
-                        losses[key] = value * cur_sample_num
-            cum_loss /= N_sample
-            for key in losses.keys():
-                losses[key] /= N_sample
 
-        return cum_loss, losses
+        # Calculate losses
+        cum_loss, losses, raw_loss_and_timestep = self.calculate_losses(
+            feat_dict=feat_dict,
+            pred_dict=pred_dict,
+            label_dict=label_dict,
+            mode=mode,
+        )
+
+        return cum_loss, losses, raw_loss_and_timestep

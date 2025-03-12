@@ -532,8 +532,8 @@ class AF3Trainer(object):
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0 and loss_data:
                 for loss_name, data in loss_data.items():
                     # Combine all collected data for this loss type
-                    combined_losses = np.concatenate([l.flatten() for l in data['losses']])
-                    combined_timesteps = np.concatenate([t.flatten() for t in data['timesteps']])
+                    combined_losses = np.concatenate([l.flatten() for l in data['losses']]).flatten()
+                    combined_timesteps = np.concatenate([t.flatten() for t in data['timesteps']]).flatten()
                     
                     # Histogram-based visualization
                     hist_fig = visualize_loss_histogram(
@@ -578,7 +578,7 @@ class AF3Trainer(object):
         with enable_amp:
             batch, _ = self.model_forward(batch, mode="train")
             loss, loss_dict, _ = self.get_loss(batch, mode="train")
-            loss_dict.pop("raw_loss_and_timestep", {})  # Remove raw_loss_and_timestep from loss_dict
+            del loss_dict["raw_loss_and_timestep"]  # Remove raw_loss_and_timestep from loss_dict
 
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):

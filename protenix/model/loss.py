@@ -81,20 +81,16 @@ class SmoothLDDTLoss(nn.Module):
         self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def _chunk_forward(self, pred_distance, true_distance, c_lm=None):
-        dist_diff = torch.abs(pred_distance - true_distance)
+        dist_diff = torch.abs(pred_distance - true_distance)  # [..., N_sample, N_atom, k]
         # For save cuda memory we use inplace op
         dist_diff_epsilon = 0
         for threshold in [0.5, 1, 2, 4]:
             dist_diff_epsilon = add(dist_diff_epsilon, mul(0.25, torch.sigmoid(threshold - dist_diff), inplace_safe=True), inplace_safe=True)
 
         # Compute mean
-        if c_lm is not None:
-            lddt = torch.sum(c_lm * dist_diff_epsilon, dim=(-1, -2)) / (
-                torch.sum(c_lm, dim=(-1, -2)) + self.eps
-            )  # [..., N_sample]
-        else:
-            # It's for sparse forward mode
-            lddt = torch.mean(dist_diff_epsilon, dim=-1)
+        lddt = torch.sum(c_lm * dist_diff_epsilon, dim=(-1, -2)) / (
+            torch.sum(c_lm, dim=(-1, -2)) + self.eps
+        )  # [..., N_sample]
         return lddt
     
     def query_neighbors(
@@ -192,37 +188,12 @@ class SmoothLDDTLoss(nn.Module):
 
         # Compute distance error
         # [..., N_sample, N_atom, k]
-        if diffusion_chunk_size is None:
-            lddt = self._chunk_forward(
-                pred_distance=pred_distance, true_distance=true_neighbor_distances, c_lm=c_lm
-            )
-
-        else:
-            # Default use checkpoint for saving memory
-            checkpoint_fn = get_checkpoint_fn()
-            lddt = []
-            no_chunks = n_samples // diffusion_chunk_size + (
-                n_samples % diffusion_chunk_size != 0
-            )
-            for i in range(no_chunks):
-                lddt_i = checkpoint_fn(
-                    self._chunk_forward,
-                    pred_distance[
-                        ...,
-                        i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
-                        :,
-                        :,
-                    ],
-                    true_neighbor_distances,
-                    c_lm,
-                )
-                if torch.isnan(lddt_i).any():
-                    print(f"NaN detected in lddt chunk {i}")
-                lddt.append(lddt_i)
-            lddt = torch.cat(lddt, dim=-1)
-            lddt = lddt.mean(dim=-1)
+        lddt = self._chunk_forward(
+            pred_distance=pred_distance, true_distance=true_neighbor_distances, c_lm=c_lm
+        )
 
         loss = 1 - lddt  # [..., N_sample]
+        print(f"smooth lddt loss: {loss.shape}")
         raw_loss = loss.detach().clone()
 
         # Training time uncertainty scaling

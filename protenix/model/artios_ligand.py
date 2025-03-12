@@ -310,7 +310,6 @@ class ArtiosLigand(nn.Module):
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object.
             inplace_safe (bool): Whether to use inplace operations safely. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
-            seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:

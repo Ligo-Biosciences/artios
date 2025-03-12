@@ -294,7 +294,7 @@ loss_configs = {
 
 monitor_configs = {
     "monitor": {
-        "log_loss_distribution": True,
+        "loss_distribution": True,
     }
 }
 

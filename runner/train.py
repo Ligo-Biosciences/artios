@@ -487,7 +487,7 @@ class AF3Trainer(object):
                     simple_metrics.update(loss_dict)
 
                     # Collect monitor metrics in master dict
-                    if self.configs.monitor.log_loss_distribution:
+                    if self.configs.monitor.loss_distribution:
                         for loss_name, monitor_metric_dict in monitor_data.items():
                             raw_loss = monitor_metric_dict["raw_loss"].cpu().numpy()  # [..., N_sample]
                             timestep = monitor_metric_dict["timestep"].cpu().numpy()  # [..., N_sample]
@@ -518,7 +518,7 @@ class AF3Trainer(object):
                     torch.cuda.empty_cache()
             
             # Log the distribution of loss values over timesteps
-            if self.configs.monitor.log_loss_distribution:
+            if self.configs.monitor.loss_distribution:
                 if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                     for loss_name, monitor_data_dict in master_monitor_dict.items():
                         # Create loss distribution plot using accumulated data

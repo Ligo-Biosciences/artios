@@ -514,9 +514,10 @@ class ProtenixLoss(nn.Module):
                 # Store raw losses and timesteps for plotting
                 if "raw_loss" in metrics:
                     raw_loss_and_timestep[loss_name] = {
-                        "loss": metrics["raw_loss"],
-                        "timestep": metrics["timestep"]
+                        "loss": metrics["raw_loss"].detach().clone(),
+                        "timestep": metrics["timestep"].detach().clone()
                     }
+                del metrics["raw_loss"]
             else:
                 assert isinstance(loss_outputs, torch.Tensor)
                 loss, metrics = loss_outputs, {}
@@ -635,6 +636,7 @@ class ProtenixLoss(nn.Module):
             )
 
         cum_loss, metrics = self.aggregate_losses(loss_fns, has_valid_resolution)
+
         return cum_loss, metrics
 
     def forward( 

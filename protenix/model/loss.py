@@ -133,7 +133,6 @@ class SmoothLDDTLoss(nn.Module):
         true_coordinates: torch.Tensor,
         coordinate_mask: torch.Tensor,
         timestep: torch.Tensor,
-        diffusion_chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
         """SmoothLDDTLoss
 
@@ -146,7 +145,6 @@ class SmoothLDDTLoss(nn.Module):
                 [..., N_atom]
             timestep (torch.Tensor): the timestep for the current sample.
                 [..., N_sample]
-            diffusion_chunk_size (Optional[int]): Chunk size over the N_sample dimension. Defaults to None.
 
         Returns:
             torch.Tensor: the smooth lddt loss
@@ -548,7 +546,6 @@ class ProtenixLoss(nn.Module):
                         true_coordinates=label_dict["coordinate"],
                         timestep=pred_dict["timestep"],
                         coordinate_mask=label_dict["coordinate_mask"],
-                        diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
                     )
                 }
             )

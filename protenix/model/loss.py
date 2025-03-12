@@ -223,6 +223,7 @@ class SmoothLDDTLoss(nn.Module):
             lddt = lddt.mean(dim=-1)
 
         loss = 1 - lddt  # [..., N_sample]
+        raw_loss = loss.clone().detach()  # Store raw loss before uncertainty scaling
 
         # Training time uncertainty scaling
         if self.training:
@@ -234,7 +235,7 @@ class SmoothLDDTLoss(nn.Module):
 
         final_loss = loss_reduction(loss, method=self.reduction)
 
-        return final_loss
+        return final_loss, {"raw_loss": raw_loss, "timestep": timestep}
 
 
 def softmax_cross_entropy(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
@@ -394,7 +395,7 @@ class MSELoss(nn.Module):
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
         per_sample_scale: torch.Tensor = None,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """MSELoss
 
         Args:
@@ -412,8 +413,11 @@ class MSELoss(nn.Module):
                 [..., N_sample]
 
         Returns:
-            torch.Tensor: the weighted mse loss.
-                [...] is self.reduction is None else []
+            tuple[torch.Tensor, dict[str, torch.Tensor]]:
+                - loss (torch.Tensor): the weighted mse loss.
+                    []
+                - metrics (dict[str, torch.Tensor]): dictionary containing raw loss and timestep.
+                    {"raw_loss": torch.Tensor [..., N_sample], "timestep": torch.Tensor [..., N_sample]}
         """
         # True_coordinate_aligned: [..., N_sample, N_atom, 3]
         # Weight: [N_atom] or [..., N_sample, N_atom]
@@ -443,6 +447,7 @@ class MSELoss(nn.Module):
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
 
         weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
+        raw_loss = weighted_align_mse_loss.clone().detach()  # Store raw loss before uncertainty scaling
 
         # Balance grads between timesteps during training
         if self.training:
@@ -450,7 +455,7 @@ class MSELoss(nn.Module):
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
 
-        return loss
+        return loss, {"raw_loss": raw_loss, "timestep": timestep}
 
 
 class ProtenixLoss(nn.Module):
@@ -500,11 +505,18 @@ class ProtenixLoss(nn.Module):
         """
         cum_loss = 0.0
         all_metrics = {}
+        raw_loss_and_timestep = {}  # dict to store raw loss and timestep for monitoring
         for loss_name, loss_fn in loss_fns.items():
             weight = self.loss_weight[loss_name]
             loss_outputs = loss_fn()
             if isinstance(loss_outputs, tuple):
                 loss, metrics = loss_outputs
+                # Store raw losses and timesteps for plotting
+                if "raw_loss" in metrics:
+                    raw_loss_and_timestep[loss_name] = {
+                        "loss": metrics["raw_loss"],
+                        "timestep": metrics["timestep"]
+                    }
             else:
                 assert isinstance(loss_outputs, torch.Tensor)
                 loss, metrics = loss_outputs, {}
@@ -528,6 +540,9 @@ class ProtenixLoss(nn.Module):
 
             cum_loss = cum_loss + weight * loss
         all_metrics["loss"] = cum_loss.detach().clone()
+
+        # Add raw loss and timestep dict to all_metrics
+        all_metrics["raw_loss_and_timestep"] = raw_loss_and_timestep
 
         return cum_loss, all_metrics
 
@@ -559,7 +574,7 @@ class ProtenixLoss(nn.Module):
         if mode == "train":
             if not self.configs.train_confidence_only:
                 # Scale 
-                diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * (1-timestep))**2)
+                diffusion_per_sample_scale =  (timestep**2 + (1 - timestep)**2) / ((self.configs.sigma_data * (1 - timestep))**2)
 
         else:
             # No scale is required

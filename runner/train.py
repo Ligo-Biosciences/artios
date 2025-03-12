@@ -37,7 +37,7 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.loss import ProtenixLoss
 from protenix.model.artios_ligand import ArtiosLigand
-from protenix.utils.distributed import DIST_WRAPPER
+from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.permutation.permutation import SymmetricPermutation
@@ -48,6 +48,9 @@ from runner.ema import PowerLawEMAWrapper
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.data.utils import to_pdb
 from io import StringIO
+from protenix.utils.monitoring import visualize_loss_histogram
+import matplotlib.pyplot as plt
+
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
@@ -425,8 +428,7 @@ class AF3Trainer(object):
                 
                 # Delete post-hoc checkpoint from RAM and disk
                 del checkpoint
-                dist.barrier()
-                time.sleep(2)  # Ensure all processes have loaded
+                wait_for_all_processes()
                 if DIST_WRAPPER.rank == 0:
                     os.remove(checkpoint_path)
 
@@ -451,12 +453,18 @@ class AF3Trainer(object):
             if torch.cuda.is_available()
             else nullcontext()
         )
+        
         self.model.eval()
+
+        # Initialize lists to store losses and timesteps
+        all_losses = []
+        all_timesteps = []
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
             evaluated_pids = []
             total_batch_num = len(test_dl)
+
             for index, batch in enumerate(tqdm(test_dl)):
                 batch = to_device(batch, self.device)
                 pid = batch["basic"]["pdb_id"]
@@ -478,6 +486,19 @@ class AF3Trainer(object):
                     batch, _ = self.model_forward(batch, mode=mode)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict, batch = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
+                    raw_loss_and_timestep = loss_dict.pop("raw_loss_and_timestep", {})
+
+                    # Collect losses and timesteps
+                    for loss_name, data in raw_loss_and_timestep.items():
+                        losses = data["loss"].detach().cpu().numpy()  # [..., N_sample]
+                        timesteps = data["timestep"].detach().cpu().numpy()  # [..., N_sample]
+                        all_losses.append(losses)
+                        all_timesteps.append(timesteps)
+
+                        # Store losses by timestep
+                        #for t, l in zip(timesteps.flatten(), losses.flatten()):
+                        #    timestep_losses[loss_name][t].append(l)
+
                     # lDDT metrics TODO: now with our modified lddt calculations this will need fixing
                     #lddt_dict = self.get_metrics(batch)
                     #lddt_metrics = self.aggregate_metrics(lddt_dict, batch)
@@ -512,8 +533,24 @@ class AF3Trainer(object):
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
             #if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
             #    wandb.log(metrics, step=self.step)
+            # Create and log the loss distribution plots
+            if self.configs.use_wandb and DIST_WRAPPER.rank == 0 and len(all_losses) > 0:
+                # Combine all collected data
+                combined_losses = np.concatenate([l.flatten() for l in all_losses])
+                combined_timesteps = np.concatenate([t.flatten() for t in all_timesteps])
+                
+                # Histogram-based visualization
+                hist_fig = visualize_loss_histogram(
+                    combined_timesteps,
+                    combined_losses,
+                    title=f"Loss Histogram over Time ({test_name}{ema_suffix})"
+                )
+                wandb.log({
+                    f"{test_name}{ema_suffix}_loss_histogram": wandb.Image(hist_fig)
+                }, step=self.step)
+                plt.close(hist_fig)
 
-            return metrics
+                return metrics
 
     def update(self):
         # Clip the gradient
@@ -568,6 +605,8 @@ class AF3Trainer(object):
             self.lr_scheduler.step()
         for key, value in loss_dict.items():
             if "loss" not in key:
+                continue
+            if key == "raw_loss_and_timestep":
                 continue
             self.train_metric_wrapper.add(key, value, namespace="train") 
         torch.cuda.empty_cache()
@@ -692,11 +731,7 @@ class AF3Trainer(object):
                                 save_model_only=True
                             )
                             wrapper.restore()
-                        # Add synchronization barrier to ensure all processes wait
-                        if DIST_WRAPPER.world_size > 1:
-                            dist.barrier()
-                            # Add small sleep to ensure filesystem operations complete
-                            time.sleep(2)
+                        wait_for_all_processes()
                         
 
                 if step_need_eval or is_last_step:

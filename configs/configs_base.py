@@ -292,6 +292,12 @@ loss_configs = {
     },
 }
 
+monitor_configs = {
+    "monitor": {
+        "log_loss_distribution": True,
+    }
+}
+
 configs = {
     **basic_configs,
     **data_configs,
@@ -299,4 +305,5 @@ configs = {
     **model_configs,
     **perm_configs,
     **loss_configs,
+    **monitor_configs,
 }

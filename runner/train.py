@@ -26,7 +26,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from pathlib import Path
 import rootutils
-
+from collections import defaultdict
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from configs.configs_base import configs as configs_base
@@ -48,6 +48,9 @@ from runner.ema import PowerLawEMAWrapper
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.data.utils import to_pdb
 from io import StringIO
+from protenix.utils.monitoring import visualize_loss_histogram
+import matplotlib.pyplot as plt
+
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
@@ -364,7 +367,7 @@ class AF3Trainer(object):
         assert mode in ["train", "eval"]
         self.loss.to(batch["pred_dict"]["coordinate"].device)  # Move loss to device
 
-        loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
+        loss, loss_dict, monitor_data = autocasting_disable_decorator(self.configs.skip_amp.loss)(
             self.loss
         )(
             feat_dict=batch["input_feature_dict"],
@@ -372,7 +375,7 @@ class AF3Trainer(object):
             label_dict=batch["label_dict"],
             mode=mode,
         )
-        return loss, loss_dict, batch
+        return loss, loss_dict, monitor_data
 
     @torch.no_grad()
     def get_metrics(self, batch: dict) -> dict:
@@ -453,6 +456,9 @@ class AF3Trainer(object):
         )
         self.model.eval()
 
+        # Initialize master monitor dict to collect all metrics
+        master_monitor_dict = defaultdict(lambda: defaultdict(list))
+
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
             evaluated_pids = []
@@ -477,20 +483,23 @@ class AF3Trainer(object):
                     # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, batch = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
-                    # lDDT metrics TODO: now with our modified lddt calculations this will need fixing
-                    #lddt_dict = self.get_metrics(batch)
-                    #lddt_metrics = self.aggregate_metrics(lddt_dict, batch)
-                    #simple_metrics.update(
-                    #    {k: v for k, v in lddt_metrics.items() if "diff" not in k}
-                    #)
+                    loss, loss_dict, monitor_data = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)
+
+                    # Collect monitor metrics in master dict
+                    if self.configs.monitor.log_loss_distribution:
+                        for loss_name, monitor_metric_dict in monitor_data.items():
+                            raw_loss = monitor_metric_dict["raw_loss"].cpu().numpy()  # [..., N_sample]
+                            timestep = monitor_metric_dict["timestep"].cpu().numpy()  # [..., N_sample]
+                            master_monitor_dict[loss_name]["raw_loss"].extend(raw_loss.flatten())
+                            master_monitor_dict[loss_name]["timestep"].extend(timestep.flatten())
+
 
                 # Metrics
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(
                         key, value, namespace="val"
-                    ) #
+                    )
                 
                 # Visualise selected structures in wandb
                 # FIXME: just temporary sampling logic for intial training runs
@@ -507,6 +516,22 @@ class AF3Trainer(object):
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()
+            
+            # Log the distribution of loss values over timesteps
+            if self.configs.monitor.log_loss_distribution:
+                if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                    for loss_name, monitor_data_dict in master_monitor_dict.items():
+                        # Create loss distribution plot using accumulated data
+                        fig = visualize_loss_histogram(
+                            timesteps=np.array(monitor_data_dict["timestep"]),
+                            losses=np.array(monitor_data_dict["raw_loss"]),
+                            title=f"{loss_name} Distribution {ema_suffix}",
+                        )
+                        # Log to wandb
+                        wandb.log({
+                            f"loss_dist/{ema_suffix}_{loss_name}": wandb.Image(fig),
+                        }, step=self.step)
+                        plt.close(fig)  # Clean up matplotlib figure
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")

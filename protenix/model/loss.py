@@ -223,6 +223,7 @@ class SmoothLDDTLoss(nn.Module):
             lddt = lddt.mean(dim=-1)
 
         loss = 1 - lddt  # [..., N_sample]
+        raw_loss = loss.detach().clone()
 
         # Training time uncertainty scaling
         if self.training:
@@ -234,7 +235,11 @@ class SmoothLDDTLoss(nn.Module):
 
         final_loss = loss_reduction(loss, method=self.reduction)
 
-        return final_loss
+        # Return the loss, metrics and monitor data
+        return final_loss, {}, {
+            "raw_loss": raw_loss,
+            "timestep": timestep.clone()
+        }
 
 
 def softmax_cross_entropy(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
@@ -394,7 +399,7 @@ class MSELoss(nn.Module):
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
         per_sample_scale: torch.Tensor = None,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict, dict[str, torch.Tensor]]:
         """MSELoss
 
         Args:
@@ -441,6 +446,8 @@ class MSELoss(nn.Module):
 
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
+        
+        raw_loss = per_sample_weighted_mse.detach().clone()
 
         weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
 
@@ -450,8 +457,11 @@ class MSELoss(nn.Module):
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
 
-        return loss
-
+        # Return the loss, metrics and monitor data
+        return loss, {}, {
+            "raw_loss": raw_loss,
+            "timestep": timestep.clone()
+        }
 
 class ProtenixLoss(nn.Module):
     """Aggregation of the various losses"""
@@ -484,44 +494,39 @@ class ProtenixLoss(nn.Module):
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
 
     def aggregate_losses(  
-        self, loss_fns: dict, has_valid_resolution: Optional[torch.Tensor] = None
+        self, loss_fns: dict
     ) -> tuple[torch.Tensor, dict]:
         """
         Aggregates multiple loss functions and their respective metrics.
 
         Args:
             loss_fns (dict): Dictionary of loss functions to be aggregated.
-            has_valid_resolution (Optional[torch.Tensor]): Tensor indicating valid resolutions. Defaults to None. # TODO: can be removed
 
         Returns:
             tuple[torch.Tensor, dict]:
                 - cum_loss (torch.Tensor): Cumulative loss.
                 - all_metrics (dict): Dictionary containing all metrics.
+                - monitor_data (dict): Dictionary containing non-standard data for monitoring training dynamics.
         """
         cum_loss = 0.0
         all_metrics = {}
+        all_monitor_data = {}
         for loss_name, loss_fn in loss_fns.items():
             weight = self.loss_weight[loss_name]
             loss_outputs = loss_fn()
             if isinstance(loss_outputs, tuple):
-                loss, metrics = loss_outputs
+                loss, metrics, monitor_data = loss_outputs
             else:
                 assert isinstance(loss_outputs, torch.Tensor)
-                loss, metrics = loss_outputs, {}
+                loss, metrics, monitor_data = loss_outputs, {}, {}
 
             all_metrics.update(
                 {f"{loss_name}/{key}": val for key, val in metrics.items()}
             )
+            all_monitor_data[loss_name] = monitor_data
+
             if torch.isnan(loss) or torch.isinf(loss):
                 logging.warning(f"{loss_name} loss is NaN. Skipping...")
-            if (
-                (has_valid_resolution is not None)
-                and (has_valid_resolution.sum() == 0)
-                and (
-                    loss_name in ["plddt_loss", "pde_loss", "resolved_loss", "pae_loss"]
-                )
-            ):
-                loss = 0.0 * loss
             else:
                 all_metrics[loss_name] = loss.detach().clone()
                 all_metrics[f"weighted_{loss_name}"] = weight * loss.detach().clone()
@@ -529,7 +534,7 @@ class ProtenixLoss(nn.Module):
             cum_loss = cum_loss + weight * loss
         all_metrics["loss"] = cum_loss.detach().clone()
 
-        return cum_loss, all_metrics
+        return cum_loss, all_metrics, all_monitor_data
 
     def calculate_losses(
         self,
@@ -537,7 +542,7 @@ class ProtenixLoss(nn.Module):
         pred_dict: dict[str, torch.Tensor],
         label_dict: dict[str, Any],
         mode: str = "train",
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         """
         Calculate the cumulative loss and aggregated metrics for the given predictions and labels.
 
@@ -551,19 +556,14 @@ class ProtenixLoss(nn.Module):
             tuple[torch.Tensor, dict[str, torch.Tensor]]:
                 - cum_loss (torch.Tensor): Cumulative loss.
                 - metrics (dict[str, torch.Tensor]): Dictionary containing aggregated metrics.
+                - monitor_data (dict[str, torch.Tensor]): Dictionary containing non-standard data for monitoring training dynamics.
         """
         assert mode in ["train", "eval", "inference"]
 
+
+        # Timestep-dependent scaling of the loss
         timestep = pred_dict["timestep"] # [..., N_sample]
-
-        if mode == "train":
-            if not self.configs.train_confidence_only:
-                # Scale 
-                diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * (1-timestep))**2)
-
-        else:
-            # No scale is required
-            diffusion_per_sample_scale = None
+        diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * (1-timestep))**2)
         
         if self.configs.train_confidence_only and mode == "train":
             # Skip Diffusion Loss and distogram loss
@@ -598,29 +598,8 @@ class ProtenixLoss(nn.Module):
                 }
             )
 
-        # Confidence Loss: #TODO: this can be removed and thus we can remove the resolution check from aggregate_losses
-        # Only when resoluton is in [min_resolution, max_resolution] the confidence loss is considered
-        # NOTE: here we assume batch_size == 1
-        resolution = feat_dict["resolution"].item()
-        has_valid_resolution = (resolution >= self.configs.loss.resolution.min) & (
-            resolution <= self.configs.loss.resolution.max
-        )
-
-        if has_valid_resolution:
-            has_valid_resolution = torch.tensor(
-                [1.0],
-                dtype=label_dict["coordinate"].dtype,
-                device=label_dict["coordinate"].device,
-            )
-        else:
-            has_valid_resolution = torch.tensor(
-                [0.0],
-                dtype=label_dict["coordinate"].dtype,
-                device=label_dict["coordinate"].device,
-            )
-
-        cum_loss, metrics = self.aggregate_losses(loss_fns, has_valid_resolution)
-        return cum_loss, metrics
+        cum_loss, metrics, monitor_data = self.aggregate_losses(loss_fns)
+        return cum_loss, metrics, monitor_data
 
     def forward( 
         self,
@@ -628,7 +607,7 @@ class ProtenixLoss(nn.Module):
         pred_dict: dict[str, torch.Tensor],
         label_dict: dict[str, Any],
         mode: str = "train",
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         """
         Forward pass for calculating the cumulative loss and aggregated metrics.
 
@@ -639,71 +618,19 @@ class ProtenixLoss(nn.Module):
             mode (str): Mode of operation ('train', 'eval', 'inference'). Defaults to 'train'.
 
         Returns:
-            tuple[torch.Tensor, dict[str, torch.Tensor]]:
+            tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
                 - cum_loss (torch.Tensor): Cumulative loss.
                 - losses (dict[str, torch.Tensor]): Dictionary containing aggregated metrics.
+                - monitor_data (dict[str, torch.Tensor]): Dictionary containing non-standard data for monitoring training dynamics.
         """
-        diffusion_chunk_size = self.configs.loss.diffusion_chunk_size_outer
         assert mode in ["train", "eval", "inference"]
 
-        if diffusion_chunk_size <= 0:
-            # Calculate losses
-            cum_loss, losses = self.calculate_losses(
-                feat_dict=feat_dict,
-                pred_dict=pred_dict,
-                label_dict=label_dict,
-                mode=mode,
-            )
-        else:
-            if "coordinate" in pred_dict: 
-                N_sample = pred_dict["coordinate"].shape[-3]
-            elif self.configs.train_confidence_only:
-                N_sample = pred_dict["coordinate_mini"].shape[-3]
-            else:
-                raise KeyError("Missing key: coordinate (in pred_dict).")
-            no_chunks = N_sample // diffusion_chunk_size + (
-                N_sample % diffusion_chunk_size != 0
-            )
-            cum_loss = 0.0
-            losses = {}
-            for i in range(no_chunks):
-                cur_sample_num = min(
-                    diffusion_chunk_size, N_sample - i * diffusion_chunk_size
-                )
-                pred_dict_i = {}
-                for key, value in pred_dict.items():
-                    if key in ["coordinate"] and mode == "train": 
-                        pred_dict_i[key] = value[
-                            i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
-                            :,
-                            :,
-                        ]
-                    elif (
-                        key in ["coordinate", "plddt", "pae", "pde", "resolved"] 
-                        and mode != "train"
-                    ):
-                        pred_dict_i[key] = value[
-                            i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
-                            :,
-                            :,
-                        ]
-                    else:
-                        pred_dict_i[key] = value
-                cum_loss_i, losses_i = self.calculate_losses(
-                    feat_dict=feat_dict,
-                    pred_dict=pred_dict_i,
-                    label_dict=label_dict,
-                    mode=mode,
-                )
-                cum_loss += cum_loss_i * cur_sample_num
-                # Aggregate metrics
-                for key, value in losses_i.items():
-                    if key in losses:
-                        losses[key] += value * cur_sample_num
-                    else:
-                        losses[key] = value * cur_sample_num
-            cum_loss /= N_sample
-            for key in losses.keys():
-                losses[key] /= N_sample
-
-        return cum_loss, losses
+        # Calculate losses
+        cum_loss, losses, monitor_data = self.calculate_losses(
+            feat_dict=feat_dict,
+            pred_dict=pred_dict,
+            label_dict=label_dict,
+            mode=mode,
+        )
+        
+        return cum_loss, losses, monitor_data

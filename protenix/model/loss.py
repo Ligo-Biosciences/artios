@@ -193,7 +193,6 @@ class SmoothLDDTLoss(nn.Module):
         )
 
         loss = 1 - lddt  # [..., N_sample]
-        print(f"smooth lddt loss: {loss.shape}")
         raw_loss = loss.detach().clone()
 
         # Training time uncertainty scaling

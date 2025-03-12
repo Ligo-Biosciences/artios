@@ -491,7 +491,6 @@ class AF3Trainer(object):
                         for loss_name, monitor_metric_dict in monitor_data.items():
                             raw_loss = monitor_metric_dict["raw_loss"].cpu().numpy()  # [..., N_sample]
                             timestep = monitor_metric_dict["timestep"].cpu().numpy()  # [..., N_sample]
-                            print(f"loss_name: {loss_name}, raw_loss: {raw_loss.shape}, timestep: {timestep.shape}")
                             master_monitor_dict[loss_name]["raw_loss"].extend(raw_loss.flatten())
                             master_monitor_dict[loss_name]["timestep"].extend(timestep.flatten())
 

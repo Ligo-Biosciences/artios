@@ -491,12 +491,7 @@ class AF3Trainer(object):
                     for loss_name, data in raw_loss_and_timestep.items():
                         losses = data["loss"].detach().cpu().numpy()  # [..., N_sample]
                         timesteps = data["timestep"].detach().cpu().numpy()  # [..., N_sample]
-                        
-                        if loss_name not in loss_data:
-                            loss_data[loss_name] = {
-                                'losses': [],
-                                'timesteps': []
-                            }
+                        print(f"losses: {losses.shape}, timesteps: {timesteps.shape}")
                         loss_data[loss_name]['losses'].append(losses)
                         loss_data[loss_name]['timesteps'].append(timesteps)
 

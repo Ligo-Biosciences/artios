@@ -490,21 +490,11 @@ class AF3Trainer(object):
 
                     # Collect losses and timesteps
                     for loss_name, data in raw_loss_and_timestep.items():
-                        losses = data["loss"].detach().cpu().numpy()  # [..., N_sample]
-                        timesteps = data["timestep"].detach().cpu().numpy()  # [..., N_sample]
+                        losses = data["loss"].detach()  # [..., N_sample]
+                        timesteps = data["timestep"].detach()  # [..., N_sample]
                         all_losses.append(losses)
                         all_timesteps.append(timesteps)
 
-                        # Store losses by timestep
-                        #for t, l in zip(timesteps.flatten(), losses.flatten()):
-                        #    timestep_losses[loss_name][t].append(l)
-
-                    # lDDT metrics TODO: now with our modified lddt calculations this will need fixing
-                    #lddt_dict = self.get_metrics(batch)
-                    #lddt_metrics = self.aggregate_metrics(lddt_dict, batch)
-                    #simple_metrics.update(
-                    #    {k: v for k, v in lddt_metrics.items() if "diff" not in k}
-                    #)
                     simple_metrics.update(loss_dict)
 
                 # Metrics
@@ -550,7 +540,7 @@ class AF3Trainer(object):
                 }, step=self.step)
                 plt.close(hist_fig)
 
-                return metrics
+        return metrics
 
     def update(self):
         # Clip the gradient

@@ -578,6 +578,7 @@ class AF3Trainer(object):
         with enable_amp:
             batch, _ = self.model_forward(batch, mode="train")
             loss, loss_dict, _ = self.get_loss(batch, mode="train")
+            loss_dict.pop("raw_loss_and_timestep", {})  # Remove raw_loss_and_timestep from loss_dict
 
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):
@@ -601,8 +602,6 @@ class AF3Trainer(object):
         for key, value in loss_dict.items():
             if "loss" not in key:
                 continue
-            if isinstance(loss_dict[key], dict) and "raw_loss_and_timestep" in loss_dict[key]:
-                loss_dict[key].pop("raw_loss_and_timestep", {})  # Remove raw_loss_and_timestep from loss_dict
             self.train_metric_wrapper.add(key, value, namespace="train") 
         torch.cuda.empty_cache()
 

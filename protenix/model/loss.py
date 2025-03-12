@@ -453,10 +453,6 @@ class ProtenixLoss(nn.Module):
             * self.weight_smooth_lddt,  # Different from AF3 appendix eq(6), where smooth_lddt has no weight
         }
 
-        #self.plddt_loss = PLDDTLoss(**configs.loss.plddt, **self.lddt_radius) 
-        #self.pde_loss = PDELoss(**configs.loss.pde)
-        #self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
-        #self.pae_loss = PAELoss(**configs.loss.pae)
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)

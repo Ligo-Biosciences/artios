@@ -367,7 +367,7 @@ class ArtiosLigand(nn.Module):
         x_target_augment, coords_pred, timestep = autocasting_disable_decorator( 
             self.configs.skip_amp.sample_diffusion_training
         )(sample_diffusion_training)(
-            timestep_sampler=self.train_timestep_sampler if self.training else self.eval_timestep_sampler,
+            timestep_sampler=self.train_timestep_sampler,
             denoise_net=self.diffusion_module,
             label_dict=label_dict,
             input_feature_dict=input_feature_dict,

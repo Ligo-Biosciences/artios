@@ -456,9 +456,8 @@ class AF3Trainer(object):
         
         self.model.eval()
 
-        # Initialize lists to store losses and timesteps
-        all_losses = []
-        all_timesteps = []
+        # Initialize dict to store losses and timesteps for each loss type
+        loss_data = {}
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
@@ -490,10 +489,16 @@ class AF3Trainer(object):
 
                     # Collect losses and timesteps
                     for loss_name, data in raw_loss_and_timestep.items():
-                        losses = data["loss"].detach()  # [..., N_sample]
-                        timesteps = data["timestep"].detach()  # [..., N_sample]
-                        all_losses.append(losses)
-                        all_timesteps.append(timesteps)
+                        losses = data["loss"].detach().cpu().numpy()  # [..., N_sample]
+                        timesteps = data["timestep"].detach().cpu().numpy()  # [..., N_sample]
+                        
+                        if loss_name not in loss_data:
+                            loss_data[loss_name] = {
+                                'losses': [],
+                                'timesteps': []
+                            }
+                        loss_data[loss_name]['losses'].append(losses)
+                        loss_data[loss_name]['timesteps'].append(timesteps)
 
                     simple_metrics.update(loss_dict)
 
@@ -501,7 +506,7 @@ class AF3Trainer(object):
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(
                         key, value, namespace="val"
-                    ) #
+                    )
                 
                 # Visualise selected structures in wandb
                 # FIXME: just temporary sampling logic for intial training runs
@@ -521,27 +526,26 @@ class AF3Trainer(object):
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
-            #if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            #    wandb.log(metrics, step=self.step)
-            # Create and log the loss distribution plots
-            if self.configs.use_wandb and DIST_WRAPPER.rank == 0 and len(all_losses) > 0:
-                # Combine all collected data
-                combined_losses = np.concatenate([l.flatten() for l in all_losses])
-                combined_timesteps = np.concatenate([t.flatten() for t in all_timesteps])
-                
-                # Histogram-based visualization
-                hist_fig = visualize_loss_histogram(
-                    combined_timesteps,
-                    combined_losses,
-                    title=f"Loss Histogram over Time ({test_name}{ema_suffix})"
-                )
-                wandb.log({
-                    f"{test_name}{ema_suffix}_loss_histogram": wandb.Image(hist_fig)
-                }, step=self.step)
-                plt.close(hist_fig)
+
+            # Create and log the loss distribution plots for each loss type
+            if self.configs.use_wandb and DIST_WRAPPER.rank == 0 and loss_data:
+                for loss_name, data in loss_data.items():
+                    # Combine all collected data for this loss type
+                    combined_losses = np.concatenate([l.flatten() for l in data['losses']])
+                    combined_timesteps = np.concatenate([t.flatten() for t in data['timesteps']])
+                    
+                    # Histogram-based visualization
+                    hist_fig = visualize_loss_histogram(
+                        combined_timesteps,
+                        combined_losses,
+                        title=f"{loss_name} Loss Histogram over Time ({test_name}{ema_suffix})"
+                    )
+                    wandb.log({
+                        f"{test_name}{ema_suffix}_{loss_name}_loss_histogram": wandb.Image(hist_fig)
+                    }, step=self.step)
+                    plt.close(hist_fig)
 
         return metrics
-
     def update(self):
         # Clip the gradient
         if self.configs.grad_clip_norm != 0.0:

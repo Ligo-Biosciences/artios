@@ -458,7 +458,10 @@ class AF3Trainer(object):
         self.model.eval()
 
         # Initialize dict to store losses and timesteps for each loss type
-        loss_data = {}
+        loss_data = {
+            'smooth_lddt_loss': {'losses': [], 'timesteps': []},
+            'mse_loss': {'losses': [], 'timesteps': []}
+        }
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")

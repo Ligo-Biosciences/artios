@@ -514,11 +514,10 @@ class ProtenixLoss(nn.Module):
             if isinstance(loss_outputs, tuple):
                 loss, metric = loss_outputs
                 # Store raw losses and timesteps for plotting
-                if "raw_loss" in metric:
-                    raw_loss_and_timestep[loss_name] = {
-                        "loss": metric["raw_loss"].detach().clone(),
-                        "timestep": metric["timestep"].detach().clone()
-                    }
+                raw_loss_and_timestep[loss_name] = {
+                    "loss": metric["raw_loss"].detach().clone(),
+                    "timestep": metric["timestep"].detach().clone()
+                }
             else:
                 assert isinstance(loss_outputs, torch.Tensor)
                 loss, metrics = loss_outputs, {}

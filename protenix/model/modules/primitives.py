@@ -969,9 +969,7 @@ class Attention(nn.Module):
         q, k, v = self._prep_qkv(q_x=q_x, kv_x=kv_x, apply_scale=True)
 
         if attn_bias is not None:
-            if len(attn_bias.shape) == len(q.shape):
-                assert attn_bias.shape[:-2] == q.shape[:-2]
-            else:
+            if len(attn_bias.shape) != len(q.shape):
                 assert len(attn_bias.shape) == len(q.shape) - 1
                 assert attn_bias.shape[:-2] == q.shape[:-3]
                 # Expand at head dim, got shape [..., 1, Q, K]

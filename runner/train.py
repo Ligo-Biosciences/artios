@@ -656,14 +656,13 @@ class AF3Trainer(object):
         # Calculate post-hoc EMA checkpoints
         save_dir = Path(self.post_hoc_ema_checkpoint_dir)
         target_sigma_values = self.configs.post_hoc_ema_sigma
-        if DIST_WRAPPER.rank == 0:
-            # Use the utility function to calculate post-hoc EMA checkpoints
-            output_paths = calculate_post_hoc_ema(
-                ema_checkpoint_paths=ema_checkpoint_paths,
-                target_sigma_values=target_sigma_values,
-                save_dir=save_dir
-            )
-        wait_for_all_processes()
+    
+        # Use the utility function to calculate post-hoc EMA checkpoints
+        output_paths = calculate_post_hoc_ema(
+            ema_checkpoint_paths=ema_checkpoint_paths,
+            target_sigma_values=target_sigma_values,
+            save_dir=save_dir
+        )
         self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
         return output_paths
     

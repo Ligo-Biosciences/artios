@@ -668,9 +668,9 @@ class AF3Trainer(object):
     
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""
-        if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
+        if not self.configs.use_wandb or DIST_WRAPPER.rank != 0 or not self.configs.monitor.weight_norm:
             return
-
+        
         # Calculate and log weight norms for each parameter
         weight_norms = {}
         for name, param in self.model.named_parameters():

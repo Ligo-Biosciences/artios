@@ -528,25 +528,34 @@ class AF3Trainer(object):
                 # Log the structures to wandb
                 if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                     # Find all .cif files recursively in structure_dir and subdirectories
-                    cif_files = glob(os.path.join(self.prediction_dir, '**/*.cif'), recursive=True)
-
+                    cif_files = glob(os.path.join(self.prediction_dir, "**/*.cif"), recursive=True)
+                    
                     # Log each structure file to wandb
                     for cif_path in cif_files:
-                        # Create temporary PDB file path
-                        temp_pdb_path = Path(cif_path).with_suffix('.pdb')
+                        # Create temporary PDB file path with full path
+                        cif_path = os.path.abspath(cif_path)  # Ensure absolute path
+                        temp_pdb_path = os.path.abspath(str(Path(cif_path).with_suffix('.pdb')))
                         
                         # Convert CIF to PDB
                         cif_to_pdb(cif_path, temp_pdb_path)
+                        
+                        # Verify the PDB file was created
+                        if not os.path.exists(temp_pdb_path):
+                            self.print(f"Warning: Failed to create PDB file at {temp_pdb_path}")
+                            continue
                         
                         # Get relative path from prediction_dir for the wandb key
                         rel_path = os.path.relpath(cif_path, self.prediction_dir)
                         # Remove extension and replace path separators with underscores
                         structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
                         
-                        # Log PDB file to wandb
-                        wandb.log({
-                            f"structures/{ema_suffix}_{structure_name}": wandb.Molecule(temp_pdb_path)
-                        }, step=self.step)
+                        try:
+                            # Log PDB file to wandb
+                            wandb.log({
+                                f"structures/{ema_suffix}_{structure_name}": wandb.Molecule(temp_pdb_path)
+                            }, step=self.step)
+                        except Exception as e:
+                            self.print(f"Error logging molecule to wandb: {e}")
                             
                         # Clean up both files
                         if os.path.exists(temp_pdb_path):

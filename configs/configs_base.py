@@ -302,6 +302,18 @@ monitor_configs = {
     }
 }
 
+training_time_inference_configs = {
+    "training_time_inference":{
+        "run": True,
+        "seeds": ListValue([101]),
+        "need_atom_confidence": False,
+        "sorted_by_ranking_score": False,
+        "input_json_path": "artios-ligand/samples.json",  # TODO: make this file
+        "num_workers": 16,
+        "use_msa": False,
+    }
+}
+
 configs = {
     **basic_configs,
     **data_configs,
@@ -310,4 +322,5 @@ configs = {
     **perm_configs,
     **loss_configs,
     **monitor_configs,
+    **training_time_inference_configs,
 }

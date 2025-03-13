@@ -48,18 +48,11 @@ from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
+from runner.inference import InferenceRunner, infer_predict
 import matplotlib.pyplot as plt
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
-PDB_TO_VISUALISE = [
-    "7xzr", "7uaw", "7zhd", "7x0b", 
-    "7vkq", "7pk0", "7ugk", "7vkr", 
-    "7uo8", "7uq1", "7wcf", "7oas", 
-    "8dik", "7te2", "8ajp", "7r0t", 
-    "8dl3", "7u1o", "7qa0", "7pd7",
-    "8dp7", "7z05", "7t7h", "7ulc"
-]
 
 
 class AF3Trainer(object):
@@ -95,6 +88,9 @@ class AF3Trainer(object):
         self.structure_dir = f"{self.run_dir}/structures"
         self.dump_dir = f"{self.run_dir}/dumps"
         self.error_dir = f"{self.run_dir}/errors"
+
+        # Add dump dir for training time inference
+        self.configs.training_time_inference.dump_dir = self.prediction_dir
 
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)
@@ -225,6 +221,10 @@ class AF3Trainer(object):
         # To establish how we should formulate the sampler object let's basicalyl copy the evaluate 
         # method below which is exactly we should be doing a forward pass
         # They do this via a "batch". #TODO: determine how they get batch and what is stored inside it.
+        # self.configs.dump_dir
+        # configs.need_atom_confidence
+        # configs.sorted_by_ranking_score
+        # self.configs.load_checkpoint_path
         pass
 
     def save_checkpoint(self, ema_suffix="", save_model_only=False):
@@ -507,25 +507,17 @@ class AF3Trainer(object):
                             timestep = monitor_metric_dict["timestep"].cpu().numpy()  # [..., N_sample]
                             master_monitor_dict[loss_name]["raw_loss"].extend(raw_loss.flatten())
                             master_monitor_dict[loss_name]["timestep"].extend(timestep.flatten())
-
+                    
+                    if self.configs.training_time_inference.run:
+                        runner = InferenceRunner(self.configs.training_time_inference, model=self.model)
+                        infer_predict(runner, self.configs.training_time_inference)
 
                 # Metrics
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(
                         key, value, namespace="val"
                     )
-                
-                # Visualise selected structures in wandb
-                # FIXME: just temporary sampling logic for intial training runs
-                """
-                if pid in PDB_TO_VISUALISE:
-                    coords = batch["pred_dict"]["coordinate_mini"].unsqueeze(-3)  # [..., 1, N_atom, 3] -> [..., N_atom, 3]
-                    pdb_str = to_pdb(coords, batch["input_feature_dict"])  # output of the mini-rollout
-                    if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                        wandb.log({
-                           f"{ema_suffix}_structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
-                        }, step=self.step)
-                """
+            
                 del batch, simple_metrics
                 if index % 5 == 0:
                     # Release some memory periodically
@@ -679,12 +671,12 @@ class AF3Trainer(object):
                 
             if len(param.shape) == 2:  # Linear layer weights (2D tensors)
                 # Compute L2 norm along fan_in dimension (dim=1) and average across output dimension
-                # Shape: [out_features, in_features] -> [out_features] -> scalar
+                # [out_features, in_features] -> [out_features] -> scalar
                 fan_in_norms = torch.norm(param, p=2, dim=1)  # L2 norm along input dimension
                 norm = torch.mean(fan_in_norms).item()  # Average across output dimension
             else:  # Other parameters (biases, layernorm weights, etc.)
                 # Standard L2 norm of the entire tensor divided by sqrt(num_elements)
-                # although this is not the norm anymore, makes tensor values more comparable
+                # although this is not the norm anymore, makes variable-length tensors comparable
                 norm = param.norm().item() / np.sqrt(param.numel())
             weight_norms[f"weight_norms/{name}"] = norm
 

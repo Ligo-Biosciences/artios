@@ -128,25 +128,3 @@ inference_configs = {
     "use_msa": False,
     "guidance_model_configs": guidance_model_configs,
 }
-
-# Evaluation configs
-evaluation_configs = {
-    "designs_cif_dir": RequiredValue(str),
-    "working_dir": RequiredValue(str),
-    "secondary_struc_method": "biotite", # "biopython"
-    "eval_tests": ListValue(["all"]), # "all", "secondary_structure_distribution", "designability"
-    "ligand_mpnn": {
-        "model_type": "ligand_mpnn",
-        "seed": 42,
-        "verbose": 0,
-        "temperature": 0.1
-    },
-    "chai1": {
-        "num_trunk_recycles": 3,
-        "num_diffn_timesteps": 100,
-        "num_diffn_samples": 1,
-        "seed": 42,
-        "device": "cuda:0",
-        "use_esm_embeddings": True,
-    },
-}

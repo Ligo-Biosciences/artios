@@ -698,6 +698,7 @@ class AF3Trainer(object):
         Evaluate the tests specified in the configs.eval_metrics.eval_tests
         and track metrics over time to visualize training progress.
         """
+        print(f"Evaluating tests: {self.configs.evaluator.eval_tests}...")
         # Dictionary to store all results
         results = {}
 
@@ -748,6 +749,7 @@ class AF3Trainer(object):
             results["merged"] = merged_df
             
             # Track metrics over time and create visualizations
+            print(f"Tracking metrics over time and creating visualizations...")
             self._track_and_visualize_metrics(results, summary_row)
 
     def _track_and_visualize_metrics(self, results, summary_row):

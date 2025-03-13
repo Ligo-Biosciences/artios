@@ -21,6 +21,7 @@ from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 import numpy as np
+import pandas as pd
 import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
@@ -37,9 +38,8 @@ from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
-from protenix.model.loss import ProtenixLoss
 from protenix.model.artios_ligand import ArtiosLigand
-from protenix.utils.distributed import DIST_WRAPPER, gather_and_merge, wait_for_all_processes
+from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.permutation.permutation import SymmetricPermutation
@@ -47,9 +47,8 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
+from runner.evaluate import Evaluator, create_summary_statistics
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
-from protenix.data.utils import to_pdb
-from io import StringIO
 from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 import matplotlib.pyplot as plt
 
@@ -74,6 +73,7 @@ class AF3Trainer(object):
         self.init_model()
         self.init_loss()
         self.init_data()
+        self.init_evaluator()
         self.try_load_checkpoint()
 
     def init_basics(self):
@@ -229,6 +229,9 @@ class AF3Trainer(object):
         # method below which is exactly we should be doing a forward pass
         # They do this via a "batch". #TODO: determine how they get batch and what is stored inside it.
         pass
+
+    def init_evaluator(self):
+        self.evaluator = Evaluator(self.configs)
 
     def save_checkpoint(self, ema_suffix="", save_model_only=False):
         if DIST_WRAPPER.rank == 0:
@@ -556,25 +559,8 @@ class AF3Trainer(object):
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
-            # Create and log the loss distribution plots for each loss type
-            if self.configs.use_wandb and DIST_WRAPPER.rank == 0 and loss_data:
-                for loss_name, data in loss_data.items():
-                    # Combine all collected data for this loss type
-                    combined_losses = np.concatenate([l.flatten() for l in data['losses']]).flatten()
-                    combined_timesteps = np.concatenate([t.flatten() for t in data['timesteps']]).flatten()
-                    
-                    # Histogram-based visualization
-                    hist_fig = visualize_loss_histogram(
-                        combined_timesteps,
-                        combined_losses,
-                        title=f"{loss_name} Loss Histogram over Time ({test_name}{ema_suffix})"
-                    )
-                    wandb.log({
-                        f"{test_name}{ema_suffix}_{loss_name}_loss_histogram": wandb.Image(hist_fig)
-                    }, step=self.step)
-                    plt.close(hist_fig)
-
         return metrics
+    
     def update(self):
         # Clip the gradient
         if self.configs.grad_clip_norm != 0.0:
@@ -707,6 +693,181 @@ class AF3Trainer(object):
             if DIST_WRAPPER.rank == 0:
                 wandb.log({"grad_norm": total_norm}, step=self.step)
 
+    def evaluate_tests(self):
+        """
+        Evaluate the tests specified in the configs.eval_metrics.eval_tests
+        and track metrics over time to visualize training progress.
+        """
+        # Dictionary to store all results
+        results = {}
+
+        # Valid evaluation tests
+        valid_eval_tests = {
+            "designability": self.evaluator.evaluate_designability,
+            "ss_distribution": self.evaluator.ss_distribution,
+            "posebusters": self.evaluator.evaluate_posebusters,
+        }
+
+        # If "all" is in eval_tests, run all available tests
+        tests_to_run = list(valid_eval_tests.keys()) if "all" in self.configs.evaluator.eval_tests else self.configs.evaluator.eval_tests
+
+        # Run each requested evaluation
+        for eval_test in tests_to_run:
+            if eval_test in valid_eval_tests:
+                print(f"Running {eval_test} evaluation...")
+                results[eval_test] = valid_eval_tests[eval_test]()
+                print(f"{eval_test} evaluation complete.")
+            else:
+                raise ValueError(f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}")
+
+        # Merge all results into a single dataframe and save to csv
+        if results:
+            print("Merging all results into a single dataframe...")
+            merged_df = None
+            
+            for test_name, df in results.items():
+                if merged_df is None:
+                    merged_df = df.copy()
+                else:
+                    # Merge on Ligand CCD column
+                    merged_df = pd.merge(merged_df, df, on="Ligand CCD", how="outer")
+            
+            # Add summary statistics row at the top
+            summary_row = create_summary_statistics(merged_df)
+            
+            # Insert summary row at the top
+            summary_df = pd.DataFrame([summary_row])
+            merged_df = pd.concat([summary_df, merged_df], ignore_index=True)
+            
+            # Save the merged dataframe
+            output_path = self.evaluator.results_dir / "all_evaluations.csv"
+            merged_df.to_csv(output_path, index=False)
+            print(f"All evaluation results saved to {output_path}")
+            
+            # Add the merged dataframe to the results dictionary
+            results["merged"] = merged_df
+            
+            # Track metrics over time and create visualizations
+            self._track_and_visualize_metrics(results, summary_row)
+
+    def _track_and_visualize_metrics(self, results, summary_row):
+        """
+        Track metrics over time and create visualizations of how they change during training.
+        
+        Args:
+            results (dict): Dictionary containing evaluation results
+            summary_row (dict): Dictionary with summary statistics (mean ± std)
+        """
+        # Initialize metrics history if not already there
+        if not hasattr(self, 'metrics_history'):
+            self.metrics_history = {}
+        
+        # Current step
+        current_step = self.step
+        
+        # For each test and each metric, track the history
+        for test_name, df in results.items():
+            if test_name == "merged":
+                continue
+            
+            if test_name not in self.metrics_history:
+                self.metrics_history[test_name] = {'steps': [], 'metrics': {}}
+            
+            # Add current step
+            self.metrics_history[test_name]['steps'].append(current_step)
+            
+            # Use create_summary_statistics to get mean and std for each metric
+            stats = create_summary_statistics(df)
+            
+            # Parse the stats and store them in history
+            for col, value in stats.items():
+                if col == 'Ligand CCD':
+                    continue
+                    
+                # Skip empty values #TODO: also might not need this
+                if value == "":
+                    continue
+                    
+                # Parse the "mean ± std" format TODO: a bunch of this logic might be unneccedary
+                try:
+                    if isinstance(value, str) and "±" in value:
+                        mean_str, std_str = value.split("±")
+                        mean_val = float(mean_str.strip())
+                        std_val = float(std_str.strip())
+                    else:
+                        # Handle the case where value might be a float or already parsed
+                        # (as in the new implementation of create_summary_statistics)
+                        if isinstance(value, float):
+                            # In this case, value could be the mean, but we don't have std
+                            mean_val = value
+                            std_val = 0
+                        else:
+                            # Try to extract mean and std from the value format
+                            parts = str(value).split("±")
+                            if len(parts) == 2:
+                                mean_val = float(parts[0].strip())
+                                std_val = float(parts[1].strip())
+                            else:
+                                continue
+                
+                    # Store in history
+                    if col not in self.metrics_history[test_name]['metrics']:
+                        self.metrics_history[test_name]['metrics'][col] = {'mean': [], 'std': []}
+                        
+                    self.metrics_history[test_name]['metrics'][col]['mean'].append(mean_val)
+                    self.metrics_history[test_name]['metrics'][col]['std'].append(std_val)
+                except (ValueError, TypeError):
+                    # Skip if we can't parse the value
+                    continue
+        
+        # Create and log visualizations for each test and metric
+        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            self._create_and_log_metric_plots()
+            
+    def _create_and_log_metric_plots(self):
+        """Create and log plots showing metric trends over time to wandb."""
+        import matplotlib.pyplot as plt
+        
+        for test_name, history in self.metrics_history.items():
+            steps = history['steps']
+            
+            for metric_name, metric_data in history['metrics'].items():
+                means = metric_data['mean']
+                stds = metric_data['std']
+                
+                # Skip if we have fewer than 2 data points
+                if len(means) < 2:
+                    continue
+                    
+                # Create figure
+                fig, ax = plt.subplots(figsize=(10, 6))
+                
+                # Plot mean line
+                ax.plot(steps, means, marker='o', linestyle='-', label=f'{metric_name} (mean)')
+                
+                # Plot std deviation range
+                ax.fill_between(steps, 
+                               [m - s for m, s in zip(means, stds)],
+                               [m + s for m, s in zip(means, stds)],
+                               alpha=0.2)
+                
+                # Add labels and title
+                ax.set_xlabel('Training Steps')
+                ax.set_ylabel(metric_name)
+                ax.set_title(f'{test_name}: {metric_name} Over Time')
+                ax.grid(True, linestyle='--', alpha=0.7)
+                
+                # Format x-axis to show step numbers nicely
+                plt.ticklabel_format(style='plain', axis='x')
+                
+                # Log to wandb
+                wandb.log({
+                    f"eval_metrics/{test_name}/{metric_name}_trend": wandb.Image(fig)
+                }, step=self.step)
+                
+                # Close the figure to free memory
+                plt.close(fig)
+
     def run(self):
         """
         Main entry for the AF3Trainer.
@@ -733,6 +894,11 @@ class AF3Trainer(object):
                 step_need_save = ( 
                     self.configs.checkpoint_interval > 0
                     and (self.step + 1) % self.configs.checkpoint_interval == 0
+                )
+
+                step_need_eval_metrics = (
+                    self.configs.evaluator.interval > 0
+                    and (self.step + 1) % self.configs.evaluator.interval == 0
                 )
 
                 is_last_step &= is_update_step
@@ -777,6 +943,10 @@ class AF3Trainer(object):
                 if step_need_eval or is_last_step:
                     self.evaluate()
                     self.on_validation_epoch_end()
+
+                if step_need_eval_metrics or is_last_step:
+                    self.evaluate_tests()
+
                 self.global_step += 1
                 if self.global_step % self.iters_to_accumulate == 0:
                     self.step += 1               

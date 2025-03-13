@@ -43,8 +43,8 @@ class InferenceRunner(object):
     def __init__(self, configs: Any, model: Optional[Any] = None) -> None:
         self.configs = configs
         self.init_basics()
+        self.init_env()
         if model is None:
-            self.init_env()
             self.init_model()
             self.load_checkpoint()
         else:

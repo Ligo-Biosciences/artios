@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from typing import Union
 import torch
 from torch.nn import Module
@@ -153,7 +154,7 @@ def grad_norm(module: Module, norm_type: Union[float, int, str], group_separator
     return norms, total_norm
 
 
-def track_and_visualize_metrics(results, eval_metrics_history, current_step):
+def track_eval_metrics(results, eval_metrics_history, current_step):
     """
     Track metrics over time and create visualizations of how they change during training.
     
@@ -213,7 +214,7 @@ def track_and_visualize_metrics(results, eval_metrics_history, current_step):
     return eval_metrics_history
 
 
-def create_and_log_metric_plots(test_name, metric_name, metric_data):
+def create_eval_metric_plots(test_name, metric_name, metric_data, steps):
     """Create and log plots showing metric trends over time to wandb.
     This should plot one function at a time. The logic for going through each test and metric 
     should be within evaluate_tests
@@ -221,10 +222,6 @@ def create_and_log_metric_plots(test_name, metric_name, metric_data):
     means = metric_data['mean']
     stds = metric_data['std']
     
-    # Skip if we have fewer than 2 data points
-    if len(means) < 2:
-        continue
-        
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 6))
     

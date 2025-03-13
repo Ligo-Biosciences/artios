@@ -49,9 +49,8 @@ from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
 from runner.evaluate import Evaluator, create_summary_statistics
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
-from protenix.utils.monitoring import visualize_loss_histogram, grad_norm, create_and_log_metric_plots, track_and_visualize_metrics
+from protenix.utils.monitoring import visualize_loss_histogram, grad_norm, create_eval_metric_plots, track_eval_metrics
 import matplotlib.pyplot as plt
-
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
@@ -754,7 +753,7 @@ class AF3Trainer(object):
             # Create and log visualizations for each test and metric
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 # Update the history metrics with the current step's metrics
-                self.eval_metrics_history = track_and_visualize_metrics(
+                self.eval_metrics_history = track_eval_metrics(
                     results, 
                     self.eval_metrics_history, 
                     self.step
@@ -764,7 +763,7 @@ class AF3Trainer(object):
                 for test_name, history in self.eval_metrics_history.items():
                     steps = history['steps']
                     for metric_name, metric_data in history['metrics'].items():
-                        fig = create_and_log_metric_plots(test_name, metric_name, metric_data)
+                        fig = create_eval_metric_plots(test_name, metric_name, metric_data, steps)
                         wandb.log({
                             f"eval_metrics/{test_name}/{metric_name}_trend": wandb.Image(fig)
                         }, step=self.step)

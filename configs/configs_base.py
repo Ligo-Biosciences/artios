@@ -32,8 +32,8 @@ basic_configs = {
     "iters_to_accumulate": 1,
     "eval_only": False,
     "load_checkpoint_path": "",
-    "load_ema_checkpoint_path": "",
-    "load_strict": True,
+    "load_ema_checkpoint_paths_directory": "",
+    "load_strict": False,
     "load_params_only": True,
     "guiding_net_path": ValueMaybeNone(""),
     "skip_load_step": False,
@@ -44,7 +44,10 @@ basic_configs = {
     "wandb_id": "", #TODO 
     "seed": 42,
     "deterministic": False,
-    "ema_decay": 0.999,
+    "post_hoc_ema_checkpoint_dir": "",
+    "power_law_ema_sigma": ListValue([0.1, 0.2]),
+    "post_hoc_ema_sigma": ListValue([0.05, 0.15]),
+    "calc_post_hoc_ema_during_training": True,
     "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],
 }

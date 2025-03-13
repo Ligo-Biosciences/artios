@@ -39,7 +39,7 @@ from protenix.web_service.dependency_url import URL
 logger = logging.getLogger(__name__)
 
 
-class InferenceRunner(object):
+class InferenceRunner(object): # TODO: add post hoc ema logic here.
     def __init__(self, configs: Any) -> None:
         self.configs = configs
         self.init_env()
@@ -132,7 +132,7 @@ class InferenceRunner(object):
         _load_checkpoint(self.configs.load_checkpoint_path, guiding=False)
         self.print(f"Finished loading checkpoint.")
 
-        if self.configs.guiding_net_path is not None:
+        if self.configs.guiding_net_path is not None and self.configs.guiding_net_path != "":
             _load_checkpoint(self.configs.guiding_net_path, guiding=True)
             self.print(f"Finished loading guiding net.")
 

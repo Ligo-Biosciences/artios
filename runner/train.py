@@ -20,9 +20,11 @@ from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
+import numpy as np
 import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
+from pathlib import Path
 import rootutils
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -35,16 +37,20 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.loss import ProtenixLoss
 from protenix.model.artios_ligand import ArtiosLigand
-from protenix.utils.distributed import DIST_WRAPPER
+from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
-from runner.ema import EMAWrapper
+from runner.ema import PowerLawEMAWrapper
+from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.data.utils import to_pdb
 from io import StringIO
+from protenix.utils.monitoring import visualize_loss_histogram
+import matplotlib.pyplot as plt
+
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
@@ -84,6 +90,8 @@ class AF3Trainer(object):
         self.run_name = [name for name in run_names if name is not None][0]
         self.run_dir = f"{self.configs.base_dir}/{self.run_name}"
         self.checkpoint_dir = f"{self.run_dir}/checkpoints"
+        self.ema_checkpoint_dir = f"{self.run_dir}/ema_checkpoints"
+        self.post_hoc_ema_checkpoint_dir = f"{self.run_dir}/post_hoc_ema_checkpoints"
         self.prediction_dir = f"{self.run_dir}/predictions"
         self.structure_dir = f"{self.run_dir}/structures"
         self.dump_dir = f"{self.run_dir}/dumps"
@@ -92,6 +100,8 @@ class AF3Trainer(object):
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)
             os.makedirs(self.checkpoint_dir)
+            os.makedirs(self.ema_checkpoint_dir)
+            os.makedirs(self.post_hoc_ema_checkpoint_dir)
             os.makedirs(self.prediction_dir)
             os.makedirs(self.structure_dir)
             os.makedirs(self.dump_dir)
@@ -103,7 +113,7 @@ class AF3Trainer(object):
 
         self.print(
             f"Using run name: {self.run_name}, run dir: {self.run_dir}, checkpoint_dir: "
-            + f"{self.checkpoint_dir}, prediction_dir: {self.prediction_dir}, structure_dir: "
+            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, post_hoc_ema_checkpoint_dir: {self.post_hoc_ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, structure_dir: "
             + f"{self.structure_dir}, error_dir: {self.error_dir}"
         )
 
@@ -182,14 +192,17 @@ class AF3Trainer(object):
         else:
             self.model = self.raw_model
 
-        if self.configs.get("ema_decay", -1) > 0:
-            assert self.configs.ema_decay < 1
-            self.ema_wrapper = EMAWrapper(
-                self.model,
-                self.configs.ema_decay,
-                self.configs.ema_mutable_param_keywords,
-            )
-            self.ema_wrapper.register()
+        if self.configs.get("power_law_ema_sigma", []):  # Check if list is not empty
+            self.power_law_ema_wrappers = []  # Store wrappers in a list
+            for sigma in self.configs.power_law_ema_sigma: 
+                wrapper = PowerLawEMAWrapper( 
+                    model=self.model,
+                    sigma=sigma,
+                    mutable_param_keywords=self.configs.ema_mutable_param_keywords,
+                )
+                wrapper.register()
+                self.power_law_ema_wrappers.append(wrapper)
+            self.print(f"Initialized {len(self.power_law_ema_wrappers)} power law EMA wrappers with standard deviations: {self.configs.power_law_ema_sigma}")
 
         torch.cuda.empty_cache()
         self.optimizer = get_optimizer(self.configs, self.model)
@@ -215,19 +228,29 @@ class AF3Trainer(object):
         # They do this via a "batch". #TODO: determine how they get batch and what is stored inside it.
         pass
 
-    def save_checkpoint(self, ema_suffix=""):
+    def save_checkpoint(self, ema_suffix="", save_model_only=False):
         if DIST_WRAPPER.rank == 0:
-            path = f"{self.checkpoint_dir}/{self.step}{ema_suffix}.pt"
-            checkpoint = {
-                "model": self.model.state_dict(),
-                "optimizer": self.optimizer.state_dict(),
-                "scheduler": (
-                    self.lr_scheduler.state_dict()
-                    if self.lr_scheduler is not None
-                    else None
-                ),
-                "step": self.step,
-            }
+            if ema_suffix:
+                path = f"{self.ema_checkpoint_dir}/{self.step}_{ema_suffix}.pt"
+            else:
+                path = f"{self.checkpoint_dir}/{self.step}.pt"
+
+            if not save_model_only:
+                # Save model, optimizer, scheduler, and step
+                checkpoint = {
+                    "model": self.model.state_dict(),
+                    "optimizer": self.optimizer.state_dict(),
+                    "scheduler": (
+                        self.lr_scheduler.state_dict()
+                        if self.lr_scheduler is not None
+                        else None
+                    ),
+                    "step": self.step,
+                }
+            else:
+                # Save model and step (used for EMA wrappers)
+                checkpoint = {"model": self.model.state_dict(), "step": self.step}
+
             torch.save(checkpoint, path)
             self.print(f"Saved checkpoint to {path}")
 
@@ -275,15 +298,44 @@ class AF3Trainer(object):
                     self.init_scheduler(last_epoch=self.step - 1)
             self.print(f"Finish loading checkpoint, current step: {self.step}")
 
-        # Load EMA model parameters
-        if self.configs.load_ema_checkpoint_path:
-            _load_checkpoint(
-                self.configs.load_ema_checkpoint_path,
-                load_params_only=True,
-            )
-            self.ema_wrapper.register()
+        if self.configs.load_ema_checkpoint_paths_directory:
+            checkpoint_dir = self.configs.load_ema_checkpoint_paths_directory
+            if not os.path.exists(checkpoint_dir):
+                raise Exception(f"EMA checkpoint directory does not exist: {checkpoint_dir}")
+            
+            # Get all checkpoint files from directory
+            checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pt')]
+            self.print(f"Found {len(checkpoint_files)} EMA checkpoints in {checkpoint_dir}")
+            
+            # Create mapping of sigma values to their corresponding wrappers
+            sigma_to_wrapper = {wrapper.sigma: wrapper for wrapper in self.power_law_ema_wrappers}
 
-        # Load model
+            # Load each checkpoint and match with corresponding wrapper
+            for checkpoint_file in checkpoint_files:
+                # Extract sigma value from filename (assuming format like "*_ema_6.94.pt")
+                try:
+                    sigma_str = checkpoint_file.split('_ema_')[-1].replace('.pt', '')
+                    sigma = float(sigma_str)
+                except (IndexError, ValueError):
+                    self.print(f"Warning: Could not extract a sigma value from checkpoint filename: {checkpoint_file}")
+                    continue
+                
+                if sigma not in sigma_to_wrapper:
+                    self.print(f"Warning: No matching wrapper found for sigma={sigma} in checkpoint: {checkpoint_file}")
+                    continue
+                
+                checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
+                _load_checkpoint(
+                    checkpoint_path,
+                    load_params_only=True,
+                )
+                
+                # Register only the wrapper corresponding to this sigma
+                matching_wrapper = sigma_to_wrapper[sigma] 
+                matching_wrapper.register()
+                self.print(f"Loaded and registered EMA checkpoint for sigma={sigma}: {checkpoint_file}")
+
+        # Load model parameters (With no EMA) from checkpoint 
         if self.configs.load_checkpoint_path:
             _load_checkpoint(
                 self.configs.load_checkpoint_path,
@@ -315,7 +367,7 @@ class AF3Trainer(object):
         assert mode in ["train", "eval"]
         self.loss.to(batch["pred_dict"]["coordinate"].device)  # Move loss to device
 
-        loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
+        loss, loss_dict, raw_loss_and_timestep = autocasting_disable_decorator(self.configs.skip_amp.loss)(
             self.loss
         )(
             feat_dict=batch["input_feature_dict"],
@@ -323,7 +375,7 @@ class AF3Trainer(object):
             label_dict=batch["label_dict"],
             mode=mode,
         )
-        return loss, loss_dict, batch
+        return loss, loss_dict, raw_loss_and_timestep
 
     @torch.no_grad()
     def get_metrics(self, batch: dict) -> dict:
@@ -345,15 +397,51 @@ class AF3Trainer(object):
 
     @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
+        all_eval_metrics = {}
         if not self.configs.eval_ema_only:
-            self._evaluate()
-        if hasattr(self, "ema_wrapper"):
-            self.ema_wrapper.apply_shadow()
-            self._evaluate(ema_suffix=f"ema{self.ema_wrapper.decay}_", mode=mode)
-            self.ema_wrapper.restore()
+            # Evaluate None-EMA
+            metrics = self._evaluate()
+            all_eval_metrics["None-EMA"] = metrics
+            
+        # Evaluate post-hoc EMA checkpoints
+        if self.configs.calc_post_hoc_ema_during_training:
+            # Perform post hoc ema calculation
+            post_hoc_checkpoints = self.calc_post_hoc_ema()
+
+            # Store current model state
+            current_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+            
+            for checkpoint_path in post_hoc_checkpoints:
+                # Extract sigma value from filename
+                sigma = float(checkpoint_path.stem.split('_post_hoc_ema_')[-1])
+                
+                # Load and evaluate the post-hoc EMA checkpoint
+                checkpoint = torch.load(checkpoint_path, map_location=self.device)
+                
+                # Load post-hoc EMA weights
+                self.model.load_state_dict(checkpoint['model'])
+                
+                # Evaluate
+                print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
+                metrics = self._evaluate(ema_suffix=f"_post_hoc_ema_{sigma}", mode=mode)
+                all_eval_metrics[f"post_hoc_ema_{sigma}"] = metrics
+                
+                # Delete post-hoc checkpoint from RAM and disk
+                del checkpoint
+                torch.distributed.barrier()  # TODO: 
+                time.sleep(2)  # Ensure all processes have loaded
+                if DIST_WRAPPER.rank == 0:
+                    os.remove(checkpoint_path)
+
+            # Restore original model state
+            self.model.load_state_dict(current_state)
+                    
+            # Plot all the metrics on wandb
+            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                log_ema_validation_curves(all_eval_metrics, self.step)
 
     @torch.no_grad()
-    def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):
+    def _evaluate(self, ema_suffix: str = "", mode: str = "eval"): 
         # Init Metric Aggregator
         simple_metric_wrapper = SimpleMetricAggregator(["avg"])
         eval_precision = {
@@ -366,12 +454,20 @@ class AF3Trainer(object):
             if torch.cuda.is_available()
             else nullcontext()
         )
+        
         self.model.eval()
+
+        # Initialize dict to store losses and timesteps for each loss type
+        loss_data = {
+            'smooth_lddt_loss': {'losses': [], 'timesteps': []},
+            'mse_loss': {'losses': [], 'timesteps': []}
+        }
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
             evaluated_pids = []
             total_batch_num = len(test_dl)
+
             for index, batch in enumerate(tqdm(test_dl)):
                 batch = to_device(batch, self.device)
                 pid = batch["basic"]["pdb_id"]
@@ -392,41 +488,62 @@ class AF3Trainer(object):
                     # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, batch = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
-                    # lDDT metrics TODO: now with our modified lddt calculations this will need fixing
-                    #lddt_dict = self.get_metrics(batch)
-                    #lddt_metrics = self.aggregate_metrics(lddt_dict, batch)
-                    #simple_metrics.update(
-                    #    {k: v for k, v in lddt_metrics.items() if "diff" not in k}
-                    #)
+                    loss, loss_dict, raw_loss_and_timestep = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
+
+                    # Collect losses and timesteps
+                    for loss_name, data in raw_loss_and_timestep.items():
+                        losses = data["loss"].detach().cpu().numpy()  # [..., N_sample]
+                        timesteps = data["timestep"].detach().cpu().numpy()  # [..., N_sample]
+                        print(f"losses: {losses.shape}, timesteps: {timesteps.shape}")
+                        loss_data[loss_name]['losses'].append(losses)
+                        loss_data[loss_name]['timesteps'].append(timesteps)
+
                     simple_metrics.update(loss_dict)
 
                 # Metrics
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(
-                        f"{ema_suffix}{key}", value, namespace=test_name
+                        key, value, namespace="val"
                     )
                 
                 # Visualise selected structures in wandb
                 # FIXME: just temporary sampling logic for intial training runs
+                """
                 if pid in PDB_TO_VISUALISE:
                     coords = batch["pred_dict"]["coordinate_mini"].unsqueeze(-3)  # [..., 1, N_atom, 3] -> [..., N_atom, 3]
                     pdb_str = to_pdb(coords, batch["input_feature_dict"])  # output of the mini-rollout
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                         wandb.log({
-                           f"{ema_suffix}structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
+                           f"{ema_suffix}_structure_{pid}": wandb.Molecule(StringIO(pdb_str), file_type="pdb")
                         }, step=self.step)
-
-                del batch, simple_metrics
+                """
+                del simple_metrics
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
-            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                wandb.log(metrics, step=self.step)
 
+            # Create and log the loss distribution plots for each loss type
+            if self.configs.use_wandb and DIST_WRAPPER.rank == 0 and loss_data:
+                for loss_name, data in loss_data.items():
+                    # Combine all collected data for this loss type
+                    combined_losses = np.concatenate([l.flatten() for l in data['losses']]).flatten()
+                    combined_timesteps = np.concatenate([t.flatten() for t in data['timesteps']]).flatten()
+                    
+                    # Histogram-based visualization
+                    hist_fig = visualize_loss_histogram(
+                        combined_timesteps,
+                        combined_losses,
+                        title=f"{loss_name} Loss Histogram over Time ({test_name}{ema_suffix})"
+                    )
+                    wandb.log({
+                        f"{test_name}{ema_suffix}_{loss_name}_loss_histogram": wandb.Image(hist_fig)
+                    }, step=self.step)
+                    plt.close(hist_fig)
+
+        return metrics
     def update(self):
         # Clip the gradient
         if self.configs.grad_clip_norm != 0.0:
@@ -481,7 +598,7 @@ class AF3Trainer(object):
         for key, value in loss_dict.items():
             if "loss" not in key:
                 continue
-            self.train_metric_wrapper.add(key, value, namespace="train") #FIXME: getting illegel CUDA memory access here 
+            self.train_metric_wrapper.add(key, value, namespace="train") 
         torch.cuda.empty_cache()
 
     def progress_bar(self, desc: str = ""):
@@ -505,6 +622,40 @@ class AF3Trainer(object):
             f"[step {self.step}: {step}/{self.iters_to_accumulate * self.configs.eval_interval}] {desc}"
         )
         return
+    
+    def calc_post_hoc_ema(self):
+        """
+        Calculate post-hoc EMA checkpoints using the utility function from ema_utils.
+        This combines checkpoints with different sigma values to create new EMA profiles 
+        with target sigma values specified in configs.post_hoc_ema_decay. 
+        """
+        # Get all EMA checkpoint paths
+        ema_checkpoint_paths = [
+            Path(os.path.join(self.ema_checkpoint_dir, f)) 
+            for f in os.listdir(self.ema_checkpoint_dir) 
+            if f.endswith('.pt')
+        ]
+        
+        if len(ema_checkpoint_paths) == 0:
+            self.print(f"No EMA checkpoints found in {self.ema_checkpoint_dir}")
+            return
+        
+        self.print(f"Found {len(ema_checkpoint_paths)} EMA checkpoints in {self.ema_checkpoint_dir}")
+        
+        # Calculate post-hoc EMA checkpoints
+        save_dir = Path(self.post_hoc_ema_checkpoint_dir)
+        target_sigma_values = self.configs.post_hoc_ema_sigma
+        
+        # Use the utility function to calculate post-hoc EMA checkpoints
+        output_paths = calculate_post_hoc_ema(
+            ema_checkpoint_paths=ema_checkpoint_paths,
+            target_sigma_values=target_sigma_values,
+            save_dir=save_dir
+        )
+        
+        self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
+
+        return output_paths
 
     def run(self):
         """
@@ -516,8 +667,8 @@ class AF3Trainer(object):
             self.evaluate()
             if self.configs.eval_only:
                 return
-        use_ema = hasattr(self, "ema_wrapper")
-        self.print(f"Using ema: {use_ema}")
+        use_ema = hasattr(self, "power_law_ema_wrappers")
+        self.print(f"Using power law ema's: {use_ema}") 
 
         while True:
             for batch in self.train_dl:
@@ -529,7 +680,7 @@ class AF3Trainer(object):
                     self.configs.eval_interval > 0
                     and (self.step + 1) % self.configs.eval_interval == 0
                 )
-                step_need_save = (
+                step_need_save = ( 
                     self.configs.checkpoint_interval > 0
                     and (self.step + 1) % self.configs.checkpoint_interval == 0
                 )
@@ -543,7 +694,8 @@ class AF3Trainer(object):
                 self.progress_bar()
                 self.train_step(batch)
                 if use_ema:
-                    self.ema_wrapper.update()
+                    for wrapper in self.power_law_ema_wrappers:
+                        wrapper.update(t=self.step+1)
                 if step_need_log or is_last_step:
                     metrics = self.train_metric_wrapper.calc()
                     self.print(f"Step {self.step} train: {metrics}")
@@ -559,22 +711,28 @@ class AF3Trainer(object):
                         wandb.log(metrics, step=self.step)
 
                 if step_need_save or is_last_step:
-                    self.save_checkpoint()
+                    self.print(f"beginning Saving checkpoint at step {self.step}")
+                    self.save_checkpoint() # Saves non-ema checkpoint
                     if use_ema:
-                        self.ema_wrapper.apply_shadow()
-                        self.save_checkpoint(
-                            ema_suffix=f"_ema_{self.ema_wrapper.decay}"
-                        )
-                        self.ema_wrapper.restore()
+                        for wrapper in self.power_law_ema_wrappers:
+                            wrapper.apply_shadow()
+                            self.save_checkpoint(
+                                ema_suffix=f"ema_{wrapper.sigma}",
+                                save_model_only=True
+                            )
+                            wrapper.restore()
+                        wait_for_all_processes()
+                        
 
                 if step_need_eval or is_last_step:
                     self.evaluate()
                 self.global_step += 1
                 if self.global_step % self.iters_to_accumulate == 0:
-                    self.step += 1
+                    self.step += 1               
                 if self.step >= self.configs.max_steps:
                     self.print(f"Finish training after {self.step} steps")
                     break
+
             if self.step >= self.configs.max_steps:
                 break
 

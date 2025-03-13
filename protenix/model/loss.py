@@ -63,6 +63,7 @@ class SmoothLDDTLoss(nn.Module):
         reduction: str = "mean",
         k: int = 300,
         uncertainty_embed_dim: int = 64,
+        use_uncertainty: bool = False,
     ) -> None:
         """SmoothLDDTLoss
 
@@ -74,27 +75,25 @@ class SmoothLDDTLoss(nn.Module):
         self.eps = eps
         self.reduction = reduction
         self.k = k
+        self.use_uncertainty = use_uncertainty
 
-        # Learnable parameter with single value
+        # Timestep-dependent uncertainty correction
         self.uncertainty_embed_dim = uncertainty_embed_dim
-        self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
-        self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
+        if self.use_uncertainty:
+            self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
+            self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def _chunk_forward(self, pred_distance, true_distance, c_lm=None):
-        dist_diff = torch.abs(pred_distance - true_distance)
+        dist_diff = torch.abs(pred_distance - true_distance)  # [..., N_sample, N_atom, k]
         # For save cuda memory we use inplace op
         dist_diff_epsilon = 0
         for threshold in [0.5, 1, 2, 4]:
             dist_diff_epsilon = add(dist_diff_epsilon, mul(0.25, torch.sigmoid(threshold - dist_diff), inplace_safe=True), inplace_safe=True)
 
         # Compute mean
-        if c_lm is not None:
-            lddt = torch.sum(c_lm * dist_diff_epsilon, dim=(-1, -2)) / (
-                torch.sum(c_lm, dim=(-1, -2)) + self.eps
-            )  # [..., N_sample]
-        else:
-            # It's for sparse forward mode
-            lddt = torch.mean(dist_diff_epsilon, dim=-1)
+        lddt = torch.sum(c_lm * dist_diff_epsilon, dim=(-1, -2)) / (
+            torch.sum(c_lm, dim=(-1, -2)) + self.eps
+        )  # [..., N_sample]
         return lddt
     
     def query_neighbors(
@@ -137,7 +136,6 @@ class SmoothLDDTLoss(nn.Module):
         true_coordinates: torch.Tensor,
         coordinate_mask: torch.Tensor,
         timestep: torch.Tensor,
-        diffusion_chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
         """SmoothLDDTLoss
 
@@ -150,7 +148,6 @@ class SmoothLDDTLoss(nn.Module):
                 [..., N_atom]
             timestep (torch.Tensor): the timestep for the current sample.
                 [..., N_sample]
-            diffusion_chunk_size (Optional[int]): Chunk size over the N_sample dimension. Defaults to None.
 
         Returns:
             torch.Tensor: the smooth lddt loss
@@ -192,41 +189,15 @@ class SmoothLDDTLoss(nn.Module):
 
         # Compute distance error
         # [..., N_sample, N_atom, k]
-        if diffusion_chunk_size is None:
-            lddt = self._chunk_forward(
-                pred_distance=pred_distance, true_distance=true_neighbor_distances, c_lm=c_lm
-            )
-
-        else:
-            # Default use checkpoint for saving memory
-            checkpoint_fn = get_checkpoint_fn()
-            lddt = []
-            no_chunks = n_samples // diffusion_chunk_size + (
-                n_samples % diffusion_chunk_size != 0
-            )
-            for i in range(no_chunks):
-                lddt_i = checkpoint_fn(
-                    self._chunk_forward,
-                    pred_distance[
-                        ...,
-                        i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size,
-                        :,
-                        :,
-                    ],
-                    true_neighbor_distances,
-                    c_lm,
-                )
-                if torch.isnan(lddt_i).any():
-                    print(f"NaN detected in lddt chunk {i}")
-                lddt.append(lddt_i)
-            lddt = torch.cat(lddt, dim=-1)
-            lddt = lddt.mean(dim=-1)
+        lddt = self._chunk_forward(
+            pred_distance=pred_distance, true_distance=true_neighbor_distances, c_lm=c_lm
+        )
 
         loss = 1 - lddt  # [..., N_sample]
-        raw_loss = loss.clone().detach()  # Store raw loss before uncertainty scaling
+        raw_loss = loss.detach().clone()
 
         # Training time uncertainty scaling
-        if self.training:
+        if self.training and self.use_uncertainty:
             timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
             u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
 
@@ -235,7 +206,11 @@ class SmoothLDDTLoss(nn.Module):
 
         final_loss = loss_reduction(loss, method=self.reduction)
 
-        return final_loss, {"raw_loss": raw_loss, "timestep": timestep}
+        # Return the loss, metrics and monitor data
+        return final_loss, {}, {
+            "raw_loss": raw_loss,
+            "timestep": timestep.clone()
+        }
 
 
 def softmax_cross_entropy(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
@@ -305,6 +280,7 @@ class MSELoss(nn.Module):
         weight_ligand=10.0,
         eps=1e-6,
         reduction: str = "mean",
+        use_uncertainty: bool = False,
         uncertainty_embed_dim: int = 64,
     ) -> None:
         super(MSELoss, self).__init__()
@@ -314,9 +290,12 @@ class MSELoss(nn.Module):
         self.weight_ligand = weight_ligand
         self.eps = eps
         self.reduction = reduction
+        self.use_uncertainty = use_uncertainty
         self.uncertainty_embed_dim = uncertainty_embed_dim
-        self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
-        self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
+
+        if self.use_uncertainty:
+            self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
+            self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def weighted_rigid_align(
         self,
@@ -395,7 +374,7 @@ class MSELoss(nn.Module):
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
         per_sample_scale: torch.Tensor = None,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, dict, dict[str, torch.Tensor]]:
         """MSELoss
 
         Args:
@@ -431,10 +410,6 @@ class MSELoss(nn.Module):
                 is_ligand=is_ligand,
             )
 
-        # Compute u(t) 
-        timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
-        u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
-
         # Calculate MSE loss
         per_atom_se = ((pred_coordinate - true_coordinate_aligned) ** 2).sum(
             dim=-1
@@ -445,18 +420,26 @@ class MSELoss(nn.Module):
 
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
+        
+        raw_loss = per_sample_weighted_mse.detach().clone()
 
         weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
         raw_loss = weighted_align_mse_loss.clone().detach()  # Store raw loss before uncertainty scaling
 
         # Balance grads between timesteps during training
-        if self.training:
+        if self.training and self.use_uncertainty:
+            # Compute u(t) 
+            timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
+            u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
             weighted_align_mse_loss = (weighted_align_mse_loss / u_t.exp()) + u_t
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
 
-        return loss, {"raw_loss": raw_loss, "timestep": timestep}
-
+        # Return the loss, metrics and monitor data
+        return loss, {}, {
+            "raw_loss": raw_loss,
+            "timestep": timestep.clone()
+        }
 
 class ProtenixLoss(nn.Module):
     """Aggregation of the various losses"""
@@ -480,61 +463,45 @@ class ProtenixLoss(nn.Module):
             * self.weight_smooth_lddt,  # Different from AF3 appendix eq(6), where smooth_lddt has no weight
         }
 
-        #self.plddt_loss = PLDDTLoss(**configs.loss.plddt, **self.lddt_radius) 
-        #self.pde_loss = PDELoss(**configs.loss.pde)
-        #self.resolved_loss = ExperimentallyResolvedLoss(**configs.loss.resolved)
-        #self.pae_loss = PAELoss(**configs.loss.pae)
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
 
     def aggregate_losses(  
-        self, loss_fns: dict, has_valid_resolution: Optional[torch.Tensor] = None
-    ) -> tuple[torch.Tensor, dict, dict]:
+        self, loss_fns: dict
+    ) -> tuple[torch.Tensor, dict]:
         """
         Aggregates multiple loss functions and their respective metrics.
 
         Args:
             loss_fns (dict): Dictionary of loss functions to be aggregated.
-            has_valid_resolution (Optional[torch.Tensor]): Tensor indicating valid resolutions. Defaults to None. # TODO: can be removed
 
         Returns:
             tuple[torch.Tensor, dict]:
                 - cum_loss (torch.Tensor): Cumulative loss.
                 - all_metrics (dict): Dictionary containing all metrics.
-                - raw_loss_and_timestep (dict): Dictionary containing raw loss and timestep for monitoring.
+                - monitor_data (dict): Dictionary containing non-standard data for monitoring training dynamics.
         """
         cum_loss = 0.0
         all_metrics = {}
-        raw_loss_and_timestep = {}  # dict to store raw loss and timestep for monitoring
+        all_monitor_data = {}
         for loss_name, loss_fn in loss_fns.items():
             weight = self.loss_weight[loss_name]
             loss_outputs = loss_fn()
             metrics = {}  # NOTE: dummy metrics
             if isinstance(loss_outputs, tuple):
-                loss, metric = loss_outputs
-                # Store raw losses and timesteps for plotting
-                raw_loss_and_timestep[loss_name] = {
-                    "loss": metric["raw_loss"].detach().clone(),
-                    "timestep": metric["timestep"].detach().clone()
-                }
+                loss, metrics, monitor_data = loss_outputs
             else:
                 assert isinstance(loss_outputs, torch.Tensor)
-                loss, metrics = loss_outputs, {}
+                loss, metrics, monitor_data = loss_outputs, {}, {}
 
             all_metrics.update(
                 {f"{loss_name}/{key}": val for key, val in metrics.items()}
             )
+            all_monitor_data[loss_name] = monitor_data
+
             if torch.isnan(loss) or torch.isinf(loss):
                 logging.warning(f"{loss_name} loss is NaN. Skipping...")
-            if (
-                (has_valid_resolution is not None)
-                and (has_valid_resolution.sum() == 0)
-                and (
-                    loss_name in ["plddt_loss", "pde_loss", "resolved_loss", "pae_loss"]
-                )
-            ):
-                loss = 0.0 * loss
             else:
                 all_metrics[loss_name] = loss.detach().clone()
                 all_metrics[f"weighted_{loss_name}"] = weight * loss.detach().clone()
@@ -542,7 +509,7 @@ class ProtenixLoss(nn.Module):
             cum_loss = cum_loss + weight * loss
         all_metrics["loss"] = cum_loss.detach().clone()
 
-        return cum_loss, all_metrics, raw_loss_and_timestep
+        return cum_loss, all_metrics, all_monitor_data
 
     def calculate_losses(
         self,
@@ -564,20 +531,14 @@ class ProtenixLoss(nn.Module):
             tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
                 - cum_loss (torch.Tensor): Cumulative loss.
                 - metrics (dict[str, torch.Tensor]): Dictionary containing aggregated metrics.
-                - raw_loss_and_timestep (dict[str, torch.Tensor]): Dictionary containing raw loss and timestep for monitoring.
+                - monitor_data (dict[str, torch.Tensor]): Dictionary containing non-standard data for monitoring training dynamics.
         """
         assert mode in ["train", "eval", "inference"]
 
+
+        # Timestep-dependent scaling of the loss
         timestep = pred_dict["timestep"] # [..., N_sample]
-
-        if mode == "train":
-            if not self.configs.train_confidence_only:
-                # Scale 
-                diffusion_per_sample_scale =  (timestep**2 + (1 - timestep)**2) / ((self.configs.sigma_data * (1 - timestep))**2)
-
-        else:
-            # No scale is required
-            diffusion_per_sample_scale = None
+        diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * (1-timestep))**2)
         
         if self.configs.train_confidence_only and mode == "train":
             # Skip Diffusion Loss and distogram loss
@@ -592,7 +553,6 @@ class ProtenixLoss(nn.Module):
                         true_coordinates=label_dict["coordinate"],
                         timestep=pred_dict["timestep"],
                         coordinate_mask=label_dict["coordinate_mask"],
-                        diffusion_chunk_size=self.configs.loss.diffusion_lddt_chunk_size,
                     )
                 }
             )
@@ -612,30 +572,8 @@ class ProtenixLoss(nn.Module):
                 }
             )
 
-        # Confidence Loss: #TODO: this can be removed and thus we can remove the resolution check from aggregate_losses
-        # Only when resoluton is in [min_resolution, max_resolution] the confidence loss is considered
-        # NOTE: here we assume batch_size == 1
-        resolution = feat_dict["resolution"].item()
-        has_valid_resolution = (resolution >= self.configs.loss.resolution.min) & (
-            resolution <= self.configs.loss.resolution.max
-        )
-
-        if has_valid_resolution:
-            has_valid_resolution = torch.tensor(
-                [1.0],
-                dtype=label_dict["coordinate"].dtype,
-                device=label_dict["coordinate"].device,
-            )
-        else:
-            has_valid_resolution = torch.tensor(
-                [0.0],
-                dtype=label_dict["coordinate"].dtype,
-                device=label_dict["coordinate"].device,
-            )
-
-        cum_loss, metrics, raw_loss_and_timestep = self.aggregate_losses(loss_fns, has_valid_resolution)
-
-        return cum_loss, metrics, raw_loss_and_timestep
+        cum_loss, metrics, monitor_data = self.aggregate_losses(loss_fns)
+        return cum_loss, metrics, monitor_data
 
     def forward( 
         self,
@@ -643,7 +581,7 @@ class ProtenixLoss(nn.Module):
         pred_dict: dict[str, torch.Tensor],
         label_dict: dict[str, Any],
         mode: str = "train",
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         """
         Forward pass for calculating the cumulative loss and aggregated metrics.
 
@@ -654,20 +592,19 @@ class ProtenixLoss(nn.Module):
             mode (str): Mode of operation ('train', 'eval', 'inference'). Defaults to 'train'.
 
         Returns:
-            tuple[torch.Tensor, dict[str, torch.Tensor]]:
+            tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
                 - cum_loss (torch.Tensor): Cumulative loss.
                 - losses (dict[str, torch.Tensor]): Dictionary containing aggregated metrics.
+                - monitor_data (dict[str, torch.Tensor]): Dictionary containing non-standard data for monitoring training dynamics.
         """
-        diffusion_chunk_size = self.configs.loss.diffusion_chunk_size_outer
         assert mode in ["train", "eval", "inference"]
 
-
         # Calculate losses
-        cum_loss, losses, raw_loss_and_timestep = self.calculate_losses(
+        cum_loss, losses, monitor_data = self.calculate_losses(
             feat_dict=feat_dict,
             pred_dict=pred_dict,
             label_dict=label_dict,
             mode=mode,
         )
-
-        return cum_loss, losses, raw_loss_and_timestep
+        
+        return cum_loss, losses, monitor_data

@@ -761,8 +761,8 @@ class AF3Trainer(object):
             summary_row (dict): Dictionary with summary statistics (mean ± std)
         """
         # Initialize metrics history if not already there
-        if not hasattr(self, 'metrics_history'):
-            self.metrics_history = {}
+        if not hasattr(self, 'eval_metrics_history'):
+            self.eval_metrics_history = {}
         
         # Current step
         current_step = self.step
@@ -772,37 +772,50 @@ class AF3Trainer(object):
             if test_name == "merged":
                 continue
             
-            if test_name not in self.metrics_history:
-                self.metrics_history[test_name] = {'steps': [], 'metrics': {}}
+            if test_name not in self.eval_metrics_history:
+                self.eval_metrics_history[test_name] = {'steps': [], 'metrics': {}}
             
             # Add current step
-            self.metrics_history[test_name]['steps'].append(current_step)
+            self.eval_metrics_history[test_name]['steps'].append(current_step)
             
-            # Calculate mean and std directly from dataframe
+            # Calculate mean and std for each metric in the test
             for col in df.columns:
                 if col == 'Ligand CCD':
                     continue
+
+                # Handle string boolean values - convert "TRUE"/"FALSE" to 1/0
+                if df[col].dtype == object:
+                    # Check if column contains string booleans
+                    has_true = df[col].str.upper().eq("TRUE").any()
+                    has_false = df[col].str.upper().eq("FALSE").any()
+                    
+                    if has_true or has_false:
+                        # Convert to boolean then to int
+                        col_data = df[col].str.upper().map({"TRUE": 1, "FALSE": 0})
+                    else:
+                        # Try to convert to numeric anyway
+                        col_data = pd.to_numeric(df[col], errors='coerce')
+                elif df[col].dtype == bool:
+                    # For boolean columns, convert to 0/1
+                    col_data = df[col].astype(int)
+                else:
+                    # For other columns, try to convert to numeric
+                    col_data = pd.to_numeric(df[col], errors='coerce')
+
+                # Calculate mean and std directly from the column
+                mean = col_data.mean()
+                std = col_data.std()
                 
-                # Only process numeric columns
-                try:
-                    # Calculate mean and std directly from the column
-                    values = pd.to_numeric(df[col], errors='coerce')
-                    mean_val = values.mean()
-                    std_val = values.std()
-                    
-                    # Skip if mean is NaN
-                    if pd.isna(mean_val):
-                        continue
-                    
-                    # Store in history
-                    if col not in self.metrics_history[test_name]['metrics']:
-                        self.metrics_history[test_name]['metrics'][col] = {'mean': [], 'std': []}
-                        
-                    self.metrics_history[test_name]['metrics'][col]['mean'].append(mean_val)
-                    self.metrics_history[test_name]['metrics'][col]['std'].append(std_val if not pd.isna(std_val) else 0)
-                except (ValueError, TypeError):
-                    # Skip if we can't parse the column as numeric
+                # Skip if mean is NaN
+                if pd.isna(mean):
                     continue
+                
+                # Store in history
+                if col not in self.eval_metrics_history[test_name]['metrics']:
+                    self.eval_metrics_history[test_name]['metrics'][col] = {'mean': [], 'std': []}
+                    
+                self.eval_metrics_history[test_name]['metrics'][col]['mean'].append(mean)
+                self.eval_metrics_history[test_name]['metrics'][col]['std'].append(std)
         
         # Create and log visualizations for each test and metric
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
@@ -812,7 +825,7 @@ class AF3Trainer(object):
         """Create and log plots showing metric trends over time to wandb."""
         import matplotlib.pyplot as plt
         
-        for test_name, history in self.metrics_history.items():
+        for test_name, history in self.eval_metrics_history.items():
             steps = history['steps']
             
             for metric_name, metric_data in history['metrics'].items():
@@ -864,6 +877,11 @@ class AF3Trainer(object):
                 return
         use_ema = hasattr(self, "power_law_ema_wrappers")
         self.print(f"Using power law ema's: {use_ema}") 
+
+        if self.configs.eval_metrics.interval != -1:
+            # Initialize metrics history
+            if not hasattr(self, 'eval_metrics_history'):
+                self.eval_metrics_history = {}
 
         while True:
             for batch in self.train_dl:

@@ -300,7 +300,7 @@ monitor_configs = {
         "grad_norm": False,
     },
     "eval_metrics": {
-        "interval": 5000,
+        "interval": -1,
     }
 }
 

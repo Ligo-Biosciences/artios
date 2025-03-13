@@ -298,6 +298,7 @@ monitor_configs = {
     "monitor": {
         "loss_distribution": False,
         "grad_norm": False,
+        "weight_norm": False,
     }
 }
 

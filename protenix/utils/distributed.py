@@ -15,6 +15,7 @@
 import os
 
 import torch
+import time
 
 
 def distributed_available() -> bool:
@@ -70,3 +71,9 @@ def gather_and_merge(metrics, aggregation_func=None):
     gathered_metrics = DIST_WRAPPER.all_gather_object(metrics)  # list of metrics
     merged_metrics = traverse_and_aggregate(gathered_metrics, aggregation_func)
     return merged_metrics
+
+
+def wait_for_all_processes():
+    if DIST_WRAPPER.world_size > 1:
+        torch.distributed.barrier()
+        time.sleep(2)  # Ensure all processes have saved checkpoints

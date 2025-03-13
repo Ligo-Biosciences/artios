@@ -42,9 +42,9 @@ logger = logging.getLogger(__name__)
 class InferenceRunner(object):
     def __init__(self, configs: Any, model: Optional[Any] = None) -> None:
         self.configs = configs
-        self.init_env()
         self.init_basics()
         if model is None:
+            self.init_env()
             self.init_model()
             self.load_checkpoint()
         self.init_dumper(

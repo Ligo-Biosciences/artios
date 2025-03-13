@@ -1,4 +1,7 @@
 import numpy as np
+from typing import Union
+import torch
+from torch.nn import Module
 from scipy.stats import gaussian_kde
 import matplotlib.pyplot as plt
 
@@ -115,48 +118,36 @@ def visualize_loss_histogram(
     return plt.gcf()
 
 
-def visualize_loss_distribution(
-        timesteps: np.ndarray,
-        losses: np.ndarray,
-        title: str = "Loss Distribution over Time",
-        figsize: tuple = (10, 6),
-    ):
-    """
-    Create a matplotlib visualization of loss distribution over time.
-    
+def grad_norm(module: Module, norm_type: Union[float, int, str], group_separator: str = "/") -> dict[str, float]:
+    """Compute each parameter's gradient's norm and their overall norm.
+
+    The overall norm is computed over all gradients together, as if they
+    were concatenated into a single vector.
+
     Args:
-        timesteps (np.ndarray): timestep values in range [0, 1]
-        losses (np.ndarray): corresponding loss values
-        title (str): plot title
-        figsize (tuple): figure dimensions (width, height)
+        module: :class:`torch.nn.Module` to inspect.
+        norm_type: The type of the used p-norm, cast to float if necessary.
+            Can be ``'inf'`` for infinity norm.
+        group_separator: The separator string used by the logger to group
+            the gradients norms in their own subfolder instead of the logs one.
+
+    Return:
+        norms: The dictionary of p-norms of each parameter's gradient and
+            a special entry for the total p-norm of the gradients viewed
+            as a single vector.
+        total_norm: The total p-norm of the gradients
     """
-    
-    # Get smoothed curve and standard deviations
-    eval_points, expected_loss, std_devs = plot_loss_vs_timestep(timesteps, losses)
-    
-    # Create figure
-    plt.figure(figsize=figsize)
-    
-    # Plot raw data points with low alpha
-    plt.scatter(timesteps, losses, alpha=0.1, color='gray', label='Raw samples')
-    
-    # Plot smoothed expectation
-    plt.plot(eval_points, expected_loss, 'b-', label='Expected loss', linewidth=2)
-    
-    # Add confidence bands (±1 standard deviation)
-    plt.fill_between(
-        eval_points,
-        expected_loss - std_devs,
-        expected_loss + std_devs,
-        alpha=0.2,
-        color='blue',
-        label='±1 std dev'
-    )
-    
-    plt.xlabel('Timestep')
-    plt.ylabel('Loss')
-    plt.title(title)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    return plt.gcf()
+    norm_type = float(norm_type)
+    if norm_type <= 0:
+        raise ValueError(f"`norm_type` must be a positive number or 'inf' (infinity norm). Got {norm_type}")
+
+    norms = {
+        f"grad_{norm_type}_norm{group_separator}{name}": p.grad.data.norm(norm_type)
+        for name, p in module.named_parameters()
+        if p.grad is not None
+    }
+    total_norm = None
+    if norms:
+        total_norm = torch.tensor(list(norms.values())).norm(norm_type)
+        norms[f"grad_{norm_type}_norm_total"] = total_norm
+    return norms, total_norm

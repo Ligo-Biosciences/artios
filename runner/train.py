@@ -26,6 +26,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from pathlib import Path
 import rootutils
+from collections import defaultdict
+from typing import Optional
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -37,7 +39,7 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.loss import ProtenixLoss
 from protenix.model.artios_ligand import ArtiosLigand
-from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
+from protenix.utils.distributed import DIST_WRAPPER, gather_and_merge, wait_for_all_processes
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.permutation.permutation import SymmetricPermutation
@@ -48,9 +50,8 @@ from runner.ema import PowerLawEMAWrapper
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.data.utils import to_pdb
 from io import StringIO
-from protenix.utils.monitoring import visualize_loss_histogram
+from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 import matplotlib.pyplot as plt
-
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
@@ -62,6 +63,7 @@ PDB_TO_VISUALISE = [
     "8dl3", "7u1o", "7qa0", "7pd7",
     "8dp7", "7z05", "7t7h", "7ulc"
 ]
+
 
 class AF3Trainer(object):
     def __init__(self, configs):
@@ -349,7 +351,22 @@ class AF3Trainer(object):
         if DIST_WRAPPER.rank == 0:
             logging.info(msg)
 
-    def model_forward(self, batch: dict, mode: str = "train") -> tuple[dict, dict]:
+    def model_forward(
+            self, 
+            batch: dict, 
+            mode: str = "train", 
+            seed: Optional[int] = None
+    ) -> tuple[dict, dict]:
+        """Forward pass of the model.
+
+        Args:
+            batch (dict): Batch of data.
+            mode (str): Mode of the forward pass.
+            seed (Optional[int]): Seed for random number generation. Defaults to None.
+
+        Returns:
+            tuple[dict, dict]: Predictions and log dict.
+        """
         assert mode in ["train", "eval"]
         batch["pred_dict"], batch["label_dict"], log_dict = self.model(
             input_feature_dict=batch["input_feature_dict"],
@@ -358,6 +375,7 @@ class AF3Trainer(object):
             mode=mode,
             current_step=self.step if mode == "train" else None,
             symmetric_permutation=self.symmetric_permutation,
+            seed=seed,
         )
         return batch, log_dict
 
@@ -367,7 +385,7 @@ class AF3Trainer(object):
         assert mode in ["train", "eval"]
         self.loss.to(batch["pred_dict"]["coordinate"].device)  # Move loss to device
 
-        loss, loss_dict, raw_loss_and_timestep = autocasting_disable_decorator(self.configs.skip_amp.loss)(
+        loss, loss_dict, monitor_data = autocasting_disable_decorator(self.configs.skip_amp.loss)(
             self.loss
         )(
             feat_dict=batch["input_feature_dict"],
@@ -375,7 +393,7 @@ class AF3Trainer(object):
             label_dict=batch["label_dict"],
             mode=mode,
         )
-        return loss, loss_dict, raw_loss_and_timestep
+        return loss, loss_dict, monitor_data
 
     @torch.no_grad()
     def get_metrics(self, batch: dict) -> dict:
@@ -457,11 +475,8 @@ class AF3Trainer(object):
         
         self.model.eval()
 
-        # Initialize dict to store losses and timesteps for each loss type
-        loss_data = {
-            'smooth_lddt_loss': {'losses': [], 'timesteps': []},
-            'mse_loss': {'losses': [], 'timesteps': []}
-        }
+        # Initialize master monitor dict to collect all metrics
+        master_monitor_dict = defaultdict(lambda: defaultdict(list))
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
@@ -486,19 +501,19 @@ class AF3Trainer(object):
                 simple_metrics = {}
                 with enable_amp:
                     # Model forward - adds the pred_dict and label_dict to batch
-                    batch, _ = self.model_forward(batch, mode=mode)
+                    batch, _ = self.model_forward(batch, mode=mode, seed=index)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, raw_loss_and_timestep = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
-
-                    # Collect losses and timesteps
-                    for loss_name, data in raw_loss_and_timestep.items():
-                        losses = data["loss"].detach().cpu().numpy()  # [..., N_sample]
-                        timesteps = data["timestep"].detach().cpu().numpy()  # [..., N_sample]
-                        print(f"losses: {losses.shape}, timesteps: {timesteps.shape}")
-                        loss_data[loss_name]['losses'].append(losses)
-                        loss_data[loss_name]['timesteps'].append(timesteps)
-
+                    loss, loss_dict, monitor_data = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)
+
+                    # Collect monitor metrics in master dict
+                    if self.configs.monitor.loss_distribution:
+                        for loss_name, monitor_metric_dict in monitor_data.items():
+                            raw_loss = monitor_metric_dict["raw_loss"].cpu().numpy()  # [..., N_sample]
+                            timestep = monitor_metric_dict["timestep"].cpu().numpy()  # [..., N_sample]
+                            master_monitor_dict[loss_name]["raw_loss"].extend(raw_loss.flatten())
+                            master_monitor_dict[loss_name]["timestep"].extend(timestep.flatten())
+
 
                 # Metrics
                 for key, value in simple_metrics.items():
@@ -521,6 +536,22 @@ class AF3Trainer(object):
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()
+            
+            # Log the distribution of loss values over timesteps
+            if self.configs.monitor.loss_distribution:
+                if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                    for loss_name, monitor_data_dict in master_monitor_dict.items():
+                        # Create loss distribution plot using accumulated data
+                        fig = visualize_loss_histogram(
+                            timesteps=np.array(monitor_data_dict["timestep"]),
+                            losses=np.array(monitor_data_dict["raw_loss"]),
+                            title=f"{loss_name} Distribution {ema_suffix}",
+                        )
+                        # Log to wandb
+                        wandb.log({
+                            f"loss_dist/{ema_suffix}_{loss_name}": wandb.Image(fig),
+                        }, step=self.step)
+                        plt.close(fig)  # Clean up matplotlib figure
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
@@ -589,6 +620,7 @@ class AF3Trainer(object):
             )
             # Unscales the gradients of optimizer's assigned parameters in-place
             scaler.unscale_(self.optimizer)
+            self.on_before_optimizer_step()
             # Do grad clip only
             self.update()
             scaler.step(self.optimizer)
@@ -656,6 +688,24 @@ class AF3Trainer(object):
         self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
 
         return output_paths
+    
+    def on_validation_epoch_end(self):
+        """Hook that is called at the end of each validation epoch."""
+        pass
+
+    def on_before_optimizer_step(self):
+        """Hook that is called before the optimizer step."""
+        if self.configs.monitor.grad_norm:
+            _, total_norm = grad_norm(self.model, norm_type=2)
+
+            # Average across all ranks
+            #def numpy_mean_aggregation(values):
+            #    return float(np.mean(values))  # Convert to float in case of numpy types
+            #total_norm = gather_and_merge(total_norm, numpy_mean_aggregation)
+
+            # Log to wandb
+            if DIST_WRAPPER.rank == 0:
+                wandb.log({"grad_norm": total_norm}, step=self.step)
 
     def run(self):
         """
@@ -726,6 +776,7 @@ class AF3Trainer(object):
 
                 if step_need_eval or is_last_step:
                     self.evaluate()
+                    self.on_validation_epoch_end()
                 self.global_step += 1
                 if self.global_step % self.iters_to_accumulate == 0:
                     self.step += 1               

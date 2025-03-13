@@ -262,6 +262,7 @@ loss_configs = {
                 "weight_rna": 5.0,
                 "weight_ligand": 10.0,
                 "eps": 1e-6,
+                "use_uncertainty": False,
             },
 
             "bond": {
@@ -270,6 +271,7 @@ loss_configs = {
             "smooth_lddt": {
                 "eps": 1e-6,
                 "k": 300,
+                "use_uncertainty": False,
             },
         },
         "distogram": {
@@ -292,6 +294,13 @@ loss_configs = {
     },
 }
 
+monitor_configs = {
+    "monitor": {
+        "loss_distribution": False,
+        "grad_norm": False,
+    }
+}
+
 configs = {
     **basic_configs,
     **data_configs,
@@ -299,4 +308,5 @@ configs = {
     **model_configs,
     **perm_configs,
     **loss_configs,
+    **monitor_configs,
 }

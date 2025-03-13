@@ -48,6 +48,7 @@ class InferenceRunner(object):
             self.init_model()
             self.load_checkpoint()
         else:
+            self.guiding_net = None
             self.model = model
         self.init_dumper(
             need_atom_confidence=configs.need_atom_confidence,
@@ -99,7 +100,6 @@ class InferenceRunner(object):
 
     def init_model(self) -> None:
         self.model = ArtiosLigand(self.configs).to(self.device)
-        self.guiding_net = None
         if self.configs.guiding_net_path is not None and self.configs.guiding_net_path != "":
             self.guiding_net = ArtiosLigand(self.configs.guidance_model_configs).to(self.device)
 

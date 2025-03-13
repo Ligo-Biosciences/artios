@@ -49,8 +49,9 @@ from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
 from runner.evaluate import Evaluator, create_summary_statistics
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
-from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
+from protenix.utils.monitoring import visualize_loss_histogram, grad_norm, create_and_log_metric_plots, track_and_visualize_metrics
 import matplotlib.pyplot as plt
+
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
@@ -750,120 +751,24 @@ class AF3Trainer(object):
             
             # Track metrics over time and create visualizations
             print(f"Tracking metrics over time and creating visualizations...")
-            self._track_and_visualize_metrics(results, summary_row)
+            # Create and log visualizations for each test and metric
+            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                # Update the history metrics with the current step's metrics
+                self.eval_metrics_history = track_and_visualize_metrics(
+                    results, 
+                    self.eval_metrics_history, 
+                    self.step
+                )
 
-    def _track_and_visualize_metrics(self, results, summary_row):
-        """
-        Track metrics over time and create visualizations of how they change during training.
-        
-        Args:
-            results (dict): Dictionary containing evaluation results
-            summary_row (dict): Dictionary with summary statistics (mean ± std)
-        """
-        # Initialize metrics history if not already there
-        if not hasattr(self, 'eval_metrics_history'):
-            self.eval_metrics_history = {}
-        
-        # Current step
-        current_step = self.step
-        
-        # For each test and each metric, track the history
-        for test_name, df in results.items():
-            if test_name == "merged":
-                continue
-            
-            if test_name not in self.eval_metrics_history:
-                self.eval_metrics_history[test_name] = {'steps': [], 'metrics': {}}
-            
-            # Add current step
-            self.eval_metrics_history[test_name]['steps'].append(current_step)
-            
-            # Calculate mean and std for each metric in the test
-            for col in df.columns:
-                if col == 'Ligand CCD':
-                    continue
-
-                # Handle string boolean values - convert "TRUE"/"FALSE" to 1/0
-                if df[col].dtype == object:
-                    # Check if column contains string booleans
-                    has_true = df[col].str.upper().eq("TRUE").any()
-                    has_false = df[col].str.upper().eq("FALSE").any()
-                    
-                    if has_true or has_false:
-                        # Convert to boolean then to int
-                        col_data = df[col].str.upper().map({"TRUE": 1, "FALSE": 0})
-                    else:
-                        # Try to convert to numeric anyway
-                        col_data = pd.to_numeric(df[col], errors='coerce')
-                elif df[col].dtype == bool:
-                    # For boolean columns, convert to 0/1
-                    col_data = df[col].astype(int)
-                else:
-                    # For other columns, try to convert to numeric
-                    col_data = pd.to_numeric(df[col], errors='coerce')
-
-                # Calculate mean and std directly from the column
-                mean = col_data.mean()
-                std = col_data.std()
-                
-                # Skip if mean is NaN
-                if pd.isna(mean):
-                    continue
-                
-                # Store in history
-                if col not in self.eval_metrics_history[test_name]['metrics']:
-                    self.eval_metrics_history[test_name]['metrics'][col] = {'mean': [], 'std': []}
-                    
-                self.eval_metrics_history[test_name]['metrics'][col]['mean'].append(mean)
-                self.eval_metrics_history[test_name]['metrics'][col]['std'].append(std)
-        
-        # Create and log visualizations for each test and metric
-        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            self._create_and_log_metric_plots()
-            
-    def _create_and_log_metric_plots(self):
-        """Create and log plots showing metric trends over time to wandb."""
-        import matplotlib.pyplot as plt
-        
-        for test_name, history in self.eval_metrics_history.items():
-            steps = history['steps']
-            
-            for metric_name, metric_data in history['metrics'].items():
-                means = metric_data['mean']
-                stds = metric_data['std']
-                
-                # Skip if we have fewer than 2 data points
-                if len(means) < 2:
-                    continue
-                    
-                # Create figure
-                fig, ax = plt.subplots(figsize=(10, 6))
-                
-                # Plot mean line
-                ax.plot(steps, means, marker='o', linestyle='-', label=f'{metric_name} (mean)')
-                
-                # Plot std deviation range
-                ax.fill_between(steps, 
-                               [m - s for m, s in zip(means, stds)],
-                               [m + s for m, s in zip(means, stds)],
-                               alpha=0.2)
-                
-                # Add labels and title
-                ax.set_xlabel('Training Steps')
-                ax.set_ylabel(metric_name)
-                ax.set_title(f'{test_name}: {metric_name} Over Time')
-                ax.grid(True, linestyle='--', alpha=0.7)
-                
-                # Format x-axis to show step numbers nicely
-                plt.ticklabel_format(style='plain', axis='x')
-                
-                # Log to wandb
-                wandb.log({
-                    f"eval_metrics/{test_name}/{metric_name}_trend": wandb.Image(fig)
-                }, step=self.step)
-                
-                # Close the figure to free memory
-                plt.close(fig)
+                # Create and log plots showing metric trends over time to wandb
+                for test_name, history in self.eval_metrics_history.items():
+                    steps = history['steps']
+                    for metric_name, metric_data in history['metrics'].items():
+                        fig = create_and_log_metric_plots(test_name, metric_name, metric_data)
+                        wandb.log({
+                            f"eval_metrics/{test_name}/{metric_name}_trend": wandb.Image(fig)
+                        }, step=self.step)
+                        plt.close(fig)
 
     def run(self):
         """

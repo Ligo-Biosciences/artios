@@ -151,3 +151,99 @@ def grad_norm(module: Module, norm_type: Union[float, int, str], group_separator
         total_norm = torch.tensor(list(norms.values())).norm(norm_type)
         norms[f"grad_{norm_type}_norm_total"] = total_norm
     return norms, total_norm
+
+
+def track_and_visualize_metrics(results, eval_metrics_history, current_step):
+    """
+    Track metrics over time and create visualizations of how they change during training.
+    
+    Args:
+        results (dict): Dictionary containing evaluation results
+    """
+    # For each test and each metric, track the history
+    for test_name, df in results.items():
+        if test_name == "merged":
+            continue
+        
+        if test_name not in eval_metrics_history:
+            eval_metrics_history[test_name] = {'steps': [], 'metrics': {}}
+        
+        # Add current step
+        eval_metrics_history[test_name]['steps'].append(current_step)
+        
+        # Calculate mean and std for each metric in the test
+        for col in df.columns:
+            if col == 'Ligand CCD':
+                continue
+
+            # Handle string boolean values - convert "TRUE"/"FALSE" to 1/0
+            if df[col].dtype == object:
+                # Check if column contains string booleans
+                has_true = df[col].str.upper().eq("TRUE").any()
+                has_false = df[col].str.upper().eq("FALSE").any()
+                
+                if has_true or has_false:
+                    # Convert to boolean then to int
+                    col_data = df[col].str.upper().map({"TRUE": 1, "FALSE": 0})
+                else:
+                    # Try to convert to numeric anyway
+                    col_data = pd.to_numeric(df[col], errors='coerce')
+            elif df[col].dtype == bool:
+                # For boolean columns, convert to 0/1
+                col_data = df[col].astype(int)
+            else:
+                # For other columns, try to convert to numeric
+                col_data = pd.to_numeric(df[col], errors='coerce')
+
+            # Calculate mean and std directly from the column
+            mean = col_data.mean()
+            std = col_data.std()
+            
+            # Skip if mean is NaN
+            if pd.isna(mean):
+                continue
+            
+            # Store in history
+            if col not in eval_metrics_history[test_name]['metrics']:
+                eval_metrics_history[test_name]['metrics'][col] = {'mean': [], 'std': []}
+                
+            eval_metrics_history[test_name]['metrics'][col]['mean'].append(mean)
+            eval_metrics_history[test_name]['metrics'][col]['std'].append(std)
+
+    return eval_metrics_history
+
+
+def create_and_log_metric_plots(test_name, metric_name, metric_data):
+    """Create and log plots showing metric trends over time to wandb.
+    This should plot one function at a time. The logic for going through each test and metric 
+    should be within evaluate_tests
+    """
+    means = metric_data['mean']
+    stds = metric_data['std']
+    
+    # Skip if we have fewer than 2 data points
+    if len(means) < 2:
+        continue
+        
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Plot mean line
+    ax.plot(steps, means, marker='o', linestyle='-', label=f'{metric_name} (mean)')
+    
+    # Plot std deviation range
+    ax.fill_between(steps, 
+                    [m - s for m, s in zip(means, stds)],
+                    [m + s for m, s in zip(means, stds)],
+                    alpha=0.2)
+    
+    # Add labels and title
+    ax.set_xlabel('Training Steps')
+    ax.set_ylabel(metric_name)
+    ax.set_title(f'{test_name}: {metric_name} Over Time')
+    ax.grid(True, linestyle='--', alpha=0.7)
+    
+    # Format x-axis to show step numbers nicely
+    plt.ticklabel_format(style='plain', axis='x')
+
+    return plt.gcf()

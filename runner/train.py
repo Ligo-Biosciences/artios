@@ -682,9 +682,10 @@ class AF3Trainer(object):
                 # Shape: [out_features, in_features] -> [out_features] -> scalar
                 fan_in_norms = torch.norm(param, p=2, dim=1)  # L2 norm along input dimension
                 norm = torch.mean(fan_in_norms).item()  # Average across output dimension
-            else:  # Other parameters (biases, conv weights, etc.)
-                # Standard L2 norm of the entire tensor
-                norm = param.norm().item()
+            else:  # Other parameters (biases, layernorm weights, etc.)
+                # Standard L2 norm of the entire tensor divided by sqrt(num_elements)
+                # although this is not the norm anymore, makes tensor values more comparable
+                norm = param.norm().item() / np.sqrt(param.numel())
             weight_norms[f"weight_norms/{name}"] = norm
 
         # Log to wandb

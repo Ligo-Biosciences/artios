@@ -28,9 +28,11 @@ class TrainingTimestepSampler:
             self,
             loc: float = 0,
             scale: float = 1,
+            seed: Optional[int] = None,
     ) -> None:
         self.loc = loc
         self.scale = scale
+        self.seed = seed
 
     def __call__(
         self, 
@@ -48,7 +50,12 @@ class TrainingTimestepSampler:
         Returns:
             torch.Tensor: sampled timestep 
         """
-        return sample_logit_normal(size, device, dtype, self.loc, self.scale)
+        # Set seed for reproducibility
+        generator = None
+        if self.seed is not None:
+            generator = torch.Generator(device=device).manual_seed(self.seed)
+
+        return sample_logit_normal(size, device, dtype, self.loc, self.scale, generator)
     
 
 class InferenceTimestepScheduler:
@@ -343,6 +350,7 @@ def sample_diffusion_training(
     sigma_data: float = 16.0,
     N_sample: int = 1,
     diffusion_chunk_size: Optional[int] = None,
+    generator: torch.Generator = None,
 ) -> tuple[torch.Tensor, ...]:
     """Implements diffusion training. Creates N_sample's of randomly augmented ground truth coordinates, 
     noises the coords via FM style interpolation, sends them through the network to get denoised coords.
@@ -359,6 +367,7 @@ def sample_diffusion_training(
         s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
             [..., N_tokens, c_s_inputs]
         N_sample (int): number of training samples
+        generator (torch.Generator): the generator to use for sampling
     Returns:
         x_target_augment (torch.Tensor): the augmented ground truth coordinates 
             [..., N_sample, N_atom, 3]
@@ -388,7 +397,8 @@ def sample_diffusion_training(
     noise = torch.randn_like(
         x_target_augment, 
         dtype=dtype, 
-        device=x_target_augment.device
+        device=x_target_augment.device,
+        generator=generator
     ) * sigma_data  # [..., N_sample, N_atom, 3]
 
     # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )

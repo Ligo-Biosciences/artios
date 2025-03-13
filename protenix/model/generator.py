@@ -53,7 +53,6 @@ class TrainingTimestepSampler:
         # Set seed for reproducibility
         generator = None
         if self.seed is not None:
-            self.seed += 1  # different seed after each call
             generator = torch.Generator(device=device).manual_seed(self.seed)
 
         return sample_logit_normal(size, device, dtype, self.loc, self.scale, generator)

@@ -180,6 +180,30 @@ def get_mol_type(ccd_code: str) -> str:
     return "ligand"
 
 
+@functools.lru_cache(maxsize=None)
+def get_smiles_str(ccd_code: str) -> str:
+    """Get CACTVS canonical SMILES string from CCD components file.
+    
+    Returns only the CACTVS canonical SMILES representation. Returns None if either
+    the CCD code is not found or no CACTVS canonical SMILES is available.
+    
+    Args:
+        ccd_code (str): The CCD component code
+        
+    Returns:
+        str: The CACTVS canonical SMILES string, or None if not found
+    """
+    ccd_cif = biotite_load_ccd_cif()
+    if ccd_code not in ccd_cif:
+        return None
+        
+    descriptors = ccd_cif[ccd_code]["pdbx_chem_comp_descriptor"]
+    mask = (descriptors["type"].as_array() == "SMILES_CANONICAL") & (descriptors["program"].as_array() == "CACTVS")
+    matching_smiles = descriptors["descriptor"].as_array()[mask]
+    
+    return matching_smiles[0] if len(matching_smiles) > 0 else None
+
+
 def get_all_ccd_code() -> list:
     """get all ccd code from components file"""
     ccd_cif = biotite_load_ccd_cif()
@@ -222,7 +246,7 @@ def get_component_rdkit_mol(ccd_code: str) -> Union[Chem.Mol, None]:
 def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
     """
     Ref: AlphaFold3 SI Chapter 2.8
-    Reference features. Features derived from a residue, nucleotide or ligand’s reference conformer.
+    Reference features. Features derived from a residue, nucleotide or ligand's reference conformer.
     Given an input CCD code or SMILES string, the conformer is typically generated
     with RDKit v.2023_03_3 [25] using ETKDGv3 [26]. On error, we fall back to using the CCD ideal coordinates,
     or finally the representative coordinates

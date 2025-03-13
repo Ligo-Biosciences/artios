@@ -407,10 +407,6 @@ class MSELoss(nn.Module):
                 is_ligand=is_ligand,
             )
 
-        # Compute u(t) 
-        timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
-        u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
-
         # Calculate MSE loss
         per_atom_se = ((pred_coordinate - true_coordinate_aligned) ** 2).sum(
             dim=-1
@@ -428,6 +424,9 @@ class MSELoss(nn.Module):
 
         # Balance grads between timesteps during training
         if self.training and self.use_uncertainty:
+            # Compute u(t) 
+            timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
+            u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
             weighted_align_mse_loss = (weighted_align_mse_loss / u_t.exp()) + u_t
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)

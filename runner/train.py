@@ -37,9 +37,8 @@ from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
-from protenix.model.loss import ProtenixLoss
 from protenix.model.artios_ligand import ArtiosLigand
-from protenix.utils.distributed import DIST_WRAPPER, gather_and_merge
+from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.permutation.permutation import SymmetricPermutation
@@ -48,8 +47,6 @@ from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
-from protenix.data.utils import to_pdb
-from io import StringIO
 from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 import matplotlib.pyplot as plt
 
@@ -446,8 +443,7 @@ class AF3Trainer(object):
                 
                 # Delete post-hoc checkpoint from RAM and disk
                 del checkpoint
-                dist.barrier()
-                time.sleep(2)  # Ensure all processes have loaded
+                wait_for_all_processes()
                 if DIST_WRAPPER.rank == 0:
                     os.remove(checkpoint_path)
 
@@ -660,16 +656,15 @@ class AF3Trainer(object):
         # Calculate post-hoc EMA checkpoints
         save_dir = Path(self.post_hoc_ema_checkpoint_dir)
         target_sigma_values = self.configs.post_hoc_ema_sigma
-        
-        # Use the utility function to calculate post-hoc EMA checkpoints
-        output_paths = calculate_post_hoc_ema(
-            ema_checkpoint_paths=ema_checkpoint_paths,
-            target_sigma_values=target_sigma_values,
-            save_dir=save_dir
-        )
-        
+        if DIST_WRAPPER.rank == 0:
+            # Use the utility function to calculate post-hoc EMA checkpoints
+            output_paths = calculate_post_hoc_ema(
+                ema_checkpoint_paths=ema_checkpoint_paths,
+                target_sigma_values=target_sigma_values,
+                save_dir=save_dir
+            )
+        wait_for_all_processes()
         self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
-
         return output_paths
     
     def on_validation_epoch_end(self):
@@ -754,11 +749,7 @@ class AF3Trainer(object):
                                 save_model_only=True
                             )
                             wrapper.restore()
-                        # Add synchronization barrier to ensure all processes wait
-                        if DIST_WRAPPER.world_size > 1:
-                            dist.barrier()
-                            # Add small sleep to ensure filesystem operations complete
-                            time.sleep(2)
+                        wait_for_all_processes()
                         
 
                 if step_need_eval or is_last_step:

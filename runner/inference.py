@@ -19,7 +19,7 @@ import urllib.request
 from contextlib import nullcontext
 from os.path import exists as opexists
 from os.path import join as opjoin
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 import torch
 import torch.distributed as dist
@@ -39,13 +39,14 @@ from protenix.web_service.dependency_url import URL
 logger = logging.getLogger(__name__)
 
 
-class InferenceRunner(object): # TODO: add post hoc ema logic here.
-    def __init__(self, configs: Any) -> None:
+class InferenceRunner(object):
+    def __init__(self, configs: Any, model: Optional[Any] = None) -> None:
         self.configs = configs
         self.init_env()
         self.init_basics()
-        self.init_model()
-        self.load_checkpoint()
+        if model is None:
+            self.init_model()
+            self.load_checkpoint()
         self.init_dumper(
             need_atom_confidence=configs.need_atom_confidence,
             sorted_by_ranking_score=configs.sorted_by_ranking_score,
@@ -68,7 +69,7 @@ class InferenceRunner(object): # TODO: add post hoc ema logic here.
             torch.cuda.set_device(self.device)
         else:
             self.device = torch.device("cpu")
-        if DIST_WRAPPER.world_size > 1:
+        if DIST_WRAPPER.world_size > 1 and not dist.is_initialized():
             dist.init_process_group(backend="nccl")
         if self.configs.use_deepspeed_evo_attention:
             env = os.getenv("CUTLASS_PATH", None)

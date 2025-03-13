@@ -535,9 +535,13 @@ class AF3Trainer(object):
                         rel_path = os.path.relpath(file_path, self.prediction_dir)
                         # Remove .cif extension and replace path separators with underscores
                         structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
-                        wandb.log({
-                            f"structures/{ema_suffix}_{structure_name}": wandb.File(file_path)
-                        }, step=self.step)
+                        wandb.log_artifact(
+                            wandb.Artifact(
+                                name=f"structures_{ema_suffix}_{structure_name}",
+                                type="structure",
+                                metadata={"step": self.step}
+                            ).add_file(file_path),
+                        )
                         
                         # Delete the file after logging
                         os.remove(file_path)

@@ -128,3 +128,22 @@ inference_configs = {
     "use_msa": False,
     "guidance_model_configs": guidance_model_configs,
 }
+
+# Evaluation configs
+evaluation_configs = {
+    "designs_cif_dir": RequiredValue(str),
+    "working_dir": RequiredValue(str),
+    "ligand_mpnn": {
+        "model_type": "ligandmpnn",
+        "seed": 42,
+        "verbose": False,
+        "temperature": 0.1
+    },
+    "chai1": {
+        "num_trunk_recycles": 3,
+        "num_diffn_timesteps": 100,
+        "num_diffn_samples": 1,
+        "seed": 42,
+        "use_esm_embeddings": True,
+    },
+}

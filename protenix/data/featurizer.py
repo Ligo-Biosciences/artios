@@ -191,7 +191,7 @@ class Featurizer(object):
                 frame_atom_index (List[int]): The index of the atoms used to construct the frame.
         """
         kdtree, atom_ids = lig_res_ref_conf_kdtree[centre_atom.ref_space_uid]
-        b_ref_pos = ref_pos[token.centre_atom_index]
+        b_ref_pos = ref_pos[token.centre_atom_index].detach().cpu().numpy()  # Convert to numpy array
         b_idx = token.centre_atom_index
         if kdtree is None:
             # Atom num < 3
@@ -207,7 +207,9 @@ class Featurizer(object):
 
             # Colinear check
             if has_frame:
-                theta_degrees = angle_3p(*[ref_pos[idx] for idx in frame_atom_index])
+                # Convert tensors to numpy arrays for angle calculation
+                pos_array = [ref_pos[idx].detach().cpu().numpy() for idx in frame_atom_index]
+                theta_degrees = angle_3p(*pos_array)
                 if theta_degrees <= 25 or theta_degrees >= 155:
                     has_frame = 0
         return has_frame, frame_atom_index

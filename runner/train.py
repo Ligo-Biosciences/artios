@@ -90,7 +90,7 @@ class AF3Trainer(object):
         self.error_dir = f"{self.run_dir}/errors"
 
         # Add dump dir for training time inference
-        self.configs.training_time_inference.dump_dir = self.prediction_dir
+        self.configs.dump_dir = self.prediction_dir
 
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)
@@ -508,9 +508,9 @@ class AF3Trainer(object):
                             master_monitor_dict[loss_name]["raw_loss"].extend(raw_loss.flatten())
                             master_monitor_dict[loss_name]["timestep"].extend(timestep.flatten())
                     
-                    if self.configs.training_time_inference.run:
-                        runner = InferenceRunner(self.configs.training_time_inference, model=self.model)
-                        infer_predict(runner, self.configs.training_time_inference)
+                    if self.configs.run_training_time_inference:
+                        runner = InferenceRunner(self.configs, model=self.model)
+                        infer_predict(runner, self.configs)
 
                 # Metrics
                 for key, value in simple_metrics.items():

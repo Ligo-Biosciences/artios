@@ -527,12 +527,12 @@ class AF3Trainer(object):
                 # Log the structures to wandb
                 if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                     # Find all .cif files recursively in structure_dir and subdirectories
-                    cif_files = glob(os.path.join(self.structure_dir, '**/*.cif'), recursive=True)
+                    cif_files = glob(os.path.join(self.prediction_dir, '**/*.cif'), recursive=True)
 
                     # Log each structure file to wandb
                     for file_path in cif_files:
                         # Get relative path from structure_dir for the wandb key
-                        rel_path = os.path.relpath(file_path, self.structure_dir)
+                        rel_path = os.path.relpath(file_path, self.prediction_dir)
                         # Remove .cif extension and replace path separators with underscores
                         structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
                         wandb.log({

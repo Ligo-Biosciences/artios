@@ -552,7 +552,7 @@ class AF3Trainer(object):
                         try:
                             # Log PDB file to wandb
                             wandb.log({
-                                f"structures/{ema_suffix}_{structure_name}": wandb.Molecule(temp_pdb_path)
+                                f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(temp_pdb_path)
                             }, step=self.step)
                         except Exception as e:
                             self.print(f"Error logging molecule to wandb: {e}")

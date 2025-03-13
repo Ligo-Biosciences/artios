@@ -535,25 +535,23 @@ class AF3Trainer(object):
                         # Create temporary PDB file path
                         temp_pdb_path = Path(cif_path).with_suffix('.pdb')
                         
-                        try:
-                            # Convert CIF to PDB
-                            cif_to_pdb(cif_path, temp_pdb_path)
+                        # Convert CIF to PDB
+                        cif_to_pdb(cif_path, temp_pdb_path)
+                        
+                        # Get relative path from prediction_dir for the wandb key
+                        rel_path = os.path.relpath(cif_path, self.prediction_dir)
+                        # Remove extension and replace path separators with underscores
+                        structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
+                        
+                        # Log PDB file to wandb
+                        wandb.log({
+                            f"structures/{ema_suffix}_{structure_name}": wandb.Molecule(temp_pdb_path)
+                        }, step=self.step)
                             
-                            # Get relative path from prediction_dir for the wandb key
-                            rel_path = os.path.relpath(cif_path, self.prediction_dir)
-                            # Remove extension and replace path separators with underscores
-                            structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
-                            
-                            # Log PDB file to wandb
-                            wandb.log({
-                                f"structures/{ema_suffix}_{structure_name}": wandb.Molecule(temp_pdb_path)
-                            }, step=self.step)
-                            
-                        finally:
-                            # Clean up both files
-                            if os.path.exists(temp_pdb_path):
-                                os.remove(temp_pdb_path)
-                            os.remove(cif_path)
+                        # Clean up both files
+                        if os.path.exists(temp_pdb_path):
+                            os.remove(temp_pdb_path)
+                        os.remove(cif_path)
 
             # Log the distribution of loss values over timesteps
             if self.configs.monitor.loss_distribution:

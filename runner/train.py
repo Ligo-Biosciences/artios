@@ -28,6 +28,7 @@ from pathlib import Path
 import rootutils
 from collections import defaultdict
 from typing import Optional
+from glob import glob
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -507,10 +508,6 @@ class AF3Trainer(object):
                             timestep = monitor_metric_dict["timestep"].cpu().numpy()  # [..., N_sample]
                             master_monitor_dict[loss_name]["raw_loss"].extend(raw_loss.flatten())
                             master_monitor_dict[loss_name]["timestep"].extend(timestep.flatten())
-                    
-                    if self.configs.run_training_time_inference:
-                        runner = InferenceRunner(self.configs, model=self.model)
-                        infer_predict(runner, self.configs)
 
                 # Metrics
                 for key, value in simple_metrics.items():
@@ -523,6 +520,28 @@ class AF3Trainer(object):
                     # Release some memory periodically
                     torch.cuda.empty_cache()
             
+            if self.configs.run_training_time_inference:
+                runner = InferenceRunner(self.configs, model=self.model)
+                infer_predict(runner, self.configs)
+
+                # Log the structures to wandb
+                if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                    # Find all .cif files recursively in structure_dir and subdirectories
+                    cif_files = glob(os.path.join(self.structure_dir, '**/*.cif'), recursive=True)
+
+                    # Log each structure file to wandb
+                    for file_path in cif_files:
+                        # Get relative path from structure_dir for the wandb key
+                        rel_path = os.path.relpath(file_path, self.structure_dir)
+                        # Remove .cif extension and replace path separators with underscores
+                        structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
+                        wandb.log({
+                            f"structures/{ema_suffix}_{structure_name}": wandb.File(file_path)
+                        }, step=self.step)
+                        
+                        # Delete the file after logging
+                        os.remove(file_path)
+
             # Log the distribution of loss values over timesteps
             if self.configs.monitor.loss_distribution:
                 if self.configs.use_wandb and DIST_WRAPPER.rank == 0:

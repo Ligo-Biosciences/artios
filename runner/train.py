@@ -778,48 +778,30 @@ class AF3Trainer(object):
             # Add current step
             self.metrics_history[test_name]['steps'].append(current_step)
             
-            # Use create_summary_statistics to get mean and std for each metric
-            stats = create_summary_statistics(df)
-            
-            # Parse the stats and store them in history
-            for col, value in stats.items():
+            # Calculate mean and std directly from dataframe
+            for col in df.columns:
                 if col == 'Ligand CCD':
                     continue
-                    
-                # Skip empty values #TODO: also might not need this
-                if value == "":
-                    continue
-                    
-                # Parse the "mean ± std" format TODO: a bunch of this logic might be unneccedary
-                try:
-                    if isinstance(value, str) and "±" in value:
-                        mean_str, std_str = value.split("±")
-                        mean_val = float(mean_str.strip())
-                        std_val = float(std_str.strip())
-                    else:
-                        # Handle the case where value might be a float or already parsed
-                        # (as in the new implementation of create_summary_statistics)
-                        if isinstance(value, float):
-                            # In this case, value could be the mean, but we don't have std
-                            mean_val = value
-                            std_val = 0
-                        else:
-                            # Try to extract mean and std from the value format
-                            parts = str(value).split("±")
-                            if len(parts) == 2:
-                                mean_val = float(parts[0].strip())
-                                std_val = float(parts[1].strip())
-                            else:
-                                continue
                 
+                # Only process numeric columns
+                try:
+                    # Calculate mean and std directly from the column
+                    values = pd.to_numeric(df[col], errors='coerce')
+                    mean_val = values.mean()
+                    std_val = values.std()
+                    
+                    # Skip if mean is NaN
+                    if pd.isna(mean_val):
+                        continue
+                    
                     # Store in history
                     if col not in self.metrics_history[test_name]['metrics']:
                         self.metrics_history[test_name]['metrics'][col] = {'mean': [], 'std': []}
                         
                     self.metrics_history[test_name]['metrics'][col]['mean'].append(mean_val)
-                    self.metrics_history[test_name]['metrics'][col]['std'].append(std_val)
+                    self.metrics_history[test_name]['metrics'][col]['std'].append(std_val if not pd.isna(std_val) else 0)
                 except (ValueError, TypeError):
-                    # Skip if we can't parse the value
+                    # Skip if we can't parse the column as numeric
                     continue
         
         # Create and log visualizations for each test and metric
@@ -899,8 +881,8 @@ class AF3Trainer(object):
                 )
 
                 step_need_eval_metrics = (
-                    self.configs.evaluator.interval > 0
-                    and (self.step + 1) % self.configs.evaluator.interval == 0
+                    self.configs.eval_metrics.interval > 0
+                    and (self.step + 1) % self.configs.eval_metrics.interval == 0
                 )
 
                 is_last_step &= is_update_step

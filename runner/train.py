@@ -50,6 +50,7 @@ from runner.ema import PowerLawEMAWrapper
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 from runner.inference import InferenceRunner, infer_predict
+from runner.evaluate import cif_to_pdb
 import matplotlib.pyplot as plt
 
 # Disable WANDB's console output capture to reduce unnecessary logging
@@ -530,21 +531,29 @@ class AF3Trainer(object):
                     cif_files = glob(os.path.join(self.prediction_dir, '**/*.cif'), recursive=True)
 
                     # Log each structure file to wandb
-                    for file_path in cif_files:
-                        # Get relative path from structure_dir for the wandb key
-                        rel_path = os.path.relpath(file_path, self.prediction_dir)
-                        # Remove .cif extension and replace path separators with underscores
-                        structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
-                        wandb.log_artifact(
-                            wandb.Artifact(
-                                name=f"structures_{ema_suffix}_{structure_name}",
-                                type="structure",
-                                metadata={"step": self.step}
-                            ).add_file(file_path),
-                        )
+                    for cif_path in cif_files:
+                        # Create temporary PDB file path
+                        temp_pdb_path = Path(cif_path).with_suffix('.pdb')
                         
-                        # Delete the file after logging
-                        os.remove(file_path)
+                        try:
+                            # Convert CIF to PDB
+                            cif_to_pdb(cif_path, temp_pdb_path)
+                            
+                            # Get relative path from prediction_dir for the wandb key
+                            rel_path = os.path.relpath(cif_path, self.prediction_dir)
+                            # Remove extension and replace path separators with underscores
+                            structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
+                            
+                            # Log PDB file to wandb
+                            wandb.log({
+                                f"structures/{ema_suffix}_{structure_name}": wandb.Molecule(temp_pdb_path)
+                            }, step=self.step)
+                            
+                        finally:
+                            # Clean up both files
+                            if os.path.exists(temp_pdb_path):
+                                os.remove(temp_pdb_path)
+                            os.remove(cif_path)
 
             # Log the distribution of loss values over timesteps
             if self.configs.monitor.loss_distribution:

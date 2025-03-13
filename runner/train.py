@@ -27,6 +27,8 @@ from tqdm import tqdm
 from pathlib import Path
 import rootutils
 from collections import defaultdict
+from typing import Optional
+
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from configs.configs_base import configs as configs_base
@@ -349,7 +351,22 @@ class AF3Trainer(object):
         if DIST_WRAPPER.rank == 0:
             logging.info(msg)
 
-    def model_forward(self, batch: dict, mode: str = "train") -> tuple[dict, dict]:
+    def model_forward(
+            self, 
+            batch: dict, 
+            mode: str = "train", 
+            seed: Optional[int] = None
+    ) -> tuple[dict, dict]:
+        """Forward pass of the model.
+
+        Args:
+            batch (dict): Batch of data.
+            mode (str): Mode of the forward pass.
+            seed (Optional[int]): Seed for random number generation. Defaults to None.
+
+        Returns:
+            tuple[dict, dict]: Predictions and log dict.
+        """
         assert mode in ["train", "eval"]
         batch["pred_dict"], batch["label_dict"], log_dict = self.model(
             input_feature_dict=batch["input_feature_dict"],
@@ -358,6 +375,7 @@ class AF3Trainer(object):
             mode=mode,
             current_step=self.step if mode == "train" else None,
             symmetric_permutation=self.symmetric_permutation,
+            seed=seed,
         )
         return batch, log_dict
 
@@ -481,7 +499,7 @@ class AF3Trainer(object):
                 simple_metrics = {}
                 with enable_amp:
                     # Model forward - adds the pred_dict and label_dict to batch
-                    batch, _ = self.model_forward(batch, mode=mode)
+                    batch, _ = self.model_forward(batch, mode=mode, seed=index)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict, monitor_data = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)

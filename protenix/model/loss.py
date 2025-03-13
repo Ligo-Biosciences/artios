@@ -63,6 +63,7 @@ class SmoothLDDTLoss(nn.Module):
         reduction: str = "mean",
         k: int = 300,
         uncertainty_embed_dim: int = 64,
+        use_uncertainty: bool = False,
     ) -> None:
         """SmoothLDDTLoss
 
@@ -74,11 +75,13 @@ class SmoothLDDTLoss(nn.Module):
         self.eps = eps
         self.reduction = reduction
         self.k = k
+        self.use_uncertainty = use_uncertainty
 
-        # Learnable parameter with single value
+        # Timestep-dependent uncertainty correction
         self.uncertainty_embed_dim = uncertainty_embed_dim
-        self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
-        self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
+        if self.use_uncertainty:
+            self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
+            self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def _chunk_forward(self, pred_distance, true_distance, c_lm=None):
         dist_diff = torch.abs(pred_distance - true_distance)  # [..., N_sample, N_atom, k]
@@ -194,7 +197,7 @@ class SmoothLDDTLoss(nn.Module):
         raw_loss = loss.detach().clone()
 
         # Training time uncertainty scaling
-        if self.training:
+        if self.training and self.use_uncertainty:
             timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
             u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
 
@@ -277,6 +280,7 @@ class MSELoss(nn.Module):
         weight_ligand=10.0,
         eps=1e-6,
         reduction: str = "mean",
+        use_uncertainty: bool = False,
         uncertainty_embed_dim: int = 64,
     ) -> None:
         super(MSELoss, self).__init__()
@@ -286,9 +290,12 @@ class MSELoss(nn.Module):
         self.weight_ligand = weight_ligand
         self.eps = eps
         self.reduction = reduction
+        self.use_uncertainty = use_uncertainty
         self.uncertainty_embed_dim = uncertainty_embed_dim
-        self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
-        self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
+
+        if self.use_uncertainty:
+            self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
+            self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def weighted_rigid_align(
         self,
@@ -420,7 +427,7 @@ class MSELoss(nn.Module):
         weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
 
         # Balance grads between timesteps during training
-        if self.training:
+        if self.training and self.use_uncertainty:
             weighted_align_mse_loss = (weighted_align_mse_loss / u_t.exp()) + u_t
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)

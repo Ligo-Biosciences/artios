@@ -299,6 +299,7 @@ class ArtiosLigand(nn.Module):
         symmetric_permutation: SymmetricPermutation,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
+        seed: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         Main training (and evaluation) loop for the ArtiosLigand model.
@@ -310,6 +311,7 @@ class ArtiosLigand(nn.Module):
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object.
             inplace_safe (bool): Whether to use inplace operations safely. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
+            seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
@@ -362,6 +364,10 @@ class ArtiosLigand(nn.Module):
                 log_dict.update(perm_log_dict)
         '''
 
+        # Set seed for reproducibility
+        if seed:
+            self.eval_timestep_sampler.seed = seed
+
         ### Diffusion training
         N_sample = self.diffusion_batch_size
         x_target_augment, coords_pred, timestep = autocasting_disable_decorator( 
@@ -375,7 +381,7 @@ class ArtiosLigand(nn.Module):
             sigma_data=self.sigma_data,
             N_sample=N_sample,
             diffusion_chunk_size=self.configs.diffusion_chunk_size,
-            generator=torch.Generator(s_inputs.device).manual_seed(42) if not self.training else None
+            generator=torch.Generator(s_inputs.device).manual_seed(seed) if not self.training else None
         )
 
         # Update dicts
@@ -407,6 +413,7 @@ class ArtiosLigand(nn.Module):
         current_step: Optional[int] = None,
         symmetric_permutation: SymmetricPermutation = None,
         guiding_net: Optional[nn.Module] = None,
+        seed: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         Forward pass of the Alphafold3 model.
@@ -418,6 +425,7 @@ class ArtiosLigand(nn.Module):
             mode (str): Mode of operation ('train', 'inference', 'eval'). Defaults to 'inference'.
             current_step (Optional[int]): Current training step. Defaults to None.
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object. Defaults to None.
+            seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
@@ -440,6 +448,7 @@ class ArtiosLigand(nn.Module):
                 symmetric_permutation=symmetric_permutation,
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,
+                seed=seed,
             )
         elif mode == "inference":
             pred_dict, log_dict, time_tracker = self.main_inference_loop( 

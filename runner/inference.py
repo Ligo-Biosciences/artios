@@ -47,6 +47,8 @@ class InferenceRunner(object):
             self.init_env()
             self.init_model()
             self.load_checkpoint()
+        else:
+            self.model = model
         self.init_dumper(
             need_atom_confidence=configs.need_atom_confidence,
             sorted_by_ranking_score=configs.sorted_by_ranking_score,

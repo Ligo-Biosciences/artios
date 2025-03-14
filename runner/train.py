@@ -27,7 +27,7 @@ from tqdm import tqdm
 from pathlib import Path
 import rootutils
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, List
 from glob import glob
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -51,6 +51,8 @@ from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_
 from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 from runner.inference import InferenceRunner, infer_predict
 from runner.evaluate import cif_to_pdb
+from protenix.metrics.posebusters import evaluate_posebusters
+import pandas as pd
 import matplotlib.pyplot as plt
 
 # Disable WANDB's console output capture to reduce unnecessary logging
@@ -531,41 +533,11 @@ class AF3Trainer(object):
                     cif_files = glob(os.path.join(self.prediction_dir, "**/*.cif"), recursive=True)
                     
                     # Log each structure file to wandb
-                    for cif_path in cif_files:
-                        try:
-                            # Create temporary PDB file path with full path
-                            cif_path = os.path.abspath(cif_path)  # Ensure absolute path
-                            temp_pdb_path = os.path.abspath(str(Path(cif_path).with_suffix('.pdb')))
-                            
-                            # Convert CIF to PDB
-                            cif_to_pdb(cif_path, temp_pdb_path)
-                            
-                            # Verify the PDB file was created
-                            if not os.path.exists(temp_pdb_path):
-                                self.print(f"Warning: Failed to create PDB file at {temp_pdb_path}")
-                                continue
-                            
-                            # Get relative path from prediction_dir for the wandb key
-                            rel_path = os.path.relpath(cif_path, self.prediction_dir)
-                            # Remove extension and replace path separators with underscores
-                            structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
-                            
-                            try:
-                                # Log PDB file to wandb
-                                wandb.log({
-                                    f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(temp_pdb_path)
-                                }, step=self.step)
-                            except Exception as e:
-                                self.print(f"Error logging molecule to wandb: {e}")
-                            
-                            # Clean up both files
-                            if os.path.exists(temp_pdb_path):
-                                os.remove(temp_pdb_path)
-                            os.remove(cif_path)
-                            
-                        except Exception as e:
-                            self.print(f"Error processing CIF file {cif_path}: {e}")
-                            continue
+                    self.log_structure_files_to_wandb(cif_files, ema_suffix=ema_suffix)
+
+                    # Run posebusters
+                    if self.configs.monitor.posebusters:
+                        self.run_posebusters_evaluation(cif_files, ema_suffix=ema_suffix)
 
             # Log the distribution of loss values over timesteps
             if self.configs.monitor.loss_distribution:
@@ -740,6 +712,86 @@ class AF3Trainer(object):
             # Log to wandb
             if DIST_WRAPPER.rank == 0:
                 wandb.log({"grad_norm": total_norm}, step=self.step)
+    
+    def log_structure_files_to_wandb(self, cif_files, ema_suffix=""):
+        """
+        Process CIF files, convert them to PDB format, and log them to Weights & Biases.
+        
+        Args:
+            cif_files (list): List of paths to CIF files to process
+            ema_suffix (str, optional): Suffix to add to the structure name in wandb. Defaults to "".
+        """
+        for cif_path in cif_files:
+            try:
+                # Create temporary PDB file path with full path
+                cif_path = os.path.abspath(cif_path)  # Ensure absolute path
+                temp_pdb_path = os.path.abspath(str(Path(cif_path).with_suffix('.pdb')))
+                
+                # Convert CIF to PDB
+                cif_to_pdb(cif_path, temp_pdb_path)
+                
+                # Verify the PDB file was created
+                if not os.path.exists(temp_pdb_path):
+                    self.print(f"Warning: Failed to create PDB file at {temp_pdb_path}")
+                    continue
+                
+                # Get relative path from prediction_dir for the wandb key
+                rel_path = os.path.relpath(cif_path, self.prediction_dir)
+                # Remove extension and replace path separators with underscores
+                structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
+                
+                try:
+                    # Log PDB file to wandb
+                    wandb.log({
+                        f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(temp_pdb_path)
+                    }, step=self.step)
+                except Exception as e:
+                    self.print(f"Error logging molecule to wandb: {e}")
+                
+                # Clean up both files
+                if os.path.exists(temp_pdb_path):
+                    os.remove(temp_pdb_path)
+                os.remove(cif_path)
+                
+            except Exception as e:
+                self.print(f"Error processing CIF file {cif_path}: {e}")
+                continue
+
+    def run_posebusters_evaluation(self, cif_files: List[Path], ema_suffix: str = ""):
+        """
+        Run Posebusters evaluation on the generated structures and log results to wandb.
+        
+        Args:
+            cif_files (List[Path]): List of paths to CIF files to evaluate
+            ema_suffix (str, optional): Suffix to add to the metric name in wandb. Defaults to "".
+        """
+        if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
+            return
+
+        try:
+            # Run Posebusters evaluation
+            posebusters_df = evaluate_posebusters(
+                cif_files=cif_files,
+            )
+
+            # Calculate mean for each metric column (excluding the 'Ligand CCD' column)
+            metric_columns = [col for col in posebusters_df.columns if col != 'Ligand CCD']
+            mean_metrics = {}
+            
+            for column in metric_columns:
+                # Convert boolean values to float before calculating mean
+                mean_value = posebusters_df[column].astype(float).mean()
+                metric_name = f"posebusters/{ema_suffix}_{column}" if ema_suffix else f"posebusters/{column}"
+                mean_metrics[metric_name] = mean_value
+
+            # Log metrics to wandb
+            wandb.log(mean_metrics, step=self.step)
+
+            self.print(f"Logged Posebusters metrics to wandb: {mean_metrics}")
+
+        except Exception as e:
+            self.print(f"Error running Posebusters evaluation: {e}")
+
 
     def run(self):
         """

@@ -299,6 +299,7 @@ monitor_configs = {
         "loss_distribution": False,
         "grad_norm": False,
         "weight_norm": False,
+        "posebusters": False,
     }
 }
 

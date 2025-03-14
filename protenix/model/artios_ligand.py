@@ -34,11 +34,13 @@ class ArtiosLigand(nn.Module):
         # Some constants 
         self.N_model_seed = self.configs.model.N_model_seed
 
+        # Fixed eval generator for reproducibility
+        #self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
+
         # Diffusion 
         self.train_timestep_sampler = TrainingTimestepSampler(**configs.train_timestep_sampler) 
         self.eval_timestep_sampler = TrainingTimestepSampler(
            **configs.train_timestep_sampler,
-           seed=42  # fixed seed for deterministic eval
         )
         self.inference_timestep_scheduler = InferenceTimestepScheduler(
            **configs.inference_timestep_scheduler

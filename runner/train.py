@@ -21,6 +21,7 @@ from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 import numpy as np
+import pandas as pd
 import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
@@ -47,6 +48,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
+from runner.evaluate import Evaluator, add_summary_statistics_row
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 from runner.inference import InferenceRunner, infer_predict
@@ -68,6 +70,7 @@ class AF3Trainer(object):
         self.init_model()
         self.init_loss()
         self.init_data()
+        self.init_evaluator()
         self.try_load_checkpoint()
 
     def init_basics(self):
@@ -230,6 +233,9 @@ class AF3Trainer(object):
         # configs.sorted_by_ranking_score
         # self.configs.load_checkpoint_path
         pass
+
+    def init_evaluator(self):
+        self.evaluator = Evaluator(self.configs)
 
     def save_checkpoint(self, ema_suffix="", save_model_only=False):
         if DIST_WRAPPER.rank == 0:
@@ -472,6 +478,7 @@ class AF3Trainer(object):
             if torch.cuda.is_available()
             else nullcontext()
         )
+        
         self.model.eval()
 
         # Initialize master monitor dict to collect all metrics
@@ -481,6 +488,7 @@ class AF3Trainer(object):
             self.print(f"Testing on {test_name}")
             evaluated_pids = []
             total_batch_num = len(test_dl)
+
             for index, batch in enumerate(tqdm(test_dl)):
                 batch = to_device(batch, self.device)
                 pid = batch["basic"]["pdb_id"]
@@ -536,8 +544,9 @@ class AF3Trainer(object):
                     self.log_structure_files_to_wandb(cif_files, ema_suffix=ema_suffix)
 
                     # Run posebusters
-                    if self.configs.monitor.posebusters:
-                        self.run_posebusters_evaluation(cif_files, ema_suffix=ema_suffix)
+                    # TODO: fix this
+                    #if self.configs.monitor.posebusters:
+                    #    self.run_posebusters_evaluation(cif_files, ema_suffix=ema_suffix)
 
             # Log the distribution of loss values over timesteps
             if self.configs.monitor.loss_distribution:
@@ -557,11 +566,9 @@ class AF3Trainer(object):
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
-            #if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            #    wandb.log(metrics, step=self.step)
 
-            return metrics
-
+        return metrics
+    
     def update(self):
         # Clip the gradient
         if self.configs.grad_clip_norm != 0.0:
@@ -757,40 +764,179 @@ class AF3Trainer(object):
                 self.print(f"Error processing CIF file {cif_path}: {e}")
                 continue
 
-    def run_posebusters_evaluation(self, cif_files: List[Path], ema_suffix: str = ""):
+
+    def run_evaluation_tests(self):
         """
-        Run Posebusters evaluation on the generated structures and log results to wandb.
+        Evaluate the tests specified in the configs.monitor.eval_metrics.eval_tests
+        and track metrics over time to visualize training progress.
+        """
+        print(f"Evaluating tests: {self.configs.monitor.eval_metrics.eval_tests}...")
+
+        # Dictionary to store this step's results
+        results = {}
+
+        # Valid evaluation tests
+        valid_eval_tests = {
+            "designability": self.evaluator.evaluate_designability,
+            "ss_distribution": self.evaluator.ss_distribution,
+            "posebusters": self.evaluator.evaluate_posebusters,
+        }
+
+        ### Run each requested evaluation
+        for eval_test in self.configs.monitor.eval_metrics.eval_tests:
+            if eval_test in valid_eval_tests:
+                print(f"Running {eval_test} evaluation...")
+                results[eval_test] = valid_eval_tests[eval_test]()
+                print(f"{eval_test} evaluation complete.")
+            else:
+                raise ValueError(f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}")
+
+        ### Merge all results into a single dataframe and save to csv
+        merged_df = None
         
-        Args:
-            cif_files (List[Path]): List of paths to CIF files to evaluate
-            ema_suffix (str, optional): Suffix to add to the metric name in wandb. Defaults to "".
-        """
-        if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
-            return
+        for test_name, df in results.items():
+            if merged_df is None:
+                merged_df = df.copy()
+            else:
+                # Merge on Ligand CCD column
+                merged_df = pd.merge(merged_df, df, on="Ligand CCD", how="outer")
+        
+        # Add summary statistics row at the top
+        merged_df = add_summary_statistics_row(merged_df)
+        # Save the merged dataframe
+        output_path = self.evaluator.results_dir / "all_evaluations.csv"
+        merged_df.to_csv(output_path, index=False)
+        print(f"All evaluation results saved to {output_path}")
 
-        try:
-            # Run Posebusters evaluation
-            posebusters_df = evaluate_posebusters(
-                cif_files=cif_files,
-            )
-
-            # Calculate mean for each metric column (excluding the 'Ligand CCD' column)
-            metric_columns = [col for col in posebusters_df.columns if col != 'Ligand CCD']
-            mean_metrics = {}
+        ### Log tests' metrics to WandB
+        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            wandb_metrics = {}
             
-            for column in metric_columns:
-                # Convert boolean values to float before calculating mean
-                mean_value = posebusters_df[column].astype(float).mean()
-                metric_name = f"posebusters/{ema_suffix}_{column}" if ema_suffix else f"posebusters/{column}"
-                mean_metrics[metric_name] = mean_value
+            for test_name, df in results.items():
+                for col in df.columns:
+                    if col == 'Ligand CCD':
+                        continue
 
-            # Log metrics to wandb
-            wandb.log(mean_metrics, step=self.step)
+                    # Handle string boolean values - convert "TRUE"/"FALSE" to 1/0
+                    if df[col].dtype == object:
+                        # Check if column contains string booleans
+                        has_true = df[col].str.upper().eq("TRUE").any()
+                        has_false = df[col].str.upper().eq("FALSE").any()
+                        
+                        if has_true or has_false:
+                            # Convert to boolean then to int
+                            col_data = df[col].str.upper().map({"TRUE": 1, "FALSE": 0})
+                        else:
+                            # Try to convert to numeric anyway
+                            col_data = pd.to_numeric(df[col], errors='coerce')
+                    elif df[col].dtype == bool:
+                        # For boolean columns, convert to 0/1
+                        col_data = df[col].astype(int)
+                    else:
+                        # For other columns, try to convert to numeric
+                        col_data = pd.to_numeric(df[col], errors='coerce')
 
-            self.print(f"Logged Posebusters metrics to wandb: {mean_metrics}")
+                    # Calculate mean and std
+                    mean = col_data.mean()
+                    #std = col_data.std()
+                    
+                    # Skip if mean is NaN
+                    if pd.isna(mean):
+                        continue
+                        
+                    # Add to wandb metrics dictionary
+                    wandb_metrics[f"{test_name}/{col}"] = mean
+                    #wandb_metrics[f"{test_name}/{col}_std"] = std
+            
+            # Log all metrics at once
+            wandb.log(wandb_metrics, step=self.step)
 
-        except Exception as e:
-            self.print(f"Error running Posebusters evaluation: {e}")
+
+    def run_evaluation_tests(self):
+        """
+        Evaluate the tests specified in the configs.monitor.eval_metrics.eval_tests
+        and track metrics over time to visualize training progress.
+        """
+        print(f"Evaluating tests: {self.configs.monitor.eval_metrics.eval_tests}...")
+
+        # Dictionary to store this step's results
+        results = {}
+
+        # Valid evaluation tests
+        valid_eval_tests = {
+            "designability": self.evaluator.evaluate_designability,
+            "ss_distribution": self.evaluator.ss_distribution,
+            "posebusters": self.evaluator.evaluate_posebusters,
+        }
+
+        ### Run each requested evaluation
+        for eval_test in self.configs.monitor.eval_metrics.eval_tests:
+            if eval_test in valid_eval_tests:
+                print(f"Running {eval_test} evaluation...")
+                results[eval_test] = valid_eval_tests[eval_test]()
+                print(f"{eval_test} evaluation complete.")
+            else:
+                raise ValueError(f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}")
+
+        ### Merge all results into a single dataframe and save to csv
+        merged_df = None
+        
+        for test_name, df in results.items():
+            if merged_df is None:
+                merged_df = df.copy()
+            else:
+                # Merge on Ligand CCD column
+                merged_df = pd.merge(merged_df, df, on="Ligand CCD", how="outer")
+        
+        # Add summary statistics row at the top
+        merged_df = add_summary_statistics_row(merged_df)
+        # Save the merged dataframe
+        output_path = self.evaluator.results_dir / "all_evaluations.csv"
+        merged_df.to_csv(output_path, index=False)
+        print(f"All evaluation results saved to {output_path}")
+
+        ### Log tests' metrics to WandB
+        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            wandb_metrics = {}
+            
+            for test_name, df in results.items():
+                for col in df.columns:
+                    if col == 'Ligand CCD':
+                        continue
+
+                    # Handle string boolean values - convert "TRUE"/"FALSE" to 1/0
+                    if df[col].dtype == object:
+                        # Check if column contains string booleans
+                        has_true = df[col].str.upper().eq("TRUE").any()
+                        has_false = df[col].str.upper().eq("FALSE").any()
+                        
+                        if has_true or has_false:
+                            # Convert to boolean then to int
+                            col_data = df[col].str.upper().map({"TRUE": 1, "FALSE": 0})
+                        else:
+                            # Try to convert to numeric anyway
+                            col_data = pd.to_numeric(df[col], errors='coerce')
+                    elif df[col].dtype == bool:
+                        # For boolean columns, convert to 0/1
+                        col_data = df[col].astype(int)
+                    else:
+                        # For other columns, try to convert to numeric
+                        col_data = pd.to_numeric(df[col], errors='coerce')
+
+                    # Calculate mean and std
+                    mean = col_data.mean()
+                    #std = col_data.std()
+                    
+                    # Skip if mean is NaN
+                    if pd.isna(mean):
+                        continue
+                        
+                    # Add to wandb metrics dictionary
+                    wandb_metrics[f"{test_name}/{col}"] = mean
+                    #wandb_metrics[f"{test_name}/{col}_std"] = std
+            
+            # Log all metrics at once
+            wandb.log(wandb_metrics, step=self.step)
 
 
     def run(self):
@@ -819,6 +965,11 @@ class AF3Trainer(object):
                 step_need_save = ( 
                     self.configs.checkpoint_interval > 0
                     and (self.step + 1) % self.configs.checkpoint_interval == 0
+                )
+
+                step_need_eval_metrics = (
+                    self.configs.monitor.eval_metrics.interval > 0
+                    and (self.step + 1) % self.configs.monitor.eval_metrics.interval == 0
                 )
 
                 is_last_step &= is_update_step
@@ -863,6 +1014,10 @@ class AF3Trainer(object):
                 if step_need_eval or is_last_step:
                     self.evaluate()
                     self.on_validation_epoch_end()
+
+                if step_need_eval_metrics or is_last_step:
+                    self.run_evaluation_tests()
+
                 self.global_step += 1
                 if self.global_step % self.iters_to_accumulate == 0:
                     self.step += 1               

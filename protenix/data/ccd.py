@@ -194,6 +194,8 @@ def get_smiles_str(ccd_code: str) -> str:
         str: The CACTVS canonical SMILES string, or None if not found
     """
     ccd_cif = biotite_load_ccd_cif()
+    if ccd_cif is None:
+        raise ValueError("Failed to load CCD components file. biotite_load_ccd_cif() returned None.")
     if ccd_code not in ccd_cif:
         return None
         

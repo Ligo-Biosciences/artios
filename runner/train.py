@@ -47,7 +47,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
-from runner.evaluate import Evaluator, create_summary_statistics
+from runner.evaluate import Evaluator, create_summary_statistics_row
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.monitoring import visualize_loss_histogram, grad_norm, create_eval_metric_plots, track_eval_metrics
 import matplotlib.pyplot as plt
@@ -693,12 +693,13 @@ class AF3Trainer(object):
             if DIST_WRAPPER.rank == 0:
                 wandb.log({"grad_norm": total_norm}, step=self.step)
 
-    def evaluate_tests(self):
+    def evaluation_tests(self):
         """
         Evaluate the tests specified in the configs.eval_metrics.eval_tests
         and track metrics over time to visualize training progress.
         """
         print(f"Evaluating tests: {self.configs.evaluator.eval_tests}...")
+
         # Dictionary to store all results
         results = {}
 
@@ -734,7 +735,7 @@ class AF3Trainer(object):
                     merged_df = pd.merge(merged_df, df, on="Ligand CCD", how="outer")
             
             # Add summary statistics row at the top
-            summary_row = create_summary_statistics(merged_df)
+            summary_row = create_summary_statistics_row(merged_df)
             
             # Insert summary row at the top
             summary_df = pd.DataFrame([summary_row])
@@ -851,7 +852,7 @@ class AF3Trainer(object):
                     self.on_validation_epoch_end()
 
                 if step_need_eval_metrics or is_last_step:
-                    self.evaluate_tests()
+                    self.evaluation_tests()
 
                 self.global_step += 1
                 if self.global_step % self.iters_to_accumulate == 0:

@@ -310,7 +310,6 @@ evaluator_configs = {
     "evaluator": {
         "designs_cif_dir": RequiredValue(str),
         "working_dir": RequiredValue(str),
-        "secondary_struc_method": "biotite", # "biopython"
         "eval_tests": ListValue(["ss_distribution", "posebusters"]), # "all", "secondary_structure_distribution", "designability"
         "ligand_mpnn": {
             "model_type": "ligand_mpnn",

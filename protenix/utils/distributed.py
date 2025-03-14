@@ -76,8 +76,4 @@ def gather_and_merge(metrics, aggregation_func=None):
 def wait_for_all_processes():
     if DIST_WRAPPER.world_size > 1:
         torch.distributed.barrier()
-<<<<<<< HEAD
         time.sleep(2)  # Ensure all processes have saved checkpoints
-=======
-        time.sleep(2)  # Ensure all processes have loaded
->>>>>>> evaluation-pipeline

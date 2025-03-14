@@ -47,7 +47,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
-from runner.evaluate import Evaluator, create_summary_statistics_row
+from runner.evaluate import Evaluator, add_summary_statistics_row
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.monitoring import visualize_loss_histogram, grad_norm, create_eval_metric_plots, track_eval_metrics
 import matplotlib.pyplot as plt
@@ -735,11 +735,7 @@ class AF3Trainer(object):
                     merged_df = pd.merge(merged_df, df, on="Ligand CCD", how="outer")
             
             # Add summary statistics row at the top
-            summary_row = create_summary_statistics_row(merged_df)
-            
-            # Insert summary row at the top
-            summary_df = pd.DataFrame([summary_row])
-            merged_df = pd.concat([summary_df, merged_df], ignore_index=True)
+            merged_df = add_summary_statistics_row(merged_df)
             
             # Save the merged dataframe
             output_path = self.evaluator.results_dir / "all_evaluations.csv"

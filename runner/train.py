@@ -741,6 +741,7 @@ class AF3Trainer(object):
             self.eval_metrics_history = {}
 
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            """
             # Update the history metrics with the current step's metrics
             self.eval_metrics_history = update_eval_metrics(
                 results=results, 
@@ -752,17 +753,54 @@ class AF3Trainer(object):
             for test_name, history in self.eval_metrics_history.items():
                 steps = history['steps']
                 for metric_name, metric_data in history['metrics'].items():
-                    """
                     fig = create_eval_metric_plots(test_name, metric_name, metric_data, steps)
                     wandb.log({
                         f"{test_name}/{metric_name}": wandb.Image(fig)
                     }, step=self.step)
                     plt.close(fig)
-                    """
-                    wandb.log(
-                        {f"{test_name}/{metric_name}": metric_data},
-                        step=self.step
-                    )
+            """
+                        # For each test and each metric, calculate means and log directly
+            wandb_metrics = {}
+            
+            for test_name, df in results.items():
+                for col in df.columns:
+                    if col == 'Ligand CCD':
+                        continue
+
+                    # Handle string boolean values - convert "TRUE"/"FALSE" to 1/0
+                    if df[col].dtype == object:
+                        # Check if column contains string booleans
+                        has_true = df[col].str.upper().eq("TRUE").any()
+                        has_false = df[col].str.upper().eq("FALSE").any()
+                        
+                        if has_true or has_false:
+                            # Convert to boolean then to int
+                            col_data = df[col].str.upper().map({"TRUE": 1, "FALSE": 0})
+                        else:
+                            # Try to convert to numeric anyway
+                            col_data = pd.to_numeric(df[col], errors='coerce')
+                    elif df[col].dtype == bool:
+                        # For boolean columns, convert to 0/1
+                        col_data = df[col].astype(int)
+                    else:
+                        # For other columns, try to convert to numeric
+                        col_data = pd.to_numeric(df[col], errors='coerce')
+
+                    # Calculate mean and std
+                    mean = col_data.mean()
+                    std = col_data.std()
+                    
+                    # Skip if mean is NaN
+                    if pd.isna(mean):
+                        continue
+                        
+                    # Add to wandb metrics dictionary
+                    wandb_metrics[f"{test_name}/{col}_mean"] = mean
+                    wandb_metrics[f"{test_name}/{col}_std"] = std
+            
+            # Log all metrics at once
+            wandb.log(wandb_metrics, step=self.step)
+
 
     def run(self):
         """

@@ -785,8 +785,12 @@ class AF3Trainer(object):
             assert eval_test in valid_eval_tests, f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}"
             
             print(f"Running {eval_test} evaluation...")
-            results[eval_test] = valid_eval_tests[eval_test](cif_files=cif_files)
-            print(f"{eval_test} evaluation complete.")
+            try:
+                results[eval_test] = valid_eval_tests[eval_test](cif_files=cif_files)
+                print(f"{eval_test} evaluation complete.")
+            except Exception as e:
+                self.print(f"Error running {eval_test} evaluation: {e}")
+                continue
 
         ### Log tests' metrics to WandB
         wandb_metrics = {}

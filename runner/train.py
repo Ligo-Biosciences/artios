@@ -48,7 +48,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
-from runner.evaluate import Evaluator, add_summary_statistics_row
+from runner.evaluate import Evaluator
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 from runner.inference import InferenceRunner, infer_predict

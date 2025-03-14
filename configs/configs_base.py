@@ -69,8 +69,8 @@ optim_configs = {
     "warmup_steps": 10,
     "max_steps": RequiredValue(int),
     "min_lr_ratio": 0.1,
-    "decay_every_n_steps": 50000,
-    "grad_clip_norm": 10,
+    "decay_every_n_steps": 25000,  # 50000
+    "grad_clip_norm": 3,
     # Optim - Adam
     "adam": {
         "beta1": 0.9,

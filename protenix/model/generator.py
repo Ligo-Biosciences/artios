@@ -367,7 +367,7 @@ def sample_diffusion_training(
         s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
             [..., N_tokens, c_s_inputs]
         N_sample (int): number of training samples
-        generator (torch.Generator, optional): the generator to use for sampling. Defaults to None during training.
+        generator (torch.Generator): the generator to use for sampling
     Returns:
         x_target_augment (torch.Tensor): the augmented ground truth coordinates 
             [..., N_sample, N_atom, 3]
@@ -394,11 +394,11 @@ def sample_diffusion_training(
     timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype) 
 
     # Generate noise
-    noise = torch.randn(
-        *x_target_augment.shape,
-        dtype=dtype,
+    noise = torch.randn_like(
+        x_target_augment, 
+        dtype=dtype, 
         device=x_target_augment.device,
-        generator=generator
+        #generator=generator
     ) * sigma_data  # [..., N_sample, N_atom, 3]
 
     # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )

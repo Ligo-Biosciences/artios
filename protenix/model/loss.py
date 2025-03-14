@@ -392,8 +392,11 @@ class MSELoss(nn.Module):
                 [..., N_sample]
 
         Returns:
-            torch.Tensor: the weighted mse loss.
-                [...] is self.reduction is None else []
+            tuple[torch.Tensor, dict[str, torch.Tensor]]:
+                - loss (torch.Tensor): the weighted mse loss.
+                    []
+                - metrics (dict[str, torch.Tensor]): dictionary containing raw loss and timestep.
+                    {"raw_loss": torch.Tensor [..., N_sample], "timestep": torch.Tensor [..., N_sample]}
         """
         # True_coordinate_aligned: [..., N_sample, N_atom, 3]
         # Weight: [N_atom] or [..., N_sample, N_atom]
@@ -421,6 +424,7 @@ class MSELoss(nn.Module):
         raw_loss = per_sample_weighted_mse.detach().clone()
 
         weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
+        raw_loss = weighted_align_mse_loss.clone().detach()  # Store raw loss before uncertainty scaling
 
         # Balance grads between timesteps during training
         if self.training and self.use_uncertainty:
@@ -484,6 +488,7 @@ class ProtenixLoss(nn.Module):
         for loss_name, loss_fn in loss_fns.items():
             weight = self.loss_weight[loss_name]
             loss_outputs = loss_fn()
+            metrics = {}  # NOTE: dummy metrics
             if isinstance(loss_outputs, tuple):
                 loss, metrics, monitor_data = loss_outputs
             else:
@@ -523,7 +528,7 @@ class ProtenixLoss(nn.Module):
             mode (str): Mode of operation ('train', 'eval', 'inference'). Defaults to 'train'.
 
         Returns:
-            tuple[torch.Tensor, dict[str, torch.Tensor]]:
+            tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
                 - cum_loss (torch.Tensor): Cumulative loss.
                 - metrics (dict[str, torch.Tensor]): Dictionary containing aggregated metrics.
                 - monitor_data (dict[str, torch.Tensor]): Dictionary containing non-standard data for monitoring training dynamics.

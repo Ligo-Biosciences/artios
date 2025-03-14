@@ -34,11 +34,13 @@ from protenix.openfold_local.utils.chunk_utils import chunk_layer
 
 
 # Optimized layer norm
+"""
 try:
     from protenix.model.layer_norm.layer_norm import FusedLayerNormAffineFunction
     CUDA_AVAILABLE = True
 except OSError:
     CUDA_AVAILABLE = False
+"""
 
 # Linear layer utilities
 
@@ -256,6 +258,7 @@ class LayerNorm(nn.Module):
         Returns:
             torch.Tensor: Normalized tensor
         """
+        """
         if CUDA_AVAILABLE and x.is_cuda and x.dtype in [torch.float32, torch.float16, torch.bfloat16]:
             # Use optimized CUDA kernel implementation
             return FusedLayerNormAffineFunction.apply(
@@ -265,15 +268,17 @@ class LayerNorm(nn.Module):
                 self.normalized_shape,
                 self.eps
             )
+        
         else:
-            # Manual implementation using torch.functional
-            return F.layer_norm(
-                x,
-                self.normalized_shape,
-                self.weight if self.elementwise_affine else None,
-                self.bias if self.elementwise_affine else None,
-                self.eps
-            )
+        """
+        # Manual implementation using torch.functional
+        return F.layer_norm(
+            x,
+            self.normalized_shape,
+            self.weight if self.elementwise_affine else None,
+            self.bias if self.elementwise_affine else None,
+            self.eps
+        )
 
 class SwiGLU(nn.Module):
     """SwiGLU layer that computes swish(Linear(a)) * Linear(b)"""

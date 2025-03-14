@@ -154,18 +154,20 @@ def grad_norm(module: Module, norm_type: Union[float, int, str], group_separator
     return norms, total_norm
 
 
-def track_eval_metrics(results, eval_metrics_history, current_step):
+def update_eval_metrics(results, eval_metrics_history, current_step):
     """
     Track metrics over time and create visualizations of how they change during training.
     
     Args:
-        results (dict): Dictionary containing evaluation results
+        results (dict): Dictionary containing current step's evaluation results
+        eval_metrics_history (dict): Dictionary containing all the previous steps' evaluation results
+        current_step (int): Current step number
+
+    Returns:
+        eval_metrics_history (dict): Updated dictionary with the current step's evaluation metrics
     """
     # For each test and each metric, track the history
     for test_name, df in results.items():
-        if test_name == "merged":
-            continue
-        
         if test_name not in eval_metrics_history:
             eval_metrics_history[test_name] = {'steps': [], 'metrics': {}}
         
@@ -215,7 +217,18 @@ def track_eval_metrics(results, eval_metrics_history, current_step):
 
 
 def create_eval_metric_plots(test_name, metric_name, metric_data, steps):
-    """Create evaluation metric plots."""
+    """
+    Create evaluation metric plots.
+    
+    Args:
+        test_name (str): Name of the test
+        metric_name (str): Name of the metric
+        metric_data (dict): Dictionary containing mean and std values
+        steps (list): List of step numbers
+    
+    Returns:
+        fig (matplotlib.figure.Figure): Figure object with the plot
+    """
     means = metric_data['mean']
     stds = metric_data['std']
     

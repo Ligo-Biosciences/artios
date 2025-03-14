@@ -49,7 +49,7 @@ from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
 from runner.evaluate import Evaluator, add_summary_statistics_row
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
-from protenix.utils.monitoring import visualize_loss_histogram, grad_norm, create_eval_metric_plots, track_eval_metrics
+from protenix.utils.monitoring import visualize_loss_histogram, grad_norm, create_eval_metric_plots, update_eval_metrics
 import matplotlib.pyplot as plt
 
 # Disable WANDB's console output capture to reduce unnecessary logging
@@ -693,14 +693,14 @@ class AF3Trainer(object):
             if DIST_WRAPPER.rank == 0:
                 wandb.log({"grad_norm": total_norm}, step=self.step)
 
-    def evaluation_tests(self):
+    def run_evaluation_tests(self):
         """
-        Evaluate the tests specified in the configs.eval_metrics.eval_tests
+        Evaluate the tests specified in the configs.monitor.eval_metrics.eval_tests
         and track metrics over time to visualize training progress.
         """
-        print(f"Evaluating tests: {self.configs.evaluator.eval_tests}...")
+        print(f"Evaluating tests: {self.configs.monitor.eval_metrics.eval_tests}...")
 
-        # Dictionary to store all results
+        # Dictionary to store this step's results
         results = {}
 
         # Valid evaluation tests
@@ -710,11 +710,8 @@ class AF3Trainer(object):
             "posebusters": self.evaluator.evaluate_posebusters,
         }
 
-        # If "all" is in eval_tests, run all available tests
-        tests_to_run = list(valid_eval_tests.keys()) if "all" in self.configs.evaluator.eval_tests else self.configs.evaluator.eval_tests
-
-        # Run each requested evaluation
-        for eval_test in tests_to_run:
+        ### Run each requested evaluation
+        for eval_test in self.configs.monitor.eval_metrics.eval_tests:
             if eval_test in valid_eval_tests:
                 print(f"Running {eval_test} evaluation...")
                 results[eval_test] = valid_eval_tests[eval_test]()
@@ -722,49 +719,44 @@ class AF3Trainer(object):
             else:
                 raise ValueError(f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}")
 
-        # Merge all results into a single dataframe and save to csv
-        if results:
-            print("Merging all results into a single dataframe...")
-            merged_df = None
-            
-            for test_name, df in results.items():
-                if merged_df is None:
-                    merged_df = df.copy()
-                else:
-                    # Merge on Ligand CCD column
-                    merged_df = pd.merge(merged_df, df, on="Ligand CCD", how="outer")
-            
-            # Add the merged dataframe to the results dictionary
-            results["merged"] = merged_df
-            
-            # Track metrics over time and create visualizations
-            print(f"Tracking metrics over time and creating visualizations...")
-            # Create and log visualizations for each test and metric
-            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                # Update the history metrics with the current step's metrics
-                self.eval_metrics_history = track_eval_metrics(
-                    results, 
-                    self.eval_metrics_history, 
-                    self.step
-                )
+        ### Merge all results into a single dataframe and save to csv
+        merged_df = None
+        
+        for test_name, df in results.items():
+            if merged_df is None:
+                merged_df = df.copy()
+            else:
+                # Merge on Ligand CCD column
+                merged_df = pd.merge(merged_df, df, on="Ligand CCD", how="outer")
+        
+        # Add summary statistics row at the top
+        merged_df = add_summary_statistics_row(merged_df)
+        # Save the merged dataframe
+        output_path = self.evaluator.results_dir / "all_evaluations.csv"
+        merged_df.to_csv(output_path, index=False)
+        print(f"All evaluation results saved to {output_path}")
 
-                # Create and log plots showing metric trends over time to wandb
-                for test_name, history in self.eval_metrics_history.items():
-                    steps = history['steps']
-                    for metric_name, metric_data in history['metrics'].items():
-                        fig = create_eval_metric_plots(test_name, metric_name, metric_data, steps)
-                        wandb.log({
-                            f"{test_name}/{metric_name}": wandb.Image(fig)
-                        }, step=self.step+1)
-                        plt.close(fig)
+        ### If logging to wandb, track metrics over time and create visualisations
+        if not hasattr(self, 'eval_metrics_history'):
+            self.eval_metrics_history = {}
 
-                # Add summary statistics row at the top
-                merged_df = add_summary_statistics_row(merged_df)
-                
-                # Save the merged dataframe
-                output_path = self.evaluator.results_dir / "all_evaluations.csv"
-                merged_df.to_csv(output_path, index=False)
-                print(f"All evaluation results saved to {output_path}")
+        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            # Update the history metrics with the current step's metrics
+            self.eval_metrics_history = update_eval_metrics(
+                results=results, 
+                eval_metrics_history=self.eval_metrics_history, 
+                current_step=self.step+1
+            )
+
+            # Create and log plots showing metric trends over time to wandb
+            for test_name, history in self.eval_metrics_history.items():
+                steps = history['steps']
+                for metric_name, metric_data in history['metrics'].items():
+                    fig = create_eval_metric_plots(test_name, metric_name, metric_data, steps)
+                    wandb.log({
+                        f"{test_name}/{metric_name}": wandb.Image(fig)
+                    }, step=self.step)
+                    plt.close(fig)
 
     def run(self):
         """
@@ -778,11 +770,6 @@ class AF3Trainer(object):
                 return
         use_ema = hasattr(self, "power_law_ema_wrappers")
         self.print(f"Using power law ema's: {use_ema}") 
-
-        if self.configs.eval_metrics.interval != -1:
-            # Initialize metrics history
-            if not hasattr(self, 'eval_metrics_history'):
-                self.eval_metrics_history = {}
 
         while True:
             for batch in self.train_dl:
@@ -800,8 +787,8 @@ class AF3Trainer(object):
                 )
 
                 step_need_eval_metrics = (
-                    self.configs.eval_metrics.interval > 0
-                    and (self.step + 1) % self.configs.eval_metrics.interval == 0
+                    self.configs.monitor.eval_metrics.interval > 0
+                    and (self.step + 1) % self.configs.monitor.eval_metrics.interval == 0
                 )
 
                 is_last_step &= is_update_step
@@ -848,7 +835,7 @@ class AF3Trainer(object):
                     self.on_validation_epoch_end()
 
                 if step_need_eval_metrics or is_last_step:
-                    self.evaluation_tests()
+                    self.run_evaluation_tests()
 
                 self.global_step += 1
                 if self.global_step % self.iters_to_accumulate == 0:

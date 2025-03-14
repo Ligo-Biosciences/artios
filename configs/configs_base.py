@@ -298,10 +298,11 @@ monitor_configs = {
     "monitor": {
         "loss_distribution": False,
         "grad_norm": False,
+        "eval_metrics": {
+            "eval_tests": ListValue(["ss_distribution", "posebusters"]),
+            "interval": -1,
+        }
     },
-    "eval_metrics": {
-        "interval": -1,
-    }
 }
 
 evaluator_configs = {

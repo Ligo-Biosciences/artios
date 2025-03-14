@@ -215,10 +215,7 @@ def track_eval_metrics(results, eval_metrics_history, current_step):
 
 
 def create_eval_metric_plots(test_name, metric_name, metric_data, steps):
-    """Create and log plots showing metric trends over time to wandb.
-    This should plot one function at a time. The logic for going through each test and metric 
-    should be within evaluate_tests
-    """
+    """Create evaluation metric plots."""
     means = metric_data['mean']
     stds = metric_data['std']
     

@@ -830,11 +830,6 @@ class AF3Trainer(object):
                     and (self.step + 1) % self.configs.checkpoint_interval == 0
                 )
 
-                #step_need_eval_metrics = (
-                #    self.configs.monitor.eval_metrics.interval > 0
-                #    and (self.step + 1) % self.configs.monitor.eval_metrics.interval == 0
-                #)
-
                 is_last_step &= is_update_step
                 step_need_log &= is_update_step
                 step_need_eval &= is_update_step
@@ -877,9 +872,6 @@ class AF3Trainer(object):
                 if step_need_eval or is_last_step:
                     self.evaluate()
                     self.on_validation_epoch_end()
-
-                #if step_need_eval_metrics or is_last_step:
-                #    self.run_evaluation_tests()
 
                 self.global_step += 1
                 if self.global_step % self.iters_to_accumulate == 0:

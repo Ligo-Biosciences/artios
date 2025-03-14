@@ -301,7 +301,6 @@ monitor_configs = {
         "weight_norm": False,
         "eval_metrics": {
             "eval_tests": ListValue(["ss_distribution", "posebusters"]),
-            "interval": -1,
         }
     },
 }

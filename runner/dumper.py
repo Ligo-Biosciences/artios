@@ -164,10 +164,16 @@ class DataDumper:
         if sorted_indices is None:
             sorted_indices = range(N_sample)  # do not rank the output file
         for idx, rank in enumerate(sorted_indices):
-            output_fpath = os.path.join(
-                prediction_save_dir,
-                f"{sample_name}_seed_{seed}_sample_{rank}.cif",
-            )
+            if rank == 0:
+                output_fpath = os.path.join(
+                    prediction_save_dir,
+                    f"{sample_name}.cif",
+                )
+            else:
+                output_fpath = os.path.join(
+                    prediction_save_dir,
+                    f"{sample_name}_seed_{seed}_sample_{rank}.cif",
+                )
             if b_factor is not None:
                 # b_factor.shape == [N_sample, N_atom]
                 atom_array.set_annotation("b_factor", np.round(b_factor[idx], 2))

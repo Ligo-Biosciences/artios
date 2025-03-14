@@ -49,7 +49,7 @@ from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
 from runner.evaluate import Evaluator, add_summary_statistics_row
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
-from protenix.utils.monitoring import visualize_loss_histogram, grad_norm, create_eval_metric_plots, update_eval_metrics
+from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 import matplotlib.pyplot as plt
 
 # Disable WANDB's console output capture to reduce unnecessary logging
@@ -736,30 +736,8 @@ class AF3Trainer(object):
         merged_df.to_csv(output_path, index=False)
         print(f"All evaluation results saved to {output_path}")
 
-        ### If logging to wandb, track metrics over time and create visualisations
-        if not hasattr(self, 'eval_metrics_history'):
-            self.eval_metrics_history = {}
-
+        ### Log tests' metrics to WandB
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            """
-            # Update the history metrics with the current step's metrics
-            self.eval_metrics_history = update_eval_metrics(
-                results=results, 
-                eval_metrics_history=self.eval_metrics_history, 
-                current_step=self.step+1
-            )
-
-            # Create and log plots showing metric trends over time to wandb
-            for test_name, history in self.eval_metrics_history.items():
-                steps = history['steps']
-                for metric_name, metric_data in history['metrics'].items():
-                    fig = create_eval_metric_plots(test_name, metric_name, metric_data, steps)
-                    wandb.log({
-                        f"{test_name}/{metric_name}": wandb.Image(fig)
-                    }, step=self.step)
-                    plt.close(fig)
-            """
-                        # For each test and each metric, calculate means and log directly
             wandb_metrics = {}
             
             for test_name, df in results.items():
@@ -788,15 +766,15 @@ class AF3Trainer(object):
 
                     # Calculate mean and std
                     mean = col_data.mean()
-                    std = col_data.std()
+                    #std = col_data.std()
                     
                     # Skip if mean is NaN
                     if pd.isna(mean):
                         continue
                         
                     # Add to wandb metrics dictionary
-                    wandb_metrics[f"{test_name}/{col}_mean"] = mean
-                    wandb_metrics[f"{test_name}/{col}_std"] = std
+                    wandb_metrics[f"{test_name}/{col}"] = mean
+                    #wandb_metrics[f"{test_name}/{col}_std"] = std
             
             # Log all metrics at once
             wandb.log(wandb_metrics, step=self.step)

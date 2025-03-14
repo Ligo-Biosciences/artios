@@ -754,8 +754,8 @@ class AF3Trainer(object):
                     for metric_name, metric_data in history['metrics'].items():
                         fig = create_eval_metric_plots(test_name, metric_name, metric_data, steps)
                         wandb.log({
-                            f"eval_metrics/{test_name}/{metric_name}_trend": wandb.Image(fig)
-                        }, step=self.step)
+                            f"{test_name}/{metric_name}": wandb.Image(fig)
+                        }, step=self.step+1)
                         plt.close(fig)
 
                 # Add summary statistics row at the top

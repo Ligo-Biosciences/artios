@@ -752,11 +752,17 @@ class AF3Trainer(object):
             for test_name, history in self.eval_metrics_history.items():
                 steps = history['steps']
                 for metric_name, metric_data in history['metrics'].items():
+                    """
                     fig = create_eval_metric_plots(test_name, metric_name, metric_data, steps)
                     wandb.log({
                         f"{test_name}/{metric_name}": wandb.Image(fig)
                     }, step=self.step)
                     plt.close(fig)
+                    """
+                    wandb.log(
+                        {f"{test_name}/{metric_name}": metric_data},
+                        step=self.step
+                    )
 
     def run(self):
         """

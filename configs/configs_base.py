@@ -306,25 +306,6 @@ monitor_configs = {
     },
 }
 
-evaluator_configs = {
-    "evaluator": {
-        "eval_tests": ListValue(["ss_distribution", "posebusters"]), # "all", "secondary_structure_distribution", "designability"
-        "ligand_mpnn": {
-            "model_type": "ligand_mpnn",
-            "seed": 42,
-            "verbose": 0,
-            "temperature": 0.1
-        },
-        "chai1": {
-            "num_trunk_recycles": 3,
-            "num_diffn_timesteps": 100,
-            "num_diffn_samples": 1,
-            "seed": 42,
-            "device": "cuda:0",
-            "use_esm_embeddings": True,
-        },
-    },
-}
 
 training_time_inference_configs = {
     "run_training_time_inference": True,
@@ -345,5 +326,4 @@ configs = {
     **loss_configs,
     **monitor_configs,
     **training_time_inference_configs,
-    **evaluator_configs,
 }

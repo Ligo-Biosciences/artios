@@ -34,13 +34,13 @@ from protenix.openfold_local.utils.chunk_utils import chunk_layer
 
 
 # Optimized layer norm
-"""
+
 try:
     from protenix.model.layer_norm.layer_norm import FusedLayerNormAffineFunction
     CUDA_AVAILABLE = True
 except OSError:
     CUDA_AVAILABLE = False
-"""
+
 
 # Linear layer utilities
 

@@ -522,6 +522,7 @@ class AF3Trainer(object):
                 if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                     # Find all .cif files recursively in structure_dir and subdirectories
                     cif_files = glob(os.path.join(self.prediction_dir, "**/*.cif"), recursive=True)
+                    cif_files = [Path(cif_file) for cif_file in cif_files]
                     
                     # Log each structure file to wandb
                     self.log_structure_files_to_wandb(cif_files, ema_suffix=ema_suffix)

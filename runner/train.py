@@ -532,35 +532,40 @@ class AF3Trainer(object):
                     
                     # Log each structure file to wandb
                     for cif_path in cif_files:
-                        # Create temporary PDB file path with full path
-                        cif_path = os.path.abspath(cif_path)  # Ensure absolute path
-                        temp_pdb_path = os.path.abspath(str(Path(cif_path).with_suffix('.pdb')))
-                        
-                        # Convert CIF to PDB
-                        cif_to_pdb(cif_path, temp_pdb_path)
-                        
-                        # Verify the PDB file was created
-                        if not os.path.exists(temp_pdb_path):
-                            self.print(f"Warning: Failed to create PDB file at {temp_pdb_path}")
-                            continue
-                        
-                        # Get relative path from prediction_dir for the wandb key
-                        rel_path = os.path.relpath(cif_path, self.prediction_dir)
-                        # Remove extension and replace path separators with underscores
-                        structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
-                        
                         try:
-                            # Log PDB file to wandb
-                            wandb.log({
-                                f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(temp_pdb_path)
-                            }, step=self.step)
-                        except Exception as e:
-                            self.print(f"Error logging molecule to wandb: {e}")
+                            # Create temporary PDB file path with full path
+                            cif_path = os.path.abspath(cif_path)  # Ensure absolute path
+                            temp_pdb_path = os.path.abspath(str(Path(cif_path).with_suffix('.pdb')))
                             
-                        # Clean up both files
-                        if os.path.exists(temp_pdb_path):
-                            os.remove(temp_pdb_path)
-                        os.remove(cif_path)
+                            # Convert CIF to PDB
+                            cif_to_pdb(cif_path, temp_pdb_path)
+                            
+                            # Verify the PDB file was created
+                            if not os.path.exists(temp_pdb_path):
+                                self.print(f"Warning: Failed to create PDB file at {temp_pdb_path}")
+                                continue
+                            
+                            # Get relative path from prediction_dir for the wandb key
+                            rel_path = os.path.relpath(cif_path, self.prediction_dir)
+                            # Remove extension and replace path separators with underscores
+                            structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
+                            
+                            try:
+                                # Log PDB file to wandb
+                                wandb.log({
+                                    f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(temp_pdb_path)
+                                }, step=self.step)
+                            except Exception as e:
+                                self.print(f"Error logging molecule to wandb: {e}")
+                            
+                            # Clean up both files
+                            if os.path.exists(temp_pdb_path):
+                                os.remove(temp_pdb_path)
+                            os.remove(cif_path)
+                            
+                        except Exception as e:
+                            self.print(f"Error processing CIF file {cif_path}: {e}")
+                            continue
 
             # Log the distribution of loss values over timesteps
             if self.configs.monitor.loss_distribution:

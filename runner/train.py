@@ -734,14 +734,6 @@ class AF3Trainer(object):
                     # Merge on Ligand CCD column
                     merged_df = pd.merge(merged_df, df, on="Ligand CCD", how="outer")
             
-            # Add summary statistics row at the top
-            merged_df = add_summary_statistics_row(merged_df)
-            
-            # Save the merged dataframe
-            output_path = self.evaluator.results_dir / "all_evaluations.csv"
-            merged_df.to_csv(output_path, index=False)
-            print(f"All evaluation results saved to {output_path}")
-            
             # Add the merged dataframe to the results dictionary
             results["merged"] = merged_df
             
@@ -765,6 +757,14 @@ class AF3Trainer(object):
                             f"eval_metrics/{test_name}/{metric_name}_trend": wandb.Image(fig)
                         }, step=self.step)
                         plt.close(fig)
+
+                # Add summary statistics row at the top
+                merged_df = add_summary_statistics_row(merged_df)
+                
+                # Save the merged dataframe
+                output_path = self.evaluator.results_dir / "all_evaluations.csv"
+                merged_df.to_csv(output_path, index=False)
+                print(f"All evaluation results saved to {output_path}")
 
     def run(self):
         """

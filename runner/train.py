@@ -736,13 +736,11 @@ class AF3Trainer(object):
                 # Remove extension and replace path separators with underscores
                 structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
                 
-                try:
-                    # Log PDB file to wandb
-                    wandb.log({
-                        f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(temp_pdb_path)
-                    }, step=self.step)
-                except Exception as e:
-                    self.print(f"Error logging molecule to wandb: {e}")
+                # Log PDB file to wandb
+                wandb.log({
+                    f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(temp_pdb_path)
+                }, step=self.step)
+
                 
                 # Clean up both files
                 if os.path.exists(temp_pdb_path):
@@ -765,7 +763,7 @@ class AF3Trainer(object):
             cif_files (list[Path]): List of paths to the CIF files to evaluate
             ema_suffix (str, optional): Suffix to add to the structure name in wandb. Defaults to "".
         """
-        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+        if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
             return
         
         print(f"Evaluating tests: {self.configs.monitor.eval_metrics.eval_tests}...")

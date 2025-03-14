@@ -711,99 +711,89 @@ class AF3Trainer(object):
         cif_files: list[Path], 
         ema_suffix: str = ""
     ):
-        """
-        Process CIF files, convert them to PDB format, and log them to Weights & Biases.
-        
-        Args:
-            cif_files (list): List of paths to CIF files to process
-            ema_suffix (str, optional): Suffix to add to the structure name in wandb. Defaults to "".
-        """
-        for cif_path in cif_files:
-            try:
-                # Create temporary PDB file path with full path
-                cif_path = os.path.abspath(cif_path)  # Ensure absolute path
-                temp_pdb_path = os.path.abspath(str(Path(cif_path).with_suffix('.pdb')))
+        # Move all operations to CPU explicitly
+        with torch.cuda.device(torch.device('cpu')):
+            for cif_path in cif_files:
+                try:
+                    # Create temporary PDB file path with full path
+                    cif_path = os.path.abspath(cif_path)
+                    temp_pdb_path = os.path.abspath(str(Path(cif_path).with_suffix('.pdb')))
+                    
+                    # Convert CIF to PDB
+                    cif_to_pdb(cif_path, temp_pdb_path)
+                    
+                    # Verify the PDB file was created
+                    if not os.path.exists(temp_pdb_path):
+                        self.print(f"Warning: Failed to create PDB file at {temp_pdb_path}")
+                        continue
+                    
+                    # Get relative path for the wandb key
+                    rel_path = os.path.relpath(cif_path, self.prediction_dir)
+                    structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
+                    
+                    # Log PDB file to wandb (force CPU)
+                    wandb.log({
+                        f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(temp_pdb_path)
+                    }, step=self.step)
+
+                    # Clean up both files
+                    if os.path.exists(temp_pdb_path):
+                        os.remove(temp_pdb_path)
                 
-                # Convert CIF to PDB
-                cif_to_pdb(cif_path, temp_pdb_path)
-                
-                # Verify the PDB file was created
-                if not os.path.exists(temp_pdb_path):
-                    self.print(f"Warning: Failed to create PDB file at {temp_pdb_path}")
+                except Exception as e:
+                    self.print(f"Error processing CIF file {cif_path}: {e}")
                     continue
                 
-                # Get relative path from prediction_dir for the wandb key
-                rel_path = os.path.relpath(cif_path, self.prediction_dir)
-                # Remove extension and replace path separators with underscores
-                structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
-                
-                # Log PDB file to wandb
-                wandb.log({
-                    f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(temp_pdb_path)
-                }, step=self.step)
-
-                
-                # Clean up both files
-                if os.path.exists(temp_pdb_path):
-                    os.remove(temp_pdb_path)
-                
-            except Exception as e:
-                self.print(f"Error processing CIF file {cif_path}: {e}")
-                continue
+                # Explicitly clean up memory
+                torch.cuda.empty_cache()
 
     def run_evaluation_tests(
         self, 
         cif_files: list[Path], 
         ema_suffix: str = ""
     ):
-        """
-        Evaluate the tests specified in the configs.monitor.eval_metrics.eval_tests
-        and track metrics over time to visualize training progress.
-
-        Args:
-            cif_files (list[Path]): List of paths to the CIF files to evaluate
-            ema_suffix (str, optional): Suffix to add to the structure name in wandb. Defaults to "".
-        """
-        if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
-            return
-        
-        print(f"Evaluating tests: {self.configs.monitor.eval_metrics.eval_tests}...")
-
-        # Dictionary to store this step's results
-        results = {}
-
-        # Valid evaluation tests
-        valid_eval_tests = {
-            # "designability": Evaluator.evaluate_designability,
-            "ss_distribution": Evaluator.ss_distribution,
-            "posebusters": Evaluator.evaluate_posebusters,
-        }
-
-        ### Run each requested evaluation
-        for eval_test in self.configs.monitor.eval_metrics.eval_tests:
-            # Assert that the test is valid before running
-            assert eval_test in valid_eval_tests, f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}"
+        # Move operations to CPU
+        with torch.cuda.device(torch.device('cpu')):
+            if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
+                return
             
-            print(f"Running {eval_test} evaluation...")
-            try:
-                results[eval_test] = valid_eval_tests[eval_test](cif_files=cif_files)
-                print(f"{eval_test} evaluation complete.")
-            except Exception as e:
-                self.print(f"Error running {eval_test} evaluation: {e}")
-                continue
+            print(f"Evaluating tests: {self.configs.monitor.eval_metrics.eval_tests}...")
+            results = {}
+            
+            # Valid evaluation tests
+            valid_eval_tests = {
+                "ss_distribution": Evaluator.ss_distribution,
+                "posebusters": Evaluator.evaluate_posebusters,
+            }
 
-        ### Log tests' metrics to WandB
-        wandb_metrics = {}
-        
-        for test_name, df in results.items():
-            for col in df.columns:
-                if col == 'Ligand CCD':
+            for eval_test in self.configs.monitor.eval_metrics.eval_tests:
+                assert eval_test in valid_eval_tests, f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}"
+                
+                print(f"Running {eval_test} evaluation...")
+                try:
+                    results[eval_test] = valid_eval_tests[eval_test](cif_files=cif_files)
+                    print(f"{eval_test} evaluation complete.")
+                except Exception as e:
+                    self.print(f"Error running {eval_test} evaluation: {e}")
+                    results.pop(eval_test, None)
                     continue
-                # Convert boolean values to float before calculating mean
-                wandb_metrics[f"{test_name}/{ema_suffix}_{col}"] = df[col].astype(float).mean()
-        
-        # Log all metrics at once
-        wandb.log(wandb_metrics, step=self.step)
+                
+                # Clean up after each test
+                torch.cuda.empty_cache()
+
+            # Log metrics to WandB
+            wandb_metrics = {}
+            for test_name, df in results.items():
+                for col in df.columns:
+                    if col == 'Ligand CCD':
+                        continue
+                    wandb_metrics[f"{test_name}/{ema_suffix}_{col}"] = df[col].astype(float).mean()
+            
+            wandb.log(wandb_metrics, step=self.step)
+            
+            # Clean up memory again
+            del results, wandb_metrics
+            torch.cuda.empty_cache()
 
     def run(self):
         """

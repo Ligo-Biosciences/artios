@@ -6,6 +6,7 @@ from protenix.data.parser import MMCIFParser
 from pathlib import Path
 from biotite.structure.io.mol import MOLFile
 from biotite.structure import AtomArray
+import biotite.structure.io as strucio
 from protenix.data.constants import mmcif_restype_3to1
 
 
@@ -95,3 +96,27 @@ def extract_protein_from_cif(
     
     # Save the structure
     save_to_sdf(protein_array, output_path)
+
+
+def cif_to_pdb(cif_file: Union[str, Path], output_path: Union[str, Path] = None) -> None:
+    """
+    Convert a CIF file to PDB format and save it.
+    
+    Args:
+        cif_file (Union[str, Path]): Path to the input CIF file
+        output_path (Union[str, Path], optional): Path where to save the PDB file. 
+            If None, will use the same path as cif_file but with .pdb extension.
+    """
+    # Convert paths to Path objects
+    cif_file = Path(cif_file)
+    if output_path is None:
+        output_path = cif_file.with_suffix('.pdb')
+    else:
+        output_path = Path(output_path)
+
+    # Parse CIF file using existing MMCIFParser
+    structure = load_structure(cif_file)
+
+    # Save as PDB using Biotite's functionality
+    strucio.save_structure(output_path, structure)
+    

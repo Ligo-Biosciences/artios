@@ -52,8 +52,7 @@ from runner.evaluate import Evaluator, add_summary_statistics_row
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 from runner.inference import InferenceRunner, infer_predict
-from runner.evaluate import cif_to_pdb
-from protenix.metrics.posebusters import evaluate_posebusters
+from protenix.utils.structure_io import cif_to_pdb
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -70,7 +69,6 @@ class AF3Trainer(object):
         self.init_model()
         self.init_loss()
         self.init_data()
-        self.init_evaluator()
         self.try_load_checkpoint()
 
     def init_basics(self):
@@ -222,20 +220,6 @@ class AF3Trainer(object):
             error_dir=self.error_dir,
         )
         print("finished init_data")
-
-    def init_sampler(self): 
-        #TODO: here we should perhaps initialise some sampler object with some sampler configs
-        # To establish how we should formulate the sampler object let's basicalyl copy the evaluate 
-        # method below which is exactly we should be doing a forward pass
-        # They do this via a "batch". #TODO: determine how they get batch and what is stored inside it.
-        # self.configs.dump_dir
-        # configs.need_atom_confidence
-        # configs.sorted_by_ranking_score
-        # self.configs.load_checkpoint_path
-        pass
-
-    def init_evaluator(self):
-        self.evaluator = Evaluator(self.configs)
 
     def save_checkpoint(self, ema_suffix="", save_model_only=False):
         if DIST_WRAPPER.rank == 0:
@@ -535,7 +519,6 @@ class AF3Trainer(object):
                 runner = InferenceRunner(self.configs, model=self.model)
                 infer_predict(runner, self.configs)
 
-                # Log the structures to wandb
                 if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                     # Find all .cif files recursively in structure_dir and subdirectories
                     cif_files = glob(os.path.join(self.prediction_dir, "**/*.cif"), recursive=True)
@@ -543,10 +526,12 @@ class AF3Trainer(object):
                     # Log each structure file to wandb
                     self.log_structure_files_to_wandb(cif_files, ema_suffix=ema_suffix)
 
-                    # Run posebusters
-                    # TODO: fix this
-                    #if self.configs.monitor.posebusters:
-                    #    self.run_posebusters_evaluation(cif_files, ema_suffix=ema_suffix)
+                    # Run evaluation tests
+                    self.run_evaluation_tests(cif_files, ema_suffix=ema_suffix)
+
+                    # Delete the CIF files
+                    for cif_file in cif_files:
+                        os.remove(cif_file)
 
             # Log the distribution of loss values over timesteps
             if self.configs.monitor.loss_distribution:
@@ -720,7 +705,11 @@ class AF3Trainer(object):
             if DIST_WRAPPER.rank == 0:
                 wandb.log({"grad_norm": total_norm}, step=self.step)
     
-    def log_structure_files_to_wandb(self, cif_files, ema_suffix=""):
+    def log_structure_files_to_wandb(
+        self, 
+        cif_files: list[Path], 
+        ema_suffix: str = ""
+    ):
         """
         Process CIF files, convert them to PDB format, and log them to Weights & Biases.
         
@@ -758,18 +747,27 @@ class AF3Trainer(object):
                 # Clean up both files
                 if os.path.exists(temp_pdb_path):
                     os.remove(temp_pdb_path)
-                os.remove(cif_path)
                 
             except Exception as e:
                 self.print(f"Error processing CIF file {cif_path}: {e}")
                 continue
 
-
-    def run_evaluation_tests(self):
+    def run_evaluation_tests(
+        self, 
+        cif_files: list[Path], 
+        ema_suffix: str = ""
+    ):
         """
         Evaluate the tests specified in the configs.monitor.eval_metrics.eval_tests
         and track metrics over time to visualize training progress.
+
+        Args:
+            cif_files (list[Path]): List of paths to the CIF files to evaluate
+            ema_suffix (str, optional): Suffix to add to the structure name in wandb. Defaults to "".
         """
+        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            return
+        
         print(f"Evaluating tests: {self.configs.monitor.eval_metrics.eval_tests}...")
 
         # Dictionary to store this step's results
@@ -777,167 +775,32 @@ class AF3Trainer(object):
 
         # Valid evaluation tests
         valid_eval_tests = {
-            "designability": self.evaluator.evaluate_designability,
-            "ss_distribution": self.evaluator.ss_distribution,
-            "posebusters": self.evaluator.evaluate_posebusters,
+            # "designability": Evaluator.evaluate_designability,
+            "ss_distribution": Evaluator.ss_distribution,
+            "posebusters": Evaluator.evaluate_posebusters,
         }
 
         ### Run each requested evaluation
         for eval_test in self.configs.monitor.eval_metrics.eval_tests:
-            if eval_test in valid_eval_tests:
-                print(f"Running {eval_test} evaluation...")
-                results[eval_test] = valid_eval_tests[eval_test]()
-                print(f"{eval_test} evaluation complete.")
-            else:
-                raise ValueError(f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}")
-
-        ### Merge all results into a single dataframe and save to csv
-        merged_df = None
-        
-        for test_name, df in results.items():
-            if merged_df is None:
-                merged_df = df.copy()
-            else:
-                # Merge on Ligand CCD column
-                merged_df = pd.merge(merged_df, df, on="Ligand CCD", how="outer")
-        
-        # Add summary statistics row at the top
-        merged_df = add_summary_statistics_row(merged_df)
-        # Save the merged dataframe
-        output_path = self.evaluator.results_dir / "all_evaluations.csv"
-        merged_df.to_csv(output_path, index=False)
-        print(f"All evaluation results saved to {output_path}")
+            # Assert that the test is valid before running
+            assert eval_test in valid_eval_tests, f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}"
+            
+            print(f"Running {eval_test} evaluation...")
+            results[eval_test] = valid_eval_tests[eval_test](cif_files=cif_files)
+            print(f"{eval_test} evaluation complete.")
 
         ### Log tests' metrics to WandB
-        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            wandb_metrics = {}
-            
-            for test_name, df in results.items():
-                for col in df.columns:
-                    if col == 'Ligand CCD':
-                        continue
-
-                    # Handle string boolean values - convert "TRUE"/"FALSE" to 1/0
-                    if df[col].dtype == object:
-                        # Check if column contains string booleans
-                        has_true = df[col].str.upper().eq("TRUE").any()
-                        has_false = df[col].str.upper().eq("FALSE").any()
-                        
-                        if has_true or has_false:
-                            # Convert to boolean then to int
-                            col_data = df[col].str.upper().map({"TRUE": 1, "FALSE": 0})
-                        else:
-                            # Try to convert to numeric anyway
-                            col_data = pd.to_numeric(df[col], errors='coerce')
-                    elif df[col].dtype == bool:
-                        # For boolean columns, convert to 0/1
-                        col_data = df[col].astype(int)
-                    else:
-                        # For other columns, try to convert to numeric
-                        col_data = pd.to_numeric(df[col], errors='coerce')
-
-                    # Calculate mean and std
-                    mean = col_data.mean()
-                    #std = col_data.std()
-                    
-                    # Skip if mean is NaN
-                    if pd.isna(mean):
-                        continue
-                        
-                    # Add to wandb metrics dictionary
-                    wandb_metrics[f"{test_name}/{col}"] = mean
-                    #wandb_metrics[f"{test_name}/{col}_std"] = std
-            
-            # Log all metrics at once
-            wandb.log(wandb_metrics, step=self.step)
-
-
-    def run_evaluation_tests(self):
-        """
-        Evaluate the tests specified in the configs.monitor.eval_metrics.eval_tests
-        and track metrics over time to visualize training progress.
-        """
-        print(f"Evaluating tests: {self.configs.monitor.eval_metrics.eval_tests}...")
-
-        # Dictionary to store this step's results
-        results = {}
-
-        # Valid evaluation tests
-        valid_eval_tests = {
-            "designability": self.evaluator.evaluate_designability,
-            "ss_distribution": self.evaluator.ss_distribution,
-            "posebusters": self.evaluator.evaluate_posebusters,
-        }
-
-        ### Run each requested evaluation
-        for eval_test in self.configs.monitor.eval_metrics.eval_tests:
-            if eval_test in valid_eval_tests:
-                print(f"Running {eval_test} evaluation...")
-                results[eval_test] = valid_eval_tests[eval_test]()
-                print(f"{eval_test} evaluation complete.")
-            else:
-                raise ValueError(f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}")
-
-        ### Merge all results into a single dataframe and save to csv
-        merged_df = None
+        wandb_metrics = {}
         
         for test_name, df in results.items():
-            if merged_df is None:
-                merged_df = df.copy()
-            else:
-                # Merge on Ligand CCD column
-                merged_df = pd.merge(merged_df, df, on="Ligand CCD", how="outer")
+            for col in df.columns:
+                if col == 'Ligand CCD':
+                    continue
+                # Convert boolean values to float before calculating mean
+                wandb_metrics[f"{test_name}/{ema_suffix}_{col}"] = df[col].astype(float).mean()
         
-        # Add summary statistics row at the top
-        merged_df = add_summary_statistics_row(merged_df)
-        # Save the merged dataframe
-        output_path = self.evaluator.results_dir / "all_evaluations.csv"
-        merged_df.to_csv(output_path, index=False)
-        print(f"All evaluation results saved to {output_path}")
-
-        ### Log tests' metrics to WandB
-        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            wandb_metrics = {}
-            
-            for test_name, df in results.items():
-                for col in df.columns:
-                    if col == 'Ligand CCD':
-                        continue
-
-                    # Handle string boolean values - convert "TRUE"/"FALSE" to 1/0
-                    if df[col].dtype == object:
-                        # Check if column contains string booleans
-                        has_true = df[col].str.upper().eq("TRUE").any()
-                        has_false = df[col].str.upper().eq("FALSE").any()
-                        
-                        if has_true or has_false:
-                            # Convert to boolean then to int
-                            col_data = df[col].str.upper().map({"TRUE": 1, "FALSE": 0})
-                        else:
-                            # Try to convert to numeric anyway
-                            col_data = pd.to_numeric(df[col], errors='coerce')
-                    elif df[col].dtype == bool:
-                        # For boolean columns, convert to 0/1
-                        col_data = df[col].astype(int)
-                    else:
-                        # For other columns, try to convert to numeric
-                        col_data = pd.to_numeric(df[col], errors='coerce')
-
-                    # Calculate mean and std
-                    mean = col_data.mean()
-                    #std = col_data.std()
-                    
-                    # Skip if mean is NaN
-                    if pd.isna(mean):
-                        continue
-                        
-                    # Add to wandb metrics dictionary
-                    wandb_metrics[f"{test_name}/{col}"] = mean
-                    #wandb_metrics[f"{test_name}/{col}_std"] = std
-            
-            # Log all metrics at once
-            wandb.log(wandb_metrics, step=self.step)
-
+        # Log all metrics at once
+        wandb.log(wandb_metrics, step=self.step)
 
     def run(self):
         """
@@ -967,10 +830,10 @@ class AF3Trainer(object):
                     and (self.step + 1) % self.configs.checkpoint_interval == 0
                 )
 
-                step_need_eval_metrics = (
-                    self.configs.monitor.eval_metrics.interval > 0
-                    and (self.step + 1) % self.configs.monitor.eval_metrics.interval == 0
-                )
+                #step_need_eval_metrics = (
+                #    self.configs.monitor.eval_metrics.interval > 0
+                #    and (self.step + 1) % self.configs.monitor.eval_metrics.interval == 0
+                #)
 
                 is_last_step &= is_update_step
                 step_need_log &= is_update_step
@@ -1015,8 +878,8 @@ class AF3Trainer(object):
                     self.evaluate()
                     self.on_validation_epoch_end()
 
-                if step_need_eval_metrics or is_last_step:
-                    self.run_evaluation_tests()
+                #if step_need_eval_metrics or is_last_step:
+                #    self.run_evaluation_tests()
 
                 self.global_step += 1
                 if self.global_step % self.iters_to_accumulate == 0:

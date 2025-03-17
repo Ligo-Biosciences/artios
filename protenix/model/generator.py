@@ -218,7 +218,7 @@ def sample_diffusion(
         "deterministic": lambda t: torch.zeros_like(t) / (1 - t),
         "constant": lambda t: torch.ones_like(t) * (0.5 * (alpha**2)) / (1 - t),
         "non_singular": lambda t: 4 * torch.ones_like(t) * 0.5 * (alpha**2), # int_{0}^{1}(non_sing) = 1/4
-        "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t, # int_{0}^{1}(zero_ends) = 1/12
+        "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t, # int_{0}^{1}(zero_ends) = 1/12 
         #TODO: add in the beta distribution.
         #TODO: check the divergence minimising choice used in ma et al.
         #"proteina": lambda t: alpha / (t + 0.01)

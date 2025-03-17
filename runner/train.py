@@ -523,12 +523,14 @@ class AF3Trainer(object):
                     # Find all .cif files recursively in structure_dir and subdirectories
                     cif_files = glob(os.path.join(self.prediction_dir, "**/*.cif"), recursive=True)
                     cif_files = [Path(cif_file) for cif_file in cif_files]
-                    
-                    # Log each structure file to wandb
-                    self.log_structure_files_to_wandb(cif_files, ema_suffix=ema_suffix)
+                    try:
+                        # Log each structure file to wandb
+                        self.log_structure_files_to_wandb(cif_files, ema_suffix=ema_suffix)
 
-                    # Run evaluation tests
-                    self.run_evaluation_tests(cif_files, ema_suffix=ema_suffix)
+                        # Run evaluation tests
+                        self.run_evaluation_tests(cif_files, ema_suffix=ema_suffix)
+                    except Exception as e:
+                        self.print(f"Failed evaluation / logging: {e}")
 
                     # Delete the CIF files
                     for cif_file in cif_files:

@@ -450,6 +450,14 @@ def _attention(
     # [..., n_q, n_kv]
     attn_weights = F.softmax(attn_weights, dim=-1)
 
+    # Apply dropout to attention weights if dropout probability > 0
+    if attn_weight_dropout_p > 0.0:
+        attn_weights = F.dropout(
+            attn_weights, 
+            p=attn_weight_dropout_p, 
+            training=not torch.is_inference_mode_enabled()
+        )
+
     # [..., n_q, n_kv], [..., n_kv, d] -> [..., n_q, d]
     attn_output = attn_weights @ v
 

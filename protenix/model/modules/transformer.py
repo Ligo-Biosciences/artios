@@ -360,6 +360,7 @@ class DiffusionTransformer(nn.Module):
         c_z: int,  # could be c_z or c_atompair
         n_blocks: int,  # could be 3 or 24 in AF3
         n_heads: int,  # could be 16 or 4 or ... in AF3
+        dropout: float = 0.0,
         blocks_per_ckpt: Optional[int] = None,
     ) -> None:
         """
@@ -369,6 +370,7 @@ class DiffusionTransformer(nn.Module):
             c_z (int): pair embedding dimension.
             n_blocks (int): number of blocks in DiffusionTransformer.
             n_heads (int): number of heads in attention.
+            dropout (float, optional): dropout probability for attention weights and transition block. Defaults to 0.0.
             blocks_per_ckpt: number of DiffusionTransformer blocks in each activation checkpoint
         """
         super(DiffusionTransformer, self).__init__()
@@ -378,11 +380,12 @@ class DiffusionTransformer(nn.Module):
         self.c_s = c_s
         self.c_z = c_z
         self.blocks_per_ckpt = blocks_per_ckpt
+        self.dropout = dropout
 
         self.blocks = nn.ModuleList()
         for _ in range(n_blocks):
             block = DiffusionTransformerBlock(
-                n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z
+                n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z, dropout=dropout
             )
             self.blocks.append(block)
 

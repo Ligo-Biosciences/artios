@@ -180,6 +180,7 @@ model_configs = {
                 "n_blocks": 3,
                 "n_heads": 4,
             },
+            "dropout": 0.0,
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
     },

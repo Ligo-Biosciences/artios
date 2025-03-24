@@ -171,6 +171,7 @@ class DiffusionModule(nn.Module):
         atom_encoder: dict[str, int] = {"n_blocks": 3, "n_heads": 4},
         transformer: dict[str, int] = {"n_blocks": 24, "n_heads": 16},
         atom_decoder: dict[str, int] = {"n_blocks": 3, "n_heads": 4},
+        dropout: float = 0.0,
         blocks_per_ckpt: Optional[int] = None,
         use_fine_grained_checkpoint: bool = False,
     ) -> None:
@@ -186,6 +187,7 @@ class DiffusionModule(nn.Module):
             atom_encoder (dict[str, int], optional): configs in AtomAttentionEncoder. Defaults to {"n_blocks": 3, "n_heads": 4}.
             transformer (dict[str, int], optional): configs in DiffusionTransformer. Defaults to {"n_blocks": 24, "n_heads": 16}.
             atom_decoder (dict[str, int], optional): configs in AtomAttentionDecoder. Defaults to {"n_blocks": 3, "n_heads": 4}.
+            dropout (float, optional): dropout probability for attention weights and transition block. Defaults to 0.0.
             blocks_per_ckpt: number of atom_encoder/transformer/atom_decoder blocks in each activation checkpoint
                 Size of each chunk. A higher value corresponds to fewer
                 checkpoints, and trades memory for speed. If None, no checkpointing is performed.
@@ -227,6 +229,7 @@ class DiffusionModule(nn.Module):
             c_a=c_token,
             c_s=c_s,
             c_z=c_z,
+            dropout=dropout,
             blocks_per_ckpt=blocks_per_ckpt,
         )
         self.layernorm_a = LayerNorm(c_token)

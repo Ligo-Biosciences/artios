@@ -51,6 +51,7 @@ class AttentionPairBias(nn.Module):
         c_s: int = 384,
         c_z: int = 128,
         biasinit: float = -2.0,
+        attn_weight_dropout_p: float = 0.0,
     ) -> None:
         """
         Args:
@@ -60,6 +61,7 @@ class AttentionPairBias(nn.Module):
             c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
             c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128.
             biasinit (float, optional): biasinit for BiasInitLinear. Defaults to -2.0.
+            attn_weight_dropout_p (float, optional): dropout probability for attention weights. Defaults to 0.0.
         """
         super(AttentionPairBias, self).__init__()
         assert c_a % n_heads == 0
@@ -85,6 +87,7 @@ class AttentionPairBias(nn.Module):
             gating=False,  # disable gating
             q_linear_bias=True,
             local_attention_method=self.local_attention_method,
+            attn_weight_dropout_p=attn_weight_dropout_p,
         )
         self.layernorm_z = LayerNorm(c_z)
         # Alg24. Line8 is scalar, but this is different for different heads
@@ -213,6 +216,60 @@ class AttentionPairBias(nn.Module):
         return a
 
 
+class ConditionedTransitionBlock(nn.Module):
+    """
+    Implements Algorithm 25 in AF3
+    """
+
+    def __init__(
+        self,
+        c_a: int,
+        c_s: int,
+        n: int = 2,
+        biasinit: float = -2.0,
+        dropout: float = 0.0,
+    ) -> None:
+        """
+        Args:
+            c_a (int, optional): single embedding dim (single feature aggregated atom info).
+            c_s (int, optional):  single embedding dim.
+            n (int, optional): channel scale factor. Defaults to 2.
+            biasinit (float, optional): bias initialization for final linear before sigmoid. Defaults to -2.0.
+            dropout (float, optional): dropout probability for attention weights and transition block. Defaults to 0.0.
+        """
+        super(ConditionedTransitionBlock, self).__init__()
+        self.c_a = c_a
+        self.c_s = c_s
+        self.n = n
+        self.dropout = dropout
+        self.adaln = AdaptiveLayerNorm(c_a=c_a, c_s=c_s)
+        self.linear_nobias_a1 = LinearNoBias(in_features=c_a, out_features=n * c_a)
+        self.linear_nobias_a2 = LinearNoBias(in_features=c_a, out_features=n * c_a)
+        self.linear_nobias_b = LinearNoBias(in_features=n * c_a, out_features=c_a)
+        self.linear_s = BiasInitLinear(
+            in_features=c_s, out_features=c_a, bias=True, biasinit=biasinit
+        )
+
+    def forward(self, a: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            a (torch.Tensor): the single feature aggregate per-atom representation
+                [..., N, c_a]
+            s (torch.Tensor): single embedding
+                [..., N, c_s]
+
+        Returns:
+            torch.Tensor: the updated a from ConditionedTransitionBlock
+                [..., N, c_a]
+        """
+        a = self.adaln(a, s)
+        b = F.silu((self.linear_nobias_a1(a))) * self.linear_nobias_a2(a)
+        b = F.dropout(b, p=self.dropout, training=self.training)
+        # Output projection (from adaLN-Zero [27])
+        a = torch.sigmoid(self.linear_s(s)) * self.linear_nobias_b(b)
+        return a
+    
+
 class DiffusionTransformerBlock(nn.Module):
     """
     Implements Algorithm 23[Line2-Line3] in AF3
@@ -225,6 +282,8 @@ class DiffusionTransformerBlock(nn.Module):
         c_z: int,  # could be c_z or c_atompair
         n_heads: int,  # could be 16 or 4 or ... in AF3
         biasinit: float = -2.0,
+        dropout: float = 0.0,
+
     ) -> None:
         """
         Args:
@@ -232,6 +291,7 @@ class DiffusionTransformerBlock(nn.Module):
             c_s (int, optional): single embedding dimension.
             c_z (int, optional): pair embedding dimension.
             n_heads (int, optional): number of heads for DiffusionTransformerBlock.
+            dropout (float, optional): dropout probability for attention weights and transition block. Defaults to 0.0.
         """
         super(DiffusionTransformerBlock, self).__init__()
         self.n_heads = n_heads
@@ -239,10 +299,10 @@ class DiffusionTransformerBlock(nn.Module):
         self.c_s = c_s
         self.c_z = c_z
         self.attention_pair_bias = AttentionPairBias(
-            has_s=True, n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z, biasinit=biasinit
+            has_s=True, n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z, biasinit=biasinit, attn_weight_dropout_p=dropout
         )
         self.conditioned_transition_block = ConditionedTransitionBlock(
-            n=2, c_a=c_a, c_s=c_s, biasinit=biasinit
+            n=2, c_a=c_a, c_s=c_s, biasinit=biasinit, dropout=dropout
         )
 
     def forward(
@@ -478,49 +538,6 @@ class AtomTransformer(nn.Module):
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
-
-
-class ConditionedTransitionBlock(nn.Module):
-    """
-    Implements Algorithm 25 in AF3
-    """
-
-    def __init__(self, c_a: int, c_s: int, n: int = 2, biasinit: float = -2.0) -> None:
-        """
-        Args:
-            c_a (int, optional): single embedding dim (single feature aggregated atom info).
-            c_s (int, optional):  single embedding dim.
-            n (int, optional): channel scale factor. Defaults to 2.
-        """
-        super(ConditionedTransitionBlock, self).__init__()
-        self.c_a = c_a
-        self.c_s = c_s
-        self.n = n
-        self.adaln = AdaptiveLayerNorm(c_a=c_a, c_s=c_s)
-        self.linear_nobias_a1 = LinearNoBias(in_features=c_a, out_features=n * c_a)
-        self.linear_nobias_a2 = LinearNoBias(in_features=c_a, out_features=n * c_a)
-        self.linear_nobias_b = LinearNoBias(in_features=n * c_a, out_features=c_a)
-        self.linear_s = BiasInitLinear(
-            in_features=c_s, out_features=c_a, bias=True, biasinit=biasinit
-        )
-
-    def forward(self, a: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            a (torch.Tensor): the single feature aggregate per-atom representation
-                [..., N, c_a]
-            s (torch.Tensor): single embedding
-                [..., N, c_s]
-
-        Returns:
-            torch.Tensor: the updated a from ConditionedTransitionBlock
-                [..., N, c_a]
-        """
-        a = self.adaln(a, s)
-        b = F.silu((self.linear_nobias_a1(a))) * self.linear_nobias_a2(a)
-        # Output projection (from adaLN-Zero [27])
-        a = torch.sigmoid(self.linear_s(s)) * self.linear_nobias_b(b)
-        return a
 
 
 class AtomAttentionEncoder(nn.Module):

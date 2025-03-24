@@ -64,9 +64,9 @@ data_configs = {
 }
 optim_configs = {
     # Optim
-    "lr": 0.0018,
+    "lr": 2e-4,
     "lr_scheduler": "af3",
-    "warmup_steps": 10,
+    "warmup_steps": 2000,
     "max_steps": RequiredValue(int),
     "min_lr_ratio": 0.1,
     "decay_every_n_steps": 25000,  # 50000
@@ -99,7 +99,7 @@ model_configs = {
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
     "sigma_data": 16.0,
-    "diffusion_batch_size": 48, # 12
+    "diffusion_batch_size": 48, 
     "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(

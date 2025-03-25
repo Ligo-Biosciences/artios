@@ -83,12 +83,12 @@ class SmoothLDDTLoss(nn.Module):
             self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
             self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
-    def _chunk_forward(self, pred_distance, true_distance, c_lm=None):
+    def _chunk_forward(self, pred_distance, true_distance, c_lm):
         dist_diff = torch.abs(pred_distance - true_distance)  # [..., N_sample, N_atom, k]
         # For save cuda memory we use inplace op
         dist_diff_epsilon = 0
         for threshold in [0.5, 1, 2, 4]:
-            dist_diff_epsilon = add(dist_diff_epsilon, mul(0.25, torch.sigmoid(threshold - dist_diff), inplace_safe=True), inplace_safe=True)
+            dist_diff_epsilon += 0.25 * torch.sigmoid(threshold - dist_diff)
 
         # Compute mean
         lddt = torch.sum(c_lm * dist_diff_epsilon, dim=(-1, -2)) / (

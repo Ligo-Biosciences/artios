@@ -159,7 +159,9 @@ class SmoothLDDTLoss(nn.Module):
         
         # Compute mask for the atoms that have true coordinates
         n_neighbors = neighbor_indices.shape[-1]
-        c_lm = coordinate_mask[neighbor_indices].bool().unsqueeze(-3).detach()  # [..., 1, N_atom, 300]
+        c_lm = coordinate_mask[neighbor_indices]   # [..., N_atom, k]
+        c_lm = c_lm * coordinate_mask.unsqueeze(-1)  # mask atoms that do not have true coordinates
+        c_lm = c_lm.bool().unsqueeze(-3).detach()  # [..., 1, N_atom, k]
 
         # Get N_sample dimension size
         n_samples = pred_coordinates.shape[-3]

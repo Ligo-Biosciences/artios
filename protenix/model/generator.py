@@ -398,7 +398,7 @@ def sample_diffusion_training(
         x_target_augment, 
         dtype=dtype, 
         device=x_target_augment.device,
-        #generator=generator
+        generator=generator
     ) * sigma_data  # [..., N_sample, N_atom, 3]
 
     # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )

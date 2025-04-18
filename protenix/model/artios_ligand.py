@@ -397,12 +397,12 @@ class ArtiosLigand(nn.Module):
 
         # Permute symmetric atom/chain in each sample to match true structure
         # Note: currently chains cannot be permuted since label is cropped
-        pred_dict, perm_log_dict, _, _ = (
-            symmetric_permutation.permute_diffusion_sample_to_match_label( 
-                input_feature_dict, pred_dict, label_dict, stage="train"
-            )
-        )
-        log_dict.update(perm_log_dict)
+        #pred_dict, perm_log_dict, _, _ = (
+        #    symmetric_permutation.permute_diffusion_sample_to_match_label( 
+        #        input_feature_dict, pred_dict, label_dict, stage="train"
+        #    )
+        #)
+        #log_dict.update(perm_log_dict)
 
         return pred_dict, label_dict, log_dict
     

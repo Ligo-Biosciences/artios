@@ -621,7 +621,7 @@ class AtomAttentionEncoder(nn.Module):
             )
             # Line11
             self.linear_no_bias_r = LinearNoBias(
-                in_features=3, out_features=self.c_atom, init="zeros"
+                in_features=3, out_features=self.c_atom, init="default"
             )
         self.linear_no_bias_cl = LinearNoBias(
             in_features=self.c_atom, out_features=self.c_atompair, init="zeros"
@@ -738,9 +738,7 @@ class AtomAttentionEncoder(nn.Module):
         p_lm = add(p_lm, invd_emb, inplace_safe=inplace_safe)
         p_lm = add(p_lm, mask_emb, inplace_safe=inplace_safe)
 
-        # Line7: Initialise the atom single representation as the single conditioning
-        q_l = c_l.clone()
-
+        
         # If provided, add trunk embeddings and noisy positions
         n_token = None
         if r_l is not None:
@@ -767,9 +765,12 @@ class AtomAttentionEncoder(nn.Module):
             )  # [..., N_sample, n_blocks, n_queries, n_keys, c_atompair]
 
             # Add the noisy positions
-            q_l = q_l.unsqueeze(dim=-3) + self.linear_no_bias_r(
+            q_l = self.linear_no_bias_r(
                 r_l
             )  # [..., N_sample, N_atom, c_atom]
+        else:
+            # Initialise the atom single representation as the single conditioning (input feature embedder)
+            q_l = c_l.clone()
 
         # Add the combined single conditioning to the pair representation
         c_l_q, c_l_k, _ = rearrange_qk_to_dense_trunk(

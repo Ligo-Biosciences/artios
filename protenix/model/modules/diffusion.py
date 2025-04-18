@@ -45,10 +45,10 @@ class DiffusionConditioning(nn.Module):
         """
         Args:
             sigma_data (torch.float, optional): the standard deviation of the data. Defaults to 16.0.
-            c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128. 
-            c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
-            c_s_inputs (int, optional): input embedding dim from InputEmbedder. Defaults to 449.
-            c_noise_embedding (int, optional): noise embedding dim. Defaults to 256.
+            c_z (int, optional): hidden dim [for pair embedding]. 
+            c_s (int, optional):  hidden dim [for single embedding].
+            c_s_inputs (int, optional): input embedding dim from InputEmbedder.
+            c_noise_embedding (int, optional): noise embedding dim.
         """
         super(DiffusionConditioning, self).__init__()
         self.sigma_data = sigma_data

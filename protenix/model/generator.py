@@ -394,8 +394,8 @@ def sample_diffusion_training(
     timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype) 
 
     # Generate noise
-    noise = torch.randn_like(
-        x_target_augment, 
+    noise = torch.randn(
+        x_target_augment.shape, 
         dtype=dtype, 
         device=x_target_augment.device,
         generator=generator

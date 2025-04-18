@@ -89,9 +89,9 @@ optim_configs = {
 }
 model_configs = {
     # Model
-    "c_s": 384, # 192
+    "c_s": 128, # 192
     "c_z": 128, # 64
-    "c_s_inputs": 800,  # c_s_inputs == c_token + 32
+    "c_s_inputs": 128,  # c_s_inputs == c_token + 32
     "c_atom": 128, # 64
     "c_atompair": 16, # 16
     "c_token": 768, # 192
@@ -157,7 +157,7 @@ model_configs = {
         "input_embedder": {
             "c_atom": GlobalConfigValue("c_atom"),
             "c_atompair": GlobalConfigValue("c_atompair"),
-            "c_token": GlobalConfigValue("c_token"),
+            "c_token": GlobalConfigValue("c_s_inputs"),
         },
         "diffusion_module": {
             "use_fine_grained_checkpoint": True,

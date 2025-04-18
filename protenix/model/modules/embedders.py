@@ -50,7 +50,7 @@ class InputFeatureEmbedder(nn.Module):
             has_coords=False,
         )
         # Line2
-        self.input_feature = {"restype": 32} # {"restype": 32, "profile": 32, "deletion_mean": 1}
+        # self.input_feature = {"restype": 32} # {"restype": 32, "profile": 32, "deletion_mean": 1}
 
     def forward(
         self,
@@ -76,16 +76,16 @@ class InputFeatureEmbedder(nn.Module):
         )  # [..., N_token, c_token]
         # Concatenate the per-token features.
         batch_shape = input_feature_dict["restype"].shape[:-1]
-        s_inputs = torch.cat(
-            [a]
-            + [
-                input_feature_dict[name].reshape(*batch_shape, d)
-                for name, d in self.input_feature.items()
-            ],
-            dim=-1,
-        )
+        #s_inputs = torch.cat(
+        #    [a]
+        #    + [
+        #        input_feature_dict[name].reshape(*batch_shape, d)
+        #        for name, d in self.input_feature.items()
+        #    ],
+        #    dim=-1,
+        #)
         
-        return s_inputs
+        return a
 
 
 class RelativePositionEncoding(nn.Module):

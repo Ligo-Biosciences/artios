@@ -474,6 +474,7 @@ class FMLoss(nn.Module):
         is_dna: torch.Tensor,
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
+        sigma_data: float,
     ) -> torch.Tensor:
         """Flow matching loss.
 
@@ -497,9 +498,10 @@ class FMLoss(nn.Module):
             + self.weight_rna * is_rna
             + self.weight_ligand * is_ligand
         )  # [N_atom] or [..., N_atom]
+        weight = weight / (sigma_data ** 2)
 
         # Apply coordinate_mask
-        weight = weight * coordinate_mask  # [N_atom] or [..., N_atom]
+        weight = weight * coordinate_mask # [N_atom] or [..., N_atom]
 
         # Calculate FM loss (weighted MSE)
         per_atom_se = ((pred_velocity - true_velocity) ** 2).sum(
@@ -613,8 +615,8 @@ class ProtenixLoss(nn.Module):
 
 
         # Timestep-dependent scaling of the loss
-        timestep = pred_dict["timestep"] # [..., N_sample]
-        diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * (1-timestep))**2)
+        # timestep = pred_dict["timestep"] # [..., N_sample]
+        # diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * (1-timestep))**2)
         
         if self.configs.train_confidence_only and mode == "train":
             # Skip Diffusion Loss and distogram loss
@@ -658,6 +660,7 @@ class ProtenixLoss(nn.Module):
                         is_rna=feat_dict["is_rna"],
                         is_dna=feat_dict["is_dna"],
                         is_ligand=feat_dict["is_ligand"],
+                        sigma_data=self.configs.sigma_data,
                     )
                 }
             )

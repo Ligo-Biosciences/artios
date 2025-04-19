@@ -161,7 +161,7 @@ model_configs = {
             "n_blocks": 1,  # default was 3, not much to gain after 1 in design
         },
         "diffusion_module": {
-            "use_fine_grained_checkpoint": True,
+            "use_fine_grained_checkpoint": False,
             "sigma_data": GlobalConfigValue("sigma_data"),
             "c_token": GlobalConfigValue("c_token"), 
             "c_atom": GlobalConfigValue("c_atom"),

@@ -32,6 +32,7 @@ class InputFeatureEmbedder(nn.Module):
         c_atom: int = 128,
         c_atompair: int = 16,
         c_token: int = 384,
+        n_blocks: int = 3,
     ) -> None:
         """
         Args:
@@ -47,6 +48,7 @@ class InputFeatureEmbedder(nn.Module):
             c_atom=c_atom,
             c_atompair=c_atompair,
             c_token=c_token,
+            n_blocks=n_blocks,
             has_coords=False,
         )
         # Line2

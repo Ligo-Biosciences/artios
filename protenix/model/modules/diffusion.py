@@ -16,7 +16,7 @@ from typing import Optional, Union
 
 import torch
 import torch.nn as nn
-
+import numpy as np
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LinearNoBias, Transition
 from protenix.model.modules.transformer import (
@@ -339,41 +339,27 @@ class DiffusionModule(nn.Module):
 
         a_token = self.layernorm_a(a_token)
 
-        # Fine-grained checkpoint for finetuning stage 2 (token num: 768) for avoiding OOM
-        if blocks_per_ckpt and self.use_fine_grained_checkpoint:
-            checkpoint_fn = get_checkpoint_fn()
-            r_update = checkpoint_fn(
-                self.atom_attention_decoder,
-                input_feature_dict,
-                a_token,
-                q_skip,
-                c_skip,
-                p_skip, 
-                inplace_safe,
-                chunk_size,
-            )
-        else:
-            # Broadcast token activations to atoms and run Sequence-local Atom Attention
-            r_update = self.atom_attention_decoder(
-                input_feature_dict=input_feature_dict,
-                a=a_token,
-                q_skip=q_skip,
-                c_skip=c_skip,
-                p_skip=p_skip, 
-                inplace_safe=inplace_safe,
-                chunk_size=chunk_size,
-            )
+        # Broadcast token activations to atoms and run Sequence-local Atom Attention
+        velocity_pred = self.atom_attention_decoder(
+            input_feature_dict=input_feature_dict,
+            a=a_token,
+            q_skip=q_skip,
+            c_skip=c_skip,
+            p_skip=p_skip, 
+            inplace_safe=inplace_safe,
+            chunk_size=chunk_size,
+        )
 
-        return r_update 
+        return velocity_pred 
 
     def c_in(self, timestep: torch.Tensor) -> torch.Tensor:
         return 1 / (self.sigma_data * (timestep ** 2 + (1 - timestep) ** 2).sqrt())
 
-    def c_out(self, timestep: torch.Tensor) -> torch.Tensor:
-        return self.sigma_data * (1 - timestep) / (timestep ** 2 + (1 - timestep) ** 2).sqrt()
+    def c_out(self) -> float:
+        return np.sqrt(2) * self.sigma_data
 
-    def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
-        return timestep / (timestep ** 2 + (1 - timestep) ** 2)
+    #def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
+    #    return timestep / (timestep ** 2 + (1 - timestep) ** 2)
 
     def forward(
         self,
@@ -388,7 +374,7 @@ class DiffusionModule(nn.Module):
         r_noisy = x_noisy * self.c_in(timestep[..., None, None])
 
         # Predict velocity from noisy coords
-        r_update = self.f_forward(
+        velocity_pred = self.f_forward(
             r_noisy=r_noisy,
             timestep=timestep,  # Return to original shape for f_forward
             input_feature_dict=input_feature_dict,
@@ -398,7 +384,9 @@ class DiffusionModule(nn.Module):
         )
 
         # Scale output with direct function calls
-        coords_pred = x_noisy * self.c_skip(timestep[..., None, None]) + \
-                      r_update * self.c_out(timestep[..., None, None])
+        #coords_pred = x_noisy * self.c_skip(timestep[..., None, None]) + \
+        #              r_update * self.c_out(timestep[..., None, None])
 
-        return coords_pred
+        velocity_pred = velocity_pred * self.c_out()
+
+        return velocity_pred

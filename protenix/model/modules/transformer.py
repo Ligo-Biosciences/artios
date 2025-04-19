@@ -793,7 +793,7 @@ class AtomAttentionEncoder(nn.Module):
 
         # Aggregate per-atom representation to per-token representation
         a = aggregate_atom_to_token(
-            x_atom=F.relu(self.linear_no_bias_q(q_l)),
+            x_atom=F.silu(self.linear_no_bias_q(q_l)),  # relu
             atom_to_token_idx=atom_to_token_idx,
             n_token=n_token,
             reduce="mean",

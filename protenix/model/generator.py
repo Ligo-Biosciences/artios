@@ -417,6 +417,6 @@ def sample_diffusion_training(
     )
 
     # Compute target flow
-    target_flow = x_target_augment - (1 - sigma_min) * x_noisy
+    target_flow = x_target_augment - (1 - sigma_min) * noise
 
     return target_flow, velocity_pred, timestep 

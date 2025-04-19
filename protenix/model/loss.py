@@ -538,6 +538,7 @@ class ProtenixLoss(nn.Module):
             "mse_loss": self.alpha_diffusion,
             "smooth_lddt_loss": self.alpha_diffusion
             * self.weight_smooth_lddt,  # Different from AF3 appendix eq(6), where smooth_lddt has no weight
+            "flow_loss": 1.0
         }
 
         #self.mse_loss = MSELoss(**configs.loss.diffusion.mse)

@@ -451,7 +451,7 @@ class FMLoss(nn.Module):
 
     def __init__(
         self,
-        weight_fm: float = 1.0,
+        weight_mse: float = 1.0,
         weight_dna: float = 5.0,
         weight_rna=5.0,
         weight_ligand=10.0,
@@ -459,7 +459,7 @@ class FMLoss(nn.Module):
         reduction: str = "mean",
     ) -> None:
         super(FMLoss, self).__init__()
-        self.weight_fm = weight_fm
+        self.weight_mse = weight_mse
         self.weight_dna = weight_dna
         self.weight_rna = weight_rna
         self.weight_ligand = weight_ligand
@@ -498,7 +498,7 @@ class FMLoss(nn.Module):
             + self.weight_rna * is_rna
             + self.weight_ligand * is_ligand
         )  # [N_atom] or [..., N_atom]
-        weight = weight / (sigma_data ** 2)
+        weight = weight / (sigma_data ** 2)  # for flow matching
 
         # Apply coordinate_mask
         weight = weight * coordinate_mask # [N_atom] or [..., N_atom]
@@ -511,9 +511,9 @@ class FMLoss(nn.Module):
             coordinate_mask.sum(dim=-1, keepdim=True) + self.eps
         )  # [..., N_sample]
 
-        weighted_align_fm_loss = self.weight_fm * per_sample_weighted_mse
+        # weighted_align_fm_loss = per_sample_weighted_mse
 
-        loss = loss_reduction(weighted_align_fm_loss, method=self.reduction)
+        loss = loss_reduction(per_sample_weighted_mse, method=self.reduction)
 
         return loss
 

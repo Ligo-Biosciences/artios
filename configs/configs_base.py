@@ -158,6 +158,7 @@ model_configs = {
             "c_atom": GlobalConfigValue("c_atom"),
             "c_atompair": GlobalConfigValue("c_atompair"),
             "c_token": GlobalConfigValue("c_s_inputs"),
+            "n_blocks": 1,  # default was 3, not much to gain after 1 in design
         },
         "diffusion_module": {
             "use_fine_grained_checkpoint": True,

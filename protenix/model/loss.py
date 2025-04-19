@@ -443,6 +443,79 @@ class MSELoss(nn.Module):
             "timestep": timestep.clone()
         }
 
+
+class FMLoss(nn.Module):
+    """
+    Implements Flow Matching Loss based on weighted MSE after rigid alignment.
+    """
+
+    def __init__(
+        self,
+        weight_fm: float = 1.0,
+        weight_dna: float = 5.0,
+        weight_rna=5.0,
+        weight_ligand=10.0,
+        eps=1e-6,
+        reduction: str = "mean",
+    ) -> None:
+        super(FMLoss, self).__init__()
+        self.weight_fm = weight_fm
+        self.weight_dna = weight_dna
+        self.weight_rna = weight_rna
+        self.weight_ligand = weight_ligand
+        self.eps = eps
+        self.reduction = reduction
+
+    def forward(
+        self,
+        pred_velocity: torch.Tensor,
+        true_velocity: torch.Tensor,
+        coordinate_mask: torch.Tensor,
+        is_dna: torch.Tensor,
+        is_rna: torch.Tensor,
+        is_ligand: torch.Tensor,
+    ) -> torch.Tensor:
+        """Flow matching loss.
+
+        Args:
+            pred_velocity (torch.Tensor): the predicted velocities from flow matching model.
+                [..., N_sample, N_atom, 3]
+            true_velocity (torch.Tensor): the ground truth velocities.
+                [..., N_atom, 3]
+            coordinate_mask (torch.Tensor): whether true coordinates exist.
+                [N_atom] or [..., N_atom]
+            is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
+                [N_atom] or [..., N_atom]
+
+        Returns:
+            torch.Tensor: the weighted flow matching loss.
+            
+        """
+        weight = (
+            1
+            + self.weight_dna * is_dna
+            + self.weight_rna * is_rna
+            + self.weight_ligand * is_ligand
+        )  # [N_atom] or [..., N_atom]
+
+        # Apply coordinate_mask
+        weight = weight * coordinate_mask  # [N_atom] or [..., N_atom]
+
+        # Calculate FM loss (weighted MSE)
+        per_atom_se = ((pred_velocity - true_velocity) ** 2).sum(
+            dim=-1
+        )  # [..., N_sample, N_atom]
+        per_sample_weighted_mse = (weight * per_atom_se).sum(dim=-1) / (
+            coordinate_mask.sum(dim=-1, keepdim=True) + self.eps
+        )  # [..., N_sample]
+
+        weighted_align_fm_loss = self.weight_fm * per_sample_weighted_mse
+
+        loss = loss_reduction(weighted_align_fm_loss, method=self.reduction)
+
+        return loss
+
+
 class ProtenixLoss(nn.Module):
     """Aggregation of the various losses"""
 
@@ -465,9 +538,10 @@ class ProtenixLoss(nn.Module):
             * self.weight_smooth_lddt,  # Different from AF3 appendix eq(6), where smooth_lddt has no weight
         }
 
-        self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
+        #self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
-        self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
+        #self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
+        self.fm_loss = FMLoss(**configs.loss.diffusion.mse)
 
     def aggregate_losses(  
         self, loss_fns: dict
@@ -548,6 +622,7 @@ class ProtenixLoss(nn.Module):
         else:
             loss_fns = {}
             
+            '''
             loss_fns.update(
                 {
                     "smooth_lddt_loss": lambda: self.smooth_lddt_loss.forward(
@@ -573,6 +648,20 @@ class ProtenixLoss(nn.Module):
                     ),
                 }
             )
+            '''
+            loss_fns.update(
+                {
+                    "flow_loss": lambda: self.fm_loss.forward(
+                        pred_velocity=pred_dict["velocity"],
+                        true_velocity=label_dict["target_flow"],
+                        coordinate_mask=label_dict["coordinate_mask"],
+                        is_rna=feat_dict["is_rna"],
+                        is_dna=feat_dict["is_dna"],
+                        is_ligand=feat_dict["is_ligand"],
+                    )
+                }
+            )
+
 
         cum_loss, metrics, monitor_data = self.aggregate_losses(loss_fns)
         return cum_loss, metrics, monitor_data

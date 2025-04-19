@@ -181,8 +181,8 @@ class TestGenerator:
         assert not torch.isnan(coords_pred).any()
 
     def test_sample_diffusion_training(self, device, input_dict, label_dict, sample_data):
-        # Mock denoise network
-        def mock_denoise_net(x_noisy, timestep, input_feature_dict, s_inputs):
+        # Mock flow network
+        def mock_flow_net(x_noisy, timestep, input_feature_dict, s_inputs):
             return torch.zeros_like(x_noisy)
             
         # Get dimensions from sample data
@@ -195,27 +195,24 @@ class TestGenerator:
         s_inputs = torch.randn((*batch_shape, n_tokens, c_s_inputs), device=device)
         timestep_sampler = TrainingTimestepSampler()
         
-        # Test with and without diffusion chunking
-        for chunk_size in [None, 2]:
-            x_gt_augment, coords_pred, timestep = sample_diffusion_training(
-                timestep_sampler=timestep_sampler,
-                denoise_net=mock_denoise_net,
-                label_dict=label_dict,
-                input_feature_dict=input_dict,
-                s_inputs=s_inputs,
-                N_sample=n_samples,
-                diffusion_chunk_size=chunk_size
-            )
+        target_flow, velocity_pred, timestep = sample_diffusion_training(
+            timestep_sampler=timestep_sampler,
+            flow_net=mock_flow_net,
+            label_dict=label_dict,
+            input_feature_dict=input_dict,
+            s_inputs=s_inputs,
+            N_sample=n_samples
+        )
             
-            # Check output shapes and values
-            assert x_gt_augment.shape == (*batch_shape, n_samples, n_atoms, 3)
-            assert coords_pred.shape == (*batch_shape, n_samples, n_atoms, 3)
-            assert timestep.shape == (*batch_shape, n_samples)
+        # Check output shapes and values
+        assert target_flow.shape == (*batch_shape, n_samples, n_atoms, 3)
+        assert velocity_pred.shape == (*batch_shape, n_samples, n_atoms, 3)
+        assert timestep.shape == (*batch_shape, n_samples)
             
-            assert not torch.isnan(x_gt_augment).any()
-            assert not torch.isnan(coords_pred).any()
-            assert not torch.isnan(timestep).any()
-            assert ((timestep >= 0) & (timestep <= 1)).all()
+        assert not torch.isnan(target_flow).any()
+        assert not torch.isnan(velocity_pred).any()
+        assert not torch.isnan(timestep).any()
+        assert ((timestep >= 0) & (timestep <= 1)).all()
 
 if __name__ == "__main__":
     pytest.main([__file__])

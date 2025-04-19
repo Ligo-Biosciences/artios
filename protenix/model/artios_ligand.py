@@ -372,17 +372,16 @@ class ArtiosLigand(nn.Module):
 
         ### Diffusion training
         N_sample = self.diffusion_batch_size
-        x_target_augment, coords_pred, timestep = autocasting_disable_decorator( 
+        target_flow, velocity_pred, timestep = autocasting_disable_decorator( 
             self.configs.skip_amp.sample_diffusion_training
         )(sample_diffusion_training)(
             timestep_sampler=self.train_timestep_sampler if self.training else self.eval_timestep_sampler,
-            denoise_net=self.diffusion_module,
+            flow_net=self.diffusion_module,
             label_dict=label_dict,
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs,
             sigma_data=self.sigma_data,
             N_sample=N_sample,
-            diffusion_chunk_size=self.configs.diffusion_chunk_size,
             generator=torch.Generator(s_inputs.device).manual_seed(seed) if not self.training else None
         )
 
@@ -390,19 +389,25 @@ class ArtiosLigand(nn.Module):
         pred_dict.update(
             {
                 # [..., N_sample=48, N_atom, 3]: diffusion loss
-                "coordinate": coords_pred,
+                "velocity": velocity_pred,
                 "timestep": timestep, 
+            }
+        )
+
+        label_dict.update(
+            {
+                "target_flow": target_flow,
             }
         )
 
         # Permute symmetric atom/chain in each sample to match true structure
         # Note: currently chains cannot be permuted since label is cropped
-        pred_dict, perm_log_dict, _, _ = (
-            symmetric_permutation.permute_diffusion_sample_to_match_label( 
-                input_feature_dict, pred_dict, label_dict, stage="train"
-            )
-        )
-        log_dict.update(perm_log_dict)
+        #pred_dict, perm_log_dict, _, _ = (
+        #    symmetric_permutation.permute_diffusion_sample_to_match_label( 
+        #        input_feature_dict, pred_dict, label_dict, stage="train"
+        #    )
+        #)
+        #log_dict.update(perm_log_dict)
 
         return pred_dict, label_dict, log_dict
     
@@ -418,7 +423,7 @@ class ArtiosLigand(nn.Module):
         seed: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
-        Forward pass of the Alphafold3 model.
+        Forward pass of the Artios model.
 
         Args:
             input_feature_dict (dict[str, Any]): Input features dictionary.

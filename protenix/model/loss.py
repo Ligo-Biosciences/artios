@@ -543,7 +543,7 @@ class ProtenixLoss(nn.Module):
         #self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
         #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         #self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
-        self.fm_loss = FMLoss(**configs.loss.diffusion.mse)
+        self.flow_loss = FMLoss(**configs.loss.diffusion.mse)
 
     def aggregate_losses(  
         self, loss_fns: dict

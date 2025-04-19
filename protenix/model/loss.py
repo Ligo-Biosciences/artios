@@ -498,7 +498,7 @@ class FMLoss(nn.Module):
             + self.weight_rna * is_rna
             + self.weight_ligand * is_ligand
         )  # [N_atom] or [..., N_atom]
-        weight = weight / (sigma_data ** 2)  # for flow matching
+        weight = weight / (2 * sigma_data ** 2)  # for flow matching
 
         # Apply coordinate_mask
         weight = weight * coordinate_mask # [N_atom] or [..., N_atom]

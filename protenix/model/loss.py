@@ -654,7 +654,7 @@ class ProtenixLoss(nn.Module):
             '''
             loss_fns.update(
                 {
-                    "flow_loss": lambda: self.fm_loss.forward(
+                    "flow_loss": lambda: self.flow_loss.forward(
                         pred_velocity=pred_dict["velocity"],
                         true_velocity=label_dict["target_flow"],
                         coordinate_mask=label_dict["coordinate_mask"],

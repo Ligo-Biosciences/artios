@@ -49,7 +49,7 @@ class ArtiosLigand(nn.Module):
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
         # Model 
-        self.c_s, self.c_z, self.c_s_inputs = ( #TODO: remove c_Z
+        self.c_s, self.c_z, self.c_s_inputs = (
             configs.c_s,
             configs.c_z,
             configs.c_s_inputs,

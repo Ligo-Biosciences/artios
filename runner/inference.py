@@ -44,11 +44,12 @@ class InferenceRunner(object):
         self.configs = configs
         self.init_basics()
         self.init_env()
+
+        self.guiding_net = None
         if model is None:
             self.init_model()
             self.load_checkpoint()
         else:
-            self.guiding_net = None
             self.model = model
         self.init_dumper(
             need_atom_confidence=configs.need_atom_confidence,

@@ -250,13 +250,13 @@ class ArtiosLigand(nn.Module):
                                                       dtype=s_inputs.dtype) 
         # N_sample different ouputs created via diffusion
         pred_dict["coordinate"] = self.sample_diffusion(
-            denoise_net=self.diffusion_module,
+            flow_net=self.diffusion_module,
             input_feature_dict=input_feature_dict,
             s_inputs=s_inputs,
             N_sample=N_sample,
             timesteps=timesteps,
             inplace_safe=inplace_safe,
-            guiding_denoise_net=guiding_diffusion_module,
+            guiding_flow_net=guiding_diffusion_module,
             guiding_s_inputs=guiding_s_inputs,
         )
 

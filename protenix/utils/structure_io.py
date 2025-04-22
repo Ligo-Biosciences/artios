@@ -1,13 +1,16 @@
 import os
 from pathlib import Path
 import numpy as np
-from typing import Union
+from typing import Union, List
 from protenix.data.parser import MMCIFParser
 from pathlib import Path
 from biotite.structure.io.mol import MOLFile
 from biotite.structure import AtomArray
 import biotite.structure.io as strucio
 from protenix.data.constants import mmcif_restype_3to1
+import biotite.structure.io.pdbx as pdbx
+import biotite.structure.io.pdb as pdb
+from biotite.structure import AtomArrayStack
 
 
 def load_structure(path_to_file: Path) -> AtomArray:
@@ -39,7 +42,7 @@ def save_to_sdf(atom_array, output_path):
 def extract_ligands_from_cif(
     cif_file: Union[str, Path], 
     output_dir: Union[str, Path]
-) -> None:
+) -> List[Path]:
     """
     Parse a CIF file, extract ligands, and convert them to RDKit molecules, and save them 
     to the given directory. 
@@ -47,6 +50,8 @@ def extract_ligands_from_cif(
     Args:
         cif_file (str | Path): Path to the CIF file
         output_path (str | Path): Path to the directory where the ligand files will be saved
+    Returns:
+        List[Path]: List of paths to the ligand files
     """
     # Convert to Path
     if isinstance(cif_file, str):
@@ -60,6 +65,7 @@ def extract_ligands_from_cif(
     ligands_array = atom_array[is_ligand]
     
     ligand_ids = np.unique(ligands_array.label_entity_id)
+    output_paths = []
     
     for ligand_id in ligand_ids:
         ligand = ligands_array[ligands_array.label_entity_id == ligand_id]
@@ -71,6 +77,9 @@ def extract_ligands_from_cif(
         # Save the structure
         output_filepath = os.path.join(output_dir, f"{cif_file.stem}_{save_ligand_id}.sdf")
         save_to_sdf(ligand, output_filepath)
+        output_paths.append(output_filepath)
+
+    return output_paths
 
 
 def extract_protein_from_cif(

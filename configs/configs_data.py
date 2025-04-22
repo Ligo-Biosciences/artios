@@ -60,8 +60,8 @@ default_weighted_pdb_configs = {
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
 }
 
-# TODO: temporary! this will not work with training
-DATA_ROOT_DIR = "/models/artios/data_cache" #"af3-dev-backbone/release_data/" 
+
+DATA_ROOT_DIR = "af3-dev-backbone/release_data/" 
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -73,10 +73,27 @@ CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
 if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
     not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
 ):
+    # Try with leading slash if original path doesn't exist
+    alt_data_root = "/" + DATA_ROOT_DIR
+    CCD_COMPONENTS_FILE_PATH = os.path.join(alt_data_root, "components.cif") 
+    CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(alt_data_root, "components.cif.rdkit_mol.pkl")
+    
+# if still not found, try with date in filename
+if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
+    not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
+):
     CCD_COMPONENTS_FILE_PATH = os.path.join(DATA_ROOT_DIR, "components.v20240608.cif")
     CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
         DATA_ROOT_DIR, "components.v20240608.cif.rdkit_mol.pkl"
     )
+    if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
+        not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
+    ):
+        alt_data_root = "/" + DATA_ROOT_DIR
+        CCD_COMPONENTS_FILE_PATH = os.path.join(DATA_ROOT_DIR, "components.v20240608.cif")
+        CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
+            DATA_ROOT_DIR, "components.v20240608.cif.rdkit_mol.pkl"
+        )
 
 
 # This is a patch in inference stage for users that do not have root permission.
@@ -89,29 +106,29 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
 # protenix predict --input examples/example.json --out_dir  ./output
 # ````
 # The checkpoint and the data cache will be downloaded to the current code directory.
-if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
-    not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
-):
-    print("Try to find the ccd cache data in the code directory for inference.")
-    current_file_path = os.path.abspath(__file__)
-    current_directory = os.path.dirname(current_file_path)
-    code_directory = os.path.dirname(current_directory)
+#if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
+#    not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
+#):
+#    print("Try to find the ccd cache data in the code directory for inference.")
+#    current_file_path = os.path.abspath(__file__)
+#    current_directory = os.path.dirname(current_file_path)
+#    code_directory = os.path.dirname(current_directory)
 
-    data_cache_dir = os.path.join(code_directory, "release_data/ccd_cache")
-    CCD_COMPONENTS_FILE_PATH = os.path.join(data_cache_dir, "components.cif")
-    CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
-        data_cache_dir, "components.cif.rdkit_mol.pkl"
-    )
-    if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
-        not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
-    ):
-
-        CCD_COMPONENTS_FILE_PATH = os.path.join(
-            data_cache_dir, "components.v20240608.cif"
-        )
-        CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
-            data_cache_dir, "components.v20240608.cif.rdkit_mol.pkl"
-        )
+#    data_cache_dir = os.path.join(code_directory, "release_data/ccd_cache")
+#    CCD_COMPONENTS_FILE_PATH = os.path.join(data_cache_dir, "components.cif")
+#    CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
+#        data_cache_dir, "components.cif.rdkit_mol.pkl"
+#    )
+#    if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
+#        not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
+#    ):
+#
+#        CCD_COMPONENTS_FILE_PATH = os.path.join(
+#            data_cache_dir, "components.v20240608.cif"
+#        )
+#        CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
+#            data_cache_dir, "components.v20240608.cif.rdkit_mol.pkl"
+#        )
 
 data_configs = {
     "num_dl_workers": 16,

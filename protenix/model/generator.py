@@ -92,14 +92,12 @@ class InferenceTimestepScheduler:
 def _calculate_velocity_and_score(
     x_noisy: torch.Tensor,
     t_cur: torch.Tensor,
-    flow_net: Callable,
+    denoise_net: Callable,
     input_feature_dict: dict,
-    s_inputs: torch.Tensor,
     t: torch.Tensor,
     attn_chunk_size: Optional[int] = None,
     inplace_safe: bool = False,
-    guiding_flow_net: Optional[Callable] = None,
-    guiding_s_inputs: Optional[torch.Tensor] = None,
+    guiding_denoise_net: Optional[Callable] = None,
     guidance_weight: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Calculate velocity and scaled score for the diffusion process for a single timestep.
@@ -107,49 +105,45 @@ def _calculate_velocity_and_score(
     Args:
         x_noisy: Current noisy coordinates [..., N_sample, N_atom, 3]
         t_cur: Current timestep (float)
-        flow_net: Network that performs flow
+        denoise_net: Network that performs denoising
         input_feature_dict: Input feature dictionary
-        s_inputs: Single embedding tensor
         t: Broadcasted timestep tensor 
             [..., N_sample]
         attn_chunk_size: Chunk size for attention operation
         inplace_safe: Whether to use inplace operations
-        guiding_flow_net: Optional guiding network
-        guiding_s_inputs: Optional guiding single embedding tensor
+        guiding_denoise_net: Optional guiding network
         guidance_weight: Weight for guidance
 
     Returns:
         tuple: (velocity_pred, scaled_score)
     """
     # Predict denoised coords from our noised coords
-    velocity_pred = flow_net(
+    coords_pred = denoise_net(
         x_noisy=x_noisy,
         timestep=t,
         input_feature_dict=input_feature_dict,
-        s_inputs=s_inputs,
         chunk_size=attn_chunk_size,
         inplace_safe=inplace_safe,
     )
 
     # Calculate velocity
-    # velocity_pred = (coords_pred - x_noisy) / (1 - t_cur)
+    velocity_pred = (coords_pred - x_noisy) / (1 - t_cur)
 
     # Predict score (division by 1-t absorbed into the stochasticity schedule for numerical stability)
     scaled_score = (t_cur * velocity_pred - x_noisy)
 
     # Apply guidance if specified
-    if guiding_flow_net is not None:
-        guidance_velocity_pred = guiding_flow_net(
+    if guiding_denoise_net is not None:
+        guidance_coords_pred = guiding_denoise_net(
             x_noisy=x_noisy,
             timestep=t,
             input_feature_dict=input_feature_dict,
-            s_inputs=guiding_s_inputs,
             chunk_size=attn_chunk_size,
             inplace_safe=inplace_safe,
         )
 
         # Calculate velocity and scaled score for guidance
-        # guidance_velocity_pred = (guidance_coords_pred - x_noisy) / (1 - t_cur)
+        guidance_velocity_pred = (guidance_coords_pred - x_noisy) / (1 - t_cur)
         scaled_guidance_score = (t_cur * guidance_velocity_pred - x_noisy)
         
         # Velocity and score interpolation for guidance
@@ -160,9 +154,8 @@ def _calculate_velocity_and_score(
 
 
 def sample_diffusion(
-    flow_net: Callable,
+    denoise_net: Callable,
     input_feature_dict: dict[str, Any],
-    s_inputs: torch.Tensor,
     timesteps: torch.Tensor,
     N_sample: int = 1,
     sigma_data: float = 16.0,
@@ -173,8 +166,7 @@ def sample_diffusion(
     inplace_safe: bool = False,
     attn_chunk_size: Optional[int] = None,
     second_order: bool = False,
-    guiding_flow_net : Optional[Callable] = None,
-    guiding_s_inputs : Optional[torch.Tensor] = None,
+    guiding_denoise_net : Optional[Callable] = None,
     guidance_weight : float = 1.0,
 ) -> torch.Tensor:
     """Implements Algorithm 18 in AF3.
@@ -182,10 +174,8 @@ def sample_diffusion(
     The time steps (=noise levels) are given by noise_schedule.
 
     Args:
-        flow_net (Callable): the network that performs the flow step.
+        denoise_net (Callable): the network that performs the denoising step.
         input_feature_dict (dict[str, Any]): input meta feature dict
-        s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
-            [..., N_tokens, c_s_inputs]
         timesteps (torch.Tensor): Timestep discretisation for solving the SDE.
             [N_steps]
         N_sample (int): number of generated samples
@@ -198,17 +188,16 @@ def sample_diffusion(
         inplace_safe (bool): Whether to use inplace operations safely. Defaults to False.
         attn_chunk_size (Optional[int]): Chunk size for attention operation. Defaults to None.
         second_order (bool): Whether to use second order Euler-Maruyama. Defaults to False.
-        guiding_flow_net (Optional[Callable]): The guiding network to use for guidance. Defaults to None.
-        guiding_s_inputs (Optional[torch.Tensor]): The guiding single embedding from InputFeatureEmbedder. Defaults to None.
+        guiding_denoise_net (Optional[Callable]): The guiding network to use for guidance. Defaults to None.
         guidance_weight (float): The weight to use for guidance. Defaults to 1.0.
     Returns:
         torch.Tensor: the denoised coordinates of x in inference stage
             [..., N_sample, N_atom, 3]
     """
     N_atom = input_feature_dict["atom_to_token_idx"].size(-1)
-    batch_shape = s_inputs.shape[:-2]
-    device = s_inputs.device
-    dtype = s_inputs.dtype
+    batch_shape = input_feature_dict["residue_index"].shape[:-1]
+    device = input_feature_dict["residue_index"].device
+    dtype = input_feature_dict["residue_index"].dtype
 
     # Stochasticity schedule g (scaled by 1/(1-t) for numerical stability)
     # We also normalise by the functions' integral over [0,1].
@@ -221,6 +210,7 @@ def sample_diffusion(
         "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t, # int_{0}^{1}(zero_ends) = 1/12 
         #TODO: add in the beta distribution.
         #TODO: check the divergence minimising choice used in ma et al.
+        #"proteina": lambda t: alpha / (t + 0.01)
     }
 
     if stoch_type not in stoch_schedules:
@@ -268,14 +258,12 @@ def sample_diffusion(
             velocity_pred, scaled_score = _calculate_velocity_and_score(
                 x_noisy=x,
                 t_cur=t_cur,
-                flow_net=flow_net,
+                denoise_net=denoise_net,
                 input_feature_dict=input_feature_dict,
-                s_inputs=s_inputs,
                 t=t,
                 attn_chunk_size=attn_chunk_size,
                 inplace_safe=inplace_safe,
-                guiding_flow_net=guiding_flow_net,
-                guiding_s_inputs=guiding_s_inputs,
+                guiding_denoise_net=guiding_denoise_net,
                 guidance_weight=guidance_weight,
             )
 
@@ -299,14 +287,12 @@ def sample_diffusion(
                 velocity_pred_2, scaled_score_2 = _calculate_velocity_and_score(
                     x_noisy=x_middle.to(dtype),
                     t_cur=t_cur,
-                    flow_net=flow_net,
+                    denoise_net=denoise_net,
                     input_feature_dict=input_feature_dict,
-                    s_inputs=s_inputs,
                     t=t,
                     attn_chunk_size=attn_chunk_size,
                     inplace_safe=inplace_safe,
-                    guiding_flow_net=guiding_flow_net,
-                    guiding_s_inputs=guiding_s_inputs,
+                    guiding_denoise_net=guiding_denoise_net,
                     guidance_weight=guidance_weight,
                 )
 
@@ -342,35 +328,32 @@ def sample_diffusion(
 
 def sample_diffusion_training(
     timestep_sampler: TrainingTimestepSampler,
-    flow_net: Callable,
+    denoise_net: Callable,
     label_dict: dict[str, Any],
     input_feature_dict: dict[str, Any],
-    s_inputs: torch.Tensor,
     sigma_data: float = 16.0,
     N_sample: int = 1,
+    diffusion_chunk_size: Optional[int] = None,
     generator: torch.Generator = None,
-    sigma_min: float = 1e-5
 ) -> tuple[torch.Tensor, ...]:
     """Implements diffusion training. Creates N_sample's of randomly augmented ground truth coordinates, 
-    noises the coords via FM style interpolation, sends them through the network to get the flow.
+    noises the coords via FM style interpolation, sends them through the network to get denoised coords.
 
     Args:
         timestep_sampler (TrainingTimestepSampler): the timestep sampler
-        flow_net (Callable): the network that performs the flow step.
+        denoise_net (Callable): the network that performs the denoising step.
         label_dict (dict, optional) : a dictionary containing the followings.
             "coordinate": the ground-truth coordinates
                 [..., N_atom, 3]
             "coordinate_mask": whether true coordinates exist.
                 [..., N_atom]
         input_feature_dict (dict[str, Any]): input meta feature dict
-        s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
-            [..., N_tokens, c_s_inputs]
         N_sample (int): number of training samples
         generator (torch.Generator): the generator to use for sampling
     Returns:
-        target_flow (torch.Tensor): the augmented ground truth velocities 
+        x_target_augment (torch.Tensor): the augmented ground truth coordinates 
             [..., N_sample, N_atom, 3]
-        pred_flow (torch.Tensor): the predicted velocities
+        coords_pred (torch.Tensor): the predicted coordinates
             [..., N_sample, N_atom, 3]
         timestep (torch.Tensor): the timestep
             [..., N_sample]
@@ -393,30 +376,42 @@ def sample_diffusion_training(
     timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype) 
 
     # Generate noise
-    noise = torch.randn(
-        x_target_augment.shape, 
+    noise = torch.randn_like(
+        x_target_augment, 
         dtype=dtype, 
         device=x_target_augment.device,
         generator=generator
     ) * sigma_data  # [..., N_sample, N_atom, 3]
 
     # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )
-    x_noisy = noise_w_flow_matching(
-        data=x_target_augment, 
-        noise=noise, 
-        timestep=timestep[..., :, None, None],
-        sigma_min=sigma_min
-    )
+    x_noisy = noise_w_flow_matching(x_target_augment, noise, timestep[..., :, None, None])
 
-    # Get velocity predictions [..., N_sample, N_atom, 3]
-    velocity_pred = flow_net( 
-        x_noisy=x_noisy, 
-        timestep=timestep, 
-        input_feature_dict=input_feature_dict,
-        s_inputs=s_inputs
-    )
+    # Get denoised output predictions [..., N_sample, N_atom, 3]
+    if diffusion_chunk_size is None:
+        coords_pred = denoise_net( 
+            x_noisy=x_noisy, 
+            timestep=timestep, 
+            input_feature_dict=input_feature_dict,
+        )
+    else:
+        coords_pred = []
+        no_chunks = N_sample // diffusion_chunk_size + (
+            N_sample % diffusion_chunk_size != 0
+        )
+        for i in range(no_chunks):
+            x_noisy_i = x_noisy[ 
+                ..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size, :, :
+            ]
+            timestep_i = timestep[
+                ..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size
+            ]
+            coords_pred_i = denoise_net(
+                x_noisy=x_noisy_i,
+                timestep=timestep_i,
+                input_feature_dict=input_feature_dict,
+            )
 
-    # Compute target flow
-    target_flow = x_target_augment - (1 - sigma_min) * noise
+            coords_pred.append(coords_pred_i)
+        coords_pred = torch.cat(coords_pred, dim=-3)
 
-    return target_flow, velocity_pred, timestep 
+    return x_target_augment, coords_pred, timestep 

@@ -649,9 +649,6 @@ class AtomAttentionEncoder(nn.Module):
         self.linear_no_bias_q = LinearNoBias(
             in_features=self.c_atom, out_features=self.c_token, init="relu"
         )
-        #self.linear_no_bias_c = LinearNoBias(
-        #    in_features=self.c_atom, out_features=self.c_s, init="zeros"  # added as a residual
-        #)
 
     def forward(
         self,
@@ -801,14 +798,6 @@ class AtomAttentionEncoder(nn.Module):
             n_token=n_token,
             reduce="mean",
         )  # [..., (N_sample), N_token, c_token]
-        
-        # Aggregate per-atom conditioning to per-token conditioning
-        #c_token = aggregate_atom_to_token(
-        #    x_atom=self.linear_no_bias_c(c_l),
-        #    atom_to_token_idx=atom_to_token_idx,
-        #    n_token=n_token,
-        #    reduce="mean",
-        #)  # [..., N_sample, N_token, c_token]
 
         return a, q_l, c_l, p_lm
 

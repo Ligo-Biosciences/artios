@@ -258,7 +258,6 @@ class DiffusionModule(nn.Module):
         r_noisy: torch.Tensor,
         timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
-        # s_inputs: torch.Tensor,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
@@ -296,14 +295,12 @@ class DiffusionModule(nn.Module):
                 self.diffusion_conditioning,
                 timestep,
                 input_feature_dict,
-                #s_inputs,
                 inplace_safe,
             )
         else:
             s, z = self.diffusion_conditioning( 
                 timestep=timestep,
                 input_feature_dict=input_feature_dict,
-                #s_inputs=s_inputs,
                 inplace_safe=inplace_safe,
             )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
 
@@ -370,7 +367,6 @@ class DiffusionModule(nn.Module):
         x_noisy: torch.Tensor,
         timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
-        # s_inputs: torch.Tensor,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
@@ -382,7 +378,6 @@ class DiffusionModule(nn.Module):
             r_noisy=r_noisy,
             timestep=timestep,  # Return to original shape for f_forward
             input_feature_dict=input_feature_dict,
-            # s_inputs=s_inputs,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )

@@ -233,7 +233,8 @@ loss_configs = {
             "alpha_diffusion": 4.0,
             "alpha_distogram": 3e-2,
             "alpha_bond": 0.0,  # or 1 in finetuning stages
-            "smooth_lddt": 1.0,  # or 0 in finetuning stages
+            "smooth_lddt": 0.0,  # or 0 in finetuning stages
+            "neighbour_mse": 1.0,
         },
         "plddt": {
             "min_bin": 0,
@@ -274,6 +275,10 @@ loss_configs = {
                 "eps": 1e-6,
                 "k": 300,
                 "use_uncertainty": False,
+            },
+            "neighbour_mse": {
+                "eps": 1e-6,
+                "k": 300,
             },
         },
         "distogram": {

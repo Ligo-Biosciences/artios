@@ -49,14 +49,9 @@ class ArtiosLigand(nn.Module):
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
         # Model 
-        self.c_s, self.c_z, self.c_s_inputs = (
+        self.c_s, self.c_z = (
             configs.c_s,
             configs.c_z,
-            configs.c_s_inputs,
-        )
-
-        self.input_feature_embedder = InputFeatureEmbedder(
-            **configs.model.input_embedder
         )
 
         self.diffusion_module = DiffusionModule(
@@ -193,28 +188,12 @@ class ArtiosLigand(nn.Module):
         """        
         step_st = time.time()
         N_token = input_feature_dict["residue_index"].shape[-1]
+        device = input_feature_dict["residue_index"].device
+        dtype = input_feature_dict["residue_index"].dtype
 
         log_dict = {}
         pred_dict = {}
         time_tracker = {}
-
-        # Embed input features
-        s_inputs = self.input_feature_embedder(
-            input_feature_dict=input_feature_dict,
-            inplace_safe=inplace_safe,
-            chunk_size=chunk_size,
-        )
-
-        # Embed guidance input features
-        guiding_s_inputs = None
-        if guiding_net is not None:
-            guiding_input_embedder = guiding_net.input_feature_embedder
-            # Embed input features for guiding net
-            guiding_s_inputs = guiding_input_embedder(
-                input_feature_dict=input_feature_dict,
-                inplace_safe=inplace_safe,
-                chunk_size=chunk_size,
-            )
 
         if mode == "inference":
             keys_to_delete = []
@@ -246,18 +225,16 @@ class ArtiosLigand(nn.Module):
         N_step = self.configs.sample_diffusion["N_step"]
         # Generate timesteps for solving the FM SDE
         timesteps = self.inference_timestep_scheduler(N_step=N_step,
-                                                      device=s_inputs.device, 
-                                                      dtype=s_inputs.dtype) 
+                                                      device=device, 
+                                                      dtype=dtype) 
         # N_sample different ouputs created via diffusion
         pred_dict["coordinate"] = self.sample_diffusion(
             flow_net=self.diffusion_module,
             input_feature_dict=input_feature_dict,
-            s_inputs=s_inputs,
             N_sample=N_sample,
             timesteps=timesteps,
             inplace_safe=inplace_safe,
             guiding_flow_net=guiding_diffusion_module,
-            guiding_s_inputs=guiding_s_inputs,
         )
 
         timestep = timesteps[-1]  # Get final timestep
@@ -319,15 +296,11 @@ class ArtiosLigand(nn.Module):
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
                 Prediction, updated label, and log dictionaries.
         """
-
-        s_inputs = self.input_feature_embedder(
-            input_feature_dict=input_feature_dict,
-            inplace_safe=inplace_safe,
-            chunk_size=chunk_size,
-        )
         
         log_dict = {}
         pred_dict = {}
+
+        device = input_feature_dict["residue_index"].device
 
         ### Mini-rollout for evaluation
         '''
@@ -372,42 +345,36 @@ class ArtiosLigand(nn.Module):
 
         ### Diffusion training
         N_sample = self.diffusion_batch_size
-        target_flow, velocity_pred, timestep = autocasting_disable_decorator( 
+        x_target_augment, coords_pred, timestep = autocasting_disable_decorator( 
             self.configs.skip_amp.sample_diffusion_training
         )(sample_diffusion_training)(
             timestep_sampler=self.train_timestep_sampler if self.training else self.eval_timestep_sampler,
-            flow_net=self.diffusion_module,
+            denoise_net=self.diffusion_module,
             label_dict=label_dict,
             input_feature_dict=input_feature_dict,
-            s_inputs=s_inputs,
             sigma_data=self.sigma_data,
             N_sample=N_sample,
-            generator=torch.Generator(s_inputs.device).manual_seed(seed) if not self.training else None
+            diffusion_chunk_size=self.configs.diffusion_chunk_size,
+            generator=torch.Generator(device).manual_seed(seed) if not self.training else None
         )
 
         # Update dicts
         pred_dict.update(
             {
                 # [..., N_sample=48, N_atom, 3]: diffusion loss
-                "velocity": velocity_pred,
+                "coordinate": coords_pred,
                 "timestep": timestep, 
-            }
-        )
-
-        label_dict.update(
-            {
-                "target_flow": target_flow,
             }
         )
 
         # Permute symmetric atom/chain in each sample to match true structure
         # Note: currently chains cannot be permuted since label is cropped
-        #pred_dict, perm_log_dict, _, _ = (
-        #    symmetric_permutation.permute_diffusion_sample_to_match_label( 
-        #        input_feature_dict, pred_dict, label_dict, stage="train"
-        #    )
-        #)
-        #log_dict.update(perm_log_dict)
+        pred_dict, perm_log_dict, _, _ = (
+            symmetric_permutation.permute_diffusion_sample_to_match_label( 
+                input_feature_dict, pred_dict, label_dict, stage="train"
+            )
+        )
+        log_dict.update(perm_log_dict)
 
         return pred_dict, label_dict, log_dict
     

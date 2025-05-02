@@ -256,7 +256,7 @@ class NeighbourMSELoss(nn.Module):
         loss = torch.sum(c_lm * dist_diff, dim=(-1, -2)) / (
             torch.sum(c_lm, dim=(-1, -2)) + self.eps
         )  # [..., N_sample]
-        return loss / 3  # balancing the xyz components
+        return loss
     
     def query_neighbors(
         self,

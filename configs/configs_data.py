@@ -135,9 +135,9 @@ data_configs = {
     "epoch_size": 10000,
     "train_ref_pos_augment": True,
     "test_ref_pos_augment": True,
-    "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925"]),
+    "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925", "distillation"]),
     "train_sampler": {
-        "train_sample_weights": ListValue([1.0]),
+        "train_sample_weights": ListValue([0.5, 0.5]),
         "sampler_type": "weighted",
     },
     "test_sets": ListValue(["posebusters_0925"]),
@@ -148,6 +148,25 @@ data_configs = {
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9_no_nucleic.csv", # .gz
+            ),
+            "pdb_list": "",
+            "random_sample_if_failed": True,
+            "max_n_token": 3000, # -1,  # can be used for removing data with too many tokens.
+            "use_reference_chains_only": False,
+            "exclusion": {  # do not sample the data based on ions.
+                "mol_1_type": ListValue(["ions"]),
+                "mol_2_type": ListValue(["ions"]),
+            },
+        },
+        **deepcopy(default_weighted_pdb_configs),
+    },
+    "distillation":{
+        "base_info": {
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "distillation/mmcif"),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "distillation/mmcif_bioassembly"),
+            "indices_fpath": os.path.join(
+                DATA_ROOT_DIR,
+                "indices/distillation_sample_indices.csv", # .gz
             ),
             "pdb_list": "",
             "random_sample_if_failed": True,

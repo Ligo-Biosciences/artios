@@ -838,8 +838,7 @@ class AtomAttentionDecoder(nn.Module):
         self.c_atompair = c_atompair
         self.n_queries = n_queries
         self.n_keys = n_keys
-        self.linear_no_bias_a = LinearNoBias(in_features=c_token + c_atom, out_features=c_atom)
-        self.layernorm_q_skip = LayerNorm(c_atom)
+        self.linear_no_bias_a = LinearNoBias(in_features=c_token, out_features=c_atom)
         self.layernorm_q = LayerNorm(c_atom)
         self.linear_no_bias_out = LinearNoBias(in_features=c_atom, out_features=3)
         self.atom_transformer = AtomTransformer(
@@ -878,17 +877,12 @@ class AtomAttentionDecoder(nn.Module):
             torch.Tensor: the updated nosiy coordinates
                 [..., N_atom, 3]
         """
-        # Concatenate skip connection and broadcast per-token activiations to per-atom activations
-        q = self.linear_no_bias_a(  # U-net style concat instead of adding skip connection
-                torch.cat([
-                    broadcast_token_to_atom(
-                        x_token=a, atom_to_token_idx=input_feature_dict["atom_to_token_idx"]
-                    ),  # [..., N_atom, c_token]
-                    self.layernorm_q_skip(q_skip)
-                ],
-                dim=-1
-            )  # [..., N_atom, c_token + c_atom]
-        )
+        # Broadcast per-token activiations to per-atom activations and add the skip connection
+        q = self.linear_no_bias_a(
+            broadcast_token_to_atom(
+                x_token=a, atom_to_token_idx=input_feature_dict["atom_to_token_idx"]
+            )
+        ) + q_skip
 
         # Cross attention transformer
         q = self.atom_transformer(

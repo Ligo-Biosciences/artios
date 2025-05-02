@@ -34,7 +34,7 @@ class CosineAnnealingWithWarmup(LRScheduler):
         self.decay_steps = decay_steps
         self.lr = lr
         self.min_lr = min_lr
-        super().__init__(optimizer, last_epoch, verbose)
+        super().__init__(optimizer, last_epoch)
 
     def _get_step_lr(self, step):
         if step <= self.warmup_steps:
@@ -81,7 +81,7 @@ class AlphaFold3LRScheduler(LRScheduler):
         self.lr = lr
         self.decay_factor = decay_factor
         super(AlphaFold3LRScheduler, self).__init__(
-            optimizer=optimizer, last_epoch=last_epoch, verbose=verbose
+            optimizer=optimizer, last_epoch=last_epoch, #verbose=verbose
         )
 
     def _get_step_lr(self, step):

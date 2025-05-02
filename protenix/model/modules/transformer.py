@@ -649,6 +649,9 @@ class AtomAttentionEncoder(nn.Module):
         self.linear_no_bias_q = LinearNoBias(
             in_features=self.c_atom, out_features=self.c_token, init="relu"
         )
+        #self.linear_no_bias_c = LinearNoBias(
+        #    in_features=self.c_atom, out_features=self.c_s, init="zeros"  # added as a residual
+        #)
 
     def forward(
         self,
@@ -764,7 +767,7 @@ class AtomAttentionEncoder(nn.Module):
                 self.layernorm_z(z_local_pairs)
             )  # [..., N_sample, n_blocks, n_queries, n_keys, c_atompair]
 
-            # Add the noisy positions
+            # Embed the noisy positions
             q_l = self.linear_no_bias_r(
                 r_l
             )  # [..., N_sample, N_atom, c_atom]
@@ -798,8 +801,15 @@ class AtomAttentionEncoder(nn.Module):
             n_token=n_token,
             reduce="mean",
         )  # [..., (N_sample), N_token, c_token]
-        if (not self.training) and (a.shape[-2] > 2000 or q_l.shape[-2] > 20000):
-            torch.cuda.empty_cache()
+        
+        # Aggregate per-atom conditioning to per-token conditioning
+        #c_token = aggregate_atom_to_token(
+        #    x_atom=self.linear_no_bias_c(c_l),
+        #    atom_to_token_idx=atom_to_token_idx,
+        #    n_token=n_token,
+        #    reduce="mean",
+        #)  # [..., N_sample, N_token, c_token]
+
         return a, q_l, c_l, p_lm
 
 
@@ -897,3 +907,4 @@ class AtomAttentionDecoder(nn.Module):
         r = self.linear_no_bias_out(self.layernorm_q(q))
 
         return r
+    

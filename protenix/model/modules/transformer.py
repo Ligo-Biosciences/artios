@@ -839,6 +839,7 @@ class AtomAttentionDecoder(nn.Module):
         self.n_queries = n_queries
         self.n_keys = n_keys
         self.linear_no_bias_a = LinearNoBias(in_features=c_token + c_atom, out_features=c_atom)
+        self.layernorm_q_skip = LayerNorm(c_atom)
         self.layernorm_q = LayerNorm(c_atom)
         self.linear_no_bias_out = LinearNoBias(in_features=c_atom, out_features=3)
         self.atom_transformer = AtomTransformer(
@@ -883,7 +884,7 @@ class AtomAttentionDecoder(nn.Module):
                     broadcast_token_to_atom(
                         x_token=a, atom_to_token_idx=input_feature_dict["atom_to_token_idx"]
                     ),  # [..., N_atom, c_token]
-                    q_skip
+                    self.layernorm_q_skip(q_skip)
                 ],
                 dim=-1
             )  # [..., N_atom, c_token + c_atom]

@@ -121,6 +121,7 @@ class DiffusionConditioning(nn.Module):
         )
 
         # 3. Compute ligand ref pos displacement
+        # TODO: there should be the masking logic with ref_space_uid
         d_lm = (ligand_ref_pos[..., None, :] - ligand_ref_pos[..., None, :, :])  # [..., n_token, n_token, 3]
         z = self.linear_no_bias_d(d_lm) # [..., n_token, n_token, c_z]
 

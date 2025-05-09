@@ -53,7 +53,7 @@ basic_configs = {
 }
 data_configs = {
     # Data
-    "train_crop_size": 256,
+    "train_crop_size": 384,
     "test_max_n_token": -1,
     "train_lig_atom_rename": False,
     "train_shuffle_mols": False,
@@ -89,10 +89,10 @@ optim_configs = {
 }
 model_configs = {
     # Model
-    "c_s": 128, # 192
+    "c_s": 256, # 192
     "c_z": 128, # 64
     "c_s_inputs": 128,  # c_s_inputs == c_token + 32
-    "c_atom": 128, # 64
+    "c_atom": 256, # 64
     "c_atompair": 16, # 16
     "c_token": 768, # 192
     "n_blocks": 48, # 16
@@ -140,7 +140,7 @@ model_configs = {
         "p": -0.7
     },
     "sample_diffusion": { 
-        "N_step": 50, # 25
+        "N_step": 200, # 25
         "N_sample": 1, # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
@@ -150,7 +150,7 @@ model_configs = {
         "sigma_data": GlobalConfigValue("sigma_data"),
         "second_order_train": False,
         "second_order_inference": False,
-        "guidance_weight": 2.0,
+        "guidance_weight": 1.0,
     },
     "model": {
         "N_model_seed": 1,  # for inference
@@ -174,7 +174,7 @@ model_configs = {
                 "n_heads": 4,
             },
             "transformer": {
-                "n_blocks": 24,
+                "n_blocks": 20,
                 "n_heads": 16,
             },
             "atom_decoder": {

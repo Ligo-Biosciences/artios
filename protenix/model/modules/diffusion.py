@@ -109,7 +109,8 @@ class DiffusionConditioning(nn.Module):
         ### Initialize pair embedding with ligand conformer features:
         # 1. Get token-wise ligand reference positions
         # [..., N_atom, 3]
-        ligand_ref_pos = input_feature_dict["ref_pos"] * input_feature_dict["is_ligand"][..., None]  # (zero out non-ligand atoms)
+        is_ligand = input_feature_dict["is_ligand"].unsqueeze(-1)  # [..., n_atom, 1]
+        ligand_ref_pos = input_feature_dict["ref_pos"] * is_ligand # (zero out non-ligand atoms)
 
         # 2. Aggregate per-atom reference positions to per-token reference positions (trick to get token-level tensor)
         # [..., N_atom, 3] -> [..., N_token, 3]
@@ -117,16 +118,24 @@ class DiffusionConditioning(nn.Module):
             x_atom=ligand_ref_pos,
             atom_to_token_idx=atom_to_token_idx,
             n_token=n_token,
-            reduce="mean",
+            reduce="mean"
         )
 
+        # Compute v_lm mask
+        token_ref_space_uid = aggregate_atom_to_token(
+            x_atom=input_feature_dict["ref_space_uid"].unsqueeze(-1),
+            atom_to_token_idx=atom_to_token_idx,
+            n_token=n_token,
+            reduce="mean"
+        ) # [..., N_token, 1]
+        v_lm = token_ref_space_uid[..., None, :, :] == token_ref_space_uid[..., None, :]  # [..., n_token, n_token, 1]
+
         # 3. Compute ligand ref pos displacement
-        # TODO: there should be the masking logic with ref_space_uid
         d_lm = (ligand_ref_pos[..., None, :] - ligand_ref_pos[..., None, :, :])  # [..., n_token, n_token, 3]
-        z = self.linear_no_bias_d(d_lm) # [..., n_token, n_token, c_z]
+        z = self.linear_no_bias_d(d_lm) * v_lm # [..., n_token, n_token, c_z]
 
         # 4. Embed pairwise inverse squared distances
-        invd_emb = self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True)))
+        invd_emb = self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))) * v_lm
         z = add(z, invd_emb, inplace_safe=inplace_safe)
 
         # Add token bonds to pair embedding

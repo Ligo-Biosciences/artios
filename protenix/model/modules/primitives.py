@@ -435,6 +435,7 @@ def _attention(
             value=v,
             attn_mask=attn_bias,
             dropout_p=attn_weight_dropout_p,
+            scale=1.0  # q and k scaled in prep_qkv
         )
         return attn_output
     # [..., n_kv, d] -> [..., d, n_kv]

@@ -175,7 +175,7 @@ class ArtiosLigand(nn.Module):
         input_feature_dict: dict[str, Any],
         label_dict: dict[str, Any],
         mode: str,
-        inplace_safe: bool = True,
+        inplace_safe: bool = False,
         chunk_size: Optional[int] = 4,
         symmetric_permutation: SymmetricPermutation = None,
         guiding_net: Optional[nn.Module] = None,
@@ -429,7 +429,7 @@ class ArtiosLigand(nn.Module):
                 input_feature_dict=input_feature_dict,
                 label_dict=None,
                 mode=mode,
-                inplace_safe=inplace_safe,
+                inplace_safe=False, # inplace_safe,  TODO: temporary workaround
                 chunk_size=chunk_size,
                 N_model_seed=self.N_model_seed,
                 symmetric_permutation=None,

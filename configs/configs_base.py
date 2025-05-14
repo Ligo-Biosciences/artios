@@ -55,7 +55,7 @@ data_configs = {
     # Data
     "train_crop_size": 256,
     "test_max_n_token": -1,
-    "train_lig_atom_rename": False,
+    "train_lig_atom_rename": False,  # TODO: 
     "train_shuffle_mols": False,
     "train_shuffle_sym_ids": False,
     "test_lig_atom_rename": False,

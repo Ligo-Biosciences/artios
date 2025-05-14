@@ -228,7 +228,7 @@ def sample_diffusion(
             size=(*batch_shape, chunk_n_sample, N_atom, 3), 
             device=device, 
             dtype=dtype
-        )  # [..., N_sample, N_atom, 3] # NOTE: set seed in distributed training
+        )  # [..., N_sample, N_atom, 3]
 
         # Initialise Euler/Euler-Maruyama
         x = x_0 

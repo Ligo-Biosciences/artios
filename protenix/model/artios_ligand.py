@@ -229,12 +229,12 @@ class ArtiosLigand(nn.Module):
                                                       dtype=dtype) 
         # N_sample different ouputs created via diffusion
         pred_dict["coordinate"] = self.sample_diffusion(
-            flow_net=self.diffusion_module,
+            denoise_net=self.diffusion_module,
             input_feature_dict=input_feature_dict,
             N_sample=N_sample,
             timesteps=timesteps,
             inplace_safe=inplace_safe,
-            guiding_flow_net=guiding_diffusion_module,
+            guiding_denoise_net=guiding_diffusion_module,  # TODO: flow net
         )
 
         timestep = timesteps[-1]  # Get final timestep

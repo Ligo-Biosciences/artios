@@ -197,7 +197,7 @@ def sample_diffusion(
     N_atom = input_feature_dict["atom_to_token_idx"].size(-1)
     batch_shape = input_feature_dict["residue_index"].shape[:-1]
     device = input_feature_dict["residue_index"].device
-    dtype = input_feature_dict["residue_index"].dtype
+    dtype = torch.float32  # input_feature_dict["residue_index"].dtype
 
     # Stochasticity schedule g (scaled by 1/(1-t) for numerical stability)
     # We also normalise by the functions' integral over [0,1].

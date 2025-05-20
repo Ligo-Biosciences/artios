@@ -631,7 +631,7 @@ class ProtenixLoss(nn.Module):
             "mse_loss": self.alpha_diffusion,
             "neighbour_mse_loss": self.alpha_diffusion
             * self.weight_neighbour_mse,  # Different from AF3 appendix eq(6), where smooth_lddt has no weight
-            "smooth_lddt": self.alpha_diffusion * self.weight_smooth_lddt
+            "smooth_lddt_loss": self.alpha_diffusion * self.weight_smooth_lddt
         }
 
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
@@ -730,6 +730,17 @@ class ProtenixLoss(nn.Module):
                 }
             )
             
+            loss_fns.update(
+                {
+                    "smooth_lddt_loss": lambda: self.smooth_lddt_loss.forward(
+                        pred_coordinates=pred_dict["coordinate"],
+                        true_coordinates=label_dict["coordinate"],
+                        timestep=pred_dict["timestep"],
+                        coordinate_mask=label_dict["coordinate_mask"],
+                    )
+                }
+            )
+
             loss_fns.update(
                 {
                     "mse_loss": lambda: self.mse_loss(

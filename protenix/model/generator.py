@@ -22,40 +22,80 @@ from protenix.model.utils import centre_random_augmentation, sample_logit_normal
 
 class TrainingTimestepSampler:
     """
-    Sample the timestep used for noising training samples via a logit-normal distribution. Used in the flow matching paradigm.
+    Sample the timestep using a mixture of either a beta or logit-normal distribution with uniform distribution.
+
+    Notes:
+    + Proteina parameters: distribution_type="beta", alpha=1.9, beta=1.0, uniform_weight=0.02
+    + Default parameters: distribution_type="logit-normal", loc=0.0, scale=1.0, uniform_weight=0.0
+    + Suggested parameters: distribution_type="logit-normal", loc=1.4, scale=1.0, uniform_weight=0.1
     """
     def __init__(
-            self,
-            loc: float = 0,
-            scale: float = 1,
-            seed: Optional[int] = None,
-    ) -> None:
+        self, 
+        distribution_type: str = "logit-normal",
+        alpha: float = 1.0, 
+        beta: float = 1.0, 
+        loc: float = 1.4,
+        scale: float = 1.0,
+        uniform_weight: float = 0.1, 
+        seed: Optional[int] = None
+    ):
+        """
+        Args:
+            distribution_type (str): The type of distribution to use (must be "beta" or "logit-normal")
+            alpha (float): Shape parameter for beta distribution or location parameter for beta distribution
+            beta (float): Shape parameter for beta distribution or scale parameter for beta distribution
+            loc (float): mean of the logit-normal distribution
+            scale (float): standard deviation of the logit-normal distribution
+            uniform_weight (float): Weight allocated to the uniform distribution
+            seed (Optional, int): Random seed for reproducibility
+
+        """
+        self.distribution_type = distribution_type
+        self.alpha = alpha
+        self.beta = beta
         self.loc = loc
         self.scale = scale
+        self.uniform_weight = uniform_weight
         self.seed = seed
 
-    def __call__(
-        self, 
-        size: torch.Size, 
-        device: torch.device = torch.device("cpu"),
-        dtype: torch.dtype = torch.float32,
+    def __call__(self, 
+                 size: torch.Size, 
+                 device: torch.device = torch.device("cpu"), 
+                 dtype: torch.dtype = torch.float32
     ) -> torch.Tensor:
-        """Sampling.
-
-        Args:
-            shape (torch.Size): the target shape
-            device (torch.device, optional): target device. Defaults to torch.device("cpu").
-            dtype (torch.dtype, optional): target dtype. Defaults to torch.float32.
-
-        Returns:
-            torch.Tensor: sampled timestep 
         """
-        # Set seed for reproducibility
+        Sample the timestep from the mixture of the specified distribution and uniform distribution.
+        """
         generator = None
         if self.seed is not None:
             generator = torch.Generator(device=device).manual_seed(self.seed)
 
-        return sample_logit_normal(size, device, dtype, self.loc, self.scale, generator)
+        # Sample from uniform distribution
+        uniform_samples = torch.rand(size, device=device, dtype=dtype, generator=generator)
+
+        # Sample from specified distribution
+        if self.distribution_type == "beta":
+            # Need to ensure the size argument for sample is a tuple for torch beta
+            sample_shape = size if isinstance(size, tuple) else (size,)
+            dist = torch.distributions.beta.Beta(
+                torch.tensor(self.alpha, device=device, dtype=dtype),
+                torch.tensor(self.beta, device=device, dtype=dtype)
+            )
+            dist_samples = dist.sample(sample_shape=sample_shape)
+
+        elif self.distribution_type == "logit-normal":
+            dist_samples = sample_logit_normal(size, device, dtype, self.loc, self.scale, generator)
+            
+        else:
+            raise ValueError("distribution_type must be either 'beta' or 'logit-normal'")
+
+        # Generate mask to pick either uniform or distribution samples
+        mask = torch.rand(size, device=device, dtype=dtype, generator=generator) < self.uniform_weight
+        
+        # Use mask to pick either uniform or distribution samples
+        samples = torch.where(mask, uniform_samples, dist_samples)
+        
+        return samples
     
 
 class InferenceTimestepScheduler:

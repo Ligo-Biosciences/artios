@@ -132,9 +132,13 @@ model_configs = {
             1
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
-    "train_timestep_sampler": { 
-        "loc": 0.0,
-        "scale": 1.0
+    "train_timestep_sampler": {
+        "distribution_type": "logit-normal",
+        "alpha": 1.0,
+        "beta": 1.0,
+        "loc": 1.4,
+        "scale": 1.0,
+        "uniform_weight": 0.1,
     },
     "inference_timestep_scheduler": { 
         "p": -0.7

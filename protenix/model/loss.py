@@ -710,7 +710,7 @@ class ProtenixLoss(nn.Module):
 
         # Timestep-dependent scaling of the loss
         timestep = pred_dict["timestep"] # [..., N_sample]
-        diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * (1-timestep))**2)
+        diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * torch.clamp(1-timestep, min=1e-3))**2)
         
         if self.configs.train_confidence_only and mode == "train":
             # Skip Diffusion Loss and distogram loss

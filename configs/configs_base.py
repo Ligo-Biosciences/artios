@@ -98,7 +98,7 @@ model_configs = {
     "n_blocks": 48, # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
-    "sigma_data": 16.0,
+    "sigma_data": 12.0,
     "diffusion_batch_size": 48, 
     "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
@@ -136,9 +136,9 @@ model_configs = {
         "distribution_type": "logit-normal",
         "alpha": 1.0,
         "beta": 1.0,
-        "loc": 1.4,
-        "scale": 1.0,
-        "uniform_weight": 0.1,
+        "loc": 1.2,
+        "scale": 0.8,
+        "uniform_weight": 0.05,
     },
     "inference_timestep_scheduler": { 
         "p": -0.7

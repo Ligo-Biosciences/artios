@@ -40,7 +40,7 @@ class DiffusionConditioning(nn.Module):
 
     def __init__(
         self,
-        sigma_data: float = 16.0,
+        sigma_data: float = 12.0,
         c_z: int = 128,
         c_s: int = 384,
         c_timestep_embedding: int = 256,
@@ -183,7 +183,7 @@ class DiffusionModule(nn.Module):
 
     def __init__(
         self,
-        sigma_data: float = 16.0,
+        sigma_data: float = 12.0,
         c_atom: int = 128,
         c_atompair: int = 16,
         c_token: int = 768,

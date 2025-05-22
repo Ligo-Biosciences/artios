@@ -136,6 +136,7 @@ class SmoothLDDTLoss(nn.Module):
         true_coordinates: torch.Tensor,
         coordinate_mask: torch.Tensor,
         timestep: torch.Tensor,
+        per_sample_scale: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """SmoothLDDTLoss
 
@@ -147,6 +148,8 @@ class SmoothLDDTLoss(nn.Module):
             coordinate_mask (torch.Tensor): whether true coordinates exist
                 [..., N_atom]
             timestep (torch.Tensor): the timestep for the current sample.
+                [..., N_sample]
+            per_sample_scale (torch.Tensor, optional): whether to scale the loss by the per-sample noise-level.
                 [..., N_sample]
 
         Returns:
@@ -196,174 +199,9 @@ class SmoothLDDTLoss(nn.Module):
         )
 
         loss = 1 - lddt  # [..., N_sample]
+        if per_sample_scale is not None:
+            loss = loss * per_sample_scale
         raw_loss = loss.detach().clone()
-
-        # Training time uncertainty scaling
-        if self.training and self.use_uncertainty:
-            timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
-            u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
-
-            # Apply uncertainty scaling
-            loss = loss / u_t.exp() + u_t # [..., N_sample]
-
-        final_loss = loss_reduction(loss, method=self.reduction)
-
-        # Return the loss, metrics and monitor data
-        return final_loss, {}, {
-            "raw_loss": raw_loss,
-            "timestep": timestep.clone()
-        }
-    
-
-class NeighbourMSELoss(nn.Module):
-    """
-    This is a loss inspired by the inductive bias of the SmoothLDDTLoss for encouraging the model to learn
-    local structures, but it is designed to work seamlessly with the generative diffusion framework, relying
-    only on the L2 norm with timestep-dependent scaling.
-    """
-
-    def __init__(
-        self,
-        eps: float = 1e-10,
-        reduction: str = "mean",
-        k: int = 300,
-        uncertainty_embed_dim: int = 64,
-        use_uncertainty: bool = False,
-    ) -> None:
-        """NeighbourMSELoss
-
-        Args:
-            eps (float, optional): avoid nan. Defaults to 1e-10.
-            reduction (str, optional): reduction method for the batch dims. Defaults to mean.
-        """
-        super(NeighbourMSELoss, self).__init__()
-        self.eps = eps
-        self.reduction = reduction
-        self.k = k
-        self.use_uncertainty = use_uncertainty
-
-        # Timestep-dependent uncertainty correction
-        self.uncertainty_embed_dim = uncertainty_embed_dim
-        if self.use_uncertainty:
-            self.fourier_embedding = FourierEmbedding(c=uncertainty_embed_dim)
-            self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
-
-    def _chunk_forward(self, pred_distance, true_distance, c_lm):
-        # Squared error of the predicted distance from the true distance
-        dist_diff = (pred_distance - true_distance)**2  # [..., N_sample, N_atom, k]
-
-        # Compute mean
-        loss = torch.sum(c_lm * dist_diff, dim=(-1, -2)) / (
-            torch.sum(c_lm, dim=(-1, -2)) + self.eps
-        )  # [..., N_sample]
-        return loss
-    
-    def query_neighbors(
-        self,
-        true_coordinates: torch.Tensor,
-        inf: float = 1e9
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Find k-nearest neighbors for each atom based on their coordinates.
-        
-        Args:
-            true_coordinates (torch.Tensor): Atom coordinates
-                [..., N_atom, 3]
-            k (int, optional): Number of neighbors to find. Defaults to 300.
-                
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]:
-                - neighbor_indices: Indices of k-nearest neighbors for each atom
-                    [..., N_atom, k]
-                - neighbor_distances: Distances to k-nearest neighbors for each atom
-                    [..., N_atom, k]
-        """
-        # Get number of atoms and limit k
-        n_atoms = true_coordinates.shape[-2]
-        k = min(self.k, n_atoms - 1)  # -1 to exclude self
-        
-        # Compute pairwise distances between all atoms
-        distances = torch.cdist(true_coordinates, true_coordinates)  # [..., N_atom, N_atom]
-        
-        # Set diagonal to infinity to exclude self-pairs
-        distances = distances + torch.eye(distances.shape[-1], device=distances.device) * inf
-        
-        # Get k smallest distances and their indices for each atom
-        neighbor_distances, neighbor_indices = torch.topk(distances, k=k, dim=-1, largest=False)
-        
-        return neighbor_indices, neighbor_distances
-
-    def forward(
-        self,
-        pred_coordinates: torch.Tensor,
-        true_coordinates: torch.Tensor,
-        coordinate_mask: torch.Tensor,
-        timestep: torch.Tensor,
-        per_sample_scale: torch.Tensor,
-    ) -> torch.Tensor:
-        """NeighbourMSELoss
-
-        Args:
-            pred_coordinates (torch.Tensor): the diffusion denoised atom coordinates
-                [..., N_sample, N_atom, 3]
-            true_coordinates (torch.Tensor): the ground truth atom coordinates
-                [..., N_atom, 3]
-            coordinate_mask (torch.Tensor): whether true coordinates exist
-                [..., N_atom]
-            timestep (torch.Tensor): the timestep for the current sample.
-                [..., N_sample]
-            per_sample_scale (torch.Tensor): the per-sample scales to scale the loss by.
-                [..., N_sample]
-
-        Returns:
-            torch.Tensor: the smooth lddt loss
-                [...] if reduction is None else []
-        """
-
-        # Get the indices and distances of the k closest atoms for each atom in the true coordinates
-        neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates)
-        
-        # Compute mask for the atoms that have true coordinates
-        n_neighbors = neighbor_indices.shape[-1]
-        c_lm = coordinate_mask[neighbor_indices]   # [..., N_atom, k]
-        c_lm = c_lm * coordinate_mask.unsqueeze(-1)  # mask atoms that do not have true coordinates
-        c_lm = c_lm.bool().unsqueeze(-3).detach()  # [..., 1, N_atom, k]
-
-        # Get N_sample dimension size
-        n_samples = pred_coordinates.shape[-3]
-
-        # Expand pred_coordinates to include neighbor dimension
-        # [..., N_sample, N_atom, 3] -> [..., N_sample, N_atom, k, 3]
-        pred_coordinates = expand_at_dim(x=pred_coordinates, dim=-2, n=n_neighbors)
-
-        # Expand neighbour indices and distances to include N_sample dimension
-        # [..., N_atom, k] -> [..., N_sample, N_atom, k]
-        indices_expanded = expand_at_dim(x=neighbor_indices, dim=-3, n=n_samples)
-        # [..., N_sample, N_atom, k] -> [..., N_sample, N_atom, k, 3]
-        indices_expanded = expand_at_dim(x=indices_expanded, dim=-1, n=3)
-
-        pred_neighbor_coords = torch.gather(
-            pred_coordinates,
-            dim=-3,
-            index=indices_expanded
-        )  # [..., N_sample, N_atom, k, 3]
-        
-        # Expand true_neighbor_distances to include N_sample dimension
-        # [..., N_atom, k] -> [..., N_sample, N_atom, k]
-        true_neighbor_distances = expand_at_dim(x=true_neighbor_distances, dim=-3, n=n_samples)
-
-        # Compute predicted neighbour distances
-        pred_distance = torch.sqrt(torch.sum((pred_coordinates - pred_neighbor_coords)**2, dim=-1))  # [..., N_sample, N_atom, k]
-
-        # Compute distance error
-        # [..., N_sample, N_atom, k]
-        loss = self._chunk_forward(
-            pred_distance=pred_distance, true_distance=true_neighbor_distances, c_lm=c_lm
-        )  # [..., N_sample]
-
-        raw_loss = loss.detach().clone()
-
-        # Scale the loss by the per-sample scale
-        loss = loss * per_sample_scale
 
         # Training time uncertainty scaling
         if self.training and self.use_uncertainty:
@@ -629,15 +467,11 @@ class ProtenixLoss(nn.Module):
         self.loss_weight = {  
             # diffusion
             "mse_loss": self.alpha_diffusion,
-            "neighbour_mse_loss": self.alpha_diffusion
-            * self.weight_neighbour_mse,  # Different from AF3 appendix eq(6), where smooth_lddt has no weight
             "smooth_lddt_loss": self.alpha_diffusion * self.weight_smooth_lddt
         }
 
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
-        #self.bond_loss = BondLoss(**configs.loss.diffusion.bond)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
-        self.neighbour_mse_loss = NeighbourMSELoss(**configs.loss.diffusion.neighbour_mse)
 
     def aggregate_losses(  
         self, loss_fns: dict
@@ -710,7 +544,7 @@ class ProtenixLoss(nn.Module):
 
         # Timestep-dependent scaling of the loss
         timestep = pred_dict["timestep"] # [..., N_sample]
-        diffusion_per_sample_scale =  (timestep**2 + (1-timestep)**2) / ((self.configs.sigma_data * torch.clamp(1-timestep, min=1e-3))**2)
+        diffusion_per_sample_scale =  1 / ((self.configs.sigma_data * torch.clamp(1-timestep, min=1e-3))**2)
         
         if self.configs.train_confidence_only and mode == "train":
             # Skip Diffusion Loss and distogram loss
@@ -720,23 +554,12 @@ class ProtenixLoss(nn.Module):
             
             loss_fns.update(
                 {
-                    "neighbour_mse_loss": lambda: self.neighbour_mse_loss.forward(
-                        pred_coordinates=pred_dict["coordinate"],
-                        true_coordinates=label_dict["coordinate"],
-                        timestep=pred_dict["timestep"],
-                        coordinate_mask=label_dict["coordinate_mask"],
-                        per_sample_scale=diffusion_per_sample_scale,
-                    )
-                }
-            )
-            
-            loss_fns.update(
-                {
                     "smooth_lddt_loss": lambda: self.smooth_lddt_loss.forward(
                         pred_coordinates=pred_dict["coordinate"],
                         true_coordinates=label_dict["coordinate"],
                         timestep=pred_dict["timestep"],
                         coordinate_mask=label_dict["coordinate_mask"],
+                        per_sample_scale=diffusion_per_sample_scale,
                     )
                 }
             )

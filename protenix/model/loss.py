@@ -559,7 +559,7 @@ class ProtenixLoss(nn.Module):
                         true_coordinates=label_dict["coordinate"],
                         timestep=pred_dict["timestep"],
                         coordinate_mask=label_dict["coordinate_mask"],
-                        per_sample_scale=diffusion_per_sample_scale,
+                        # per_sample_scale=diffusion_per_sample_scale,
                     )
                 }
             )

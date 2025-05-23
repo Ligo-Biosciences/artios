@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, List, Dict
 
 import torch
 import numpy as np
@@ -96,6 +96,151 @@ class TrainingTimestepSampler:
         samples = torch.where(mask, uniform_samples, dist_samples)
         
         return samples
+    
+
+class TrainingTimestepSamplerV2:
+    """
+    Samples timesteps from a configurable mixture of distributions.
+
+    The mixture can include any number of beta, logit-normal, or uniform distributions,
+    each with a specified weight and parameters.
+    """
+    def __init__(
+        self,
+        distributions_config: List[Dict],
+        seed: Optional[int] = None
+    ) -> None:
+        """
+        Args:
+            distributions_config (List[Dict]): A list of dictionaries, each configuring a
+                distribution in the mixture. Each dictionary must contain:
+                - "distribution_type" (str): One of "beta", "logit-normal", "uniform". Can other types if needed
+                - "weight" (float): The mixture weight for this distribution. All weights
+                                     must be positive and sum to approximately 1.0.
+                - Parameters specific to the distribution_type:
+                    - For "beta": "alpha" (float > 0), "beta" (float > 0).
+                    - For "logit-normal": "loc" (float), "scale" (float > 0).
+                    - For "uniform": "low" (float), "high" (float), with low < high.
+            seed (Optional[int]): Random seed for reproducibility.
+        """
+        if not isinstance(distributions_config, list) or not distributions_config:
+            raise ValueError("distributions_config must be a non-empty list of dicts.")
+
+        total_weight = 0.0
+        validated_configs = []
+        for config in distributions_config:
+            if not isinstance(config, dict):
+                raise ValueError("Each item in distributions_config must be a dictionary.")
+            
+            dist_type = config.get("distribution_type")
+            weight = config.get("weight")
+
+            if not isinstance(dist_type, str):
+                raise ValueError("Each config must have a 'distribution_type' (str).")
+            if not isinstance(weight, (float, int)) or weight <= 0:
+                raise ValueError("Each config must have a 'weight' (float > 0).")
+
+            total_weight += weight
+            
+            if dist_type == "beta":
+                alpha = config.get("alpha")
+                beta_param = config.get("beta")
+                if not isinstance(alpha, (float, int)) or alpha <= 0:
+                    raise ValueError("Beta distribution requires 'alpha' (float > 0).")
+                if not isinstance(beta_param, (float, int)) or beta_param <= 0:
+                    raise ValueError("Beta distribution requires 'beta' (float > 0).")
+            elif dist_type == "logit-normal":
+                loc = config.get("loc")
+                scale = config.get("scale")
+                if not isinstance(loc, (float, int)):
+                    raise ValueError("Logit-normal distribution requires 'loc' (float).")
+                if not isinstance(scale, (float, int)) or scale <= 0:
+                    raise ValueError("Logit-normal distribution requires 'scale' (float > 0).")
+            elif dist_type == "uniform":
+                low = config.get("low")
+                high = config.get("high")
+                if not isinstance(low, (float, int)):
+                    raise ValueError("Uniform distribution requires 'low' (float).")
+                if not isinstance(high, (float, int)):
+                    raise ValueError("Uniform distribution requires 'high' (float).")
+                if low >= high:
+                    raise ValueError("For uniform distribution, 'low' must be less than 'high'.")
+            else:
+                raise ValueError(f"Unsupported distribution_type: {dist_type}. "
+                                 "Must be 'beta', 'logit-normal', or 'uniform'.")
+            validated_configs.append(config)
+
+        if not torch.isclose(torch.tensor(total_weight), torch.tensor(1.0)):
+            raise ValueError(f"Sum of weights must be close to 1.0, but got {total_weight}.")
+
+        self.distributions_config = validated_configs
+        self.seed = seed
+        self.weights_tensor = torch.tensor([d['weight'] for d in self.distributions_config], dtype=torch.float32)
+
+    def __call__(
+        self,
+        size: torch.Size,
+        device: torch.device = torch.device("cpu"),
+        dtype: torch.dtype = torch.float32
+    ) -> torch.Tensor:
+        """
+        Sample the timestep from the configured mixture of distributions.
+        """
+        generator = None
+        if self.seed is not None:
+            generator = torch.Generator(device=device).manual_seed(self.seed)
+
+        num_total_samples = size[0] # assuming size is a tuple of (num_samples, ), works for current training code TODO: make more robust
+        
+        # Determine which distribution to sample from for each element
+        dist_indices = torch.multinomial(
+            self.weights_tensor.to(device), # Ensure weights tensor is on the correct device
+            num_total_samples,
+            replacement=True,
+            generator=generator
+        )
+
+        samples = torch.empty(num_total_samples, device=device, dtype=dtype)
+
+        for i, dist_config in enumerate(self.distributions_config):
+            mask = (dist_indices == i)
+            num_samples_for_dist = mask.sum().item()
+
+            if num_samples_for_dist == 0:
+                continue
+
+            current_dist_type = dist_config["distribution_type"]
+            
+            if current_dist_type == "beta":
+                alpha = torch.tensor(dist_config["alpha"], device=device, dtype=dtype)
+                beta_param = torch.tensor(dist_config["beta"], device=device, dtype=dtype)
+                beta_dist = torch.distributions.beta.Beta(alpha, beta_param)
+                #TODO: .sample() does not take a generator argument directly. should fix seeds at some point
+                samples[mask] = beta_dist.sample(sample_shape=torch.Size([num_samples_for_dist]))
+            
+            elif current_dist_type == "logit-normal":
+                loc = dist_config["loc"]
+                scale = dist_config["scale"]
+                samples[mask] = sample_logit_normal(
+                    size=torch.Size([num_samples_for_dist]),
+                    device=device,
+                    dtype=dtype,
+                    loc=loc,
+                    scale=scale,
+                    generator=generator
+                )
+            
+            elif current_dist_type == "uniform":
+                low = dist_config["low"]
+                high = dist_config["high"]
+                samples[mask] = torch.rand(
+                    torch.Size([num_samples_for_dist]),
+                    device=device,
+                    dtype=dtype,
+                    generator=generator
+                ) * (high - low) + low
+        
+        return samples.view(size)
     
 
 class InferenceTimestepScheduler:

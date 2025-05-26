@@ -91,7 +91,7 @@ class AttentionPairBias(nn.Module):
         )
         self.layernorm_z = LayerNorm(c_z)
         # Alg24. Line8 is scalar, but this is different for different heads
-        self.linear_nobias_z = LinearNoBias(in_features=c_z, out_features=n_heads)
+        self.linear_nobias_z = LinearNoBias(in_features=c_z, out_features=n_heads, init="zeros")
 
     def local_multihead_attention(
         self,

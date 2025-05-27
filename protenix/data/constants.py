@@ -970,3 +970,17 @@ PBV2_COMMON_NATURAL_LIGANDS = {'UPG', 'CDP', 'DSG', 'APC', 'GSP', 'FAD', 'IPE', 
                                'SFG', 'MFU', 'APR', 'GTP', 'PLP', 'UDP', 'SAH', 'ACP', 'GSH', 'CTP', 'AKG', 'F15', '5AD', 'BCN', 
                                'BDP', 'H4B', 'PHO', 'FMN', 'MTA', 'NGA', 'OGA', 'SLB', 'SIN', 'C5P', 'TPP', 'BGC', 'NCA', 'UD1', 
                                'ANP', 'DGL', 'FDA', 'URI', 'ADP', 'MTE', 'PJ8', 'ATP'}  # fmt: skip
+
+
+### Evaluation constants
+# AA's (3 letter codes) that are hydrophobic
+HYDROPHOBIC_RESIDUES = {"ALA", "VAL", "LEU", "ILE", "MET", "PHE", "TRP", "PRO"}
+# Each AA's max ASA
+MAX_ASA = {
+    "ALA": 121.0, "ARG": 265.0, "ASN": 187.0, "ASP": 187.0,
+    "CYS": 148.0, "GLN": 214.0, "GLU": 214.0, "GLY":  97.0,
+    "HIS": 216.0, "ILE": 195.0, "LEU": 191.0, "LYS": 230.0,
+    "MET": 203.0, "PHE": 228.0, "PRO": 154.0, "SER": 143.0,
+    "THR": 163.0, "TRP": 264.0, "TYR": 255.0, "VAL": 165.0,
+}
+

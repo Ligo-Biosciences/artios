@@ -8,7 +8,7 @@ import numpy as np
 from protenix.model import sample_confidence
 from protenix.model.generator import (
     sample_diffusion_training, 
-    TrainingTimestepSamplerV2,
+    TrainingTimestepSampler,
     InferenceTimestepScheduler,
     sample_diffusion,
     sample_diffusion_training
@@ -38,8 +38,8 @@ class ArtiosLigand(nn.Module):
         #self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
 
         # Diffusion 
-        self.train_timestep_sampler = TrainingTimestepSamplerV2(**configs.train_timestep_sampler) 
-        self.eval_timestep_sampler = TrainingTimestepSamplerV2(
+        self.train_timestep_sampler = TrainingTimestepSampler(**configs.train_timestep_sampler) 
+        self.eval_timestep_sampler = TrainingTimestepSampler(
            **configs.train_timestep_sampler,
         )
         self.inference_timestep_scheduler = InferenceTimestepScheduler(

@@ -133,11 +133,10 @@ model_configs = {
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
     "train_timestep_sampler": {
-        "distributions_config": ListValue([
-            {"distribution_type": "beta", "alpha": 6, "beta": 1.5, "weight": 0.85},
-            {"distribution_type": "uniform", "low": 0.0, "high": 1.0, "weight": 0.1},
-            {"distribution_type": "uniform", "low": 0.9, "high": 1.0, "weight": 0.05},
-        ]),
+        "distribution_type": "beta",
+        "alpha": 1.9,
+        "beta": 1.0,
+        "uniform_weight": 0.02,
     },
     "inference_timestep_scheduler": { 
         "p": -0.7

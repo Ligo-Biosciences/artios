@@ -677,9 +677,13 @@ class AF3Trainer(object):
         if not self.configs.use_wandb or DIST_WRAPPER.rank != 0 or not self.configs.monitor.weight_norm:
             return
         
+        # Get the actual model from the distributed data parallel wrapper
+        model = self.model
+        actual_model = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
+        
         # Calculate and log weight norms for each parameter
         weight_norms = {}
-        for name, param in self.model.named_parameters():
+        for name, param in actual_model.named_parameters():
             if not param.requires_grad:  # Skip non-trainable parameters
                 continue
                 

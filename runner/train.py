@@ -162,6 +162,9 @@ class AF3Trainer(object):
             assert (
                 env is not None
             ), "if use ds4sci, set env as https://www.deepspeed.ai/tutorials/ds4sci_evoformerattention/"
+
+        # Set sharing strategy to file system to avoid errors in multi-node training
+        torch.multiprocessing.set_sharing_strategy('file_system')
         
         # Set high precision for tensor core matmul
         torch.set_float32_matmul_precision('high')

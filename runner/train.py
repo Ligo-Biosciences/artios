@@ -674,13 +674,16 @@ class AF3Trainer(object):
     
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""
+        print(f"DEBUG: inside on_validation_epoch_end")
         if not self.configs.use_wandb or DIST_WRAPPER.rank != 0 or not self.configs.monitor.weight_norm:
             return
+        
+        print(f"DEBUG: past first if statement")
         
         # Get the actual model from the distributed data parallel wrapper
         model = self.model
         actual_model = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
-        
+
         # Calculate and log weight norms for each parameter
         weight_norms = {}
         for name, param in actual_model.named_parameters():

@@ -675,34 +675,29 @@ class AF3Trainer(object):
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""
         print(f"DEBUG: inside on_validation_epoch_end")
-        if not self.configs.use_wandb or DIST_WRAPPER.rank != 0 or not self.configs.monitor.weight_norm:
-            return
-        
-        print(f"DEBUG: past first if statement")
-        
-        # Get the actual model from the distributed data parallel wrapper
-        model = self.model
-        actual_model = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
+        if self.configs.monitor.weight_norm:
+            print(f"DEBUG: past first if statement")
 
-        # Calculate and log weight norms for each parameter
-        weight_norms = {}
-        for name, param in actual_model.named_parameters():
-            if not param.requires_grad:  # Skip non-trainable parameters
-                continue
-                
-            if len(param.shape) == 2:  # Linear layer weights (2D tensors)
-                # Compute L2 norm along fan_in dimension (dim=1) and average across output dimension
-                # [out_features, in_features] -> [out_features] -> scalar
-                fan_in_norms = torch.norm(param, p=2, dim=1)  # L2 norm along input dimension
-                norm = torch.mean(fan_in_norms).item()  # Average across output dimension
-            else:  # Other parameters (biases, layernorm weights, etc.)
-                # Standard L2 norm of the entire tensor divided by sqrt(num_elements)
-                # although this is not the norm anymore, makes variable-length tensors comparable
-                norm = param.norm().item() / np.sqrt(param.numel())
-            weight_norms[f"weight_norms/{name}"] = norm
+            # Calculate and log weight norms for each parameter
+            weight_norms = {}
+            for name, param in self.model.named_parameters():
+                if not param.requires_grad:  # Skip non-trainable parameters
+                    continue
+                    
+                if len(param.shape) == 2:  # Linear layer weights (2D tensors)
+                    # Compute L2 norm along fan_in dimension (dim=1) and average across output dimension
+                    # [out_features, in_features] -> [out_features] -> scalar
+                    fan_in_norms = torch.norm(param, p=2, dim=1)  # L2 norm along input dimension
+                    norm = torch.mean(fan_in_norms).item()  # Average across output dimension
+                else:  # Other parameters (biases, layernorm weights, etc.)
+                    # Standard L2 norm of the entire tensor divided by sqrt(num_elements)
+                    # although this is not the norm anymore, makes variable-length tensors comparable
+                    norm = param.norm().item() / np.sqrt(param.numel())
+                weight_norms[f"weight_norms/{name}"] = norm
 
-        # Log to wandb
-        wandb.log(weight_norms, step=self.step)
+            if DIST_WRAPPER.rank == 0:
+                # Log to wandb
+                wandb.log(weight_norms, step=self.step)
 
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""

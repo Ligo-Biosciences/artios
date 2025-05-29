@@ -674,10 +674,7 @@ class AF3Trainer(object):
     
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""
-        print(f"DEBUG: inside on_validation_epoch_end")
         if self.configs.monitor.weight_norm:
-            print(f"DEBUG: past first if statement")
-
             # Calculate and log weight norms for each parameter
             weight_norms = {}
             for name, param in self.model.named_parameters():

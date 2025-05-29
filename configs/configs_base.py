@@ -306,8 +306,8 @@ loss_configs = {
 monitor_configs = {
     "monitor": {
         "loss_distribution": False,
-        "grad_norm": False,
-        "weight_norm": False,
+        "grad_norm": True,
+        "weight_norm": True,
         "eval_metrics": {
             "eval_tests": ListValue(["ss_distribution", "posebusters"]),
         }

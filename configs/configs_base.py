@@ -33,7 +33,7 @@ basic_configs = {
     "eval_only": False,
     "load_checkpoint_path": "",
     "load_ema_checkpoint_paths_directory": "",
-    "load_strict": False,
+    "load_strict": True,
     "load_params_only": True,
     "guiding_net_path": ValueMaybeNone(""),
     "skip_load_step": False,
@@ -91,7 +91,7 @@ model_configs = {
     # Model
     "c_s": 256, # 192
     "c_z": 128, # 64
-    "c_s_inputs": 128,  # c_s_inputs == c_token + 32
+    "c_s_inputs": 256,  # c_s_inputs == c_token + 32
     "c_atom": 256, # 64
     "c_atompair": 16, # 16
     "c_token": 768, # 192
@@ -143,7 +143,7 @@ model_configs = {
         "p": -0.7
     },
     "sample_diffusion": { 
-        "N_step": 200, # 25
+        "N_step": 100, # 25
         "N_sample": 1, # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,

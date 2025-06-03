@@ -319,7 +319,7 @@ def run() -> None:
     configs = parse_configs(
         configs=configs,
         arg_str=parse_sys_args(),
-        fill_required_with_null=False,
+        fill_required_with_null=True,
     )
     download_infercence_cache(configs, model_version="v0.2.0")
     main(configs)

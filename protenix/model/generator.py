@@ -21,226 +21,50 @@ from protenix.model.utils import centre_random_augmentation, sample_logit_normal
 
 
 class TrainingTimestepSampler:
-    """
-    Sample the timestep using a mixture of either a beta or logit-normal distribution with uniform distribution.
+    """Sample timesteps using a mixture of Beta(alpha,1) and Uniform(0,1) distributions.
 
-    Notes:
-    + Proteina parameters: distribution_type="beta", alpha=1.9, beta=1.0, uniform_weight=0.02
-    + Default parameters: distribution_type="logit-normal", loc=0.0, scale=1.0, uniform_weight=0.0
-    + Suggested parameters: distribution_type="logit-normal", loc=1.4, scale=1.0, uniform_weight=0.1
-    """
-    def __init__(
-        self, 
-        distribution_type: str = "logit-normal",
-        alpha: float = 1.0, 
-        beta: float = 1.0, 
-        loc: float = 1.4,
-        scale: float = 1.0,
-        uniform_weight: float = 0.1, 
-        seed: Optional[int] = None
-    ):
-        """
-        Args:
-            distribution_type (str): The type of distribution to use (must be "beta" or "logit-normal")
-            alpha (float): Shape parameter for beta distribution or location parameter for beta distribution
-            beta (float): Shape parameter for beta distribution or scale parameter for beta distribution
-            loc (float): mean of the logit-normal distribution
-            scale (float): standard deviation of the logit-normal distribution
-            uniform_weight (float): Weight allocated to the uniform distribution
-            seed (Optional, int): Random seed for reproducibility
-
-        """
-        self.distribution_type = distribution_type
-        self.alpha = alpha
-        self.beta = beta
-        self.loc = loc
-        self.scale = scale
-        self.uniform_weight = uniform_weight
-        self.seed = seed
-
-    def __call__(self, 
-                 size: torch.Size, 
-                 device: torch.device = torch.device("cpu"), 
-                 dtype: torch.dtype = torch.float32
-    ) -> torch.Tensor:
-        """
-        Sample the timestep from the mixture of the specified distribution and uniform distribution.
-        """
-        generator = None
-        if self.seed is not None:
-            generator = torch.Generator(device=device).manual_seed(self.seed)
-
-        # Sample from uniform distribution
-        uniform_samples = torch.rand(size, device=device, dtype=dtype, generator=generator)
-
-        # Sample from specified distribution
-        if self.distribution_type == "beta":
-            # Need to ensure the size argument for sample is a tuple for torch beta
-            sample_shape = size if isinstance(size, tuple) else (size,)
-            dist = torch.distributions.beta.Beta(
-                torch.tensor(self.alpha, device=device, dtype=dtype),
-                torch.tensor(self.beta, device=device, dtype=dtype)
-            )
-            dist_samples = dist.sample(sample_shape=sample_shape)
-
-        elif self.distribution_type == "logit-normal":
-            dist_samples = sample_logit_normal(size, device, dtype, self.loc, self.scale, generator)
-            
-        else:
-            raise ValueError("distribution_type must be either 'beta' or 'logit-normal'")
-
-        # Generate mask to pick either uniform or distribution samples
-        mask = torch.rand(size, device=device, dtype=dtype, generator=generator) < self.uniform_weight
-        
-        # Use mask to pick either uniform or distribution samples
-        samples = torch.where(mask, uniform_samples, dist_samples)
-        
-        return samples
-    
-
-class TrainingTimestepSamplerV2:
-    """
-    Samples timesteps from a configurable mixture of distributions.
-
-    The mixture can include any number of beta, logit-normal, or uniform distributions,
-    each with a specified weight and parameters.
+    Args:
+        alpha (float): Shape parameter for Beta(alpha,1) distribution. Defaults to 1.9.
+        uniform_weight (float): Weight allocated to the Beta distribution. Defaults to 0.02.
+        seed (Optional[int]): Random seed for reproducibility. Defaults to None.
     """
     def __init__(
         self,
-        distributions_config: List[Dict],
-        seed: Optional[int] = None
-    ) -> None:
-        """
-        Args:
-            distributions_config (List[Dict]): A list of dictionaries, each configuring a
-                distribution in the mixture. Each dictionary must contain:
-                - "distribution_type" (str): One of "beta", "logit-normal", "uniform". Can other types if needed
-                - "weight" (float): The mixture weight for this distribution. All weights
-                                     must be positive and sum to approximately 1.0.
-                - Parameters specific to the distribution_type:
-                    - For "beta": "alpha" (float > 0), "beta" (float > 0).
-                    - For "logit-normal": "loc" (float), "scale" (float > 0).
-                    - For "uniform": "low" (float), "high" (float), with low < high.
-            seed (Optional[int]): Random seed for reproducibility.
-        """
-        if not isinstance(distributions_config, list) or not distributions_config:
-            raise ValueError("distributions_config must be a non-empty list of dicts.")
-
-        total_weight = 0.0
-        validated_configs = []
-        for config in distributions_config:
-            if not isinstance(config, dict):
-                raise ValueError("Each item in distributions_config must be a dictionary.")
-            
-            dist_type = config.get("distribution_type")
-            weight = config.get("weight")
-
-            if not isinstance(dist_type, str):
-                raise ValueError("Each config must have a 'distribution_type' (str).")
-            if not isinstance(weight, (float, int)) or weight <= 0:
-                raise ValueError("Each config must have a 'weight' (float > 0).")
-
-            total_weight += weight
-            
-            if dist_type == "beta":
-                alpha = config.get("alpha")
-                beta_param = config.get("beta")
-                if not isinstance(alpha, (float, int)) or alpha <= 0:
-                    raise ValueError("Beta distribution requires 'alpha' (float > 0).")
-                if not isinstance(beta_param, (float, int)) or beta_param <= 0:
-                    raise ValueError("Beta distribution requires 'beta' (float > 0).")
-            elif dist_type == "logit-normal":
-                loc = config.get("loc")
-                scale = config.get("scale")
-                if not isinstance(loc, (float, int)):
-                    raise ValueError("Logit-normal distribution requires 'loc' (float).")
-                if not isinstance(scale, (float, int)) or scale <= 0:
-                    raise ValueError("Logit-normal distribution requires 'scale' (float > 0).")
-            elif dist_type == "uniform":
-                low = config.get("low")
-                high = config.get("high")
-                if not isinstance(low, (float, int)):
-                    raise ValueError("Uniform distribution requires 'low' (float).")
-                if not isinstance(high, (float, int)):
-                    raise ValueError("Uniform distribution requires 'high' (float).")
-                if low >= high:
-                    raise ValueError("For uniform distribution, 'low' must be less than 'high'.")
-            else:
-                raise ValueError(f"Unsupported distribution_type: {dist_type}. "
-                                 "Must be 'beta', 'logit-normal', or 'uniform'.")
-            validated_configs.append(config)
-
-        if not torch.isclose(torch.tensor(total_weight), torch.tensor(1.0)):
-            raise ValueError(f"Sum of weights must be close to 1.0, but got {total_weight}.")
-
-        self.distributions_config = validated_configs
-        self.seed = seed
-        self.weights_tensor = torch.tensor([d['weight'] for d in self.distributions_config], dtype=torch.float32)
+        alpha: float = 2.2,
+        uniform_weight: float = 0.02,
+    ):
+        self.alpha = alpha
+        self.p_beta = 1.0 - uniform_weight
 
     def __call__(
-        self,
+        self, 
         size: torch.Size,
         device: torch.device = torch.device("cpu"),
-        dtype: torch.dtype = torch.float32
+        generator: Optional[torch.Generator] = None,
+        eps: float = 1e-4
     ) -> torch.Tensor:
+        """Sample timesteps from the mixture distribution. It is a mixture of Beta(alpha,1) and Uniform(0,1) distributions.
+
+        Args:
+            size (torch.Size): Shape of output tensor
+            device (torch.device): Device to place tensor on
+            generator (torch.Generator, optional): Generator for reproducibility
+            eps (float, optional): Epsilon value to clamp timesteps
+
+        Returns:
+            torch.Tensor: Sampled timesteps tensor of shape 'size'
         """
-        Sample the timestep from the configured mixture of distributions.
-        """
-        generator = None
-        if self.seed is not None:
-            generator = torch.Generator(device=device).manual_seed(self.seed)
+        # Component selector: 1 → take Beta, 0 → take Uniform
+        take_beta = (torch.rand(size, generator=generator, device=device) < self.p_beta)
 
-        num_total_samples = size[0] # assuming size is a tuple of (num_samples, ), works for current training code TODO: make more robust
-        
-        # Determine which distribution to sample from for each element
-        dist_indices = torch.multinomial(
-            self.weights_tensor.to(device), # Ensure weights tensor is on the correct device
-            num_total_samples,
-            replacement=True,
-            generator=generator
-        )
+        # Beta(α,1) ⇔ U**(1/α) with U ~ Uniform(0,1)
+        beta_part = torch.rand(size, generator=generator, device=device).pow(1.0 / self.alpha)
+        uniform_part = torch.rand(size, generator=generator, device=device)
 
-        samples = torch.empty(num_total_samples, device=device, dtype=dtype)
+        timesteps = torch.where(take_beta, beta_part, uniform_part)
 
-        for i, dist_config in enumerate(self.distributions_config):
-            mask = (dist_indices == i)
-            num_samples_for_dist = mask.sum().item()
-
-            if num_samples_for_dist == 0:
-                continue
-
-            current_dist_type = dist_config["distribution_type"]
-            
-            if current_dist_type == "beta":
-                alpha = torch.tensor(dist_config["alpha"], device=device, dtype=dtype)
-                beta_param = torch.tensor(dist_config["beta"], device=device, dtype=dtype)
-                beta_dist = torch.distributions.beta.Beta(alpha, beta_param)
-                #TODO: .sample() does not take a generator argument directly. should fix seeds at some point
-                samples[mask] = beta_dist.sample(sample_shape=torch.Size([num_samples_for_dist]))
-            
-            elif current_dist_type == "logit-normal":
-                loc = dist_config["loc"]
-                scale = dist_config["scale"]
-                samples[mask] = sample_logit_normal(
-                    size=torch.Size([num_samples_for_dist]),
-                    device=device,
-                    dtype=dtype,
-                    loc=loc,
-                    scale=scale,
-                    generator=generator
-                )
-            
-            elif current_dist_type == "uniform":
-                low = dist_config["low"]
-                high = dist_config["high"]
-                samples[mask] = torch.rand(
-                    torch.Size([num_samples_for_dist]),
-                    device=device,
-                    dtype=dtype,
-                    generator=generator
-                ) * (high - low) + low
-        
-        return samples.view(size)
+        # Clamp timesteps to avoid numerical instability at t=0 or t=1
+        return timesteps.clamp(min=eps, max=1.0-eps)
     
 
 class InferenceTimestepScheduler:
@@ -558,7 +382,11 @@ def sample_diffusion_training(
 
     # Get timestep for noising
     # timestep: independent timesteps for each sample [..., N_sample]
-    timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype) 
+    timestep = timestep_sampler(
+        size=(*batch_size_shape, N_sample), 
+        device=device, 
+        generator=generator
+    ).to(dtype) 
 
     # Generate noise
     noise = torch.randn(

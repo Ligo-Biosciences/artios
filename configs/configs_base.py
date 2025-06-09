@@ -177,7 +177,7 @@ model_configs = {
                 "n_heads": 4,
             },
             "transformer": {
-                "n_blocks": 20,
+                "n_blocks": 24,
                 "n_heads": 16,
             },
             "atom_decoder": {

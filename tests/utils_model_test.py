@@ -1,7 +1,7 @@
 import pytest
 import torch
 import numpy as np
-from artios.model.utils import add, mul
+from protenix.model.utils import add, mul
 
 
 class TestArithmeticOperations:

@@ -14,7 +14,7 @@
 
 import numpy as np
 import torch
-from artios.utils.ema_utils import sigma_to_gamma
+from protenix.utils.ema_utils import sigma_to_gamma
 
 
 class EMAWrapper(object):

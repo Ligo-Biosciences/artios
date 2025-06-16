@@ -28,13 +28,13 @@ from configs.configs_data import data_configs
 from configs.configs_inference import inference_configs
 from runner.dumper import DataDumper
 
-from artios.config import parse_configs, parse_sys_args
-from artios.data.infer_data_pipeline import get_inference_dataloader
-from artios.model.artios_ligand import ArtiosLigand
-from artios.utils.distributed import DIST_WRAPPER
-from artios.utils.seed import seed_everything
-from artios.utils.torch_utils import to_device
-from artios.web_service.dependency_url import URL
+from protenix.config import parse_configs, parse_sys_args
+from protenix.data.infer_data_pipeline import get_inference_dataloader
+from protenix.model.artios_ligand import ArtiosLigand
+from protenix.utils.distributed import DIST_WRAPPER
+from protenix.utils.seed import seed_everything
+from protenix.utils.torch_utils import to_device
+from protenix.web_service.dependency_url import URL
 
 logger = logging.getLogger(__name__)
 

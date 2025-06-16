@@ -2,7 +2,7 @@ import pytest
 import torch
 import os
 
-from protenix.model.modules.embedders import (
+from artios.model.modules.embedders import (
     InputFeatureEmbedder, RelativePositionEncoding, FourierEmbedding
 )
 

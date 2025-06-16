@@ -35,24 +35,24 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
-from protenix.config import parse_configs, parse_sys_args
-from protenix.config.config import save_config
-from protenix.data.dataloader import get_dataloaders
-from protenix.metrics.lddt_metrics import LDDTMetrics
-from protenix.model.artios_ligand import ArtiosLigand
-from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
-from protenix.utils.lr_scheduler import get_lr_scheduler
-from protenix.utils.metrics import SimpleMetricAggregator
-from protenix.utils.permutation.permutation import SymmetricPermutation
-from protenix.utils.seed import seed_everything
-from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
-from protenix.utils.training import get_optimizer, is_loss_nan_check
+from artios.config import parse_configs, parse_sys_args
+from artios.config.config import save_config
+from artios.data.dataloader import get_dataloaders
+from artios.metrics.lddt_metrics import LDDTMetrics
+from artios.model.artios_ligand import ArtiosLigand
+from artios.utils.distributed import DIST_WRAPPER, wait_for_all_processes
+from artios.utils.lr_scheduler import get_lr_scheduler
+from artios.utils.metrics import SimpleMetricAggregator
+from artios.utils.permutation.permutation import SymmetricPermutation
+from artios.utils.seed import seed_everything
+from artios.utils.torch_utils import autocasting_disable_decorator, to_device
+from artios.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
 from runner.evaluate import Evaluator
-from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
-from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
+from artios.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
+from artios.utils.monitoring import visualize_loss_histogram, grad_norm
 from runner.inference import InferenceRunner, infer_predict
-from protenix.utils.structure_io import cif_to_pdb
+from artios.utils.structure_io import cif_to_pdb
 import pandas as pd
 import matplotlib.pyplot as plt
 

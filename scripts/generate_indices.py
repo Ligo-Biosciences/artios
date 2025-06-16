@@ -19,8 +19,8 @@ from typing import Optional
 import pandas as pd
 import ray
 from tqdm import tqdm
-from protenix.utils.file_io import load_gzip_pickle
-from protenix.data.parser import MMCIFParser
+from artios.utils.file_io import load_gzip_pickle
+from artios.data.parser import MMCIFParser
 
 
 def get_indices_from_bioassembly(

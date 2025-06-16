@@ -2,7 +2,7 @@ import pytest
 import torch
 import os
 
-from protenix.model.modules.transformer import (
+from artios.model.modules.transformer import (
     AttentionPairBias, 
     DiffusionTransformerBlock, 
     DiffusionTransformer,

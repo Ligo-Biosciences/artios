@@ -20,8 +20,8 @@ import pandas as pd
 import ray
 import psutil
 from tqdm import tqdm
-from protenix.data.data_pipeline import DataPipeline
-from protenix.utils.file_io import dump_gzip_pickle
+from artios.data.data_pipeline import DataPipeline
+from artios.utils.file_io import dump_gzip_pickle
 
 
 def gen_a_bioassembly_data(

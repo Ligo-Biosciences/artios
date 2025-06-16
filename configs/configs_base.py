@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # pylint: disable=C0114,C0301
-from protenix.config.extend_types import (
+from artios.config.extend_types import (
     GlobalConfigValue,
     ListValue,
     RequiredValue,

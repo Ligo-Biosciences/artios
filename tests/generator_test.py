@@ -1,7 +1,7 @@
 import torch
 import pytest
 import numpy as np
-from protenix.model.generator import (
+from artios.model.generator import (
     TrainingTimestepSampler,
     InferenceTimestepScheduler,
     sample_diffusion,

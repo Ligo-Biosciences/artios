@@ -16,7 +16,7 @@
 import os
 from copy import deepcopy
 
-from protenix.config.extend_types import GlobalConfigValue, ListValue
+from artios.config.extend_types import GlobalConfigValue, ListValue
 
 default_test_configs = {
     "sampler_configs": {

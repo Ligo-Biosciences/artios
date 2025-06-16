@@ -1,7 +1,7 @@
 import pytest
 import torch
 import numpy as np
-from protenix.model.modules.primitives import (
+from artios.model.modules.primitives import (
     _calculate_fan, trunc_normal_init_, init_bias_to_zero_, init_weight_to_zero_,
     lecun_normal_init_, he_normal_init_, glorot_uniform_init_, final_init_, gating_init_,
     normal_init_, bias_init_fn, Linear, LinearNoBias, BiasInitLinear, LayerNorm, SwiGLU,

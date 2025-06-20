@@ -367,7 +367,7 @@ class DiffusionModule(nn.Module):
         return 1 / (self.sigma_data * (timestep ** 2 + (1 - timestep) ** 2).sqrt())
 
     def c_out(self, timestep: torch.Tensor) -> torch.Tensor:
-        return (1 - timestep)
+        return self.sigma_data * (1 - timestep)
 
     def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
         return 1.0

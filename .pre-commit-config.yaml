@@ -27,3 +27,20 @@ repos:
     hooks:
       - id: isort
         args: [--profile=black, --line-length=100]  # Compatible with black
+
+  # pytest - Run tests using Docker, only run on git push, not commit
+  - repo: local
+    hooks:
+      - id: pytest-docker
+        name: pytest (Docker)
+        entry: docker run --rm -v .:/app -w /app artios-dev:latest python -m pytest
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [push]  # Only run on git push, not commit
+        args: [
+          -v,
+          --tb=short,
+          --maxfail=5,
+          tests/
+        ]

@@ -60,7 +60,6 @@ def permute_pred_to_optimize_pocket_aligned_rmsd(
 
     # find entity_id/asym_id of pocket and ligand chains
     def _get_entity_and_asym_id(atom_mask):
-
         masked_asym_id = atom_asym_id[atom_mask]
         masked_entity_id = atom_entity_id[atom_mask]
         assert (masked_asym_id[0] == masked_asym_id).all()
@@ -74,9 +73,7 @@ def permute_pred_to_optimize_pocket_aligned_rmsd(
     for i in torch.unique(atom_asym_id[atom_entity_id == pocket_entity_id]):
         i = i.item()
         pocket_mask = atom_asym_id == i
-        pocket_mask = pocket_mask * torch.isin(
-            mol_atom_index, mol_atom_index[true_pocket_mask]
-        )
+        pocket_mask = pocket_mask * torch.isin(mol_atom_index, mol_atom_index[true_pocket_mask])
         assert pocket_mask.sum() == true_pocket_mask.sum()
         candidate_pockets[i] = pocket_mask.clone()
     candidate_ligands = {}
@@ -88,9 +85,7 @@ def permute_pred_to_optimize_pocket_aligned_rmsd(
                 f"The ligand selected by 'mol_id' has {lig_mask_j.sum().item()} atoms."
                 + f"The true ligand selected by 'asym_id' has {true_ligand_mask.sum().item()} atoms."
             )
-            lig_mask_j = lig_mask_j * torch.isin(
-                mol_atom_index, mol_atom_index[true_ligand_mask]
-            )
+            lig_mask_j = lig_mask_j * torch.isin(mol_atom_index, mol_atom_index[true_ligand_mask])
         assert lig_mask_j.sum() == true_ligand_mask.sum()
         candidate_ligands[j] = lig_mask_j
 
@@ -237,9 +232,11 @@ def permute_pred_to_optimize_pocket_aligned_rmsd(
     permuted_aligned_pred_coord = []
     sample_log_dicts = []
     for i in range(N_sample):
-        atom_indices, aligned_pred_coord, per_sample_log_dict = (
-            _find_protein_ligand_chains_for_one_sample(pred_coord[i])
-        )
+        (
+            atom_indices,
+            aligned_pred_coord,
+            per_sample_log_dict,
+        ) = _find_protein_ligand_chains_for_one_sample(pred_coord[i])
         permute_pred_indices.append(atom_indices)
         permuted_aligned_pred_coord.append(aligned_pred_coord)
         sample_log_dicts.append(per_sample_log_dict)

@@ -69,9 +69,7 @@ class Filter(object):
         return atom_array
 
     @staticmethod
-    def remove_crystallization_aids(
-        atom_array: AtomArray, entity_poly_type: dict
-    ) -> AtomArray:
+    def remove_crystallization_aids(atom_array: AtomArray, entity_poly_type: dict) -> AtomArray:
         """remove crystallization aids, eg: SO4, GOL, etc.
 
         Only remove crystallization aids if the chain is not polymer.
@@ -103,12 +101,8 @@ class Filter(object):
                                                Note: (i, j) != (j, i).
                 chain_resolved_atom_nums (list[int]): The number of resolved atoms corresponding to each chain ID.
         """
-        is_resolved_centre_atom = (
-            atom_array.centre_atom_mask == 1
-        ) & atom_array.is_resolved
-        cell_list = struc.CellList(
-            atom_array, cell_size=1.7, selection=is_resolved_centre_atom
-        )
+        is_resolved_centre_atom = (atom_array.centre_atom_mask == 1) & atom_array.is_resolved
+        cell_list = struc.CellList(atom_array, cell_size=1.7, selection=is_resolved_centre_atom)
 
         # (i, j) means the ratio of i's atom clashed with j's atoms
         clash_records = np.zeros((len(chain_ids), len(chain_ids)))
@@ -131,9 +125,7 @@ class Filter(object):
                 chains_covalent_dict[(chain_id_j, chain_id_i)] = covalent
 
         for i, chain_id in enumerate(chain_ids):
-            coords = atom_array.coord[
-                (atom_array.chain_id == chain_id) & is_resolved_centre_atom
-            ]
+            coords = atom_array.coord[(atom_array.chain_id == chain_id) & is_resolved_centre_atom]
             chain_resolved_atom_nums.append(len(coords))
             chain_atom_ids = np.where(atom_array.chain_id == chain_id)[0]
             chain_atom_ids_set = set(chain_atom_ids) | {-1}
@@ -156,7 +148,6 @@ class Filter(object):
                     clashed_other_chain_ids = atom_array.chain_id[other_chain_atom_ids]
 
                     for other_chain_id in set(clashed_other_chain_ids):
-
                         # two chains covalent with each other
                         if chains_covalent_dict[(chain_id, other_chain_id)]:
                             continue
@@ -164,9 +155,7 @@ class Filter(object):
                         cols = np.where(clashed_other_chain_ids == other_chain_id)[0]
 
                         # how many i's atoms clashed with j
-                        any_atom_clashed = np.any(
-                            clash_mat[:, cols].astype(int), axis=1
-                        )
+                        any_atom_clashed = np.any(clash_mat[:, cols].astype(int), axis=1)
                         clashed_atom_num = np.sum(any_atom_clashed.astype(int))
 
                         if clashed_atom_num > 0:
@@ -224,15 +213,9 @@ class Filter(object):
                     continue
                 else:
                     # clashing chains
-                    if (
-                        chain_idx_i in core_chain_id
-                        and chain_idx_j not in core_chain_id
-                    ):
+                    if chain_idx_i in core_chain_id and chain_idx_j not in core_chain_id:
                         removed_chain_idx = chain_idx_j
-                    elif (
-                        chain_idx_i not in core_chain_id
-                        and chain_idx_j in core_chain_id
-                    ):
+                    elif chain_idx_i not in core_chain_id and chain_idx_j in core_chain_id:
                         removed_chain_idx = chain_idx_i
 
                     elif clash_ratio_ij > clash_ratio_ji:
@@ -284,9 +267,7 @@ class Filter(object):
         return atom_array
 
     @staticmethod
-    def remove_polymer_chains_too_short(
-        atom_array: AtomArray, entity_poly_type: dict
-    ) -> AtomArray:
+    def remove_polymer_chains_too_short(atom_array: AtomArray, entity_poly_type: dict) -> AtomArray:
         chain_starts = struc.get_chain_starts(atom_array, add_exclusive_stop=True)
         invalid_chains = []  # list of [start, end)
         for index in range(len(chain_starts) - 1):
@@ -324,9 +305,7 @@ class Filter(object):
                 seq_ids = ca_atoms.label_seq_id
                 seq_ids[seq_ids == "."] = "-100"
                 seq_ids = seq_ids.astype(np.int64)
-                dist_square = np.sum(
-                    (ca_atoms[:-1].coord - ca_atoms[1:].coord) ** 2, axis=-1
-                )
+                dist_square = np.sum((ca_atoms[:-1].coord - ca_atoms[1:].coord) ** 2, axis=-1)
                 invalid_neighbor_mask = (dist_square > max_distance**2) & (
                     seq_ids[:-1] + 1 == seq_ids[1:]
                 )
@@ -385,9 +364,7 @@ class Filter(object):
             # no change
             return atom_array, input_chains_num
 
-        is_resolved_centre_atom = (
-            atom_array.centre_atom_mask == 1
-        ) & atom_array.is_resolved
+        is_resolved_centre_atom = (atom_array.centre_atom_mask == 1) & atom_array.is_resolved
 
         cell_list = struc.CellList(
             atom_array, cell_size=interface_radius, selection=is_resolved_centre_atom
@@ -398,9 +375,7 @@ class Filter(object):
 
         # random pick centre atom
         if core_indices is None:
-            index_shuf = np.random.default_rng(seed=42).permutation(
-                len(resolved_centre_atom)
-            )
+            index_shuf = np.random.default_rng(seed=42).permutation(len(resolved_centre_atom))
         else:
             index_shuf = np.array(core_indices)
             resolved_centre_atom_indices = np.nonzero(is_resolved_centre_atom)[0]
@@ -418,9 +393,7 @@ class Filter(object):
         chosen_centre_atom = None
         for idx in index_shuf:
             centre_atom = resolved_centre_atom[idx]
-            neighbors_indices = cell_list.get_atoms(
-                centre_atom.coord, radius=interface_radius
-            )
+            neighbors_indices = cell_list.get_atoms(centre_atom.coord, radius=interface_radius)
             neighbors_indices = neighbors_indices[neighbors_indices != -1]
 
             neighbors_chain_ids = np.unique(atom_array.mol_id[neighbors_indices])
@@ -515,9 +488,7 @@ class Filter(object):
         else:
             core_chain_id = np.array([])
 
-        clash_records, chain_resolved_atom_nums = Filter._get_clashing_chains(
-            atom_array, chain_ids
-        )
+        clash_records, chain_resolved_atom_nums = Filter._get_clashing_chains(atom_array, chain_ids)
         removed_chain_ids = Filter._get_removed_clash_chain_ids(
             clash_records,
             chain_ids,
@@ -576,7 +547,6 @@ class Filter(object):
         asymmetric_bonds = set()
         chain_starts = struc.get_chain_starts(atom_array, add_exclusive_stop=False)
         for bond in inter_chain_bonds:
-
             if bond in asymmetric_bonds:
                 continue
 

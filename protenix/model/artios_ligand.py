@@ -14,10 +14,7 @@ from protenix.model.generator import (
 )
 from protenix.model.loss import ProtenixLoss
 from protenix.model.modules.diffusion import DiffusionModule
-from protenix.model.modules.embedders import (
-    InputFeatureEmbedder,
-    RelativePositionEncoding,
-)
+from protenix.model.modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
 from protenix.model.modules.primitives import LinearNoBias
 from protenix.model.utils import add, simple_merge_dict_list
 from protenix.utils.permutation.permutation import SymmetricPermutation
@@ -36,9 +33,7 @@ class ArtiosLigand(nn.Module):
         # self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
 
         # Diffusion
-        self.train_timestep_sampler = TrainingTimestepSamplerV2(
-            **configs.train_timestep_sampler
-        )
+        self.train_timestep_sampler = TrainingTimestepSamplerV2(**configs.train_timestep_sampler)
         self.eval_timestep_sampler = TrainingTimestepSamplerV2(
             **configs.train_timestep_sampler,
         )
@@ -228,9 +223,7 @@ class ArtiosLigand(nn.Module):
         N_sample = self.configs.sample_diffusion["N_sample"]
         N_step = self.configs.sample_diffusion["N_step"]
         # Generate timesteps for solving the FM SDE
-        timesteps = self.inference_timestep_scheduler(
-            N_step=N_step, device=device, dtype=dtype
-        )
+        timesteps = self.inference_timestep_scheduler(N_step=N_step, device=device, dtype=dtype)
         # N_sample different ouputs created via diffusion
         pred_dict["coordinate"] = self.sample_diffusion(
             denoise_net=self.diffusion_module,
@@ -319,7 +312,7 @@ class ArtiosLigand(nn.Module):
                 ]  # =1
                 N_step = self.configs.sample_diffusion["N_step"]
 
-                coordinate_mini = self.sample_diffusion( 
+                coordinate_mini = self.sample_diffusion(
                     denoise_net=self.diffusion_module,
                     input_feature_dict=input_feature_dict,
                     s_inputs=s_inputs.detach(),
@@ -355,9 +348,7 @@ class ArtiosLigand(nn.Module):
             self.configs.skip_amp.sample_diffusion_training
         )(sample_diffusion_training)(
             timestep_sampler=(
-                self.train_timestep_sampler
-                if self.training
-                else self.eval_timestep_sampler
+                self.train_timestep_sampler if self.training else self.eval_timestep_sampler
             ),
             denoise_net=self.diffusion_module,
             label_dict=label_dict,
@@ -365,9 +356,7 @@ class ArtiosLigand(nn.Module):
             sigma_data=self.sigma_data,
             N_sample=N_sample,
             diffusion_chunk_size=self.configs.diffusion_chunk_size,
-            generator=(
-                torch.Generator(device).manual_seed(seed) if not self.training else None
-            ),
+            generator=(torch.Generator(device).manual_seed(seed) if not self.training else None),
         )
 
         # Update dicts
@@ -381,10 +370,13 @@ class ArtiosLigand(nn.Module):
 
         # Permute symmetric atom/chain in each sample to match true structure
         # Note: currently chains cannot be permuted since label is cropped
-        pred_dict, perm_log_dict, _, _ = (
-            symmetric_permutation.permute_diffusion_sample_to_match_label(
-                input_feature_dict, pred_dict, label_dict, stage="train"
-            )
+        (
+            pred_dict,
+            perm_log_dict,
+            _,
+            _,
+        ) = symmetric_permutation.permute_diffusion_sample_to_match_label(
+            input_feature_dict, pred_dict, label_dict, stage="train"
         )
         log_dict.update(perm_log_dict)
 
@@ -459,7 +451,7 @@ class ArtiosLigand(nn.Module):
                 )
                 label_dict.update(label_full_dict)
 
-            pred_dict, log_dict, time_tracker = self.main_inference_loop( 
+            pred_dict, log_dict, time_tracker = self.main_inference_loop(
                 input_feature_dict=input_feature_dict,
                 label_dict=label_dict,
                 mode=mode,

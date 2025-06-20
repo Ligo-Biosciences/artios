@@ -23,11 +23,10 @@ from typing import Any, Mapping, Optional
 
 import torch
 import torch.distributed as dist
+
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
 from configs.configs_inference import inference_configs
-from runner.dumper import DataDumper
-
 from protenix.config import parse_configs, parse_sys_args
 from protenix.data.infer_data_pipeline import get_inference_dataloader
 from protenix.model.artios_ligand import ArtiosLigand
@@ -35,6 +34,7 @@ from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import to_device
 from protenix.web_service.dependency_url import URL
+from runner.dumper import DataDumper
 
 logger = logging.getLogger(__name__)
 
@@ -105,12 +105,10 @@ class InferenceRunner(object):
             self.guiding_net = ArtiosLigand(self.configs.guidance_model_configs).to(self.device)
 
     def load_checkpoint(self) -> None:
-        def _load_checkpoint(checkpoint_path: str, guiding = False):
+        def _load_checkpoint(checkpoint_path: str, guiding=False):
             if not os.path.exists(checkpoint_path):
                 raise Exception(f"Given checkpoint path not exist [{checkpoint_path}]")
-            self.print(
-                f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}"
-            )
+            self.print(f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}")
             checkpoint = torch.load(checkpoint_path, self.device)
 
             sample_key = [k for k in checkpoint["model"].keys()][0]
@@ -132,7 +130,7 @@ class InferenceRunner(object):
                     strict=self.configs.load_strict,
                 )
                 self.guiding_net.eval()
-        
+
         _load_checkpoint(self.configs.load_checkpoint_path, guiding=False)
         self.print(f"Finished loading checkpoint.")
 
@@ -305,7 +303,9 @@ def main(configs: Any) -> None:
 
 
 def run() -> None:
-    LOG_FORMAT = "%(asctime)s,%(msecs)-3d %(levelname)-8s [%(filename)s:%(lineno)s %(funcName)s] %(message)s"
+    LOG_FORMAT = (
+        "%(asctime)s,%(msecs)-3d %(levelname)-8s [%(filename)s:%(lineno)s %(funcName)s] %(message)s"
+    )
     logging.basicConfig(
         format=LOG_FORMAT,
         level=logging.INFO,

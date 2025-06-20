@@ -60,9 +60,7 @@ def extract_ligands_from_cif(
     atom_array = load_structure(cif_file)
 
     # Filter for the ligands
-    is_ligand = np.isin(
-        atom_array.res_name, list(mmcif_restype_3to1.keys()) + ["HOH"], invert=True
-    )
+    is_ligand = np.isin(atom_array.res_name, list(mmcif_restype_3to1.keys()) + ["HOH"], invert=True)
     ligands_array = atom_array[is_ligand]
 
     ligand_ids = np.unique(ligands_array.label_entity_id)
@@ -76,18 +74,14 @@ def extract_ligands_from_cif(
         save_ligand_id = ligand_id.astype(np.int32) - min_entity_id + 1
 
         # Save the structure
-        output_filepath = os.path.join(
-            output_dir, f"{cif_file.stem}_{save_ligand_id}.sdf"
-        )
+        output_filepath = os.path.join(output_dir, f"{cif_file.stem}_{save_ligand_id}.sdf")
         save_to_sdf(ligand, output_filepath)
         output_paths.append(output_filepath)
 
     return output_paths
 
 
-def extract_protein_from_cif(
-    cif_file: Union[str, Path], output_path: Union[str, Path]
-) -> None:
+def extract_protein_from_cif(cif_file: Union[str, Path], output_path: Union[str, Path]) -> None:
     """
     Parse a CIF file, extract the protein structure (excluding ligands), and save it to SDF.
 
@@ -103,17 +97,13 @@ def extract_protein_from_cif(
     atom_array = load_structure(cif_file)
 
     # Only keep amino acids
-    protein_array = atom_array[
-        np.isin(atom_array.res_name, list(mmcif_restype_3to1.keys()))
-    ]
+    protein_array = atom_array[np.isin(atom_array.res_name, list(mmcif_restype_3to1.keys()))]
 
     # Save the structure
     save_to_sdf(protein_array, output_path)
 
 
-def cif_to_pdb(
-    cif_file: Union[str, Path], output_path: Union[str, Path] = None
-) -> None:
+def cif_to_pdb(cif_file: Union[str, Path], output_path: Union[str, Path] = None) -> None:
     """
     Convert a CIF file to PDB format and save it.
 

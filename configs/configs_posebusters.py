@@ -6,62 +6,44 @@ posebusters_config = {
         {
             "name": "Loading",
             "function": "loading",
-            "chosen_binary_test_output": [
-                "mol_pred_loaded"
-            ],
-            "rename_outputs": {
-                "mol_pred_loaded": "MOL_PRED loaded"
-            }
+            "chosen_binary_test_output": ["mol_pred_loaded"],
+            "rename_outputs": {"mol_pred_loaded": "MOL_PRED loaded"},
         },
         {
             "name": "Chemistry",
             "function": "rdkit_sanity",
-            "chosen_binary_test_output": [
-                "passes_rdkit_sanity_checks"
-            ],
-            "rename_outputs": {
-                "passes_rdkit_sanity_checks": "Sanitization"
-            }
+            "chosen_binary_test_output": ["passes_rdkit_sanity_checks"],
+            "rename_outputs": {"passes_rdkit_sanity_checks": "Sanitization"},
         },
         {
             "name": "Chemistry",
             "function": "inchi_convertible",
-            "chosen_binary_test_output": [
-                "inchi_convertible"
-            ],
-            "rename_outputs": {
-                "inchi_convertible": "InChI convertible"
-            }
+            "chosen_binary_test_output": ["inchi_convertible"],
+            "rename_outputs": {"inchi_convertible": "InChI convertible"},
         },
         {
             "name": "Chemistry",
             "function": "atoms_connected",
-            "chosen_binary_test_output": [
-                "all_atoms_connected"
-            ],
-            "rename_outputs": {
-                "all_atoms_connected": "All atoms connected"
-            }
+            "chosen_binary_test_output": ["all_atoms_connected"],
+            "rename_outputs": {"all_atoms_connected": "All atoms connected"},
         },
         {
             "name": "Chemistry",
             "function": "identity",
-            "parameters": {
-                "inchi_options": "w"
-            },
+            "parameters": {"inchi_options": "w"},
             "chosen_binary_test_output": [
                 "formula",
                 "connections",
                 "stereo_dbond",
-                "stereo_tetrahedral"
+                "stereo_tetrahedral",
             ],
             "rename_outputs": {
                 "formula": "Molecular formula",
                 "connections": "Molecular bonds",
                 "stereo_dbond": "Double bond stereochemistry",
                 "stereo_tetrahedral": "Tetrahedral chirality",
-                "stereo": "Stereochemistry preserved"
-            }
+                "stereo": "Stereochemistry preserved",
+            },
         },
         {
             "name": "Geometry",
@@ -71,24 +53,24 @@ posebusters_config = {
                     "set15bounds": True,  # topology based bounds also for 1,5- not just until 1,4-
                     "scaleVDW": True,  # scale down lower bounds for atoms less than 5 bonds apart
                     "doTriangleSmoothing": True,
-                    "useMacrocycle14config": False
+                    "useMacrocycle14config": False,
                 },
                 "threshold_bad_bond_length": 0.25,  # widens DG bound by this factor
                 "threshold_bad_angle": 0.25,  # widens DG bound by this factor
                 "threshold_clash": 0.3,  # widens DG bound by this factor
                 "ignore_hydrogens": True,  # ignore hydrogens
-                "sanitize": True  # sanitize molecule before running DG module (recommended)
+                "sanitize": True,  # sanitize molecule before running DG module (recommended)
             },
             "chosen_binary_test_output": [
                 "bond_lengths_within_bounds",
                 "bond_angles_within_bounds",
-                "no_internal_clash"
+                "no_internal_clash",
             ],
             "rename_outputs": {
                 "bond_lengths_within_bounds": "Bond lengths",
                 "bond_angles_within_bounds": "Bond angles",
-                "no_internal_clash": "Internal steric clash"
-            }
+                "no_internal_clash": "Internal steric clash",
+            },
         },
         {
             "name": "Ring flatness",
@@ -96,19 +78,17 @@ posebusters_config = {
             "parameters": {
                 "flat_systems": {  # list atoms which together should lie on plane as SMARTS matches
                     "aromatic_5_membered_rings_sp2": "[ar5^2]1[ar5^2][ar5^2][ar5^2][ar5^2]1",
-                    "aromatic_6_membered_rings_sp2": "[ar6^2]1[ar6^2][ar6^2][ar6^2][ar6^2][ar6^2]1"
+                    "aromatic_6_membered_rings_sp2": "[ar6^2]1[ar6^2][ar6^2][ar6^2][ar6^2][ar6^2]1",
                 },
-                "threshold_flatness": 0.25  # max distance in A to closest shared plane
+                "threshold_flatness": 0.25,  # max distance in A to closest shared plane
             },
-            "chosen_binary_test_output": [
-                "flatness_passes"
-            ],
+            "chosen_binary_test_output": ["flatness_passes"],
             "rename_outputs": {
                 "num_systems_checked": "number_aromatic_rings_checked",
                 "num_systems_passed": "number_aromatic_rings_pass",
                 "max_distance": "aromatic_ring_maximum_distance_from_plane",
-                "flatness_passes": "Aromatic ring flatness"
-            }
+                "flatness_passes": "Aromatic ring flatness",
+            },
         },
         {
             "name": "Double bond flatness",
@@ -117,17 +97,15 @@ posebusters_config = {
                 "flat_systems": {  # list atoms which together should lie on plane as SMARTS matches
                     "trigonal_planar_double_bonds": "[C;X3;^2](*)(*)=[C;X3;^2](*)(*)"
                 },
-                "threshold_flatness": 0.25  # max distance in A to closest shared plane
+                "threshold_flatness": 0.25,  # max distance in A to closest shared plane
             },
-            "chosen_binary_test_output": [
-                "flatness_passes"
-            ],
+            "chosen_binary_test_output": ["flatness_passes"],
             "rename_outputs": {
                 "num_systems_checked": "number_double_bonds_checked",
                 "num_systems_passed": "number_double_bonds_pass",
                 "max_distance": "double_bond_maximum_distance_from_plane",
-                "flatness_passes": "Double bond flatness"
-            }
+                "flatness_passes": "Double bond flatness",
+            },
         },
         {
             "name": "Energy ratio",
@@ -135,14 +113,10 @@ posebusters_config = {
             "parameters": {
                 "threshold_energy_ratio": 100.0,
                 "ensemble_number_conformations": 50,
-                "inchi_strict": False
+                "inchi_strict": False,
             },
-            "chosen_binary_test_output": [
-                "energy_ratio_passes"
-            ],
-            "rename_outputs": {
-                "energy_ratio_passes": "Internal energy"
-            }
+            "chosen_binary_test_output": ["energy_ratio_passes"],
+            "rename_outputs": {"energy_ratio_passes": "Internal energy"},
         },
     ],
     "loading": {
@@ -151,23 +125,23 @@ posebusters_config = {
             "sanitize": False,
             "add_hs": False,
             "assign_stereo": False,
-            "load_all": True
+            "load_all": True,
         },
         "mol_true": {
             "cleanup": False,
             "sanitize": False,
             "add_hs": False,
             "assign_stereo": False,
-            "load_all": True
+            "load_all": True,
         },
         "mol_cond": {
             "cleanup": False,
             "sanitize": False,
             "add_hs": False,
             "assign_stereo": False,
-            "proximityBonding": False
-        }
-    }
+            "proximityBonding": False,
+        },
+    },
 }
 
 
@@ -177,22 +151,14 @@ basic_posebusters_config = {
         {
             "name": "Loading",
             "function": "loading",
-            "chosen_binary_test_output": [
-                "mol_pred_loaded"
-            ],
-            "rename_outputs": {
-                "mol_pred_loaded": "MOL_PRED loaded"
-            }
+            "chosen_binary_test_output": ["mol_pred_loaded"],
+            "rename_outputs": {"mol_pred_loaded": "MOL_PRED loaded"},
         },
         {
             "name": "Chemistry",
             "function": "rdkit_sanity",
-            "chosen_binary_test_output": [
-                "passes_rdkit_sanity_checks"
-            ],
-            "rename_outputs": {
-                "passes_rdkit_sanity_checks": "Sanitization"
-            }
+            "chosen_binary_test_output": ["passes_rdkit_sanity_checks"],
+            "rename_outputs": {"passes_rdkit_sanity_checks": "Sanitization"},
         },
         {
             "name": "Geometry",
@@ -202,19 +168,19 @@ basic_posebusters_config = {
                 "threshold_bad_angle": 0.25,
                 "threshold_clash": 0.3,
                 "ignore_hydrogens": True,
-                "sanitize": True
+                "sanitize": True,
             },
             "chosen_binary_test_output": [
                 "bond_lengths_within_bounds",
                 "bond_angles_within_bounds",
-                "no_internal_clash"
+                "no_internal_clash",
             ],
             "rename_outputs": {
                 "bond_lengths_within_bounds": "Bond lengths",
                 "bond_angles_within_bounds": "Bond angles",
-                "no_internal_clash": "Internal steric clash"
-            }
-        }
+                "no_internal_clash": "Internal steric clash",
+            },
+        },
     ],
     "loading": {
         "mol_pred": {
@@ -222,7 +188,7 @@ basic_posebusters_config = {
             "sanitize": False,
             "add_hs": False,
             "assign_stereo": False,
-            "load_all": True
+            "load_all": True,
         }
-    }
+    },
 }

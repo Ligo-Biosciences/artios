@@ -13,12 +13,7 @@
 # limitations under the License.
 
 # pylint: disable=C0114,C0301
-from protenix.config.extend_types import (
-    GlobalConfigValue,
-    ListValue,
-    RequiredValue,
-    ValueMaybeNone,
-)
+from protenix.config.extend_types import GlobalConfigValue, ListValue, RequiredValue, ValueMaybeNone
 
 basic_configs = {
     "project": RequiredValue(str),
@@ -41,7 +36,7 @@ basic_configs = {
     "skip_load_scheduler": False,
     "train_confidence_only": False,
     "use_wandb": True,
-    "wandb_id": "", #TODO 
+    "wandb_id": "",  # TODO
     "seed": 42,
     "deterministic": False,
     "post_hoc_ema_checkpoint_dir": "",
@@ -55,7 +50,7 @@ data_configs = {
     # Data
     "train_crop_size": 384,
     "test_max_n_token": -1,
-    "train_lig_atom_rename": False,  # TODO: 
+    "train_lig_atom_rename": False,  # TODO:
     "train_shuffle_mols": False,
     "train_shuffle_sym_ids": False,
     "test_lig_atom_rename": False,
@@ -89,17 +84,17 @@ optim_configs = {
 }
 model_configs = {
     # Model
-    "c_s": 256, # 192
-    "c_z": 128, # 64
+    "c_s": 256,  # 192
+    "c_z": 128,  # 64
     "c_s_inputs": 256,  # c_s_inputs == c_token + 32
-    "c_atom": 256, # 64
-    "c_atompair": 16, # 16
-    "c_token": 768, # 192
-    "n_blocks": 48, # 16
+    "c_atom": 256,  # 64
+    "c_atompair": 16,  # 16
+    "c_token": 768,  # 192
+    "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
     "sigma_data": 12.0,
-    "diffusion_batch_size": 48, 
+    "diffusion_batch_size": 48,
     "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
@@ -107,7 +102,7 @@ model_configs = {
     ),  # NOTE: Number of blocks in each activation checkpoint, if None, no checkpointing is performed.
     # switch of kernels
     "use_memory_efficient_kernel": False,
-    "use_deepspeed_evo_attention": False, # TODO: not using deepspeed
+    "use_deepspeed_evo_attention": False,  # TODO: not using deepspeed
     "use_flash": False,
     "use_lma": False,
     "use_xformer": False,
@@ -133,22 +128,32 @@ model_configs = {
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
     "train_timestep_sampler": {
-        "distributions_config": ListValue([
-            {"distribution_type": "beta", "alpha": 6, "beta": 1.5, "weight": 0.85},
-            {"distribution_type": "uniform", "low": 0.0, "high": 1.0, "weight": 0.1},
-            {"distribution_type": "uniform", "low": 0.9, "high": 1.0, "weight": 0.05},
-        ]),
+        "distributions_config": ListValue(
+            [
+                {"distribution_type": "beta", "alpha": 6, "beta": 1.5, "weight": 0.85},
+                {
+                    "distribution_type": "uniform",
+                    "low": 0.0,
+                    "high": 1.0,
+                    "weight": 0.1,
+                },
+                {
+                    "distribution_type": "uniform",
+                    "low": 0.9,
+                    "high": 1.0,
+                    "weight": 0.05,
+                },
+            ]
+        ),
     },
-    "inference_timestep_scheduler": { 
-        "p": -0.7
-    },
-    "sample_diffusion": { 
-        "N_step": 100, # 25
-        "N_sample": 1, # 1
+    "inference_timestep_scheduler": {"p": -0.7},
+    "sample_diffusion": {
+        "N_step": 100,  # 25
+        "N_sample": 1,  # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type": "non_singular",
-        "alpha": 0.29, # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha": 0.29,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
         "sigma_data": GlobalConfigValue("sigma_data"),
         "second_order_train": False,
@@ -166,7 +171,7 @@ model_configs = {
         "diffusion_module": {
             "use_fine_grained_checkpoint": False,
             "sigma_data": GlobalConfigValue("sigma_data"),
-            "c_token": GlobalConfigValue("c_token"), 
+            "c_token": GlobalConfigValue("c_token"),
             "c_atom": GlobalConfigValue("c_atom"),
             "c_atompair": GlobalConfigValue("c_atompair"),
             "c_z": GlobalConfigValue("c_z"),
@@ -229,7 +234,7 @@ loss_configs = {
         "diffusion_sparse_loss_enable": GlobalConfigValue("loss_metrics_sparse_enable"),
         "diffusion_lddt_loss_dense": True,  # only set true in initial training for training speed
         "resolution": {"min": 0.1, "max": 4.0},
-        "weight": { # TODO: set unused loss weights to 0 (for completion)
+        "weight": {  # TODO: set unused loss weights to 0 (for completion)
             "alpha_confidence": 1e-4,
             "alpha_pae": 0.0,  # or 1 in finetuning stage 3
             "alpha_except_pae": 1.0,
@@ -268,9 +273,8 @@ loss_configs = {
                 "weight_rna": 5.0,
                 "weight_ligand": 10.0,
                 "eps": 1e-6,
-                #"use_uncertainty": False,
+                # "use_uncertainty": False,
             },
-
             "bond": {
                 "eps": 1e-6,
             },
@@ -311,7 +315,7 @@ monitor_configs = {
         "weight_norm": False,
         "eval_metrics": {
             "eval_tests": ListValue(["ss_distribution", "posebusters"]),
-        }
+        },
     },
 }
 

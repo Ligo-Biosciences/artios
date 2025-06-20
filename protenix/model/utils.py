@@ -78,13 +78,9 @@ def centre_random_augmentation(
 
     # Move to origin [..., N_atom, 3]
     if mask is None:
-        x_input_coords = x_input_coords - torch.mean(
-            input=x_input_coords, dim=-2, keepdim=True
-        )
+        x_input_coords = x_input_coords - torch.mean(input=x_input_coords, dim=-2, keepdim=True)
     else:
-        center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (
-            mask.sum(dim=-1) + eps
-        )
+        center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (mask.sum(dim=-1) + eps)
         x_input_coords = x_input_coords - center.unsqueeze(dim=-2)
 
     # Expand to [..., N_sample, N_atom, 3]
@@ -107,9 +103,7 @@ def centre_random_augmentation(
         device
     )  # [..., N_sample, 3]
     x_augment_coords = (
-        rot_vec_mul(
-            r=expand_at_dim(rot_matrix_random, dim=-3, n=N_atom), t=x_input_coords
-        )
+        rot_vec_mul(r=expand_at_dim(rot_matrix_random, dim=-3, n=N_atom), t=x_input_coords)
         + trans_random[..., None, :]
     )  # [..., N_sample, N_atom, 3]
     return x_augment_coords
@@ -189,9 +183,7 @@ def flatten_final_dims(t: torch.Tensor, num_dims: int) -> torch.Tensor:
     return t.reshape(shape=t.shape[:-num_dims] + (-1,))
 
 
-def one_hot(
-    x: torch.Tensor, lower_bins: torch.Tensor, upper_bins: torch.Tensor
-) -> torch.Tensor:
+def one_hot(x: torch.Tensor, lower_bins: torch.Tensor, upper_bins: torch.Tensor) -> torch.Tensor:
     """Get one hot embedding of x from lower_bins and upper_bins
     Args:
         x (torch.Tensor): the input x
@@ -243,9 +235,7 @@ def batched_gather(
     return data[ranges]
 
 
-def broadcast_token_to_atom(
-    x_token: torch.Tensor, atom_to_token_idx: torch.Tensor
-) -> torch.Tensor:
+def broadcast_token_to_atom(x_token: torch.Tensor, atom_to_token_idx: torch.Tensor) -> torch.Tensor:
     """Broadcast token-level embeddings to atom-level embeddings
 
     Args:
@@ -295,9 +285,7 @@ def aggregate_atom_to_token(
     """
 
     # Broadcasting in the given dim.
-    out = scatter(
-        src=x_atom, index=atom_to_token_idx, dim=-2, dim_size=n_token, reduce=reduce
-    )
+    out = scatter(src=x_atom, index=atom_to_token_idx, dim=-2, dim_size=n_token, reduce=reduce)
 
     return out
 
@@ -356,9 +344,7 @@ def sample_msa_feature_dict_random_without_replacement(
         indices = indices[:cutoff]
 
     msa_feat_dict = {
-        feat_name: torch.index_select(
-            input=feat_dict[feat_name], dim=dim, index=indices
-        )
+        feat_name: torch.index_select(input=feat_dict[feat_name], dim=dim, index=indices)
         for feat_name, dim in dim_dict.items()
     }
     return msa_feat_dict
@@ -499,13 +485,9 @@ def simple_merge_dict_list(dict_list: list[dict]) -> dict:
     return merged_dict
 
 
-def sample_logit_normal(
-    size, device, dtype=torch.float32, loc=0, scale=1, generator=None
-):
+def sample_logit_normal(size, device, dtype=torch.float32, loc=0, scale=1, generator=None):
     """Sample from a logit-normal distribution. Used to generate timesteps for flow matching."""
-    normal_samples = torch.normal(
-        loc, scale, size, device=device, dtype=dtype, generator=generator
-    )
+    normal_samples = torch.normal(loc, scale, size, device=device, dtype=dtype, generator=generator)
     return torch.sigmoid(normal_samples)
 
 

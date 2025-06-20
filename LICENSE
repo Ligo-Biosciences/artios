@@ -202,7 +202,7 @@
    limitations under the License.
 
 Implementation of the `LayerNorm` operators (in protenix/model/layer_norm/) referred to [OneFlow]
-(https://github.com/Oneflow-Inc/oneflow) and [FastFold](https://github.com/hpcaitech/FastFold). 
-We used [OpenFold](https://github.com/aqlaboratory/openfold) for some 
-(in protenix/openfold_local/) implementations, except the `LayerNorm` part. the worker OneFlow,  
+(https://github.com/Oneflow-Inc/oneflow) and [FastFold](https://github.com/hpcaitech/FastFold).
+We used [OpenFold](https://github.com/aqlaboratory/openfold) for some
+(in protenix/openfold_local/) implementations, except the `LayerNorm` part. the worker OneFlow,
 FastFold and openfold are licensed under Apache License 2.0.

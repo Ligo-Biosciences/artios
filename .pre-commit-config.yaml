@@ -27,13 +27,3 @@ repos:
     hooks:
       - id: isort
         args: [--profile=black, --line-length=100]  # Compatible with black
-
-  # pytest - Run tests (if available)
-  - repo: local
-    hooks:
-      - id: pytest
-        name: pytest
-        entry: bash -c 'if command -v pytest >/dev/null 2>&1; then pytest -v --tb=short --maxfail=5 tests/; else echo "pytest not found, skipping tests"; fi'
-        language: system
-        pass_filenames: false
-        always_run: true

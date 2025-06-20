@@ -23,7 +23,7 @@ class TestAttentionPairBias:
         data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path)["input_feature_dict"]
+        return torch.load(data_path, weights_only=False)["input_feature_dict"]
 
     def test_attention_pair_bias(self, device, sample_data):
         n_heads = 16
@@ -144,7 +144,7 @@ class TestAtomTransformer:
         data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path)
+        return torch.load(data_path, weights_only=False)
 
     def test_atom_transformer(self, device, sample_data):
         c_atom = 128
@@ -220,7 +220,7 @@ class TestAtomAttentionDecoder:
         data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path)
+        return torch.load(data_path, weights_only=False)
 
     def test_atom_attention_decoder(self, device, sample_data):
         n_blocks = 3

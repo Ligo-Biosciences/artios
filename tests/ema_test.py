@@ -1,8 +1,7 @@
 import pytest
 import torch
 import numpy as np
-
-from runner.ema import EMAWrapper, PowerLawEMAWrapper, p_dot_p, solve_weights, beta_power_law
+from protenix.utils.ema_utils import p_dot_p, solve_weights
 
 
 class TestEMA:

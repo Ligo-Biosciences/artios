@@ -470,7 +470,7 @@ class SymmetricPermutation(object):
         )
 
         if permute_pred_indices:
-            # 2. Permute confidence logits 
+            # 2. Permute confidence logits
             pred_dict = self.permute_heads(
                 pred_dict,
                 permute_pred_indices=permute_pred_indices,

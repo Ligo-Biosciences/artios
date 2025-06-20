@@ -191,7 +191,9 @@ class Featurizer(object):
                 frame_atom_index (List[int]): The index of the atoms used to construct the frame.
         """
         kdtree, atom_ids = lig_res_ref_conf_kdtree[centre_atom.ref_space_uid]
-        b_ref_pos = ref_pos[token.centre_atom_index].detach().cpu().numpy()  # Convert to numpy array
+        b_ref_pos = (
+            ref_pos[token.centre_atom_index].detach().cpu().numpy()
+        )  # Convert to numpy array
         b_idx = token.centre_atom_index
         if kdtree is None:
             # Atom num < 3
@@ -208,7 +210,9 @@ class Featurizer(object):
             # Colinear check
             if has_frame:
                 # Convert tensors to numpy arrays for angle calculation
-                pos_array = [ref_pos[idx].detach().cpu().numpy() for idx in frame_atom_index]
+                pos_array = [
+                    ref_pos[idx].detach().cpu().numpy() for idx in frame_atom_index
+                ]
                 theta_degrees = angle_3p(*pos_array)
                 if theta_degrees <= 25 or theta_degrees >= 155:
                     has_frame = 0
@@ -669,7 +673,7 @@ class Featurizer(object):
 
         Returns:
             Dict[str, torch.Tensor]: a dict of labels.
-            
+
         Raises:
             ValueError: If any of the label tensors contain NaN values.
         """
@@ -680,11 +684,11 @@ class Featurizer(object):
             self.cropped_atom_array.coord
         )  # [N_atom, 3]
 
-        # Check coordinate mask 
+        # Check coordinate mask
         labels["coordinate_mask"] = torch.Tensor(
             self.cropped_atom_array.is_resolved.astype(int)
         ).long()  # [N_atom]
-        
+
         return labels
 
     def get_atom_permutation_list(

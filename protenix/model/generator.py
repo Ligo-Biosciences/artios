@@ -17,7 +17,11 @@ from typing import Any, Callable, Optional, List, Dict
 import torch
 import numpy as np
 
-from protenix.model.utils import centre_random_augmentation, sample_logit_normal, noise_w_flow_matching
+from protenix.model.utils import (
+    centre_random_augmentation,
+    sample_logit_normal,
+    noise_w_flow_matching,
+)
 
 
 class TrainingTimestepSampler:
@@ -29,15 +33,16 @@ class TrainingTimestepSampler:
     + Default parameters: distribution_type="logit-normal", loc=0.0, scale=1.0, uniform_weight=0.0
     + Suggested parameters: distribution_type="logit-normal", loc=1.4, scale=1.0, uniform_weight=0.1
     """
+
     def __init__(
-        self, 
+        self,
         distribution_type: str = "logit-normal",
-        alpha: float = 1.0, 
-        beta: float = 1.0, 
+        alpha: float = 1.0,
+        beta: float = 1.0,
         loc: float = 1.4,
         scale: float = 1.0,
-        uniform_weight: float = 0.1, 
-        seed: Optional[int] = None
+        uniform_weight: float = 0.1,
+        seed: Optional[int] = None,
     ):
         """
         Args:
@@ -58,10 +63,11 @@ class TrainingTimestepSampler:
         self.uniform_weight = uniform_weight
         self.seed = seed
 
-    def __call__(self, 
-                 size: torch.Size, 
-                 device: torch.device = torch.device("cpu"), 
-                 dtype: torch.dtype = torch.float32
+    def __call__(
+        self,
+        size: torch.Size,
+        device: torch.device = torch.device("cpu"),
+        dtype: torch.dtype = torch.float32,
     ) -> torch.Tensor:
         """
         Sample the timestep from the mixture of the specified distribution and uniform distribution.
@@ -71,7 +77,9 @@ class TrainingTimestepSampler:
             generator = torch.Generator(device=device).manual_seed(self.seed)
 
         # Sample from uniform distribution
-        uniform_samples = torch.rand(size, device=device, dtype=dtype, generator=generator)
+        uniform_samples = torch.rand(
+            size, device=device, dtype=dtype, generator=generator
+        )
 
         # Sample from specified distribution
         if self.distribution_type == "beta":
@@ -79,24 +87,31 @@ class TrainingTimestepSampler:
             sample_shape = size if isinstance(size, tuple) else (size,)
             dist = torch.distributions.beta.Beta(
                 torch.tensor(self.alpha, device=device, dtype=dtype),
-                torch.tensor(self.beta, device=device, dtype=dtype)
+                torch.tensor(self.beta, device=device, dtype=dtype),
             )
             dist_samples = dist.sample(sample_shape=sample_shape)
 
         elif self.distribution_type == "logit-normal":
-            dist_samples = sample_logit_normal(size, device, dtype, self.loc, self.scale, generator)
-            
+            dist_samples = sample_logit_normal(
+                size, device, dtype, self.loc, self.scale, generator
+            )
+
         else:
-            raise ValueError("distribution_type must be either 'beta' or 'logit-normal'")
+            raise ValueError(
+                "distribution_type must be either 'beta' or 'logit-normal'"
+            )
 
         # Generate mask to pick either uniform or distribution samples
-        mask = torch.rand(size, device=device, dtype=dtype, generator=generator) < self.uniform_weight
-        
+        mask = (
+            torch.rand(size, device=device, dtype=dtype, generator=generator)
+            < self.uniform_weight
+        )
+
         # Use mask to pick either uniform or distribution samples
         samples = torch.where(mask, uniform_samples, dist_samples)
-        
+
         return samples
-    
+
 
 class TrainingTimestepSamplerV2:
     """
@@ -105,10 +120,9 @@ class TrainingTimestepSamplerV2:
     The mixture can include any number of beta, logit-normal, or uniform distributions,
     each with a specified weight and parameters.
     """
+
     def __init__(
-        self,
-        distributions_config: List[Dict],
-        seed: Optional[int] = None
+        self, distributions_config: List[Dict], seed: Optional[int] = None
     ) -> None:
         """
         Args:
@@ -130,8 +144,10 @@ class TrainingTimestepSamplerV2:
         validated_configs = []
         for config in distributions_config:
             if not isinstance(config, dict):
-                raise ValueError("Each item in distributions_config must be a dictionary.")
-            
+                raise ValueError(
+                    "Each item in distributions_config must be a dictionary."
+                )
+
             dist_type = config.get("distribution_type")
             weight = config.get("weight")
 
@@ -141,7 +157,7 @@ class TrainingTimestepSamplerV2:
                 raise ValueError("Each config must have a 'weight' (float > 0).")
 
             total_weight += weight
-            
+
             if dist_type == "beta":
                 alpha = config.get("alpha")
                 beta_param = config.get("beta")
@@ -153,9 +169,13 @@ class TrainingTimestepSamplerV2:
                 loc = config.get("loc")
                 scale = config.get("scale")
                 if not isinstance(loc, (float, int)):
-                    raise ValueError("Logit-normal distribution requires 'loc' (float).")
+                    raise ValueError(
+                        "Logit-normal distribution requires 'loc' (float)."
+                    )
                 if not isinstance(scale, (float, int)) or scale <= 0:
-                    raise ValueError("Logit-normal distribution requires 'scale' (float > 0).")
+                    raise ValueError(
+                        "Logit-normal distribution requires 'scale' (float > 0)."
+                    )
             elif dist_type == "uniform":
                 low = config.get("low")
                 high = config.get("high")
@@ -164,24 +184,32 @@ class TrainingTimestepSamplerV2:
                 if not isinstance(high, (float, int)):
                     raise ValueError("Uniform distribution requires 'high' (float).")
                 if low >= high:
-                    raise ValueError("For uniform distribution, 'low' must be less than 'high'.")
+                    raise ValueError(
+                        "For uniform distribution, 'low' must be less than 'high'."
+                    )
             else:
-                raise ValueError(f"Unsupported distribution_type: {dist_type}. "
-                                 "Must be 'beta', 'logit-normal', or 'uniform'.")
+                raise ValueError(
+                    f"Unsupported distribution_type: {dist_type}. "
+                    "Must be 'beta', 'logit-normal', or 'uniform'."
+                )
             validated_configs.append(config)
 
         if not torch.isclose(torch.tensor(total_weight), torch.tensor(1.0)):
-            raise ValueError(f"Sum of weights must be close to 1.0, but got {total_weight}.")
+            raise ValueError(
+                f"Sum of weights must be close to 1.0, but got {total_weight}."
+            )
 
         self.distributions_config = validated_configs
         self.seed = seed
-        self.weights_tensor = torch.tensor([d['weight'] for d in self.distributions_config], dtype=torch.float32)
+        self.weights_tensor = torch.tensor(
+            [d["weight"] for d in self.distributions_config], dtype=torch.float32
+        )
 
     def __call__(
         self,
         size: torch.Size,
         device: torch.device = torch.device("cpu"),
-        dtype: torch.dtype = torch.float32
+        dtype: torch.dtype = torch.float32,
     ) -> torch.Tensor:
         """
         Sample the timestep from the configured mixture of distributions.
@@ -190,34 +218,42 @@ class TrainingTimestepSamplerV2:
         if self.seed is not None:
             generator = torch.Generator(device=device).manual_seed(self.seed)
 
-        num_total_samples = size[0] # assuming size is a tuple of (num_samples, ), works for current training code TODO: make more robust
-        
+        num_total_samples = size[
+            0
+        ]  # assuming size is a tuple of (num_samples, ), works for current training code TODO: make more robust
+
         # Determine which distribution to sample from for each element
         dist_indices = torch.multinomial(
-            self.weights_tensor.to(device), # Ensure weights tensor is on the correct device
+            self.weights_tensor.to(
+                device
+            ),  # Ensure weights tensor is on the correct device
             num_total_samples,
             replacement=True,
-            generator=generator
+            generator=generator,
         )
 
         samples = torch.empty(num_total_samples, device=device, dtype=dtype)
 
         for i, dist_config in enumerate(self.distributions_config):
-            mask = (dist_indices == i)
+            mask = dist_indices == i
             num_samples_for_dist = mask.sum().item()
 
             if num_samples_for_dist == 0:
                 continue
 
             current_dist_type = dist_config["distribution_type"]
-            
+
             if current_dist_type == "beta":
                 alpha = torch.tensor(dist_config["alpha"], device=device, dtype=dtype)
-                beta_param = torch.tensor(dist_config["beta"], device=device, dtype=dtype)
+                beta_param = torch.tensor(
+                    dist_config["beta"], device=device, dtype=dtype
+                )
                 beta_dist = torch.distributions.beta.Beta(alpha, beta_param)
-                #TODO: .sample() does not take a generator argument directly. should fix seeds at some point
-                samples[mask] = beta_dist.sample(sample_shape=torch.Size([num_samples_for_dist]))
-            
+                # TODO: .sample() does not take a generator argument directly. should fix seeds at some point
+                samples[mask] = beta_dist.sample(
+                    sample_shape=torch.Size([num_samples_for_dist])
+                )
+
             elif current_dist_type == "logit-normal":
                 loc = dist_config["loc"]
                 scale = dist_config["scale"]
@@ -227,30 +263,32 @@ class TrainingTimestepSamplerV2:
                     dtype=dtype,
                     loc=loc,
                     scale=scale,
-                    generator=generator
+                    generator=generator,
                 )
-            
+
             elif current_dist_type == "uniform":
                 low = dist_config["low"]
                 high = dist_config["high"]
-                samples[mask] = torch.rand(
-                    torch.Size([num_samples_for_dist]),
-                    device=device,
-                    dtype=dtype,
-                    generator=generator
-                ) * (high - low) + low
-        
+                samples[mask] = (
+                    torch.rand(
+                        torch.Size([num_samples_for_dist]),
+                        device=device,
+                        dtype=dtype,
+                        generator=generator,
+                    )
+                    * (high - low)
+                    + low
+                )
+
         return samples.view(size)
-    
+
 
 class InferenceTimestepScheduler:
     """
     Schedule the timesteps used for solving the FM SDE at inference time via the p-Ligo schedule.
     """
-    def __init__(
-            self,
-            p: float = -0.7
-    ) -> None:
+
+    def __init__(self, p: float = -0.7) -> None:
         self.p = p
 
     def __call__(
@@ -267,12 +305,12 @@ class InferenceTimestepScheduler:
             dtype (torch.dtype): Data type of tensor. Defaults to float32.
 
         Returns:
-            torch.Tensor: Timesteps tensor of shape [N_step + 1] 
+            torch.Tensor: Timesteps tensor of shape [N_step + 1]
         """
         steps = torch.arange(N_step + 1, dtype=dtype, device=device)
         t = (steps / N_step) ** np.exp(self.p)
         return t
-    
+
 
 def _calculate_velocity_and_score(
     x_noisy: torch.Tensor,
@@ -292,7 +330,7 @@ def _calculate_velocity_and_score(
         t_cur: Current timestep (float)
         denoise_net: Network that performs denoising
         input_feature_dict: Input feature dictionary
-        t: Broadcasted timestep tensor 
+        t: Broadcasted timestep tensor
             [..., N_sample]
         attn_chunk_size: Chunk size for attention operation
         inplace_safe: Whether to use inplace operations
@@ -315,7 +353,7 @@ def _calculate_velocity_and_score(
     velocity_pred = (coords_pred - x_noisy) / (1 - t_cur)
 
     # Predict score (division by 1-t absorbed into the stochasticity schedule for numerical stability)
-    scaled_score = (t_cur * velocity_pred - x_noisy)
+    scaled_score = t_cur * velocity_pred - x_noisy
 
     # Apply guidance if specified
     if guiding_denoise_net is not None:
@@ -329,11 +367,17 @@ def _calculate_velocity_and_score(
 
         # Calculate velocity and scaled score for guidance
         guidance_velocity_pred = (guidance_coords_pred - x_noisy) / (1 - t_cur)
-        scaled_guidance_score = (t_cur * guidance_velocity_pred - x_noisy)
-        
+        scaled_guidance_score = t_cur * guidance_velocity_pred - x_noisy
+
         # Velocity and score interpolation for guidance
-        velocity_pred = guidance_weight * velocity_pred + (1 - guidance_weight) * guidance_velocity_pred
-        scaled_score = guidance_weight * scaled_score + (1 - guidance_weight) * scaled_guidance_score
+        velocity_pred = (
+            guidance_weight * velocity_pred
+            + (1 - guidance_weight) * guidance_velocity_pred
+        )
+        scaled_score = (
+            guidance_weight * scaled_score
+            + (1 - guidance_weight) * scaled_guidance_score
+        )
 
     return velocity_pred, scaled_score
 
@@ -351,8 +395,8 @@ def sample_diffusion(
     inplace_safe: bool = False,
     attn_chunk_size: Optional[int] = None,
     second_order: bool = False,
-    guiding_denoise_net : Optional[Callable] = None,
-    guidance_weight : float = 1.0,
+    guiding_denoise_net: Optional[Callable] = None,
+    guidance_weight: float = 1.0,
 ) -> torch.Tensor:
     """Implements Algorithm 18 in AF3.
     It performs denoising steps from time 0 to time T with Euler's method.
@@ -364,7 +408,7 @@ def sample_diffusion(
         timesteps (torch.Tensor): Timestep discretisation for solving the SDE.
             [N_steps]
         N_sample (int): number of generated samples
-        sigma_data (float): variance of data 
+        sigma_data (float): variance of data
         stoch_type (str): Stochasticity schedule type (choice of beta(t) in FM SDE)
         alpha (float): Stochasticity parameter.
         gamma (float): Noise scaling parameter.
@@ -391,39 +435,45 @@ def sample_diffusion(
     stoch_schedules = {
         "deterministic": lambda t: torch.zeros_like(t) / (1 - t),
         "constant": lambda t: torch.ones_like(t) * (0.5 * (alpha**2)) / (1 - t),
-        "non_singular": lambda t: 4 * torch.ones_like(t) * 0.5 * (alpha**2), # int_{0}^{1}(non_sing) = 1/4
-        "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t, # int_{0}^{1}(zero_ends) = 1/12 
-        #TODO: add in the beta distribution.
-        #TODO: check the divergence minimising choice used in ma et al.
-        #"proteina": lambda t: alpha / (t + 0.01)
+        "non_singular": lambda t: 4
+        * torch.ones_like(t)
+        * 0.5
+        * (alpha**2),  # int_{0}^{1}(non_sing) = 1/4
+        "zero_ends": lambda t: 12
+        * 0.5
+        * (alpha**2)
+        * t,  # int_{0}^{1}(zero_ends) = 1/12
+        # TODO: add in the beta distribution.
+        # TODO: check the divergence minimising choice used in ma et al.
+        # "proteina": lambda t: alpha / (t + 0.01)
     }
 
     if stoch_type not in stoch_schedules:
         raise ValueError(f"Invalid stochasticity type: {stoch_type}")
-        
+
     g = stoch_schedules[stoch_type](timesteps)
 
     def _chunk_sample_diffusion(chunk_n_sample, inplace_safe):
-        """ 
-        Performs all sampling logic for a single chunk of samples 
+        """
+        Performs all sampling logic for a single chunk of samples
         i.e generate noise, send noise through Euler steps, return denoised coordinates
         """
         # Generate noise
         x_0 = sigma_data * torch.randn(
-            size=(*batch_shape, chunk_n_sample, N_atom, 3), 
-            device=device, 
-            dtype=dtype
+            size=(*batch_shape, chunk_n_sample, N_atom, 3), device=device, dtype=dtype
         )  # [..., N_sample, N_atom, 3]
 
         # Initialise Euler/Euler-Maruyama
-        x = x_0 
+        x = x_0
         noise = torch.zeros_like(x)
 
         # Sampling loop
         for i, (t_cur, t_next) in enumerate(zip(timesteps[:-1], timesteps[1:])):
-   
+
             # Shape wrangling for current timestep
-            t = t_cur.new_full((batch_shape + (chunk_n_sample,)), t_cur).to(dtype) # [..., N_sample]
+            t = t_cur.new_full((batch_shape + (chunk_n_sample,)), t_cur).to(
+                dtype
+            )  # [..., N_sample]
 
             # Generate noise (for stochastic sampling)
             if stoch_type != "deterministic":
@@ -432,7 +482,7 @@ def sample_diffusion(
             # Stochastic schedule at current time step
             g_t = g[i]
 
-            # Centre and rotate coords [..., N_sample, N_atom, 3] 
+            # Centre and rotate coords [..., N_sample, N_atom, 3]
             x = (
                 centre_random_augmentation(x_input_coords=x, N_sample=1)
                 .squeeze(dim=-3)
@@ -456,17 +506,19 @@ def sample_diffusion(
             step = t_next - t_cur
 
             # Calculate update
-            update = step * (velocity_pred.to(torch.float64) + g_t * scaled_score) 
+            update = step * (velocity_pred.to(torch.float64) + g_t * scaled_score)
 
             # Euler step
             if not second_order:
                 x = x + update + torch.sqrt(2 * step * g_t * gamma) * noise
-            else: #FIXME: my current issue with this is that we add nosie twice essentially: our initial update already uses noise. 
+            else:  # FIXME: my current issue with this is that we add nosie twice essentially: our initial update already uses noise.
                 # Calculate intermediate prediction
                 x_middle = x + update
 
                 # Calculate intermediate prediction
-                t = t_next.new_full((batch_shape + (chunk_n_sample,)), t_next).to(dtype) # [..., N_sample]
+                t = t_next.new_full((batch_shape + (chunk_n_sample,)), t_next).to(
+                    dtype
+                )  # [..., N_sample]
 
                 # Calculate update at intermediate point
                 velocity_pred_2, scaled_score_2 = _calculate_velocity_and_score(
@@ -482,10 +534,16 @@ def sample_diffusion(
                 )
 
                 # Calculate update at intermediate point
-                update_2 = step * (velocity_pred_2.to(torch.float64) + g_t * scaled_score_2)
+                update_2 = step * (
+                    velocity_pred_2.to(torch.float64) + g_t * scaled_score_2
+                )
 
                 # Perform second order Euler step
-                x = x + 1/2 * (update + update_2) + torch.sqrt(2 * step * g_t * gamma) * noise
+                x = (
+                    x
+                    + 1 / 2 * (update + update_2)
+                    + torch.sqrt(2 * step * g_t * gamma) * noise
+                )
 
         return x
 
@@ -521,7 +579,7 @@ def sample_diffusion_training(
     diffusion_chunk_size: Optional[int] = None,
     generator: torch.Generator = None,
 ) -> tuple[torch.Tensor, ...]:
-    """Implements diffusion training. Creates N_sample's of randomly augmented ground truth coordinates, 
+    """Implements diffusion training. Creates N_sample's of randomly augmented ground truth coordinates,
     noises the coords via FM style interpolation, sends them through the network to get denoised coords.
 
     Args:
@@ -536,7 +594,7 @@ def sample_diffusion_training(
         N_sample (int): number of training samples
         generator (torch.Generator): the generator to use for sampling
     Returns:
-        x_target_augment (torch.Tensor): the augmented ground truth coordinates 
+        x_target_augment (torch.Tensor): the augmented ground truth coordinates
             [..., N_sample, N_atom, 3]
         coords_pred (torch.Tensor): the predicted coordinates
             [..., N_sample, N_atom, 3]
@@ -558,24 +616,31 @@ def sample_diffusion_training(
 
     # Get timestep for noising
     # timestep: independent timesteps for each sample [..., N_sample]
-    timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype) 
+    timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(
+        dtype
+    )
 
     # Generate noise
-    noise = torch.randn(
-        x_target_augment.shape, 
-        dtype=dtype, 
-        device=x_target_augment.device,
-        generator=generator
-    ) * sigma_data  # [..., N_sample, N_atom, 3]
+    noise = (
+        torch.randn(
+            x_target_augment.shape,
+            dtype=dtype,
+            device=x_target_augment.device,
+            generator=generator,
+        )
+        * sigma_data
+    )  # [..., N_sample, N_atom, 3]
 
     # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )
-    x_noisy = noise_w_flow_matching(x_target_augment, noise, timestep[..., :, None, None])
+    x_noisy = noise_w_flow_matching(
+        x_target_augment, noise, timestep[..., :, None, None]
+    )
 
     # Get denoised output predictions [..., N_sample, N_atom, 3]
     if diffusion_chunk_size is None:
-        coords_pred = denoise_net( 
-            x_noisy=x_noisy, 
-            timestep=timestep, 
+        coords_pred = denoise_net(
+            x_noisy=x_noisy,
+            timestep=timestep,
             input_feature_dict=input_feature_dict,
         )
     else:
@@ -584,7 +649,7 @@ def sample_diffusion_training(
             N_sample % diffusion_chunk_size != 0
         )
         for i in range(no_chunks):
-            x_noisy_i = x_noisy[ 
+            x_noisy_i = x_noisy[
                 ..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size, :, :
             ]
             timestep_i = timestep[
@@ -599,4 +664,4 @@ def sample_diffusion_training(
             coords_pred.append(coords_pred_i)
         coords_pred = torch.cat(coords_pred, dim=-3)
 
-    return x_target_augment, coords_pred, timestep 
+    return x_target_augment, coords_pred, timestep

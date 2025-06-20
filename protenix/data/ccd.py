@@ -183,26 +183,30 @@ def get_mol_type(ccd_code: str) -> str:
 @functools.lru_cache(maxsize=None)
 def get_smiles_str(ccd_code: str) -> str:
     """Get CACTVS canonical SMILES string from CCD components file.
-    
+
     Returns only the CACTVS canonical SMILES representation. Returns None if either
     the CCD code is not found or no CACTVS canonical SMILES is available.
-    
+
     Args:
         ccd_code (str): The CCD component code
-        
+
     Returns:
         str: The CACTVS canonical SMILES string, or None if not found
     """
     ccd_cif = biotite_load_ccd_cif()
     if ccd_cif is None:
-        raise ValueError("Failed to load CCD components file. biotite_load_ccd_cif() returned None.")
+        raise ValueError(
+            "Failed to load CCD components file. biotite_load_ccd_cif() returned None."
+        )
     if ccd_code not in ccd_cif:
         return None
-        
+
     descriptors = ccd_cif[ccd_code]["pdbx_chem_comp_descriptor"]
-    mask = (descriptors["type"].as_array() == "SMILES_CANONICAL") & (descriptors["program"].as_array() == "CACTVS")
+    mask = (descriptors["type"].as_array() == "SMILES_CANONICAL") & (
+        descriptors["program"].as_array() == "CACTVS"
+    )
     matching_smiles = descriptors["descriptor"].as_array()[mask]
-    
+
     return matching_smiles[0] if len(matching_smiles) > 0 else None
 
 

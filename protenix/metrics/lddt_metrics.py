@@ -84,7 +84,7 @@ class LDDTMetrics(nn.Module):
         lddt = self.lddt_base.forward(
             pred_coordinate=pred_dict["coordinate"],
             true_coordinate=label_dict["coordinate"],
-            #lddt_mask=label_dict["lddt_mask"],
+            # lddt_mask=label_dict["lddt_mask"],
             chunk_size=self.chunk_size,
         )  # [N_sample]
         out["complex"] = lddt
@@ -117,10 +117,8 @@ class LDDTMetrics(nn.Module):
 
     def aggregate_lddt(self, lddt_dict):
 
-        complex_lddt = self.aggregate(
-            lddt_dict["complex"]
-        )
-        
+        complex_lddt = self.aggregate(lddt_dict["complex"])
+
         # Log metrics
         complex_lddt = {
             f"lddt/complex/{name}": value for name, value in complex_lddt.items()

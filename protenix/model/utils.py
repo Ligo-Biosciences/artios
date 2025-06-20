@@ -28,7 +28,7 @@ def add(a, b, inplace_safe: bool = False):
 
     Args:
         a: First object to add
-        b: Second object to add 
+        b: Second object to add
         in_place (bool): If True, modifies first argument in place. Defaults to False.
 
     Returns:
@@ -40,12 +40,14 @@ def add(a, b, inplace_safe: bool = False):
     else:
         return a + b
 
+
 def mul(a, b, inplace_safe: bool = False):
     if inplace_safe:
         a *= b
         return a
     else:
         return a * b
+
 
 def centre_random_augmentation(
     x_input_coords: torch.Tensor,
@@ -498,25 +500,17 @@ def simple_merge_dict_list(dict_list: list[dict]) -> dict:
 
 
 def sample_logit_normal(
-    size, 
-    device, 
-    dtype=torch.float32, 
-    loc=0, 
-    scale=1, 
-    generator=None
+    size, device, dtype=torch.float32, loc=0, scale=1, generator=None
 ):
     """Sample from a logit-normal distribution. Used to generate timesteps for flow matching."""
-    normal_samples = torch.normal(loc, scale, size, device=device, dtype=dtype, generator=generator)
+    normal_samples = torch.normal(
+        loc, scale, size, device=device, dtype=dtype, generator=generator
+    )
     return torch.sigmoid(normal_samples)
 
 
-def noise_w_flow_matching(
-    data, 
-    noise, 
-    timestep, 
-    sigma_min=1e-5
-):
+def noise_w_flow_matching(data, noise, timestep, sigma_min=1e-5):
     """Flow-matching interpolation between the data and noise.
-    Requires data, noise and timestep to be broadcastable. 
+    Requires data, noise and timestep to be broadcastable.
     """
     return timestep * data + (1 - (1 - sigma_min) * timestep) * noise

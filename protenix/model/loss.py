@@ -20,15 +20,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from protenix.metrics.rmsd import weighted_rigid_align
+from protenix.model.modules.embedders import FourierEmbedding
 from protenix.model.modules.frames import (
     expressCoordinatesInFrame,
     gather_frame_atom_by_indices,
 )
-from protenix.model.utils import expand_at_dim, add, mul
+from protenix.model.modules.primitives import MLP
+from protenix.model.utils import add, expand_at_dim, mul
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 from protenix.utils.torch_utils import cdist
-from protenix.model.modules.embedders import FourierEmbedding
-from protenix.model.modules.primitives import MLP
 
 
 def loss_reduction(loss: torch.Tensor, method: str = "mean") -> torch.Tensor:

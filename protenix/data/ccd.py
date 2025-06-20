@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import functools
+import gzip
 import logging
 import pickle
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -28,9 +30,6 @@ from rdkit import Chem
 
 from configs.configs_data import data_configs
 from protenix.data.substructure_perms import get_substructure_perms
-
-import gzip
-import re
 
 logger = logging.getLogger(__name__)
 

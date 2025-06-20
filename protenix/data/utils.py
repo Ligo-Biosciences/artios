@@ -18,16 +18,16 @@ import functools
 import os
 import re
 from collections import defaultdict
+from io import StringIO
 from typing import Mapping, Sequence
 
 import biotite.structure as struc
 import numpy as np
 import torch
+from Bio import PDB
 from biotite.structure import AtomArray
 from biotite.structure.io import pdbx
 from biotite.structure.io.pdb import PDBFile
-from Bio import PDB
-from io import StringIO
 
 from protenix.data.constants import DNA_STD_RESIDUES, PRO_STD_RESIDUES, RNA_STD_RESIDUES
 

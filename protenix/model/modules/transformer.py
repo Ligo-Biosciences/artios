@@ -22,19 +22,19 @@ from protenix.model.modules.primitives import (
     AdaptiveLayerNorm,
     Attention,
     BiasInitLinear,
+    LayerNorm,
     LinearNoBias,
     broadcast_token_to_local_atom_pair,
     rearrange_qk_to_dense_trunk,
 )
 from protenix.model.utils import (
     add,
-    mul,
     aggregate_atom_to_token,
     broadcast_token_to_atom,
-    permute_final_dims,
     expand_at_dim,
+    mul,
+    permute_final_dims,
 )
-from protenix.model.modules.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import checkpoint_blocks
 
 

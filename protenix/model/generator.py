@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Callable, Optional, List, Dict
+from typing import Any, Callable, Dict, List, Optional
 
-import torch
 import numpy as np
+import torch
 
 from protenix.model.utils import (
     centre_random_augmentation,
-    sample_logit_normal,
     noise_w_flow_matching,
+    sample_logit_normal,
 )
 
 

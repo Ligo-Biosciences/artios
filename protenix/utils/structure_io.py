@@ -1,16 +1,16 @@
 import os
 from pathlib import Path
-import numpy as np
-from typing import Union, List
-from protenix.data.parser import MMCIFParser
-from pathlib import Path
-from biotite.structure.io.mol import MOLFile
-from biotite.structure import AtomArray
+from typing import List, Union
+
 import biotite.structure.io as strucio
-from protenix.data.constants import mmcif_restype_3to1
-import biotite.structure.io.pdbx as pdbx
 import biotite.structure.io.pdb as pdb
-from biotite.structure import AtomArrayStack
+import biotite.structure.io.pdbx as pdbx
+import numpy as np
+from biotite.structure import AtomArray, AtomArrayStack
+from biotite.structure.io.mol import MOLFile
+
+from protenix.data.constants import mmcif_restype_3to1
+from protenix.data.parser import MMCIFParser
 
 
 def load_structure(path_to_file: Path) -> AtomArray:

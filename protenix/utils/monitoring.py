@@ -1,10 +1,11 @@
+from typing import Union
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from typing import Union
 import torch
-from torch.nn import Module
 from scipy.stats import gaussian_kde
-import matplotlib.pyplot as plt
+from torch.nn import Module
 
 
 def plot_loss_vs_timestep(

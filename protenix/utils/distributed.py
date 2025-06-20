@@ -14,8 +14,8 @@
 
 import os
 import time
+
 import torch
-import time
 
 
 def distributed_available() -> bool:

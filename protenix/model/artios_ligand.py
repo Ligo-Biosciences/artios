@@ -1,32 +1,27 @@
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 
 from protenix.model import sample_confidence
 from protenix.model.generator import (
-    sample_diffusion_training,
-    TrainingTimestepSamplerV2,
     InferenceTimestepScheduler,
+    TrainingTimestepSamplerV2,
     sample_diffusion,
     sample_diffusion_training,
 )
-
-from protenix.model.utils import simple_merge_dict_list
-from protenix.utils.permutation.permutation import SymmetricPermutation
-from protenix.model.modules.primitives import LinearNoBias
+from protenix.model.loss import ProtenixLoss
 from protenix.model.modules.diffusion import DiffusionModule
 from protenix.model.modules.embedders import (
     InputFeatureEmbedder,
     RelativePositionEncoding,
 )
-from protenix.model.loss import ProtenixLoss
+from protenix.model.modules.primitives import LinearNoBias
+from protenix.model.utils import add, simple_merge_dict_list
+from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.torch_utils import autocasting_disable_decorator
-from protenix.model.loss import ProtenixLoss
-from protenix.model.utils import add
-from typing import Callable
 
 
 class ArtiosLigand(nn.Module):

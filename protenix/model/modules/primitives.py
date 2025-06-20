@@ -14,23 +14,22 @@
 
 import math
 from functools import partial
-from typing import Optional, Union, Callable, Tuple
+from typing import Callable, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy.stats import truncnorm
-import numpy as np
 
 from protenix.model.utils import (
+    add,
     flatten_final_dims,
     move_final_dim_to_dim,
     pad_at_dim,
     reshape_at_dim,
-    add,
 )
 from protenix.openfold_local.utils.chunk_utils import chunk_layer
-
 
 # Optimized layer norm
 

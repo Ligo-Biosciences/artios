@@ -14,18 +14,18 @@
 
 from typing import Optional, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
+
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
-from protenix.model.modules.primitives import LinearNoBias, Transition
+from protenix.model.modules.primitives import LayerNorm, LinearNoBias, Transition
 from protenix.model.modules.transformer import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
     DiffusionTransformer,
 )
 from protenix.model.utils import add, aggregate_atom_to_token, expand_at_dim
-from protenix.model.modules.primitives import LayerNorm
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 
 

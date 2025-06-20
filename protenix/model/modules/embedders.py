@@ -78,15 +78,15 @@ class InputFeatureEmbedder(nn.Module):
         )  # [..., N_token, c_token]
         # Concatenate the per-token features.
         batch_shape = input_feature_dict["restype"].shape[:-1]
-        #s_inputs = torch.cat(
+        # s_inputs = torch.cat(
         #    [a]
         #    + [
         #        input_feature_dict[name].reshape(*batch_shape, d)
         #        for name, d in self.input_feature.items()
         #    ],
         #    dim=-1,
-        #)
-        
+        # )
+
         return a
 
 
@@ -192,12 +192,12 @@ class FourierEmbedding(nn.Module):
         """
         super(FourierEmbedding, self).__init__()
         self.c = c
-        
+
         # Register buffers instead of parameters since they don't need gradients
         # This is more memory efficient and semantically clearer
         generator = torch.Generator().manual_seed(seed)
-        self.register_buffer('w', torch.randn(c, generator=generator))
-        self.register_buffer('b', torch.randn(c, generator=generator))
+        self.register_buffer("w", torch.randn(c, generator=generator))
+        self.register_buffer("b", torch.randn(c, generator=generator))
 
     def forward(self, t_hat_timestep: torch.Tensor) -> torch.Tensor:
         """

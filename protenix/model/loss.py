@@ -84,7 +84,9 @@ class SmoothLDDTLoss(nn.Module):
             self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def _chunk_forward(self, pred_distance, true_distance, c_lm):
-        dist_diff = torch.abs(pred_distance - true_distance)  # [..., N_sample, N_atom, k]
+        dist_diff = torch.abs(
+            pred_distance - true_distance
+        )  # [..., N_sample, N_atom, k]
         # For save cuda memory we use inplace op
         dist_diff_epsilon = 0
         for threshold in [0.5, 1, 2, 4]:
@@ -95,19 +97,17 @@ class SmoothLDDTLoss(nn.Module):
             torch.sum(c_lm, dim=(-1, -2)) + self.eps
         )  # [..., N_sample]
         return lddt
-    
+
     def query_neighbors(
-        self,
-        true_coordinates: torch.Tensor,
-        inf: float = 1e9
+        self, true_coordinates: torch.Tensor, inf: float = 1e9
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Find k-nearest neighbors for each atom based on their coordinates.
-        
+
         Args:
             true_coordinates (torch.Tensor): Atom coordinates
                 [..., N_atom, 3]
             k (int, optional): Number of neighbors to find. Defaults to 300.
-                
+
         Returns:
             tuple[torch.Tensor, torch.Tensor]:
                 - neighbor_indices: Indices of k-nearest neighbors for each atom
@@ -118,16 +118,22 @@ class SmoothLDDTLoss(nn.Module):
         # Get number of atoms and limit k
         n_atoms = true_coordinates.shape[-2]
         k = min(self.k, n_atoms - 1)  # -1 to exclude self
-        
+
         # Compute pairwise distances between all atoms
-        distances = torch.cdist(true_coordinates, true_coordinates)  # [..., N_atom, N_atom]
-        
+        distances = torch.cdist(
+            true_coordinates, true_coordinates
+        )  # [..., N_atom, N_atom]
+
         # Set diagonal to infinity to exclude self-pairs
-        distances = distances + torch.eye(distances.shape[-1], device=distances.device) * inf
-        
+        distances = (
+            distances + torch.eye(distances.shape[-1], device=distances.device) * inf
+        )
+
         # Get k smallest distances and their indices for each atom
-        neighbor_distances, neighbor_indices = torch.topk(distances, k=k, dim=-1, largest=False)
-        
+        neighbor_distances, neighbor_indices = torch.topk(
+            distances, k=k, dim=-1, largest=False
+        )
+
         return neighbor_indices, neighbor_distances
 
     def forward(
@@ -158,12 +164,16 @@ class SmoothLDDTLoss(nn.Module):
         """
 
         # Get the indices and distances of the k closest atoms for each atom in the true coordinates
-        neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates)
-        
+        neighbor_indices, true_neighbor_distances = self.query_neighbors(
+            true_coordinates
+        )
+
         # Compute mask for the atoms that have true coordinates
         n_neighbors = neighbor_indices.shape[-1]
-        c_lm = coordinate_mask[neighbor_indices]   # [..., N_atom, k]
-        c_lm = c_lm * coordinate_mask.unsqueeze(-1)  # mask atoms that do not have true coordinates
+        c_lm = coordinate_mask[neighbor_indices]  # [..., N_atom, k]
+        c_lm = c_lm * coordinate_mask.unsqueeze(
+            -1
+        )  # mask atoms that do not have true coordinates
         c_lm = c_lm.bool().unsqueeze(-3).detach()  # [..., 1, N_atom, k]
 
         # Get N_sample dimension size
@@ -180,22 +190,26 @@ class SmoothLDDTLoss(nn.Module):
         indices_expanded = expand_at_dim(x=indices_expanded, dim=-1, n=3)
 
         pred_neighbor_coords = torch.gather(
-            pred_coordinates,
-            dim=-3,
-            index=indices_expanded
+            pred_coordinates, dim=-3, index=indices_expanded
         )  # [..., N_sample, N_atom, k, 3]
-        
+
         # Expand true_neighbor_distances to include N_sample dimension
         # [..., N_atom, k] -> [..., N_sample, N_atom, k]
-        true_neighbor_distances = expand_at_dim(x=true_neighbor_distances, dim=-3, n=n_samples)
+        true_neighbor_distances = expand_at_dim(
+            x=true_neighbor_distances, dim=-3, n=n_samples
+        )
 
         # Compute predicted neighbour distances
-        pred_distance = torch.sqrt(torch.sum((pred_coordinates - pred_neighbor_coords)**2, dim=-1))  # [..., N_sample, N_atom, k]
+        pred_distance = torch.sqrt(
+            torch.sum((pred_coordinates - pred_neighbor_coords) ** 2, dim=-1)
+        )  # [..., N_sample, N_atom, k]
 
         # Compute distance error
         # [..., N_sample, N_atom, k]
         lddt = self._chunk_forward(
-            pred_distance=pred_distance, true_distance=true_neighbor_distances, c_lm=c_lm
+            pred_distance=pred_distance,
+            true_distance=true_neighbor_distances,
+            c_lm=c_lm,
         )
 
         loss = 1 - lddt  # [..., N_sample]
@@ -205,19 +219,16 @@ class SmoothLDDTLoss(nn.Module):
 
         # Training time uncertainty scaling
         if self.training and self.use_uncertainty:
-            timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
-            u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
+            timestep_embed = self.fourier_embedding(timestep)  # [..., N_sample, 64]
+            u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1)  # [..., N_sample]
 
             # Apply uncertainty scaling
-            loss = loss / u_t.exp() + u_t # [..., N_sample]
+            loss = loss / u_t.exp() + u_t  # [..., N_sample]
 
         final_loss = loss_reduction(loss, method=self.reduction)
 
         # Return the loss, metrics and monitor data
-        return final_loss, {}, {
-            "raw_loss": raw_loss,
-            "timestep": timestep.clone()
-        }
+        return final_loss, {}, {"raw_loss": raw_loss, "timestep": timestep.clone()}
 
 
 def softmax_cross_entropy(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
@@ -238,6 +249,7 @@ def softmax_cross_entropy(logits: torch.Tensor, labels: torch.Tensor) -> torch.T
         dim=-1,
     )
     return loss
+
 
 # Algorithm 30 Compute alignment error
 def compute_alignment_error_squared(
@@ -375,7 +387,7 @@ class MSELoss(nn.Module):
         self,
         pred_coordinate: torch.Tensor,
         true_coordinate: torch.Tensor,
-        coordinate_mask: torch.Tensor, #TODO: check where this is invoked
+        coordinate_mask: torch.Tensor,  # TODO: check where this is invoked
         timestep: torch.Tensor,
         is_dna: torch.Tensor,
         is_rna: torch.Tensor,
@@ -427,26 +439,26 @@ class MSELoss(nn.Module):
 
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
-        
+
         raw_loss = per_sample_weighted_mse.detach().clone()
 
         weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
-        raw_loss = weighted_align_mse_loss.clone().detach()  # Store raw loss before uncertainty scaling
+        raw_loss = (
+            weighted_align_mse_loss.clone().detach()
+        )  # Store raw loss before uncertainty scaling
 
         # Balance grads between timesteps during training
         if self.training and self.use_uncertainty:
-            # Compute u(t) 
-            timestep_embed = self.fourier_embedding(timestep) # [..., N_sample, 64]
-            u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1) # [..., N_sample]
+            # Compute u(t)
+            timestep_embed = self.fourier_embedding(timestep)  # [..., N_sample, 64]
+            u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1)  # [..., N_sample]
             weighted_align_mse_loss = (weighted_align_mse_loss / u_t.exp()) + u_t
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
 
         # Return the loss, metrics and monitor data
-        return loss, {}, {
-            "raw_loss": raw_loss,
-            "timestep": timestep.clone()
-        }
+        return loss, {}, {"raw_loss": raw_loss, "timestep": timestep.clone()}
+
 
 class ProtenixLoss(nn.Module):
     """Aggregation of the various losses"""
@@ -464,18 +476,16 @@ class ProtenixLoss(nn.Module):
             "is_not_nucleotide_threshold": 15.0,
         }
 
-        self.loss_weight = {  
+        self.loss_weight = {
             # diffusion
             "mse_loss": self.alpha_diffusion,
-            "smooth_lddt_loss": self.alpha_diffusion * self.weight_smooth_lddt
+            "smooth_lddt_loss": self.alpha_diffusion * self.weight_smooth_lddt,
         }
 
         self.mse_loss = MSELoss(**configs.loss.diffusion.mse)
         self.smooth_lddt_loss = SmoothLDDTLoss(**configs.loss.diffusion.smooth_lddt)
 
-    def aggregate_losses(  
-        self, loss_fns: dict
-    ) -> tuple[torch.Tensor, dict]:
+    def aggregate_losses(self, loss_fns: dict) -> tuple[torch.Tensor, dict]:
         """
         Aggregates multiple loss functions and their respective metrics.
 
@@ -541,17 +551,18 @@ class ProtenixLoss(nn.Module):
         """
         assert mode in ["train", "eval", "inference"]
 
-
         # Timestep-dependent scaling of the loss
-        timestep = pred_dict["timestep"] # [..., N_sample]
-        diffusion_per_sample_scale =  1 / ((self.configs.sigma_data * torch.clamp(1-timestep, min=1e-3))**2)
-        
+        timestep = pred_dict["timestep"]  # [..., N_sample]
+        diffusion_per_sample_scale = 1 / (
+            (self.configs.sigma_data * torch.clamp(1 - timestep, min=1e-3)) ** 2
+        )
+
         if self.configs.train_confidence_only and mode == "train":
             # Skip Diffusion Loss and distogram loss
             loss_fns = {}
         else:
             loss_fns = {}
-            
+
             loss_fns.update(
                 {
                     "smooth_lddt_loss": lambda: self.smooth_lddt_loss.forward(
@@ -582,7 +593,7 @@ class ProtenixLoss(nn.Module):
         cum_loss, metrics, monitor_data = self.aggregate_losses(loss_fns)
         return cum_loss, metrics, monitor_data
 
-    def forward( 
+    def forward(
         self,
         feat_dict: dict[str, Any],
         pred_dict: dict[str, torch.Tensor],
@@ -613,5 +624,5 @@ class ProtenixLoss(nn.Module):
             label_dict=label_dict,
             mode=mode,
         )
-        
+
         return cum_loss, losses, monitor_data

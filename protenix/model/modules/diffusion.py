@@ -56,9 +56,7 @@ class DiffusionConditioning(nn.Module):
 
         ### Ligand reference position embeddings
         self.linear_no_bias_d = LinearNoBias(in_features=3, out_features=self.c_z)
-        self.linear_no_bias_invd = LinearNoBias(
-            in_features=1, out_features=self.c_z, init="zeros"
-        )
+        self.linear_no_bias_invd = LinearNoBias(in_features=1, out_features=self.c_z, init="zeros")
 
         # Token bonds
         self.linear_no_bias_token_bonds = LinearNoBias(
@@ -69,9 +67,7 @@ class DiffusionConditioning(nn.Module):
         #  Line 1-2
         self.relpe = RelativePositionEncoding(c_z=c_z)
         self.layernorm_z = LayerNorm(2 * self.c_z)
-        self.linear_no_bias_z = LinearNoBias(
-            in_features=2 * self.c_z, out_features=self.c_z
-        )
+        self.linear_no_bias_z = LinearNoBias(in_features=2 * self.c_z, out_features=self.c_z)
         # Line 3-5:
         self.transition_z = Transition(c_in=self.c_z, n=2)
 
@@ -110,9 +106,7 @@ class DiffusionConditioning(nn.Module):
         # 1. Get token-wise ligand reference positions
         # [..., N_atom, 3]
         is_ligand = input_feature_dict["is_ligand"].unsqueeze(-1)  # [..., n_atom, 1]
-        ligand_ref_pos = (
-            input_feature_dict["ref_pos"] * is_ligand
-        )  # (zero out non-ligand atoms)
+        ligand_ref_pos = input_feature_dict["ref_pos"] * is_ligand  # (zero out non-ligand atoms)
 
         # 2. Aggregate per-atom reference positions to per-token reference positions (trick to get token-level tensor)
         # [..., N_atom, 3] -> [..., N_token, 3]
@@ -141,18 +135,13 @@ class DiffusionConditioning(nn.Module):
         z = self.linear_no_bias_d(d_lm) * v_lm  # [..., n_token, n_token, c_z]
 
         # 4. Embed pairwise inverse squared distances
-        invd_emb = (
-            self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True)))
-            * v_lm
-        )
+        invd_emb = self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))) * v_lm
         z = add(z, invd_emb, inplace_safe=inplace_safe)
 
         # Add token bonds to pair embedding
         z = add(
             z,
-            self.linear_no_bias_token_bonds(
-                input_feature_dict["token_bonds"].unsqueeze(-1)
-            ),
+            self.linear_no_bias_token_bonds(input_feature_dict["token_bonds"].unsqueeze(-1)),
             inplace_safe=inplace_safe,
         )
 
@@ -406,8 +395,8 @@ class DiffusionModule(nn.Module):
         )
 
         # Scale output with direct function calls
-        coords_pred = x_noisy * self.c_skip(
+        coords_pred = x_noisy * self.c_skip(timestep[..., None, None]) + r_update * self.c_out(
             timestep[..., None, None]
-        ) + r_update * self.c_out(timestep[..., None, None])
+        )
 
         return coords_pred

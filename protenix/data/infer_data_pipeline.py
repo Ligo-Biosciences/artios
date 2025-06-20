@@ -73,7 +73,6 @@ class InferenceDataset(Dataset):
         dump_dir: str,
         use_msa: bool = True,
     ) -> None:
-
         self.input_json_path = input_json_path
         self.dump_dir = dump_dir
         self.use_msa = use_msa
@@ -150,9 +149,7 @@ class InferenceDataset(Dataset):
         for mol_type in ["ligand", "protein", "dna", "rna"]:
             mol_type_mask = feat[f"is_{mol_type}"].bool()
             stats[f"{mol_type}/atom"] = int(mol_type_mask.sum(dim=-1).item())
-            stats[f"{mol_type}/token"] = len(
-                torch.unique(feat["atom_to_token_idx"][mol_type_mask])
-            )
+            stats[f"{mol_type}/token"] = len(torch.unique(feat["atom_to_token_idx"][mol_type_mask]))
 
         N_asym = len(torch.unique(data["input_feature_dict"]["asym_id"]))
         data.update(
@@ -208,9 +205,7 @@ class InferenceDataset(Dataset):
             sample_name = single_sample_dict["name"]
             logger.info(f"Featurizing {sample_name}...")
 
-            data, atom_array, _ = self.process_one(
-                single_sample_dict=single_sample_dict
-            )
+            data, atom_array, _ = self.process_one(single_sample_dict=single_sample_dict)
             error_message = ""
         except Exception as e:
             data, atom_array = {}, None

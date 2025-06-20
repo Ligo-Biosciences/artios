@@ -1,10 +1,9 @@
-import pytest
-import torch
 import os
 
-from protenix.model.modules.embedders import (
-    RelativePositionEncoding, FourierEmbedding
-)
+import pytest
+import torch
+
+from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 
 
 class TestRelativePositionEncoding:
@@ -24,15 +23,10 @@ class TestRelativePositionEncoding:
         s_max = 2
         c_z = 128
 
-        encoder = RelativePositionEncoding(
-            r_max=r_max,
-            s_max=s_max,
-            c_z=c_z
-        ).to(device)
+        encoder = RelativePositionEncoding(r_max=r_max, s_max=s_max, c_z=c_z).to(device)
 
         # Move sample data to device
-        input_dict = {k: v.to(device) if torch.is_tensor(v) else v 
-                     for k, v in sample_data.items()}
+        input_dict = {k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()}
 
         out = encoder(input_dict)
 
@@ -55,12 +49,12 @@ class TestFourierEmbedding:
         seed = 42
 
         embedder = FourierEmbedding(c=c, seed=seed).to(device)
-        
+
         # Create random noise levels between 0 and 1
         t_hat = torch.rand(batch_size, n_samples).to(device)
-        
+
         out = embedder(t_hat)
-        
+
         # Check output shape and values
         assert out.shape == (batch_size, n_samples, c)
         assert not torch.isnan(out).any()
@@ -72,11 +66,10 @@ class TestFourierEmbedding:
         assert torch.allclose(out, out2)
 
         # Test different output with different seed
-        embedder3 = FourierEmbedding(c=c, seed=seed+1).to(device)
+        embedder3 = FourierEmbedding(c=c, seed=seed + 1).to(device)
         out3 = embedder3(t_hat)
         assert not torch.allclose(out, out3)
 
 
 if __name__ == "__main__":
     pytest.main([__file__])
-

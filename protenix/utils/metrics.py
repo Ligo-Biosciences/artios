@@ -30,9 +30,7 @@ common_aggregator = {
 class SimpleMetricAggregator(object):
     """A quite simple metrics calculator that only do simple metrics aggregation."""
 
-    def __init__(
-        self, aggregator_names=None, gather_before_calc=True, need_gather=True
-    ):
+    def __init__(self, aggregator_names=None, gather_before_calc=True, need_gather=True):
         super(SimpleMetricAggregator, self).__init__()
         self.gather_before_calc = gather_before_calc
         self.need_gather = need_gather
@@ -64,9 +62,7 @@ class SimpleMetricAggregator(object):
     def calc(self):
         metric_data, self._metric_data = self._metric_data, {}
         if self.need_gather and self.gather_before_calc:
-            metric_data = gather_and_merge(
-                metric_data, aggregation_func=lambda l: sum(l, [])
-            )
+            metric_data = gather_and_merge(metric_data, aggregation_func=lambda l: sum(l, []))
         results = {}
         for agg_name, agg_func in self.aggregators.items():
             for namespace, value_dict in metric_data.items():

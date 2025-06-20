@@ -107,9 +107,7 @@ class DistributedWeightedSampler(DistributedSampler):
         self.epoch = 0
         self.num_samples = num_samples
 
-        self.num_samples_per_replica = int(
-            math.ceil(self.num_samples / self.num_replicas)
-        )
+        self.num_samples_per_replica = int(math.ceil(self.num_samples / self.num_replicas))
         self.total_size = self.num_samples_per_replica * self.num_replicas
 
     def __iter__(self) -> Iterator[int]:
@@ -189,9 +187,7 @@ class KeySumBalancedSampler(Sampler):
 
         if isinstance(self.dataset.indices_list, list):
             # e.g. recentPDB test set
-            dataset_values = [
-                x[self.key].astype(int)[0] for x in self.dataset.indices_list
-            ]
+            dataset_values = [x[self.key].astype(int)[0] for x in self.dataset.indices_list]
         else:
             # e.g. posebuster test set
             dataset_values = self.dataset.indices_list[self.key].astype(int).to_numpy()
@@ -228,9 +224,7 @@ class KeySumBalancedSampler(Sampler):
         # Assign remaining samples if the dataset isn't divisible perfectly
         if len(all_indices) > total_samples:
             for i in range(len(all_indices) - total_samples):
-                worker_assignments[i % self.num_replicas].append(
-                    all_indices[total_samples + i]
-                )
+                worker_assignments[i % self.num_replicas].append(all_indices[total_samples + i])
 
         # Return the indices assigned to the current worker
         return worker_assignments
@@ -333,7 +327,6 @@ def get_dataloaders(
             sampler=train_sampler,
         )
     else:
-
         train_sampler = WeightedSampler(
             weights=train_dataset.merged_datapoint_weights,
             num_samples=configs.data.epoch_size,
@@ -366,7 +359,5 @@ def get_dataloaders(
             sampler=test_sampler,
             collate_fn=lambda batch: batch[0],
         )
-    logger.info(
-        f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}"
-    )
+    logger.info(f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}")
     return train_dl, test_dls

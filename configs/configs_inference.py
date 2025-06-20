@@ -15,24 +15,21 @@
 # pylint: disable=C0114
 import os
 
-from protenix.config.extend_types import (
-    ListValue, RequiredValue, ValueMaybeNone, GlobalConfigValue
-)
-
+from protenix.config.extend_types import GlobalConfigValue, ListValue, RequiredValue, ValueMaybeNone
 
 # Small guidance model
 guidance_model_configs = {
-    "c_s": 256, # 192
-    "c_z": 128, # 64
+    "c_s": 256,  # 192
+    "c_z": 128,  # 64
     "c_s_inputs": 128,  # c_s_inputs == c_token + 32
-    "c_atom": 256, # 64
-    "c_atompair": 16, # 16
-    "c_token": 768, # 192
-    "n_blocks": 48, # 16
+    "c_atom": 256,  # 64
+    "c_atompair": 16,  # 16
+    "c_token": 768,  # 192
+    "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
     "sigma_data": 16.0,
-    "diffusion_batch_size": 48, 
+    "diffusion_batch_size": 48,
     "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
@@ -40,7 +37,7 @@ guidance_model_configs = {
     ),  # NOTE: Number of blocks in each activation checkpoint, if None, no checkpointing is performed.
     # switch of kernels
     "use_memory_efficient_kernel": False,
-    "use_deepspeed_evo_attention": False, # TODO: not using deepspeed
+    "use_deepspeed_evo_attention": False,  # TODO: not using deepspeed
     "use_flash": False,
     "use_lma": False,
     "use_xformer": False,
@@ -65,20 +62,15 @@ guidance_model_configs = {
             1
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
-    "train_timestep_sampler": { 
-        "loc": 0.0,
-        "scale": 1.0
-    },
-    "inference_timestep_scheduler": { 
-        "p": -0.7
-    },
-    "sample_diffusion": { 
-        "N_step": 200, # 25
-        "N_sample": 1, # 1
+    "train_timestep_sampler": {"loc": 0.0, "scale": 1.0},
+    "inference_timestep_scheduler": {"p": -0.7},
+    "sample_diffusion": {
+        "N_step": 200,  # 25
+        "N_sample": 1,  # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type": "non_singular",
-        "alpha": 0.29, # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha": 0.29,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
         "sigma_data": GlobalConfigValue("sigma_data"),
         "second_order_train": False,
@@ -95,7 +87,7 @@ guidance_model_configs = {
         "diffusion_module": {
             "use_fine_grained_checkpoint": True,
             "sigma_data": 16.0,
-            "c_token": 768, 
+            "c_token": 768,
             "c_atom": 256,
             "c_atompair": 16,
             "c_z": 128,
@@ -114,77 +106,76 @@ guidance_model_configs = {
                 "n_heads": 4,
             },
             "blocks_per_ckpt": 1,
-        }, 
+        },
     },
     "loss": {
-    "diffusion_lddt_chunk_size": ValueMaybeNone(1),
-    "diffusion_bond_chunk_size": ValueMaybeNone(1),
-    "diffusion_chunk_size_outer": ValueMaybeNone(-1),
-    "diffusion_sparse_loss_enable": GlobalConfigValue("loss_metrics_sparse_enable"),
-    "diffusion_lddt_loss_dense": True,  # only set true in initial training for training speed
-    "resolution": {"min": 0.1, "max": 4.0},
-    "weight": { # TODO: set unused loss weights to 0 (for completion)
-        "alpha_confidence": 1e-4,
-        "alpha_pae": 0.0,  # or 1 in finetuning stage 3
-        "alpha_except_pae": 1.0,
-        "alpha_diffusion": 4.0,
-        "alpha_distogram": 3e-2,
-        "alpha_bond": 0.0,  # or 1 in finetuning stages
-        "smooth_lddt": 0.0,  # or 0 in finetuning stages
-        "neighbour_mse": 1.0,
-    },
-    "plddt": {
-        "min_bin": 0,
-        "max_bin": 1.0,
-        "no_bins": 50,
-        "normalize": True,
-        "eps": 1e-6,
-    },
-    "pde": {
-        "min_bin": 0,
-        "max_bin": 32,
-        "no_bins": 64,
-        "eps": 1e-6,
-    },
-    "resolved": {
-        "eps": 1e-6,
-    },
-    "pae": {
-        "min_bin": 0,
-        "max_bin": 32,
-        "no_bins": 64,
-        "eps": 1e-6,
-    },
-    "diffusion": {
-        "mse": {
-            "weight_mse": 1 / 3,
-            "weight_dna": 5.0,
-            "weight_rna": 5.0,
-            "weight_ligand": 10.0,
-            "eps": 1e-6,
-            #"use_uncertainty": False,
+        "diffusion_lddt_chunk_size": ValueMaybeNone(1),
+        "diffusion_bond_chunk_size": ValueMaybeNone(1),
+        "diffusion_chunk_size_outer": ValueMaybeNone(-1),
+        "diffusion_sparse_loss_enable": GlobalConfigValue("loss_metrics_sparse_enable"),
+        "diffusion_lddt_loss_dense": True,  # only set true in initial training for training speed
+        "resolution": {"min": 0.1, "max": 4.0},
+        "weight": {  # TODO: set unused loss weights to 0 (for completion)
+            "alpha_confidence": 1e-4,
+            "alpha_pae": 0.0,  # or 1 in finetuning stage 3
+            "alpha_except_pae": 1.0,
+            "alpha_diffusion": 4.0,
+            "alpha_distogram": 3e-2,
+            "alpha_bond": 0.0,  # or 1 in finetuning stages
+            "smooth_lddt": 0.0,  # or 0 in finetuning stages
+            "neighbour_mse": 1.0,
         },
-
-        "bond": {
+        "plddt": {
+            "min_bin": 0,
+            "max_bin": 1.0,
+            "no_bins": 50,
+            "normalize": True,
             "eps": 1e-6,
         },
-        "smooth_lddt": {
+        "pde": {
+            "min_bin": 0,
+            "max_bin": 32,
+            "no_bins": 64,
             "eps": 1e-6,
-            "k": 300,
-            "use_uncertainty": False,
         },
-        "neighbour_mse": {
+        "resolved": {
             "eps": 1e-6,
-            "k": 300,
+        },
+        "pae": {
+            "min_bin": 0,
+            "max_bin": 32,
+            "no_bins": 64,
+            "eps": 1e-6,
+        },
+        "diffusion": {
+            "mse": {
+                "weight_mse": 1 / 3,
+                "weight_dna": 5.0,
+                "weight_rna": 5.0,
+                "weight_ligand": 10.0,
+                "eps": 1e-6,
+                # "use_uncertainty": False,
+            },
+            "bond": {
+                "eps": 1e-6,
+            },
+            "smooth_lddt": {
+                "eps": 1e-6,
+                "k": 300,
+                "use_uncertainty": False,
+            },
+            "neighbour_mse": {
+                "eps": 1e-6,
+                "k": 300,
+            },
+        },
+        "distogram": {
+            "min_bin": 2.3125,
+            "max_bin": 21.6875,
+            "no_bins": 64,
+            "eps": 1e-6,
         },
     },
-    "distogram": {
-        "min_bin": 2.3125,
-        "max_bin": 21.6875,
-        "no_bins": 64,
-        "eps": 1e-6,
-    },
-    }
 }
 
 

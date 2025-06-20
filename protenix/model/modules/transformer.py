@@ -130,9 +130,7 @@ class AttentionPairBias(nn.Module):
         bias = self.linear_nobias_z(
             self.layernorm_z(z)
         )  # [..., n_blocks, n_queries, n_keys, n_heads]
-        bias = permute_final_dims(
-            bias, [3, 0, 1, 2]
-        )  # [..., n_heads, n_blocks, n_queries, n_keys]
+        bias = permute_final_dims(bias, [3, 0, 1, 2])  # [..., n_heads, n_blocks, n_queries, n_keys]
 
         # Line 11: Multi-head attention with attention bias & gating (and optionally local attention)
         a = self.attention(
@@ -460,9 +458,7 @@ class DiffusionTransformer(nn.Module):
         blocks_per_ckpt = self.blocks_per_ckpt
         if not torch.is_grad_enabled():
             blocks_per_ckpt = None
-        a, s, z = checkpoint_blocks(
-            blocks, args=(a, s, z), blocks_per_ckpt=blocks_per_ckpt
-        )
+        a, s, z = checkpoint_blocks(blocks, args=(a, s, z), blocks_per_ckpt=blocks_per_ckpt)
         del s, z
         return a
 
@@ -603,9 +599,7 @@ class AtomAttentionEncoder(nn.Module):
         self.linear_no_bias_f = LinearNoBias(
             in_features=sum(self.input_feature.values()), out_features=self.c_atom
         )
-        self.linear_no_bias_d = LinearNoBias(
-            in_features=3, out_features=self.c_atompair
-        )
+        self.linear_no_bias_d = LinearNoBias(in_features=3, out_features=self.c_atompair)
         self.linear_no_bias_invd = LinearNoBias(
             in_features=1, out_features=self.c_atompair, init="zeros"
         )
@@ -636,17 +630,11 @@ class AtomAttentionEncoder(nn.Module):
         )
         self.small_mlp = nn.Sequential(
             nn.ReLU(),
-            LinearNoBias(
-                in_features=self.c_atompair, out_features=self.c_atompair, init="relu"
-            ),
+            LinearNoBias(in_features=self.c_atompair, out_features=self.c_atompair, init="relu"),
             nn.ReLU(),
-            LinearNoBias(
-                in_features=self.c_atompair, out_features=self.c_atompair, init="relu"
-            ),
+            LinearNoBias(in_features=self.c_atompair, out_features=self.c_atompair, init="relu"),
             nn.ReLU(),
-            LinearNoBias(
-                in_features=self.c_atompair, out_features=self.c_atompair, init="relu"
-            ),
+            LinearNoBias(in_features=self.c_atompair, out_features=self.c_atompair, init="relu"),
         )
         self.atom_transformer = AtomTransformer(
             n_blocks=n_blocks,
@@ -706,9 +694,7 @@ class AtomAttentionEncoder(nn.Module):
         c_l = self.linear_no_bias_f(
             torch.cat(
                 [
-                    input_feature_dict[name].reshape(
-                        *batch_shape, N_atom, self.input_feature[name]
-                    )
+                    input_feature_dict[name].reshape(*batch_shape, N_atom, self.input_feature[name])
                     for name in self.input_feature
                 ],
                 dim=-1,
@@ -736,9 +722,7 @@ class AtomAttentionEncoder(nn.Module):
         ).unsqueeze(
             dim=-1
         )  # [..., n_blocks, n_queries, n_keys, 1]
-        p_lm = (self.linear_no_bias_d(d_lm) * v_lm) * pad_info[
-            "mask_trunked"
-        ].unsqueeze(
+        p_lm = (self.linear_no_bias_d(d_lm) * v_lm) * pad_info["mask_trunked"].unsqueeze(
             dim=-1
         )  # [..., n_blocks, n_queries, n_keys, C_atompair]
 
@@ -766,9 +750,7 @@ class AtomAttentionEncoder(nn.Module):
             n_token = s.size(-2)
             c_l = c_l.unsqueeze(dim=-3) + self.linear_no_bias_s(
                 self.layernorm_s(
-                    broadcast_token_to_atom(
-                        x_token=s, atom_to_token_idx=atom_to_token_idx
-                    )
+                    broadcast_token_to_atom(x_token=s, atom_to_token_idx=atom_to_token_idx)
                 )
             )  # [..., N_sample, N_atom, c_atom]
             z_local_pairs, _ = broadcast_token_to_local_atom_pair(

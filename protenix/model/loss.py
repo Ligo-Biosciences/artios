@@ -21,10 +21,7 @@ import torch.nn.functional as F
 
 from protenix.metrics.rmsd import weighted_rigid_align
 from protenix.model.modules.embedders import FourierEmbedding
-from protenix.model.modules.frames import (
-    expressCoordinatesInFrame,
-    gather_frame_atom_by_indices,
-)
+from protenix.model.modules.frames import expressCoordinatesInFrame, gather_frame_atom_by_indices
 from protenix.model.modules.primitives import MLP
 from protenix.model.utils import add, expand_at_dim, mul
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
@@ -84,9 +81,7 @@ class SmoothLDDTLoss(nn.Module):
             self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def _chunk_forward(self, pred_distance, true_distance, c_lm):
-        dist_diff = torch.abs(
-            pred_distance - true_distance
-        )  # [..., N_sample, N_atom, k]
+        dist_diff = torch.abs(pred_distance - true_distance)  # [..., N_sample, N_atom, k]
         # For save cuda memory we use inplace op
         dist_diff_epsilon = 0
         for threshold in [0.5, 1, 2, 4]:
@@ -120,19 +115,13 @@ class SmoothLDDTLoss(nn.Module):
         k = min(self.k, n_atoms - 1)  # -1 to exclude self
 
         # Compute pairwise distances between all atoms
-        distances = torch.cdist(
-            true_coordinates, true_coordinates
-        )  # [..., N_atom, N_atom]
+        distances = torch.cdist(true_coordinates, true_coordinates)  # [..., N_atom, N_atom]
 
         # Set diagonal to infinity to exclude self-pairs
-        distances = (
-            distances + torch.eye(distances.shape[-1], device=distances.device) * inf
-        )
+        distances = distances + torch.eye(distances.shape[-1], device=distances.device) * inf
 
         # Get k smallest distances and their indices for each atom
-        neighbor_distances, neighbor_indices = torch.topk(
-            distances, k=k, dim=-1, largest=False
-        )
+        neighbor_distances, neighbor_indices = torch.topk(distances, k=k, dim=-1, largest=False)
 
         return neighbor_indices, neighbor_distances
 
@@ -164,16 +153,12 @@ class SmoothLDDTLoss(nn.Module):
         """
 
         # Get the indices and distances of the k closest atoms for each atom in the true coordinates
-        neighbor_indices, true_neighbor_distances = self.query_neighbors(
-            true_coordinates
-        )
+        neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates)
 
         # Compute mask for the atoms that have true coordinates
         n_neighbors = neighbor_indices.shape[-1]
         c_lm = coordinate_mask[neighbor_indices]  # [..., N_atom, k]
-        c_lm = c_lm * coordinate_mask.unsqueeze(
-            -1
-        )  # mask atoms that do not have true coordinates
+        c_lm = c_lm * coordinate_mask.unsqueeze(-1)  # mask atoms that do not have true coordinates
         c_lm = c_lm.bool().unsqueeze(-3).detach()  # [..., 1, N_atom, k]
 
         # Get N_sample dimension size
@@ -195,9 +180,7 @@ class SmoothLDDTLoss(nn.Module):
 
         # Expand true_neighbor_distances to include N_sample dimension
         # [..., N_atom, k] -> [..., N_sample, N_atom, k]
-        true_neighbor_distances = expand_at_dim(
-            x=true_neighbor_distances, dim=-3, n=n_samples
-        )
+        true_neighbor_distances = expand_at_dim(x=true_neighbor_distances, dim=-3, n=n_samples)
 
         # Compute predicted neighbour distances
         pred_distance = torch.sqrt(
@@ -345,10 +328,7 @@ class MSELoss(nn.Module):
         """
         N_sample = pred_coordinate.size(-3)
         weight = (
-            1
-            + self.weight_dna * is_dna
-            + self.weight_rna * is_rna
-            + self.weight_ligand * is_ligand
+            1 + self.weight_dna * is_dna + self.weight_rna * is_rna + self.weight_ligand * is_ligand
         )  # [N_atom] or [..., N_atom]
 
         # Apply coordinate_mask
@@ -361,9 +341,7 @@ class MSELoss(nn.Module):
             true_coordinate, dim=-3, n=N_sample
         )  # [..., N_sample, N_atom, 3]
         if len(weight.shape) > 1:
-            weight = expand_at_dim(
-                weight, dim=-2, n=N_sample
-            )  # [..., N_sample, N_atom]
+            weight = expand_at_dim(weight, dim=-2, n=N_sample)  # [..., N_sample, N_atom]
 
         # Align GT coords to predicted coords
         d = pred_coordinate.dtype
@@ -371,12 +349,8 @@ class MSELoss(nn.Module):
         with torch.amp.autocast("cuda", enabled=False):
             true_coordinate_aligned = weighted_rigid_align(
                 x=true_coordinate.to(torch.float32),  # [..., N_sample, N_atom, 3]
-                x_target=pred_coordinate.to(
-                    torch.float32
-                ),  # [..., N_sample, N_atom, 3]
-                atom_weight=weight.to(
-                    torch.float32
-                ),  # [N_atom] or [..., N_sample, N_atom]
+                x_target=pred_coordinate.to(torch.float32),  # [..., N_sample, N_atom, 3]
+                atom_weight=weight.to(torch.float32),  # [N_atom] or [..., N_sample, N_atom]
                 stop_gradient=True,
             )  # [..., N_sample, N_atom, 3]
             true_coordinate_aligned = true_coordinate_aligned.to(d)
@@ -511,9 +485,7 @@ class ProtenixLoss(nn.Module):
                 assert isinstance(loss_outputs, torch.Tensor)
                 loss, metrics, monitor_data = loss_outputs, {}, {}
 
-            all_metrics.update(
-                {f"{loss_name}/{key}": val for key, val in metrics.items()}
-            )
+            all_metrics.update({f"{loss_name}/{key}": val for key, val in metrics.items()})
             all_monitor_data[loss_name] = monitor_data
 
             if torch.isnan(loss) or torch.isinf(loss):

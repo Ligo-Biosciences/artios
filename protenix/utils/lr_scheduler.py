@@ -42,9 +42,7 @@ class CosineAnnealingWithWarmup(LRScheduler):
         elif step >= self.decay_steps:
             return self.min_lr
         else:
-            decay_ratio = (step - self.warmup_steps) / (
-                self.decay_steps - self.warmup_steps
-            )
+            decay_ratio = (step - self.warmup_steps) / (self.decay_steps - self.warmup_steps)
             assert 0 <= decay_ratio <= 1
             coff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
             return self.min_lr + coff * (self.lr - self.min_lr)
@@ -56,9 +54,7 @@ class CosineAnnealingWithWarmup(LRScheduler):
                 "please use `get_last_lr()`.",
                 UserWarning,
             )
-        return [
-            self._get_step_lr(self.last_epoch) for group in self.optimizer.param_groups
-        ]
+        return [self._get_step_lr(self.last_epoch) for group in self.optimizer.param_groups]
 
     def _get_closed_form_lr(self):
         return [self._get_step_lr(self.last_epoch) for base_lr in self.base_lrs]
@@ -100,9 +96,7 @@ class AlphaFold3LRScheduler(LRScheduler):
                 "please use `get_last_lr()`.",
                 UserWarning,
             )
-        return [
-            self._get_step_lr(self.last_epoch) for group in self.optimizer.param_groups
-        ]
+        return [self._get_step_lr(self.last_epoch) for group in self.optimizer.param_groups]
 
 
 def get_lr_scheduler(
@@ -123,9 +117,7 @@ def get_lr_scheduler(
         ValueError: If the specified learning rate scheduler is invalid.
     """
     if configs.lr_scheduler == "af3":
-        lr_scheduler = AlphaFold3LRScheduler(
-            optimizer, **configs.af3_lr_scheduler, **kwargs
-        )
+        lr_scheduler = AlphaFold3LRScheduler(optimizer, **configs.af3_lr_scheduler, **kwargs)
     elif configs.lr_scheduler == "cosine_annealing":
         lr_scheduler = CosineAnnealingWithWarmup(
             optimizer,

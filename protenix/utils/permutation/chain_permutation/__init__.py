@@ -55,12 +55,9 @@ def run(
     """
 
     if pred_coord.dim() > 2:
-        assert (
-            permute_label is False
-        ), "Only supports prediction permutations in batch mode."
+        assert permute_label is False, "Only supports prediction permutations in batch mode."
 
     try:
-
         if permute_by_pocket:
             """Optimize the chain assignment on pocket-ligand interface"""
             assert not permute_label
@@ -73,32 +70,37 @@ def run(
                 pocket_mask = label_full_dict["pocket_mask"]
                 ligand_mask = label_full_dict["interested_ligand_mask"]
 
-            permute_pred_indices, permuted_aligned_pred_coord, log_dict = (
-                permute_pred_to_optimize_pocket_aligned_rmsd(
-                    pred_coord=pred_coord,
-                    true_coord=label_full_dict["coordinate"],
-                    true_coord_mask=label_full_dict["coordinate_mask"],
-                    true_pocket_mask=pocket_mask,
-                    true_ligand_mask=ligand_mask,
-                    atom_entity_id=input_feature_dict["entity_mol_id"],
-                    atom_asym_id=input_feature_dict["mol_id"],
-                    mol_atom_index=input_feature_dict["mol_atom_index"],
-                    use_center_rmsd=kwargs.get("use_center_rmsd", False),
-                )
+            (
+                permute_pred_indices,
+                permuted_aligned_pred_coord,
+                log_dict,
+            ) = permute_pred_to_optimize_pocket_aligned_rmsd(
+                pred_coord=pred_coord,
+                true_coord=label_full_dict["coordinate"],
+                true_coord_mask=label_full_dict["coordinate_mask"],
+                true_pocket_mask=pocket_mask,
+                true_ligand_mask=ligand_mask,
+                atom_entity_id=input_feature_dict["entity_mol_id"],
+                atom_asym_id=input_feature_dict["mol_id"],
+                mol_atom_index=input_feature_dict["mol_atom_index"],
+                use_center_rmsd=kwargs.get("use_center_rmsd", False),
             )
             output_dict = {"coordinate": permuted_aligned_pred_coord}
             permute_label_indices = []
 
         else:
             """Optimize the chain assignment on all chains"""
-            output_dict, log_dict, permute_pred_indices, permute_label_indices = (
-                correct_symmetric_chains(
-                    pred_dict={**input_feature_dict, "coordinate": pred_coord},
-                    label_full_dict=label_full_dict,
-                    max_num_chains=max_num_chains,
-                    permute_label=permute_label,
-                    **kwargs,
-                )
+            (
+                output_dict,
+                log_dict,
+                permute_pred_indices,
+                permute_label_indices,
+            ) = correct_symmetric_chains(
+                pred_dict={**input_feature_dict, "coordinate": pred_coord},
+                label_full_dict=label_full_dict,
+                max_num_chains=max_num_chains,
+                permute_label=permute_label,
+                **kwargs,
             )
 
     except Exception as e:

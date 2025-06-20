@@ -77,9 +77,7 @@ class TrainingTimestepSampler:
             generator = torch.Generator(device=device).manual_seed(self.seed)
 
         # Sample from uniform distribution
-        uniform_samples = torch.rand(
-            size, device=device, dtype=dtype, generator=generator
-        )
+        uniform_samples = torch.rand(size, device=device, dtype=dtype, generator=generator)
 
         # Sample from specified distribution
         if self.distribution_type == "beta":
@@ -92,19 +90,14 @@ class TrainingTimestepSampler:
             dist_samples = dist.sample(sample_shape=sample_shape)
 
         elif self.distribution_type == "logit-normal":
-            dist_samples = sample_logit_normal(
-                size, device, dtype, self.loc, self.scale, generator
-            )
+            dist_samples = sample_logit_normal(size, device, dtype, self.loc, self.scale, generator)
 
         else:
-            raise ValueError(
-                "distribution_type must be either 'beta' or 'logit-normal'"
-            )
+            raise ValueError("distribution_type must be either 'beta' or 'logit-normal'")
 
         # Generate mask to pick either uniform or distribution samples
         mask = (
-            torch.rand(size, device=device, dtype=dtype, generator=generator)
-            < self.uniform_weight
+            torch.rand(size, device=device, dtype=dtype, generator=generator) < self.uniform_weight
         )
 
         # Use mask to pick either uniform or distribution samples
@@ -121,9 +114,7 @@ class TrainingTimestepSamplerV2:
     each with a specified weight and parameters.
     """
 
-    def __init__(
-        self, distributions_config: List[Dict], seed: Optional[int] = None
-    ) -> None:
+    def __init__(self, distributions_config: List[Dict], seed: Optional[int] = None) -> None:
         """
         Args:
             distributions_config (List[Dict]): A list of dictionaries, each configuring a
@@ -144,9 +135,7 @@ class TrainingTimestepSamplerV2:
         validated_configs = []
         for config in distributions_config:
             if not isinstance(config, dict):
-                raise ValueError(
-                    "Each item in distributions_config must be a dictionary."
-                )
+                raise ValueError("Each item in distributions_config must be a dictionary.")
 
             dist_type = config.get("distribution_type")
             weight = config.get("weight")
@@ -169,13 +158,9 @@ class TrainingTimestepSamplerV2:
                 loc = config.get("loc")
                 scale = config.get("scale")
                 if not isinstance(loc, (float, int)):
-                    raise ValueError(
-                        "Logit-normal distribution requires 'loc' (float)."
-                    )
+                    raise ValueError("Logit-normal distribution requires 'loc' (float).")
                 if not isinstance(scale, (float, int)) or scale <= 0:
-                    raise ValueError(
-                        "Logit-normal distribution requires 'scale' (float > 0)."
-                    )
+                    raise ValueError("Logit-normal distribution requires 'scale' (float > 0).")
             elif dist_type == "uniform":
                 low = config.get("low")
                 high = config.get("high")
@@ -184,9 +169,7 @@ class TrainingTimestepSamplerV2:
                 if not isinstance(high, (float, int)):
                     raise ValueError("Uniform distribution requires 'high' (float).")
                 if low >= high:
-                    raise ValueError(
-                        "For uniform distribution, 'low' must be less than 'high'."
-                    )
+                    raise ValueError("For uniform distribution, 'low' must be less than 'high'.")
             else:
                 raise ValueError(
                     f"Unsupported distribution_type: {dist_type}. "
@@ -195,9 +178,7 @@ class TrainingTimestepSamplerV2:
             validated_configs.append(config)
 
         if not torch.isclose(torch.tensor(total_weight), torch.tensor(1.0)):
-            raise ValueError(
-                f"Sum of weights must be close to 1.0, but got {total_weight}."
-            )
+            raise ValueError(f"Sum of weights must be close to 1.0, but got {total_weight}.")
 
         self.distributions_config = validated_configs
         self.seed = seed
@@ -224,9 +205,7 @@ class TrainingTimestepSamplerV2:
 
         # Determine which distribution to sample from for each element
         dist_indices = torch.multinomial(
-            self.weights_tensor.to(
-                device
-            ),  # Ensure weights tensor is on the correct device
+            self.weights_tensor.to(device),  # Ensure weights tensor is on the correct device
             num_total_samples,
             replacement=True,
             generator=generator,
@@ -245,14 +224,10 @@ class TrainingTimestepSamplerV2:
 
             if current_dist_type == "beta":
                 alpha = torch.tensor(dist_config["alpha"], device=device, dtype=dtype)
-                beta_param = torch.tensor(
-                    dist_config["beta"], device=device, dtype=dtype
-                )
+                beta_param = torch.tensor(dist_config["beta"], device=device, dtype=dtype)
                 beta_dist = torch.distributions.beta.Beta(alpha, beta_param)
                 # TODO: .sample() does not take a generator argument directly. should fix seeds at some point
-                samples[mask] = beta_dist.sample(
-                    sample_shape=torch.Size([num_samples_for_dist])
-                )
+                samples[mask] = beta_dist.sample(sample_shape=torch.Size([num_samples_for_dist]))
 
             elif current_dist_type == "logit-normal":
                 loc = dist_config["loc"]
@@ -371,12 +346,10 @@ def _calculate_velocity_and_score(
 
         # Velocity and score interpolation for guidance
         velocity_pred = (
-            guidance_weight * velocity_pred
-            + (1 - guidance_weight) * guidance_velocity_pred
+            guidance_weight * velocity_pred + (1 - guidance_weight) * guidance_velocity_pred
         )
         scaled_score = (
-            guidance_weight * scaled_score
-            + (1 - guidance_weight) * scaled_guidance_score
+            guidance_weight * scaled_score + (1 - guidance_weight) * scaled_guidance_score
         )
 
     return velocity_pred, scaled_score
@@ -439,10 +412,7 @@ def sample_diffusion(
         * torch.ones_like(t)
         * 0.5
         * (alpha**2),  # int_{0}^{1}(non_sing) = 1/4
-        "zero_ends": lambda t: 12
-        * 0.5
-        * (alpha**2)
-        * t,  # int_{0}^{1}(zero_ends) = 1/12
+        "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t,  # int_{0}^{1}(zero_ends) = 1/12
         # TODO: add in the beta distribution.
         # TODO: check the divergence minimising choice used in ma et al.
         # "proteina": lambda t: alpha / (t + 0.01)
@@ -469,7 +439,6 @@ def sample_diffusion(
 
         # Sampling loop
         for i, (t_cur, t_next) in enumerate(zip(timesteps[:-1], timesteps[1:])):
-
             # Shape wrangling for current timestep
             t = t_cur.new_full((batch_shape + (chunk_n_sample,)), t_cur).to(
                 dtype
@@ -483,11 +452,7 @@ def sample_diffusion(
             g_t = g[i]
 
             # Centre and rotate coords [..., N_sample, N_atom, 3]
-            x = (
-                centre_random_augmentation(x_input_coords=x, N_sample=1)
-                .squeeze(dim=-3)
-                .to(dtype)
-            )
+            x = centre_random_augmentation(x_input_coords=x, N_sample=1).squeeze(dim=-3).to(dtype)
 
             # Calculate velocity and scaled score
             velocity_pred, scaled_score = _calculate_velocity_and_score(
@@ -534,16 +499,10 @@ def sample_diffusion(
                 )
 
                 # Calculate update at intermediate point
-                update_2 = step * (
-                    velocity_pred_2.to(torch.float64) + g_t * scaled_score_2
-                )
+                update_2 = step * (velocity_pred_2.to(torch.float64) + g_t * scaled_score_2)
 
                 # Perform second order Euler step
-                x = (
-                    x
-                    + 1 / 2 * (update + update_2)
-                    + torch.sqrt(2 * step * g_t * gamma) * noise
-                )
+                x = x + 1 / 2 * (update + update_2) + torch.sqrt(2 * step * g_t * gamma) * noise
 
         return x
 
@@ -551,18 +510,12 @@ def sample_diffusion(
         coords_pred = _chunk_sample_diffusion(N_sample, inplace_safe=inplace_safe)
     else:
         coords_pred = []
-        no_chunks = N_sample // diffusion_chunk_size + (
-            N_sample % diffusion_chunk_size != 0
-        )
+        no_chunks = N_sample // diffusion_chunk_size + (N_sample % diffusion_chunk_size != 0)
         for i in range(no_chunks):
             chunk_n_sample = (
-                diffusion_chunk_size
-                if i < no_chunks - 1
-                else N_sample - i * diffusion_chunk_size
+                diffusion_chunk_size if i < no_chunks - 1 else N_sample - i * diffusion_chunk_size
             )
-            chunk_coords_pred = _chunk_sample_diffusion(
-                chunk_n_sample, inplace_safe=inplace_safe
-            )
+            chunk_coords_pred = _chunk_sample_diffusion(chunk_n_sample, inplace_safe=inplace_safe)
             coords_pred.append(chunk_coords_pred)
         coords_pred = torch.cat(coords_pred, -3)  # [..., N_sample, N_atom, 3]
 
@@ -616,9 +569,7 @@ def sample_diffusion_training(
 
     # Get timestep for noising
     # timestep: independent timesteps for each sample [..., N_sample]
-    timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(
-        dtype
-    )
+    timestep = timestep_sampler(size=(*batch_size_shape, N_sample), device=device).to(dtype)
 
     # Generate noise
     noise = (
@@ -632,9 +583,7 @@ def sample_diffusion_training(
     )  # [..., N_sample, N_atom, 3]
 
     # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )
-    x_noisy = noise_w_flow_matching(
-        x_target_augment, noise, timestep[..., :, None, None]
-    )
+    x_noisy = noise_w_flow_matching(x_target_augment, noise, timestep[..., :, None, None])
 
     # Get denoised output predictions [..., N_sample, N_atom, 3]
     if diffusion_chunk_size is None:
@@ -645,16 +594,12 @@ def sample_diffusion_training(
         )
     else:
         coords_pred = []
-        no_chunks = N_sample // diffusion_chunk_size + (
-            N_sample % diffusion_chunk_size != 0
-        )
+        no_chunks = N_sample // diffusion_chunk_size + (N_sample % diffusion_chunk_size != 0)
         for i in range(no_chunks):
             x_noisy_i = x_noisy[
                 ..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size, :, :
             ]
-            timestep_i = timestep[
-                ..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size
-            ]
+            timestep_i = timestep[..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size]
             coords_pred_i = denoise_net(
                 x_noisy=x_noisy_i,
                 timestep=timestep_i,

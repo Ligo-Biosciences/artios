@@ -14,15 +14,14 @@
 
 import numpy as np
 import torch
+
 from protenix.utils.ema_utils import sigma_to_gamma
 
 
 class EMAWrapper(object):
     """A wrapper class for exponential moving average of model weights."""
 
-    def __init__(
-        self, model: torch.nn.Module, decay: float = 0.999, mutable_param_keywords=None
-    ):
+    def __init__(self, model: torch.nn.Module, decay: float = 0.999, mutable_param_keywords=None):
         """
         model: a pytorch model to apply EMA
         decay: a scaler to indicate the decay rate
@@ -30,9 +29,7 @@ class EMAWrapper(object):
         """
         self.model = model
         self.decay = decay
-        self.mutable_param_keywords = [
-            s.strip() for s in mutable_param_keywords if s.strip()
-        ]
+        self.mutable_param_keywords = [s.strip() for s in mutable_param_keywords if s.strip()]
         self.shadow = {}
         self.backup = {}
 
@@ -47,9 +44,7 @@ class EMAWrapper(object):
             ):
                 continue
             assert name in self.shadow
-            new_average = (1.0 - self.decay) * param.data + self.decay * self.shadow[
-                name
-            ]
+            new_average = (1.0 - self.decay) * param.data + self.decay * self.shadow[name]
             self.shadow[name] = new_average.clone()
 
     def apply_shadow(self):
@@ -66,23 +61,25 @@ class EMAWrapper(object):
 
 
 class PowerLawEMAWrapper(EMAWrapper):
-    """"
-    A wrapper class for EMA that uses a power law decay. 
+    """ "
+    A wrapper class for EMA that uses a power law decay.
 
     A power law decay has two favourable properties over traditional EMA:
-     1. It puts zero weight on the random initialization of the model, allowing longer averaging 
+     1. It puts zero weight on the random initialization of the model, allowing longer averaging
         without contribution from the initial random weights.
-     2. It is self-similar, so stretching the training time by a factor of k will stretch the 
+     2. It is self-similar, so stretching the training time by a factor of k will stretch the
         averaging profile by a factor of k.
-    
+
     See equation (119) and (127) of Karras et al. "Analyzing and Improving the Training Dynamics of Diffusion Models"
     for more details.
     """
+
     def __init__(
-            self, 
-            model: torch.nn.Module, 
-            sigma: float = 10.0, #TODO: change to sigma
-            mutable_param_keywords=None):
+        self,
+        model: torch.nn.Module,
+        sigma: float = 10.0,  # TODO: change to sigma
+        mutable_param_keywords=None,
+    ):
         """
         model: (torch.nn.Module) a pytorch model to apply power law EMA
         sigma: (float) standard deviation of our power law decay (larger sigma => slower decay)
@@ -92,20 +89,18 @@ class PowerLawEMAWrapper(EMAWrapper):
         self.sigma = sigma
         self.gamma = sigma_to_gamma(sigma)
 
-        self.mutable_param_keywords = [
-            s.strip() for s in mutable_param_keywords if s.strip()
-        ]
+        self.mutable_param_keywords = [s.strip() for s in mutable_param_keywords if s.strip()]
         self.shadow = {}
         self.backup = {}
 
     def beta_power_law(self, t):
         """Calculate the timestep-dependent power law beta parameter."""
         return 0 if t == 1 else (1 - 1 / t) ** (self.gamma + 1)
-    
+
     def update(self, t):
         """
         Update the EMA weights using the power law decay.
-        
+
         Args:
             t (int): The current training step.
         """
@@ -118,7 +113,9 @@ class PowerLawEMAWrapper(EMAWrapper):
 
             beta = self.beta_power_law(t)
             if isinstance(beta, complex) or (isinstance(beta, float) and not np.isreal(beta)):
-                raise ValueError(f"Beta value {beta} is complex at step {t}. This should not happen with valid gamma={self.gamma} and delta_t={self.delta_t}")
+                raise ValueError(
+                    f"Beta value {beta} is complex at step {t}. This should not happen with valid gamma={self.gamma} and delta_t={self.delta_t}"
+                )
             new_average = (1.0 - beta) * param.data + beta * self.shadow[name]
             self.shadow[name] = new_average.to(param.dtype)  # Ensure same dtype as parameter
 
@@ -133,4 +130,3 @@ class PowerLawEMAWrapper(EMAWrapper):
             assert name in self.backup
             param.data = self.backup[name]
         self.backup = {}
-

@@ -31,6 +31,7 @@ requires-python = ">=3.10"
 dependencies = [
     "PyYaml",
     "scipy",
+    "pytest",
     "ml_collections",
     "tqdm",
     "pandas",

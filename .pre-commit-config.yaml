@@ -30,5 +30,6 @@ repos:
             requirements.in|
             ruff.toml|
             artios/data/constants.py|
-            pyproject.toml
+            pyproject.toml|
+            .*\.txt
           )$

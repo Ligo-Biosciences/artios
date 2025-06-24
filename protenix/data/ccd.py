@@ -34,7 +34,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
-COMPONENTS_FILE = data_configs["ccd_components_file"]
+COMPONENTS_FILE = Path(data_configs["ccd_components_file"])
 RKDIT_MOL_PKL = Path(data_configs["ccd_components_rdkit_mol_file"])
 
 

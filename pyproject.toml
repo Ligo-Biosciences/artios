@@ -45,6 +45,8 @@ dependencies = [
     "protobuf==3.20.2",
     "icecream",
     "wandb",
+    "ninja",
+    "setuptools",
     "numpy>=1.26.3,<3.0.0",
     "dm-tree",
     "matplotlib>=3.9.2",

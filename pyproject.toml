@@ -40,16 +40,13 @@ dependencies = [
     "rootutils",
     "posebusters",
     "modelcif==0.7",
-    "biotite>=1.2.0",
+    "biotite>=1.2.0,<1.3.0",
     "protobuf==3.20.2",
     "icecream",
-    "ipdb",
     "wandb",
     "numpy>=1.26.3,<3.0.0",
     "dm-tree",
     "matplotlib>=3.9.2",
-    "ipywidgets",
-    "py3Dmol",
     "scikit-learn>=1.6.1",
     "torch>=2.3.1"
 ]

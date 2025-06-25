@@ -61,7 +61,7 @@ default_weighted_pdb_configs = {
 }
 
 
-DATA_ROOT_DIR = "af3-dev-backbone/release_data/"
+DATA_ROOT_DIR = "/af3-dev-backbone/release_data/" # BEWARE: adjusted to absolute path for Modal!
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md

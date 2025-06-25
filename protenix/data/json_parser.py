@@ -24,7 +24,7 @@ import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, BondType as RDKitBondType
 
 from protenix.data import ccd
 
@@ -73,6 +73,16 @@ PROTEIN_1to3 = {
     "Y": "TYR",
     "V": "VAL",
     "X": "UNK",
+}
+
+
+# RDKit bond type to biotite bond type enumerations
+RDKIT_TO_BIOTITE_BOND_TYPE = {
+    RDKitBondType.SINGLE: struc.BondType.SINGLE,
+    RDKitBondType.DOUBLE: struc.BondType.DOUBLE,
+    RDKitBondType.TRIPLE: struc.BondType.TRIPLE,
+    RDKitBondType.QUADRUPLE: struc.BondType.QUADRUPLE,
+    RDKitBondType.AROMATIC: struc.BondType.AROMATIC,
 }
 
 
@@ -400,7 +410,13 @@ def rdkit_mol_to_atom_array(mol: Chem.Mol, removeHs: bool = True) -> AtomArray:
 
     bonds = []
     for bond in mol.GetBonds():
-        bonds.append([bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()])
+        bonds.append(
+            [
+                bond.GetBeginAtomIdx(),
+                bond.GetEndAtomIdx(),
+                RDKIT_TO_BIOTITE_BOND_TYPE.get(bond.GetBondType(), struc.BondType.ANY),
+            ]
+        )
     atom_array.bonds = struc.BondList(atom_count, np.array(bonds))
     if removeHs:
         atom_array = atom_array[atom_array.element != "H"]

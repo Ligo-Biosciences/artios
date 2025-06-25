@@ -260,9 +260,9 @@ def infer_predict(runner: InferenceRunner, configs: Any) -> None:
 
                 if len(data_error_message) > 0:
                     logger.info(data_error_message)
-                    with open(opjoin(runner.error_dir, f"{sample_name}.txt"), "a") as f:
-                        f.write(data_error_message)
-                    continue
+                    #with open(opjoin(runner.error_dir, f"{sample_name}.txt"), "a") as f:
+                    #    f.write(data_error_message)
+                    raise Exception(data_error_message)
 
                 logger.info(
                     (

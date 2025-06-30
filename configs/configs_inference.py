@@ -19,16 +19,17 @@ from protenix.config.extend_types import GlobalConfigValue, ListValue, RequiredV
 
 # Small guidance model
 guidance_model_configs = {
+    # Model
     "c_s": 256,  # 192
     "c_z": 128,  # 64
-    "c_s_inputs": 128,  # c_s_inputs == c_token + 32
+    "c_s_inputs": 256,  # c_s_inputs == c_token + 32
     "c_atom": 256,  # 64
     "c_atompair": 16,  # 16
     "c_token": 768,  # 192
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
-    "sigma_data": 16.0,
+    "sigma_data": 12.0,
     "diffusion_batch_size": 48,
     "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
@@ -62,7 +63,25 @@ guidance_model_configs = {
             1
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
-    "train_timestep_sampler": {"loc": 0.0, "scale": 1.0},
+    "train_timestep_sampler": {
+        "distributions_config": ListValue(
+            [
+                {"distribution_type": "beta", "alpha": 6, "beta": 1.5, "weight": 0.85},
+                {
+                    "distribution_type": "uniform",
+                    "low": 0.0,
+                    "high": 1.0,
+                    "weight": 0.1,
+                },
+                {
+                    "distribution_type": "uniform",
+                    "low": 0.9,
+                    "high": 1.0,
+                    "weight": 0.05,
+                },
+            ]
+        ),
+    },    
     "inference_timestep_scheduler": {"p": -0.7},
     "sample_diffusion": {
         "N_step": 200,  # 25
@@ -92,19 +111,20 @@ guidance_model_configs = {
             "c_atompair": 16,
             "c_z": 128,
             "c_s": 256,
-            "c_s_inputs": 128,
+            "c_s_inputs": 256,
             "atom_encoder": {
                 "n_blocks": 3,
                 "n_heads": 4,
             },
             "transformer": {
-                "n_blocks": 20,
+                "n_blocks": 24,
                 "n_heads": 16,
             },
             "atom_decoder": {
                 "n_blocks": 3,
                 "n_heads": 4,
             },
+            "dropout": 0.0,
             "blocks_per_ckpt": 1,
         },
     },

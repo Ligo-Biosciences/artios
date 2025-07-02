@@ -94,7 +94,7 @@ guidance_model_configs = {
         "sigma_data": GlobalConfigValue("sigma_data"),
         "second_order_train": False,
         "second_order_inference": False,
-        "guidance_weight": 2.0,
+        "guidance_weight": 1.1,
     },
     "model": {
         "N_model_seed": 1,  # for inference

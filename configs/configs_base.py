@@ -148,7 +148,7 @@ model_configs = {
     },
     "inference_timestep_scheduler": {"p": -0.7},
     "sample_diffusion": {
-        "N_step": 100,  # 25
+        "N_step": 200,  # 25
         "N_sample": 1,  # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,

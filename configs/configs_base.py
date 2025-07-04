@@ -153,7 +153,7 @@ model_configs = {
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type": "non_singular",
-        "alpha": 0.8,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha": 0.6,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
         "sigma_data": GlobalConfigValue("sigma_data"),
         "second_order_train": False,

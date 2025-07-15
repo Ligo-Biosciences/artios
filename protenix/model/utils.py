@@ -496,3 +496,72 @@ def noise_w_flow_matching(data, noise, timestep, sigma_min=1e-5):
     Requires data, noise and timestep to be broadcastable.
     """
     return timestep * data + (1 - (1 - sigma_min) * timestep) * noise
+
+
+def beta_function(
+        t: torch.Tensor, 
+        mean: Optional[float] = None, 
+        std: Optional[float] = None,
+        alpha: Optional[float] = None,
+        beta: Optional[float] = None,
+        device: Optional[torch.device] = None, 
+        dtype: Optional[torch.dtype] = None
+    ) -> torch.Tensor:
+    """
+    Evaluate the Beta probability density function at specified timestep values,
+    with the distribution parameterized by either mean/std or alpha/beta.
+    
+    Args:
+        t (torch.Tensor): Timestep values between 0 and 1
+        mean (float, optional): Mean of the Beta distribution (between 0 and 1)
+        std (float, optional): Standard deviation of the Beta distribution
+        alpha (float, optional): Alpha parameter of the Beta distribution (> 0)
+        beta (float, optional): Beta parameter of the Beta distribution (> 0)
+        device (torch.device, optional): Device for the computation
+        dtype (torch.dtype, optional): Data type for the computation
+        
+    Returns:
+        torch.Tensor: Normalised Beta function values evaluated at the specified timesteps
+    """
+    if device is not None and dtype is not None:
+        t = t.to(device=device, dtype=dtype)
+    
+    # Check parameter combinations
+    mean_std_provided = mean is not None and std is not None
+    alpha_beta_provided = alpha is not None and beta is not None
+    
+    if mean_std_provided and alpha_beta_provided:
+        raise ValueError("Cannot specify both (mean, std) and (alpha, beta). Choose one parameterization.")
+    elif not mean_std_provided and not alpha_beta_provided:
+        raise ValueError("Must specify either (mean, std) or (alpha, beta) parameters.")
+    
+    if mean_std_provided:
+        # Convert mean and std to alpha and beta parameters
+        if device is not None and dtype is not None:
+            mean = torch.tensor(mean, device=device, dtype=dtype)
+            std = torch.tensor(std, device=device, dtype=dtype)
+        
+        var = std ** 2
+        
+        # Ensure the parameters are valid
+        if mean * (1 - mean) <= var:
+            raise ValueError(f"Invalid parameters: mean={mean}, std={std}. Requires mean*(1-mean) > std^2")
+            
+        common_term = (mean * (1 - mean) / var) - 1
+        alpha = mean * common_term
+        beta = (1 - mean) * common_term
+    else:
+        # Use alpha and beta directly
+        if alpha <= 0 or beta <= 0:
+            raise ValueError(f"Alpha and beta must be positive. Got alpha={alpha}, beta={beta}")
+        
+        if device is not None and dtype is not None:
+            alpha = torch.tensor(alpha, device=device, dtype=dtype)
+            beta = torch.tensor(beta, device=device, dtype=dtype)
+    
+    # Calculate Beta function normalization constant using log-gamma
+    # B(alpha, beta) = Γ(alpha)Γ(beta)/Γ(alpha+beta)
+    log_norm = torch.lgamma(alpha) + torch.lgamma(beta) - torch.lgamma(alpha + beta)
+    normalization = torch.exp(log_norm)
+    
+    return t**(alpha-1) * (1-t)**(beta-1) / normalization

@@ -21,6 +21,7 @@ from protenix.model.utils import (
     centre_random_augmentation,
     noise_w_flow_matching,
     sample_logit_normal,
+    beta_function,
 )
 
 
@@ -285,7 +286,42 @@ class InferenceTimestepScheduler:
         steps = torch.arange(N_step + 1, dtype=dtype, device=device)
         t = (steps / N_step) ** np.exp(self.p)
         return t
+    
 
+class VariableLinQuadScheduler:
+    """
+    This scheduler will be lienar between the points (0,0) and (m,n)
+    and then will be concave quadratic between (m,n) and (1,1)
+    """
+    def __init__(self,
+                 m = 0.097,
+                 n = 0.418) -> None:
+        self.m = m
+        self.n = n
+
+    def __call__(
+        self,
+        N_step: int = 50,
+        device: torch.device = torch.device("cpu"),
+        dtype: torch.dtype = torch.float32):
+        
+        steps = torch.arange(N_step + 1, dtype=dtype, device=device) / N_step
+        linear_steps = steps[steps < self.m]
+        quadratic_steps = steps[steps > self.m]
+
+        # Create the timesteps on the linear section
+        linear_t = linear_steps * (self.n/self.m) 
+        
+        # Create the timeteps on the quadratic section
+        a = (self.n - 1) / ((self.m - 1)**2)
+        b = -2 * a
+        c = a + 1
+        quadratic_t = a * (quadratic_steps**2) + b * quadratic_steps + c
+
+        # Concatenate all the timesteps 
+        t = torch.cat([linear_t, quadratic_t])
+        return t
+    
 
 def _calculate_velocity_and_score(
     x_noisy: torch.Tensor,
@@ -370,6 +406,8 @@ def sample_diffusion(
     second_order: bool = False,
     guiding_denoise_net: Optional[Callable] = None,
     guidance_weight: float = 1.0,
+    beta_mean: Optional[float] = 0.5,
+    beta_std: Optional[float] = 0.224,
 ) -> torch.Tensor:
     """Implements Algorithm 18 in AF3.
     It performs denoising steps from time 0 to time T with Euler's method.
@@ -392,6 +430,8 @@ def sample_diffusion(
         second_order (bool): Whether to use second order Euler-Maruyama. Defaults to False.
         guiding_denoise_net (Optional[Callable]): The guiding network to use for guidance. Defaults to None.
         guidance_weight (float): The weight to use for guidance. Defaults to 1.0.
+        beta_mean (float): The mean of the beta distribution. Defaults to 0.5.
+        beta_std (float): The standard deviation of the beta distribution. Defaults to 0.1.
     Returns:
         torch.Tensor: the denoised coordinates of x in inference stage
             [..., N_sample, N_atom, 3]
@@ -416,7 +456,8 @@ def sample_diffusion(
         "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t,  # int_{0}^{1}(zero_ends) = 1/12
         # TODO: add in the beta distribution.
         # TODO: check the divergence minimising choice used in ma et al.
-        "proteina": lambda t: alpha / (t + 0.01) / (1 - t)
+        "proteina": lambda t: alpha / (t + 0.01) / (1 - t),
+        "beta": lambda t: 2 * 0.5 * (alpha**2) * beta_function(t, beta_mean, beta_std, device=device, dtype=dtype) / (1 - t),
     }
 
     if stoch_type not in stoch_schedules:
@@ -449,7 +490,11 @@ def sample_diffusion(
             if stoch_type != "deterministic":
                 noise = torch.randn_like(x)
 
-            # Stochastic schedule at current time step
+            # Stochastic schedule at current time step. No stochasticity near end of sampling.
+            #if t_cur < 0.95:
+            #    g_t = g[i]
+            #else:
+            #    g_t = 0.0
             g_t = g[i]
 
             # Centre and rotate coords [..., N_sample, N_atom, 3]

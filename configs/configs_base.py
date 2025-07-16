@@ -162,8 +162,8 @@ model_configs = {
         "second_order_train": False,
         "second_order_inference": False,
         "guidance_weight": 1.2,
-        "beta_mean": 0.5,
-        "beta_std": 0.222,
+        "beta_mean": 0.33,
+        "beta_std": 0.233,
     },
     "model": {
         "N_model_seed": 1,  # for inference

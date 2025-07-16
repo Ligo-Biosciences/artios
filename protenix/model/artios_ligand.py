@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from protenix.model import sample_confidence
 from protenix.model.generator import (
+    InferenceTimestepScheduler,
     VariableLinQuadScheduler,
     TrainingTimestepSamplerV2,
     sample_diffusion,
@@ -37,8 +38,11 @@ class ArtiosLigand(nn.Module):
         self.eval_timestep_sampler = TrainingTimestepSamplerV2(
             **configs.train_timestep_sampler,
         )
-        self.inference_timestep_scheduler = VariableLinQuadScheduler(
-            **configs.inference_timestep_scheduler.variable_linear_quadratic
+        #self.inference_timestep_scheduler = VariableLinQuadScheduler(
+        #    **configs.inference_timestep_scheduler.variable_linear_quadratic
+        #)
+        self.inference_timestep_scheduler = InferenceTimestepScheduler(
+            **configs.inference_timestep_scheduler.ligo
         )
 
         self.diffusion_batch_size = self.configs.diffusion_batch_size

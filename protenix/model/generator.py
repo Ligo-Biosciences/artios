@@ -303,7 +303,8 @@ class VariableLinQuadScheduler:
         self,
         N_step: int = 50,
         device: torch.device = torch.device("cpu"),
-        dtype: torch.dtype = torch.float32):
+        dtype: torch.dtype = torch.float32
+    ) -> torch.Tensor:
         
         steps = torch.arange(N_step + 1, dtype=dtype, device=device) / N_step
         linear_steps = steps[steps < self.m]
@@ -454,10 +455,12 @@ def sample_diffusion(
             4 * torch.ones_like(t) * 0.5 * (alpha**2)
         ),  # int_{0}^{1}(non_sing) = 1/4
         "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t,  # int_{0}^{1}(zero_ends) = 1/12
-        # TODO: add in the beta distribution.
-        # TODO: check the divergence minimising choice used in ma et al.
         "proteina": lambda t: alpha / (t + 0.01) / (1 - t),
-        "beta": lambda t: 2 * 0.5 * (alpha**2) * beta_function(t, beta_mean, beta_std, device=device, dtype=dtype) / (1 - t),
+        "beta": lambda t: torch.where(
+            t > 0.95,  
+            torch.zeros_like(t),
+            2 * 0.5 * (alpha**2) * beta_function(t, beta_mean, beta_std, device=device, dtype=dtype) / (1 - t)
+        ),
     }
 
     if stoch_type not in stoch_schedules:

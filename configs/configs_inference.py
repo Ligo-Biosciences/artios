@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# TODO: this is quite nasty due to guidance model configs. We should transition to cleaner configs,
+#   potentially with Hydra etc. 
 
 # pylint: disable=C0114
 import os

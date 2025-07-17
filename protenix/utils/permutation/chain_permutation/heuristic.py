@@ -159,9 +159,7 @@ def _correct_symmetric_chains_for_one_sample(
         In this case, predicted structures and true structure need to have
         the same number of atoms.
         """
-        assert pred_dict["coordinate"].size(-2) == label_full_dict["coordinate"].size(
-            -2
-        )
+        assert pred_dict["coordinate"].size(-2) == label_full_dict["coordinate"].size(-2)
 
     with torch.no_grad():
         # Do not compute gradient while optimizing the permutation
@@ -185,11 +183,7 @@ def _correct_symmetric_chains_for_one_sample(
         }
         # Permute extra label features, along the last dimension.
         output_dict.update(
-            {
-                k: label_full_dict[k][..., indices]
-                for k in extra_label_keys
-                if k in label_full_dict
-            }
+            {k: label_full_dict[k][..., indices] for k in extra_label_keys if k in label_full_dict}
         )
 
     else:
@@ -215,9 +209,7 @@ class MultiChainPermutation(object):
     those in the true complex.
     """
 
-    def __init__(
-        self, use_center_rmsd, find_gt_anchor_first, accept_it_as_it_is, *args, **kwargs
-    ):
+    def __init__(self, use_center_rmsd, find_gt_anchor_first, accept_it_as_it_is, *args, **kwargs):
         self.use_center_rmsd = use_center_rmsd
         self.find_gt_anchor_first = find_gt_anchor_first
         self.accept_it_as_it_is = accept_it_as_it_is
@@ -273,16 +265,12 @@ class MultiChainPermutation(object):
         if pred_mol_id.intersection(label_mol_id) != pred_mol_id:
             # if the mol_id in predicted structure is not a subset of label structure,
             # assert they contain the same number of atoms.
-            assert pred_dict["coordinate"].size(-2) == label_full_dict[
-                "coordinate"
-            ].size(-2)
+            assert pred_dict["coordinate"].size(-2) == label_full_dict["coordinate"].size(-2)
             self.unpermuted_match = self.check_pattern_and_create_mapping(
                 pred_dict["mol_id"], label_full_dict["mol_id"]
             )
         else:
-            self.unpermuted_match = {
-                i: i for i in torch.unique(pred_dict["mol_id"]).tolist()
-            }
+            self.unpermuted_match = {i: i for i in torch.unique(pred_dict["mol_id"]).tolist()}
 
         if len(torch.unique(label_full_dict["entity_mol_id"])) == len(
             torch.unique(label_full_dict["mol_id"])
@@ -350,16 +338,12 @@ class MultiChainPermutation(object):
                     )
             else:
                 if id2 in pattern_mapping.values():
-                    raise ValueError(
-                        f"Value {id2} in mol_id2 already mapped to another value"
-                    )
+                    raise ValueError(f"Value {id2} in mol_id2 already mapped to another value")
                 pattern_mapping[id1] = id2
 
         return pattern_mapping
 
-    def _parse_atom_feature_dict(
-        self, atom_features: dict, rep_atom_mask: torch.Tensor
-    ):
+    def _parse_atom_feature_dict(self, atom_features: dict, rep_atom_mask: torch.Tensor):
         """
         Parse the atom feature dictionary and convert it to token features and per-asym token features.
 
@@ -425,15 +409,11 @@ class MultiChainPermutation(object):
 
         for aid in torch.unique(asym_id):
             mask = asym_id == aid
-            out[aid.item()] = {
-                k: v[mask] for k, v in feature_dict.items() if v is not None
-            }
+            out[aid.item()] = {k: v[mask] for k, v in feature_dict.items() if v is not None}
         return out
 
     @staticmethod
-    def _get_entity_asym_mapping(
-        entity_id: torch.Tensor, asym_id: torch.Tensor
-    ) -> tuple[dict]:
+    def _get_entity_asym_mapping(entity_id: torch.Tensor, asym_id: torch.Tensor) -> tuple[dict]:
         """
         Generate mappings between entity IDs and asym IDs.
 
@@ -507,8 +487,7 @@ class MultiChainPermutation(object):
             is_ligand = self.pred_token_dict["is_ligand"][mask]
             if (
                 torch.sum(is_ligand) <= is_ligand.shape[0] / 2
-                and is_ligand.shape[0]
-                >= 12  # do not prioritize asym with too few tokens
+                and is_ligand.shape[0] >= 12  # do not prioritize asym with too few tokens
             ):
                 pred_polymer_entity_id.append(ent_id)
 
@@ -518,23 +497,18 @@ class MultiChainPermutation(object):
 
         # Choose entities with fewest asyms in GT
         entity_to_asym_count = {
-            k: len(self.label_token_dict["entity_to_asym"][k])
-            for k in candidate_entities
+            k: len(self.label_token_dict["entity_to_asym"][k]) for k in candidate_entities
         }
         min_asym_count = min(list(entity_to_asym_count.values()))
         candidate_entities = [
-            ent
-            for ent, count in entity_to_asym_count.items()
-            if count == min_asym_count
+            ent for ent, count in entity_to_asym_count.items() if count == min_asym_count
         ]
 
         # Choose longest asyms in Prediction
         candidate_asyms = [
             asym_id for ent, asym_id in valid_entity_asym if ent in candidate_entities
         ]
-        max_asym_length = max(
-            asym_to_asym_length[asym_id] for asym_id in candidate_asyms
-        )
+        max_asym_length = max(asym_to_asym_length[asym_id] for asym_id in candidate_asyms)
         candidate_asyms = [
             asym_id
             for asym_id in candidate_asyms
@@ -578,19 +552,14 @@ class MultiChainPermutation(object):
 
         if self.find_gt_anchor_first:
             # Randomly sample a groundtruth asym chain using this entity id
-            anchor_gt_asym_id = self.label_token_dict["entity_to_asym"][
-                anchor_entity_id
-            ].tolist()
+            anchor_gt_asym_id = self.label_token_dict["entity_to_asym"][anchor_entity_id].tolist()
             anchor_gt_asym_id = random.choice(anchor_gt_asym_id)
 
             # The candidate anchors to be matched are from prediction
             candidate_anchors = self.pred_token_dict["entity_to_asym"][anchor_entity_id]
         else:
-
             # The candidate anchors to be matched are from groundtruth
-            candidate_anchors = self.label_token_dict["entity_to_asym"][
-                anchor_entity_id
-            ]
+            candidate_anchors = self.label_token_dict["entity_to_asym"][anchor_entity_id]
 
         # Find best match
         best_rmsd = torch.inf
@@ -620,13 +589,11 @@ class MultiChainPermutation(object):
             )
 
             # Transform all GT coordinates according to the aligment results
-            aligned_coordinate = apply_transform(
-                self.label_token_dict["coordinate"], rot, trans
-            )
+            aligned_coordinate = apply_transform(self.label_token_dict["coordinate"], rot, trans)
             for asym_id in self.label_asym_dict:
-                self.label_asym_dict[asym_id]["aligned_coordinate"] = (
-                    aligned_coordinate[self.label_token_dict["mol_id"] == asym_id]
-                )
+                self.label_asym_dict[asym_id]["aligned_coordinate"] = aligned_coordinate[
+                    self.label_token_dict["mol_id"] == asym_id
+                ]
 
             # Greedily matches all remaining chains
             matched_asym = {pred_anchor: gt_anchor}
@@ -642,9 +609,7 @@ class MultiChainPermutation(object):
             while len(to_be_matched) > 0:
                 cur_pred_asym_id = to_be_matched.pop(0)
                 cur_entity_id = self.pred_token_dict["asym_to_entity"][cur_pred_asym_id]
-                cur_gt_asym_ids = self.label_token_dict["entity_to_asym"][
-                    cur_entity_id
-                ].tolist()
+                cur_gt_asym_ids = self.label_token_dict["entity_to_asym"][cur_entity_id].tolist()
                 matched_gt_asym_id, _ = self.match_pred_asym_to_gt_asym(
                     cur_pred_asym_id,
                     [asym for asym in cur_gt_asym_ids if asym in candidate_gt_asym_id],
@@ -670,9 +635,7 @@ class MultiChainPermutation(object):
         Calculate the RMSD given a match.
         """
 
-        return sum(self._calculate_rmsd(a, b) for a, b in asym_match.items()) / len(
-            asym_match
-        )
+        return sum(self._calculate_rmsd(a, b) for a, b in asym_match.items()) / len(asym_match)
 
     def _calculate_rmsd(self, pred_asym_id: int, gt_asym_id: int):
         """
@@ -755,9 +718,7 @@ class MultiChainPermutation(object):
         return best_gt_asym_id, best_error
 
     @staticmethod
-    def build_permuted_indice(
-        pred_dict: dict, label_full_dict: dict, best_match: dict[int, int]
-    ):
+    def build_permuted_indice(pred_dict: dict, label_full_dict: dict, best_match: dict[int, int]):
         """
         Build permutation indices from the pred-gt chain mapping.
         Args:
@@ -849,9 +810,7 @@ class MultiChainPermutation(object):
                 - permuted_indices (torch.Tensor): Indices to permute the groundtruth coordinates.
                 - log_dict (dict): A dictionary detailing the permutation information.
         """
-        match, has_sym_chain = self.process_input(
-            pred_dict, label_full_dict, max_num_chains
-        )
+        match, has_sym_chain = self.process_input(pred_dict, label_full_dict, max_num_chains)
 
         if match is not None:
             """
@@ -866,15 +825,12 @@ class MultiChainPermutation(object):
 
         best_match = self.compute_best_match_heuristic()
 
-        permuted_indices = self.build_permuted_indice(
-            pred_dict, label_full_dict, best_match
-        )
+        permuted_indices = self.build_permuted_indice(pred_dict, label_full_dict, best_match)
 
         log_dict = {
             "has_sym_chain": True,
             "is_permuted": num_unique_matches([best_match, self.unpermuted_match]) > 1,
-            "algo:no_permute": num_unique_matches([best_match, self.unpermuted_match])
-            == 1,
+            "algo:no_permute": num_unique_matches([best_match, self.unpermuted_match]) == 1,
         }
 
         if log_dict["algo:no_permute"]:
@@ -888,9 +844,7 @@ class MultiChainPermutation(object):
         )
 
         permuted_rmsd = self.aligned_rmsd(pred_dict, label_full_dict, permuted_indices)
-        unpermuted_rmsd = self.aligned_rmsd(
-            pred_dict, label_full_dict, unpermuted_indices
-        )
+        unpermuted_rmsd = self.aligned_rmsd(pred_dict, label_full_dict, unpermuted_indices)
         improved_rmsd = unpermuted_rmsd - permuted_rmsd
         if improved_rmsd >= 1e-12:
             # Case with better permutation
@@ -936,9 +890,7 @@ class MultiChainPermutation(object):
 
         if pred_dict["coordinate"].size(-2) == label_full_dict["coordinate"].size(-2):
             Checker.is_permutation(permuted_indices)  # indices to permute/crop label
-            permute_pred_indices = torch.argsort(
-                permuted_indices
-            )  # Indices to permute pred
+            permute_pred_indices = torch.argsort(permuted_indices)  # Indices to permute pred
         else:
             # Hard to `define` permute_pred_indices in this case
             permute_pred_indices = None

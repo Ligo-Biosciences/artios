@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import functools
+import gzip
 import logging
 import pickle
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -29,12 +31,9 @@ from rdkit import Chem
 from configs.configs_data import data_configs
 from protenix.data.substructure_perms import get_substructure_perms
 
-import gzip
-import re
-
 logger = logging.getLogger(__name__)
 
-COMPONENTS_FILE = data_configs["ccd_components_file"]
+COMPONENTS_FILE = Path(data_configs["ccd_components_file"])
 RKDIT_MOL_PKL = Path(data_configs["ccd_components_rdkit_mol_file"])
 
 
@@ -96,9 +95,7 @@ def get_component_atom_array(
         comp = pdbx.get_component(ccd_cif, data_block=ccd_code, use_ideal_coord=True)
     except biotite.InvalidFileError as e:
         # Eg: UNL without atom.
-        logger.warning(
-            f"Warning: get_component_atom_array() can not parse {ccd_code} for {e}"
-        )
+        logger.warning(f"Warning: get_component_atom_array() can not parse {ccd_code} for {e}")
         return None
     atom_category = ccd_cif[ccd_code]["chem_comp_atom"]
     leaving_atom_flag = atom_category["pdbx_leaving_atom_flag"].as_array()
@@ -183,26 +180,30 @@ def get_mol_type(ccd_code: str) -> str:
 @functools.lru_cache(maxsize=None)
 def get_smiles_str(ccd_code: str) -> str:
     """Get CACTVS canonical SMILES string from CCD components file.
-    
+
     Returns only the CACTVS canonical SMILES representation. Returns None if either
     the CCD code is not found or no CACTVS canonical SMILES is available.
-    
+
     Args:
         ccd_code (str): The CCD component code
-        
+
     Returns:
         str: The CACTVS canonical SMILES string, or None if not found
     """
     ccd_cif = biotite_load_ccd_cif()
     if ccd_cif is None:
-        raise ValueError("Failed to load CCD components file. biotite_load_ccd_cif() returned None.")
+        raise ValueError(
+            "Failed to load CCD components file. biotite_load_ccd_cif() returned None."
+        )
     if ccd_code not in ccd_cif:
         return None
-        
+
     descriptors = ccd_cif[ccd_code]["pdbx_chem_comp_descriptor"]
-    mask = (descriptors["type"].as_array() == "SMILES_CANONICAL") & (descriptors["program"].as_array() == "CACTVS")
+    mask = (descriptors["type"].as_array() == "SMILES_CANONICAL") & (
+        descriptors["program"].as_array() == "CACTVS"
+    )
     matching_smiles = descriptors["descriptor"].as_array()[mask]
-    
+
     return matching_smiles[0] if len(matching_smiles) > 0 else None
 
 
@@ -298,13 +299,7 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
         except:
             # Sanitize failed, permutation is unavailable
             perm = np.array(
-                [
-                    [
-                        i
-                        for i, atom in enumerate(mol.GetAtoms())
-                        if atom.GetAtomicNum() != 1
-                    ]
-                ]
+                [[i for i, atom in enumerate(mol.GetAtoms()) if atom.GetAtomicNum() != 1]]
             )
         # np.ndarray[int]: atom permutation, shape:(n_atom_wo_h, n_perm)
         results["perm"] = perm.T
@@ -313,9 +308,7 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
 
 
 # Modified from biotite to use consistent ccd components file
-def _connect_inter_residue(
-    atoms: AtomArray, residue_starts: np.ndarray
-) -> struc.BondList:
+def _connect_inter_residue(atoms: AtomArray, residue_starts: np.ndarray) -> struc.BondList:
     """
     Create a :class:`BondList` containing the bonds between adjacent
     amino acid or nucleotide residues.
@@ -392,9 +385,7 @@ def _connect_inter_residue(
             # -> skip this bond
             continue
 
-        bonds.append(
-            (curr_connect_indices[0], next_connect_indices[0], struc.BondType.SINGLE)
-        )
+        bonds.append((curr_connect_indices[0], next_connect_indices[0], struc.BondType.SINGLE))
 
     return struc.BondList(atoms.array_length(), np.array(bonds, dtype=np.uint32))
 
@@ -441,9 +432,7 @@ def add_inter_residue_bonds(
 
     if remove_far_inter_chain_pairs:
         if not hasattr(atom_array, "label_asym_id"):
-            logging.warning(
-                "label_asym_id not found, far inter chain bonds will not be removed"
-            )
+            logging.warning("label_asym_id not found, far inter chain bonds will not be removed")
         for b_idx, (atom_i, atom_j, b_type) in enumerate(inter_bonds._bonds):
             if atom_array.label_asym_id[atom_i] != atom_array.label_asym_id[atom_j]:
                 coord_i = atom_array.coord[atom_i]

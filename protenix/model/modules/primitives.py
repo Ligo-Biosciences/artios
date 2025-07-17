@@ -14,28 +14,28 @@
 
 import math
 from functools import partial
-from typing import Optional, Union, Callable, Tuple
+from typing import Callable, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy.stats import truncnorm
-import numpy as np
 
 from protenix.model.utils import (
+    add,
     flatten_final_dims,
     move_final_dim_to_dim,
     pad_at_dim,
     reshape_at_dim,
-    add
 )
 from protenix.openfold_local.utils.chunk_utils import chunk_layer
-
 
 # Optimized layer norm
 
 try:
     from protenix.model.layer_norm.layer_norm import FusedLayerNormAffineFunction
+
     CUDA_AVAILABLE = True
 except OSError:
     CUDA_AVAILABLE = False
@@ -43,19 +43,20 @@ except OSError:
 
 # Linear layer utilities
 
+
 def _calculate_fan(linear_weight_shape, fan="fan_in"):
     """Calculate fan-in/fan-out/fan-avg for a linear layer weight shape."""
     fan_out, fan_in = linear_weight_shape
-    
+
     fan_options = {
         "fan_in": fan_in,
-        "fan_out": fan_out, 
-        "fan_avg": (fan_in + fan_out) / 2
+        "fan_out": fan_out,
+        "fan_avg": (fan_in + fan_out) / 2,
     }
-    
+
     if fan not in fan_options:
         raise ValueError(f"Invalid fan option. Must be one of: {list(fan_options.keys())}")
-        
+
     return fan_options[fan]
 
 
@@ -64,19 +65,13 @@ def trunc_normal_init_(weight, bias=None, scale=1.0, fan="fan_in"):
     shape = weight.shape
     fan_size = _calculate_fan(shape, fan)
     adjusted_scale = scale / max(1, fan_size)
-    
+
     # Truncated normal parameters
     a, b = -2, 2
     std = math.sqrt(adjusted_scale) / truncnorm.std(a=a, b=b, loc=0, scale=1)
-    
+
     # Generate truncated normal samples
-    samples = truncnorm.rvs(
-        a=a, 
-        b=b,
-        loc=0,
-        scale=std,
-        size=np.prod(shape)
-    ).reshape(shape)
+    samples = truncnorm.rvs(a=a, b=b, loc=0, scale=std, size=np.prod(shape)).reshape(shape)
 
     # Initialize weight and bias
     with torch.no_grad():
@@ -88,6 +83,7 @@ def init_bias_to_zero_(bias=None):
     if bias is not None:
         with torch.no_grad():
             bias.fill_(0.0)
+
 
 def init_weight_to_zero_(weight):
     with torch.no_grad():
@@ -111,7 +107,7 @@ def final_init_(weight, bias=None):
     init_weight_to_zero_(weight)
     init_bias_to_zero_(bias)
 
-    
+
 def gating_init_(weight, bias=None):
     init_weight_to_zero_(weight)
     init_bias_to_zero_(bias)
@@ -133,16 +129,17 @@ def bias_init_fn(weight: torch.Tensor, bias: Optional[torch.Tensor], biasinit: f
 class Linear(nn.Linear):
     """
     Linear layer with non-standard initialisations.
-  
+
     """
+
     def __init__(
-            self,
-            in_features: int,
-            out_features: int,
-            bias: bool = True,
-            init: str = "default",
-            init_fn: Optional[Callable[[torch.Tensor, torch.Tensor], None]] = None,
-            precision: Optional[torch.dtype] = None,
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool = True,
+        init: str = "default",
+        init_fn: Optional[Callable[[torch.Tensor, torch.Tensor], None]] = None,
+        precision: Optional[torch.dtype] = None,
     ) -> None:
         """
         Args:
@@ -171,10 +168,10 @@ class Linear(nn.Linear):
         init_methods = {
             "default": lecun_normal_init_,
             "relu": he_normal_init_,
-            "glorot": glorot_uniform_init_, 
+            "glorot": glorot_uniform_init_,
             "gating": gating_init_,
             "normal": normal_init_,
-            "zeros": final_init_
+            "zeros": final_init_,
         }
 
         if init_fn is not None:
@@ -215,23 +212,24 @@ class BiasInitLinear(Linear):
             in_features=in_features,
             out_features=out_features,
             bias=bias,
-            init_fn=lambda w, b: bias_init_fn(w, b, biasinit)
+            init_fn=lambda w, b: bias_init_fn(w, b, biasinit),
         )
 
 
 class LayerNorm(nn.Module):
     """LayerNorm with bias=False by default."""
+
     def __init__(
-            self,
-            normalized_shape: Union[int, Tuple[int, ...]],
-            eps: float = 1e-5,
-            elementwise_affine: bool = True, 
-            bias: bool = False,
-            device: Optional[torch.device] = None,
-            dtype: Optional[torch.dtype] = None
+        self,
+        normalized_shape: Union[int, Tuple[int, ...]],
+        eps: float = 1e-5,
+        elementwise_affine: bool = True,
+        bias: bool = False,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ):
         super().__init__()
-        
+
         if isinstance(normalized_shape, int):
             normalized_shape = (normalized_shape,)
         self.normalized_shape = tuple(normalized_shape)
@@ -243,31 +241,33 @@ class LayerNorm(nn.Module):
             if bias:
                 self.bias = nn.Parameter(torch.zeros(normalized_shape, device=device, dtype=dtype))
             else:
-                self.register_buffer('bias', torch.zeros(normalized_shape, device=device, dtype=dtype))
+                self.register_buffer(
+                    "bias", torch.zeros(normalized_shape, device=device, dtype=dtype)
+                )
         else:
-            self.register_buffer('weight', torch.ones(normalized_shape, device=device, dtype=dtype))
-            self.register_buffer('bias', torch.zeros(normalized_shape, device=device, dtype=dtype))
+            self.register_buffer("weight", torch.ones(normalized_shape, device=device, dtype=dtype))
+            self.register_buffer("bias", torch.zeros(normalized_shape, device=device, dtype=dtype))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass using optimized kernel on GPU, regular layernorm on CPU.
-        
+
         Args:
             x (torch.Tensor): Input tensor
-            
+
         Returns:
             torch.Tensor: Normalized tensor
         """
-        
-        if CUDA_AVAILABLE and x.is_cuda and x.dtype in [torch.float32, torch.float16, torch.bfloat16]:
+
+        if (
+            CUDA_AVAILABLE
+            and x.is_cuda
+            and x.dtype in [torch.float32, torch.float16, torch.bfloat16]
+        ):
             # Use optimized CUDA kernel implementation
             return FusedLayerNormAffineFunction.apply(
-                x,
-                self.weight,
-                self.bias,
-                self.normalized_shape,
-                self.eps
+                x, self.weight, self.bias, self.normalized_shape, self.eps
             )
-        
+
         else:
             # Manual implementation using torch.functional
             return F.layer_norm(
@@ -275,16 +275,14 @@ class LayerNorm(nn.Module):
                 self.normalized_shape,
                 self.weight if self.elementwise_affine else None,
                 self.bias if self.elementwise_affine else None,
-                self.eps
+                self.eps,
             )
+
 
 class SwiGLU(nn.Module):
     """SwiGLU layer that computes swish(Linear(a)) * Linear(b)"""
-    def __init__(
-            self,
-            c_in: int,
-            c_out: int
-    ) -> None:
+
+    def __init__(self, c_in: int, c_out: int) -> None:
         """
         Args:
             c_in (int): Input channels
@@ -317,7 +315,9 @@ class AdaptiveLayerNorm(nn.Module):
         self.layernorm_a = LayerNorm(c_a, elementwise_affine=False)
         # The pytorch version should be newer than 2.1
         self.layernorm_s = LayerNorm(c_s)
-        self.linear_s = BiasInitLinear(in_features=c_s, out_features=c_a, biasinit=1.0)  # gate values 0.73 @ init
+        self.linear_s = BiasInitLinear(
+            in_features=c_s, out_features=c_a, biasinit=1.0
+        )  # gate values 0.73 @ init
         self.linear_nobias_s = LinearNoBias(in_features=c_s, out_features=c_a, init="zeros")
 
     def forward(self, a: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
@@ -369,8 +369,8 @@ class Transition(nn.Module):
         x = self.layernorm(x)
         x = self.linear_no_bias(self.swiglu(x))
         return x
-    
-    
+
+
 class MLP(nn.Module):
     """
     Implements Algorithm 11 in AF3
@@ -435,7 +435,7 @@ def _attention(
             value=v,
             attn_mask=attn_bias,
             dropout_p=attn_weight_dropout_p,
-            scale=1.0  # q and k scaled in prep_qkv
+            scale=1.0,  # q and k scaled in prep_qkv
         )
         return attn_output
     # [..., n_kv, d] -> [..., d, n_kv]
@@ -453,9 +453,9 @@ def _attention(
     # Apply dropout to attention weights if dropout probability > 0
     if attn_weight_dropout_p > 0.0:
         attn_weights = F.dropout(
-            attn_weights, 
-            p=attn_weight_dropout_p, 
-            training=not torch.is_inference_mode_enabled()
+            attn_weights,
+            p=attn_weight_dropout_p,
+            training=not torch.is_inference_mode_enabled(),
         )
 
     # [..., n_q, n_kv], [..., n_kv, d] -> [..., n_q, d]
@@ -523,10 +523,7 @@ def rearrange_qk_to_dense_trunk(
     n_trunks = int(math.ceil(n / n_queries))
     q_pad_length = n_trunks * n_queries - n
 
-    q_new = [
-        pad_at_dim(q[i], dim=dim_q[i], pad_length=(0, q_pad_length))
-        for i in range(num_q)
-    ]
+    q_new = [pad_at_dim(q[i], dim=dim_q[i], pad_length=(0, q_pad_length)) for i in range(num_q)]
     q_trunked = [
         reshape_at_dim(q_new[i], dim=dim_q[i], target_shape=(n_trunks, n_queries))
         for i in range(num_q)
@@ -535,16 +532,9 @@ def rearrange_qk_to_dense_trunk(
     pad_left = (n_keys - n_queries) // 2
     pad_right = int((n_trunks - 1 / 2) * n_queries + n_keys / 2 - n + 1 / 2)
 
-    k_new = [
-        pad_at_dim(k[i], dim=dim_k[i], pad_length=(pad_left, pad_right))
-        for i in range(num_k)
-    ]
-    k_trunked = [
-        k_new[i].unfold(dim_k[i], size=n_keys, step=n_queries) for i in range(num_k)
-    ]
-    k_trunked = [
-        move_final_dim_to_dim(k_trunked[i], dim=dim_k[i] + 1) for i in range(num_k)
-    ]
+    k_new = [pad_at_dim(k[i], dim=dim_k[i], pad_length=(pad_left, pad_right)) for i in range(num_k)]
+    k_trunked = [k_new[i].unfold(dim_k[i], size=n_keys, step=n_queries) for i in range(num_k)]
+    k_trunked = [move_final_dim_to_dim(k_trunked[i], dim=dim_k[i] + 1) for i in range(num_k)]
 
     if compute_mask:
         pad_mask = q[0].new_ones(
@@ -559,9 +549,7 @@ def rearrange_qk_to_dense_trunk(
 
         concat_split_data = optimized_concat_split(pad_mask, n_queries)
         pad_mask_trunked = (
-            concat_split_data.unfold(
-                -1, n_keys, pad_mask.size(-1) + n_queries
-            ).transpose(-2, -3)
+            concat_split_data.unfold(-1, n_keys, pad_mask.size(-1) + n_queries).transpose(-2, -3)
         ).bool()
     else:
         pad_mask_trunked = None
@@ -720,16 +708,20 @@ def _local_attention(
     # q: [*, n, d] -> [*, n_trunks, n_queries, d]
     # kv: [*, n, d] -> [*, n_trunks, n_keys, d]
     # attn_bias: [*, n, d] -> [*, n_trunks, n_queries, n_keys]
-    q_trunked, k_trunked, v_trunked, attn_bias_trunked, q_pad_length = (
-        rearrange_to_dense_trunk(
-            q=q,
-            k=k,
-            v=v,
-            n_queries=n_queries,
-            n_keys=n_keys,
-            attn_bias=attn_bias,
-            inf=inf,
-        )
+    (
+        q_trunked,
+        k_trunked,
+        v_trunked,
+        attn_bias_trunked,
+        q_pad_length,
+    ) = rearrange_to_dense_trunk(
+        q=q,
+        k=k,
+        v=v,
+        n_queries=n_queries,
+        n_keys=n_keys,
+        attn_bias=attn_bias,
+        inf=inf,
     )
 
     # Apply attention
@@ -867,7 +859,9 @@ class Attention(nn.Module):
         # Attention in AF3 vs vanilla attention
         linear_layer = Linear if q_linear_bias else LinearNoBias
         self.linear_q = linear_layer(
-            in_features=self.c_q, out_features=self.c_hidden * self.num_heads, init="glorot"
+            in_features=self.c_q,
+            out_features=self.c_hidden * self.num_heads,
+            init="glorot",
         )
         self.linear_k = LinearNoBias(self.c_k, self.c_hidden * self.num_heads, init="glorot")
         self.linear_v = LinearNoBias(self.c_v, self.c_hidden * self.num_heads, init="glorot")
@@ -876,16 +870,16 @@ class Attention(nn.Module):
         if self.gating:
             self.linear_g = LinearNoBias(self.c_q, self.c_hidden * self.num_heads)
             self.sigmoid = nn.Sigmoid()
-    
+
     def split_heads(self, x: torch.Tensor) -> torch.Tensor:
         """Split heads of tensor along the last dimension."""
         return x.view(x.shape[:-1] + (self.num_heads, -1))
 
     def _prep_qkv(
-        self, 
-        q_x: torch.Tensor, 
-        kv_x: torch.Tensor, 
-        apply_scale: bool = True, 
+        self,
+        q_x: torch.Tensor,
+        kv_x: torch.Tensor,
+        apply_scale: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Prepare qkv
 
@@ -1036,9 +1030,7 @@ class Attention(nn.Module):
                     chunk_size=chunk_size,
                 )
             else:
-                raise ValueError(
-                    f"Invalid local attention method: {self.local_attention_method}"
-                )
+                raise ValueError(f"Invalid local attention method: {self.local_attention_method}")
         else:
             o = _attention(
                 q=q,
@@ -1055,9 +1047,7 @@ class Attention(nn.Module):
         return o
 
 
-def gather_pair_embedding_in_dense_trunk(
-    x: torch.Tensor, idx_q: torch.Tensor, idx_k: torch.Tensor
-):
+def gather_pair_embedding_in_dense_trunk(x: torch.Tensor, idx_q: torch.Tensor, idx_k: torch.Tensor):
     """
     Selectively gather elements from a tensor using two sets of indices.
 

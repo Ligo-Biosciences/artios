@@ -43,9 +43,7 @@ def rmsd(
         mask = torch.ones(true_pose.shape[:-1], device=true_pose.device)
 
     # [...]
-    err2 = (torch.square(pred_pose - true_pose).sum(dim=-1) * mask).sum(
-        dim=-1
-    ) / mask.sum(dim=-1)
+    err2 = (torch.square(pred_pose - true_pose).sum(dim=-1) * mask).sum(dim=-1) / mask.sum(dim=-1)
     rmsd = err2.add(eps).sqrt()
     if reduce:
         rmsd = rmsd.mean()
@@ -84,13 +82,11 @@ def align_pred_to_true(
 
     weighted_n_atoms = torch.sum(weight, dim=-1, keepdim=True).unsqueeze(-1)
     pred_pose_centroid = (
-        torch.sum(pred_pose * weight.unsqueeze(-1), dim=-2, keepdim=True)
-        / weighted_n_atoms
+        torch.sum(pred_pose * weight.unsqueeze(-1), dim=-2, keepdim=True) / weighted_n_atoms
     )
     pred_pose_centered = pred_pose - pred_pose_centroid
     true_pose_centroid = (
-        torch.sum(true_pose * weight.unsqueeze(-1), dim=-2, keepdim=True)
-        / weighted_n_atoms
+        torch.sum(true_pose * weight.unsqueeze(-1), dim=-2, keepdim=True) / weighted_n_atoms
     )
     true_pose_centered = true_pose - true_pose_centroid
     H_mat = torch.matmul(
@@ -101,12 +97,9 @@ def align_pred_to_true(
     u = u.transpose(-1, -2)
 
     if not allowing_reflection:
-
         det = torch.linalg.det(torch.matmul(v, u))
 
-        diagonal = torch.stack(
-            [torch.ones_like(det), torch.ones_like(det), det], dim=-1
-        )
+        diagonal = torch.stack([torch.ones_like(det), torch.ones_like(det), det], dim=-1)
         rot = torch.matmul(
             torch.diag_embed(diagonal).to(u.device),
             u,
@@ -114,9 +107,7 @@ def align_pred_to_true(
         rot = torch.matmul(v, rot)
     else:
         rot = torch.matmul(v, u)
-    translate = true_pose_centroid - torch.matmul(
-        pred_pose_centroid, rot.transpose(-1, -2)
-    )
+    translate = true_pose_centroid - torch.matmul(pred_pose_centroid, rot.transpose(-1, -2))
 
     pred_pose_translated = (
         torch.matmul(pred_pose_centered, rot.transpose(-1, -2)) + true_pose_centroid
@@ -164,12 +155,8 @@ def partially_aligned_rmsd(
     aligned_mask, unaligned_mask = atom_mask * align_mask.float(), atom_mask * (
         1 - align_mask.float()
     )
-    aligned_part_err_square = (err_atom * aligned_mask).sum(dim=-1) / aligned_mask.sum(
-        dim=-1
-    )
-    unaligned_part_err_square = (err_atom * unaligned_mask).sum(
-        dim=-1
-    ) / unaligned_mask.sum(dim=-1)
+    aligned_part_err_square = (err_atom * aligned_mask).sum(dim=-1) / aligned_mask.sum(dim=-1)
+    unaligned_part_err_square = (err_atom * unaligned_mask).sum(dim=-1) / unaligned_mask.sum(dim=-1)
     aligned_part_rmsd = aligned_part_err_square.add(eps).sqrt()
     unaligned_part_rmsd = unaligned_part_err_square.add(eps).sqrt()
     if reduce:

@@ -16,22 +16,25 @@ import datetime
 import logging
 import os
 import time
+from collections import defaultdict
 from contextlib import nullcontext
+from glob import glob
+from pathlib import Path
+from typing import List, Optional
 
-import torch
-import torch.distributed as dist
 import numpy as np
 import pandas as pd
+import rootutils
+import torch
+import torch.distributed as dist
 import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
-from pathlib import Path
-import rootutils
-from collections import defaultdict
-from typing import Optional, List
-from glob import glob
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+
+import matplotlib.pyplot as plt
+import pandas as pd
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
@@ -41,20 +44,18 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.artios_ligand import ArtiosLigand
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
+from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
+from protenix.utils.monitoring import grad_norm, visualize_loss_histogram
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
+from protenix.utils.structure_io import cif_to_pdb
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
 from runner.evaluate import Evaluator
-from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
-from protenix.utils.monitoring import visualize_loss_histogram, grad_norm
 from runner.inference import InferenceRunner, infer_predict
-from protenix.utils.structure_io import cif_to_pdb
-import pandas as pd
-import matplotlib.pyplot as plt
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
@@ -162,16 +163,14 @@ class AF3Trainer(object):
             assert (
                 env is not None
             ), "if use ds4sci, set env as https://www.deepspeed.ai/tutorials/ds4sci_evoformerattention/"
-        
+
         # Set high precision for tensor core matmul
-        torch.set_float32_matmul_precision('high')
+        torch.set_float32_matmul_precision("high")
         logging.info("Finished init ENV.")
 
     def init_loss(self):
         # self.loss = ProtenixLoss(self.configs)
-        self.symmetric_permutation = SymmetricPermutation(
-            self.configs, error_dir=self.error_dir
-        )
+        self.symmetric_permutation = SymmetricPermutation(self.configs, error_dir=self.error_dir)
         self.lddt_metrics = LDDTMetrics(self.configs)
 
     def init_model(self):
@@ -194,15 +193,17 @@ class AF3Trainer(object):
 
         if self.configs.get("power_law_ema_sigma", []):  # Check if list is not empty
             self.power_law_ema_wrappers = []  # Store wrappers in a list
-            for sigma in self.configs.power_law_ema_sigma: 
-                wrapper = PowerLawEMAWrapper( 
+            for sigma in self.configs.power_law_ema_sigma:
+                wrapper = PowerLawEMAWrapper(
                     model=self.model,
                     sigma=sigma,
                     mutable_param_keywords=self.configs.ema_mutable_param_keywords,
                 )
                 wrapper.register()
                 self.power_law_ema_wrappers.append(wrapper)
-            self.print(f"Initialized {len(self.power_law_ema_wrappers)} power law EMA wrappers with standard deviations: {self.configs.power_law_ema_sigma}")
+            self.print(
+                f"Initialized {len(self.power_law_ema_wrappers)} power law EMA wrappers with standard deviations: {self.configs.power_law_ema_sigma}"
+            )
 
         torch.cuda.empty_cache()
         self.optimizer = get_optimizer(self.configs, self.model)
@@ -234,9 +235,7 @@ class AF3Trainer(object):
                     "model": self.model.state_dict(),
                     "optimizer": self.optimizer.state_dict(),
                     "scheduler": (
-                        self.lr_scheduler.state_dict()
-                        if self.lr_scheduler is not None
-                        else None
+                        self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
                     ),
                     "step": self.step,
                 }
@@ -248,7 +247,6 @@ class AF3Trainer(object):
             self.print(f"Saved checkpoint to {path}")
 
     def try_load_checkpoint(self):
-
         def _load_checkpoint(
             checkpoint_path: str,
             load_params_only: bool,
@@ -258,9 +256,7 @@ class AF3Trainer(object):
         ):
             if not os.path.exists(checkpoint_path):
                 raise Exception(f"Given checkpoint path not exist [{checkpoint_path}]")
-            self.print(
-                f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}"
-            )
+            self.print(f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}")
             checkpoint = torch.load(checkpoint_path, self.device)
             sample_key = [k for k in checkpoint["model"].keys()][0]
             self.print(f"Sampled key: {sample_key}")
@@ -295,11 +291,11 @@ class AF3Trainer(object):
             checkpoint_dir = self.configs.load_ema_checkpoint_paths_directory
             if not os.path.exists(checkpoint_dir):
                 raise Exception(f"EMA checkpoint directory does not exist: {checkpoint_dir}")
-            
+
             # Get all checkpoint files from directory
-            checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pt')]
+            checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
             self.print(f"Found {len(checkpoint_files)} EMA checkpoints in {checkpoint_dir}")
-            
+
             # Create mapping of sigma values to their corresponding wrappers
             sigma_to_wrapper = {wrapper.sigma: wrapper for wrapper in self.power_law_ema_wrappers}
 
@@ -307,28 +303,34 @@ class AF3Trainer(object):
             for checkpoint_file in checkpoint_files:
                 # Extract sigma value from filename (assuming format like "*_ema_6.94.pt")
                 try:
-                    sigma_str = checkpoint_file.split('_ema_')[-1].replace('.pt', '')
+                    sigma_str = checkpoint_file.split("_ema_")[-1].replace(".pt", "")
                     sigma = float(sigma_str)
                 except (IndexError, ValueError):
-                    self.print(f"Warning: Could not extract a sigma value from checkpoint filename: {checkpoint_file}")
+                    self.print(
+                        f"Warning: Could not extract a sigma value from checkpoint filename: {checkpoint_file}"
+                    )
                     continue
-                
+
                 if sigma not in sigma_to_wrapper:
-                    self.print(f"Warning: No matching wrapper found for sigma={sigma} in checkpoint: {checkpoint_file}")
+                    self.print(
+                        f"Warning: No matching wrapper found for sigma={sigma} in checkpoint: {checkpoint_file}"
+                    )
                     continue
-                
+
                 checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
                 _load_checkpoint(
                     checkpoint_path,
                     load_params_only=True,
                 )
-                
-                # Register only the wrapper corresponding to this sigma
-                matching_wrapper = sigma_to_wrapper[sigma] 
-                matching_wrapper.register()
-                self.print(f"Loaded and registered EMA checkpoint for sigma={sigma}: {checkpoint_file}")
 
-        # Load model parameters (With no EMA) from checkpoint 
+                # Register only the wrapper corresponding to this sigma
+                matching_wrapper = sigma_to_wrapper[sigma]
+                matching_wrapper.register()
+                self.print(
+                    f"Loaded and registered EMA checkpoint for sigma={sigma}: {checkpoint_file}"
+                )
+
+        # Load model parameters (With no EMA) from checkpoint
         if self.configs.load_checkpoint_path:
             _load_checkpoint(
                 self.configs.load_checkpoint_path,
@@ -343,10 +345,7 @@ class AF3Trainer(object):
             logging.info(msg)
 
     def model_forward(
-            self, 
-            batch: dict, 
-            mode: str = "train", 
-            seed: Optional[int] = None
+        self, batch: dict, mode: str = "train", seed: Optional[int] = None
     ) -> tuple[dict, dict]:
         """Forward pass of the model.
 
@@ -370,11 +369,9 @@ class AF3Trainer(object):
         )
         return batch, log_dict
 
-    def get_loss(
-        self, batch: dict, mode: str = "train"
-    ) -> tuple[torch.Tensor, dict, dict]:
+    def get_loss(self, batch: dict, mode: str = "train") -> tuple[torch.Tensor, dict, dict]:
         assert mode in ["train", "eval"]
-        self.loss.to(batch["pred_dict"]["coordinate"].device)  # Move loss to device
+        self.loss.to(batch["label_dict"]["coordinate"].device)  # Move loss to device
 
         loss, loss_dict, monitor_data = autocasting_disable_decorator(self.configs.skip_amp.loss)(
             self.loss
@@ -388,19 +385,13 @@ class AF3Trainer(object):
 
     @torch.no_grad()
     def get_metrics(self, batch: dict) -> dict:
-
-        lddt_dict = self.lddt_metrics.compute_lddt(
-            batch["pred_dict"], batch["label_dict"]
-        )
+        lddt_dict = self.lddt_metrics.compute_lddt(batch["pred_dict"], batch["label_dict"])
 
         return lddt_dict
 
     @torch.no_grad()
     def aggregate_metrics(self, lddt_dict: dict, batch: dict) -> dict:
-
-        simple_metrics, _ = self.lddt_metrics.aggregate_lddt(
-            lddt_dict
-        )
+        simple_metrics, _ = self.lddt_metrics.aggregate_lddt(lddt_dict)
 
         return simple_metrics
 
@@ -411,7 +402,7 @@ class AF3Trainer(object):
             # Evaluate None-EMA
             metrics = self._evaluate()
             all_eval_metrics["None-EMA"] = metrics
-            
+
         # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:
             # Perform post hoc ema calculation
@@ -419,22 +410,22 @@ class AF3Trainer(object):
 
             # Store current model state
             current_state = {k: v.clone() for k, v in self.model.state_dict().items()}
-            
+
             for checkpoint_path in post_hoc_checkpoints:
                 # Extract sigma value from filename
-                sigma = float(checkpoint_path.stem.split('_post_hoc_ema_')[-1])
-                
+                sigma = float(checkpoint_path.stem.split("_post_hoc_ema_")[-1])
+
                 # Load and evaluate the post-hoc EMA checkpoint
                 checkpoint = torch.load(checkpoint_path, map_location=self.device)
-                
+
                 # Load post-hoc EMA weights
-                self.model.load_state_dict(checkpoint['model'])
-                
+                self.model.load_state_dict(checkpoint["model"])
+
                 # Evaluate
                 print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
                 metrics = self._evaluate(ema_suffix=f"_post_hoc_ema_{sigma}", mode=mode)
                 all_eval_metrics[f"post_hoc_ema_{sigma}"] = metrics
-                
+
                 # Delete post-hoc checkpoint from RAM and disk
                 del checkpoint
                 wait_for_all_processes()
@@ -443,13 +434,13 @@ class AF3Trainer(object):
 
             # Restore original model state
             self.model.load_state_dict(current_state)
-                    
+
             # Plot all the metrics on wandb
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 log_ema_validation_curves(all_eval_metrics, self.step)
 
     @torch.no_grad()
-    def _evaluate(self, ema_suffix: str = "", mode: str = "eval"): 
+    def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):
         # Init Metric Aggregator
         simple_metric_wrapper = SimpleMetricAggregator(["avg"])
         eval_precision = {
@@ -462,7 +453,7 @@ class AF3Trainer(object):
             if torch.cuda.is_available()
             else nullcontext()
         )
-        
+
         self.model.eval()
 
         # Initialize master monitor dict to collect all metrics
@@ -493,28 +484,32 @@ class AF3Trainer(object):
                     # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode, seed=index)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, monitor_data = self.get_loss(batch, mode="train")  # eval, loss evaluated in the same way as train
+                    loss, loss_dict, monitor_data = self.get_loss(
+                        batch, mode="train"
+                    )  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)
 
                     # Collect monitor metrics in master dict
                     if self.configs.monitor.loss_distribution:
                         for loss_name, monitor_metric_dict in monitor_data.items():
-                            raw_loss = monitor_metric_dict["raw_loss"].cpu().numpy()  # [..., N_sample]
-                            timestep = monitor_metric_dict["timestep"].cpu().numpy()  # [..., N_sample]
+                            raw_loss = (
+                                monitor_metric_dict["raw_loss"].cpu().numpy()
+                            )  # [..., N_sample]
+                            timestep = (
+                                monitor_metric_dict["timestep"].cpu().numpy()
+                            )  # [..., N_sample]
                             master_monitor_dict[loss_name]["raw_loss"].extend(raw_loss.flatten())
                             master_monitor_dict[loss_name]["timestep"].extend(timestep.flatten())
 
                 # Metrics
                 for key, value in simple_metrics.items():
-                    simple_metric_wrapper.add(
-                        key, value, namespace="val"
-                    )
-            
+                    simple_metric_wrapper.add(key, value, namespace="val")
+
                 del batch, simple_metrics
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()
-            
+
             if self.configs.run_training_time_inference:
                 runner = InferenceRunner(self.configs, model=self.model)
                 infer_predict(runner, self.configs)
@@ -547,22 +542,23 @@ class AF3Trainer(object):
                             title=f"{loss_name} Distribution {ema_suffix}",
                         )
                         # Log to wandb
-                        wandb.log({
-                            f"loss_dist/{ema_suffix}_{loss_name}": wandb.Image(fig),
-                        }, step=self.step)
+                        wandb.log(
+                            {
+                                f"loss_dist/{ema_suffix}_{loss_name}": wandb.Image(fig),
+                            },
+                            step=self.step,
+                        )
                         plt.close(fig)  # Clean up matplotlib figure
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
         return metrics
-    
+
     def update(self):
         # Clip the gradient
         if self.configs.grad_clip_norm != 0.0:
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.configs.grad_clip_norm
-            )
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.configs.grad_clip_norm)
 
     def train_step(self, batch: dict):
         self.model.train()
@@ -573,9 +569,7 @@ class AF3Trainer(object):
             "fp16": torch.float16,
         }[self.configs.dtype]
         enable_amp = (
-            torch.autocast(
-                device_type="cuda", dtype=train_precision, cache_enabled=False
-            )
+            torch.autocast(device_type="cuda", dtype=train_precision, cache_enabled=False)
             if torch.cuda.is_available()
             else nullcontext()
         )
@@ -612,20 +606,19 @@ class AF3Trainer(object):
         for key, value in loss_dict.items():
             if "loss" not in key:
                 continue
-            self.train_metric_wrapper.add(key, value, namespace="train") 
+            self.train_metric_wrapper.add(key, value, namespace="train")
         torch.cuda.empty_cache()
 
     def progress_bar(self, desc: str = ""):
         if DIST_WRAPPER.rank != 0:
             return
-        if self.global_step % (
-            self.configs.eval_interval * self.iters_to_accumulate
-        ) == 0 or (not hasattr(self, "_ipbar")):
+        if self.global_step % (self.configs.eval_interval * self.iters_to_accumulate) == 0 or (
+            not hasattr(self, "_ipbar")
+        ):
             # Start a new progress bar
             self._pbar = tqdm(
                 range(
-                    self.global_step
-                    % (self.iters_to_accumulate * self.configs.eval_interval),
+                    self.global_step % (self.iters_to_accumulate * self.configs.eval_interval),
                     self.iters_to_accumulate * self.configs.eval_interval,
                 )
             )
@@ -636,50 +629,56 @@ class AF3Trainer(object):
             f"[step {self.step}: {step}/{self.iters_to_accumulate * self.configs.eval_interval}] {desc}"
         )
         return
-    
+
     def calc_post_hoc_ema(self):
         """
         Calculate post-hoc EMA checkpoints using the utility function from ema_utils.
-        This combines checkpoints with different sigma values to create new EMA profiles 
-        with target sigma values specified in configs.post_hoc_ema_decay. 
+        This combines checkpoints with different sigma values to create new EMA profiles
+        with target sigma values specified in configs.post_hoc_ema_decay.
         """
         # Get all EMA checkpoint paths
         ema_checkpoint_paths = [
-            Path(os.path.join(self.ema_checkpoint_dir, f)) 
-            for f in os.listdir(self.ema_checkpoint_dir) 
-            if f.endswith('.pt')
+            Path(os.path.join(self.ema_checkpoint_dir, f))
+            for f in os.listdir(self.ema_checkpoint_dir)
+            if f.endswith(".pt")
         ]
-        
+
         if len(ema_checkpoint_paths) == 0:
             self.print(f"No EMA checkpoints found in {self.ema_checkpoint_dir}")
             return
-        
-        self.print(f"Found {len(ema_checkpoint_paths)} EMA checkpoints in {self.ema_checkpoint_dir}")
-        
+
+        self.print(
+            f"Found {len(ema_checkpoint_paths)} EMA checkpoints in {self.ema_checkpoint_dir}"
+        )
+
         # Calculate post-hoc EMA checkpoints
         save_dir = Path(self.post_hoc_ema_checkpoint_dir)
         target_sigma_values = self.configs.post_hoc_ema_sigma
-    
+
         # Use the utility function to calculate post-hoc EMA checkpoints
         output_paths = calculate_post_hoc_ema(
             ema_checkpoint_paths=ema_checkpoint_paths,
             target_sigma_values=target_sigma_values,
-            save_dir=save_dir
+            save_dir=save_dir,
         )
         self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
         return output_paths
-    
+
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""
-        if not self.configs.use_wandb or DIST_WRAPPER.rank != 0 or not self.configs.monitor.weight_norm:
+        if (
+            not self.configs.use_wandb
+            or DIST_WRAPPER.rank != 0
+            or not self.configs.monitor.weight_norm
+        ):
             return
-        
+
         # Calculate and log weight norms for each parameter
         weight_norms = {}
         for name, param in self.model.named_parameters():
             if not param.requires_grad:  # Skip non-trainable parameters
                 continue
-                
+
             if len(param.shape) == 2:  # Linear layer weights (2D tensors)
                 # Compute L2 norm along fan_in dimension (dim=1) and average across output dimension
                 # [out_features, in_features] -> [out_features] -> scalar
@@ -691,8 +690,9 @@ class AF3Trainer(object):
                 norm = param.norm().item() / np.sqrt(param.numel())
             weight_norms[f"weight_norms/{name}"] = norm
 
-        # Log to wandb
-        wandb.log(weight_norms, step=self.step)
+            if DIST_WRAPPER.rank == 0:
+                # Log to wandb
+                wandb.log(weight_norms, step=self.step)
 
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
@@ -700,66 +700,63 @@ class AF3Trainer(object):
             _, total_norm = grad_norm(self.model, norm_type=2)
 
             # Average across all ranks
-            #def numpy_mean_aggregation(values):
+            # def numpy_mean_aggregation(values):
             #    return float(np.mean(values))  # Convert to float in case of numpy types
-            #total_norm = gather_and_merge(total_norm, numpy_mean_aggregation)
+            # total_norm = gather_and_merge(total_norm, numpy_mean_aggregation)
 
             # Log to wandb
             if DIST_WRAPPER.rank == 0:
                 wandb.log({"grad_norm": total_norm}, step=self.step)
-    
-    def log_structure_files_to_wandb(
-        self, 
-        cif_files: list[Path], 
-        ema_suffix: str = ""
-    ):
+
+    def log_structure_files_to_wandb(self, cif_files: list[Path], ema_suffix: str = ""):
         if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
             return
         for cif_path in cif_files:
             try:
                 # Create temporary PDB file path with full path
                 cif_path = os.path.abspath(cif_path)
-                temp_pdb_path = os.path.abspath(str(Path(cif_path).with_suffix('.pdb')))
-                
+                temp_pdb_path = os.path.abspath(str(Path(cif_path).with_suffix(".pdb")))
+
                 # Convert CIF to PDB
                 cif_to_pdb(cif_path, temp_pdb_path)
-                
+
                 # Verify the PDB file was created
                 if not os.path.exists(temp_pdb_path):
                     self.print(f"Warning: Failed to create PDB file at {temp_pdb_path}")
                     continue
-                
+
                 # Get relative path for the wandb key
                 rel_path = os.path.relpath(cif_path, self.prediction_dir)
-                structure_name = os.path.splitext(rel_path)[0].replace(os.sep, '_')
-                
+                structure_name = os.path.splitext(rel_path)[0].replace(os.sep, "_")
+
                 # Log PDB file to wandb
-                wandb.log({
-                    f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(temp_pdb_path)
-                }, step=self.step)
+                wandb.log(
+                    {
+                        f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(
+                            temp_pdb_path
+                        )
+                    },
+                    step=self.step,
+                )
 
                 # Clean up both files
                 if os.path.exists(temp_pdb_path):
                     os.remove(temp_pdb_path)
-            
+
             except Exception as e:
                 self.print(f"Error processing CIF file {cif_path}: {e}")
                 continue
-            
+
             # Explicitly clean up memory
             torch.cuda.empty_cache()
 
-    def run_evaluation_tests(
-        self, 
-        cif_files: list[Path], 
-        ema_suffix: str = ""
-    ):
+    def run_evaluation_tests(self, cif_files: list[Path], ema_suffix: str = ""):
         if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
             return
-        
+
         print(f"Evaluating tests: {self.configs.monitor.eval_metrics.eval_tests}...")
         results = {}
-        
+
         # Valid evaluation tests
         valid_eval_tests = {
             "ss_distribution": Evaluator.ss_distribution,
@@ -767,8 +764,10 @@ class AF3Trainer(object):
         }
 
         for eval_test in self.configs.monitor.eval_metrics.eval_tests:
-            assert eval_test in valid_eval_tests, f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}"
-            
+            assert (
+                eval_test in valid_eval_tests
+            ), f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}"
+
             print(f"Running {eval_test} evaluation...")
             try:
                 results[eval_test] = valid_eval_tests[eval_test](cif_files=cif_files)
@@ -777,7 +776,7 @@ class AF3Trainer(object):
                 self.print(f"Error running {eval_test} evaluation: {e}")
                 results.pop(eval_test, None)
                 continue
-            
+
             # Clean up after each test
             torch.cuda.empty_cache()
 
@@ -785,12 +784,12 @@ class AF3Trainer(object):
         wandb_metrics = {}
         for test_name, df in results.items():
             for col in df.columns:
-                if col == 'Ligand CCD':
+                if col == "Ligand CCD":
                     continue
                 wandb_metrics[f"{test_name}/{ema_suffix}_{col}"] = df[col].astype(float).mean()
-        
+
         wandb.log(wandb_metrics, step=self.step)
-        
+
         # Clean up memory again
         del results, wandb_metrics
         torch.cuda.empty_cache()
@@ -806,7 +805,7 @@ class AF3Trainer(object):
             if self.configs.eval_only:
                 return
         use_ema = hasattr(self, "power_law_ema_wrappers")
-        self.print(f"Using power law ema's: {use_ema}") 
+        self.print(f"Using power law ema's: {use_ema}")
 
         while True:
             for batch in self.train_dl:
@@ -818,7 +817,7 @@ class AF3Trainer(object):
                     self.configs.eval_interval > 0
                     and (self.step + 1) % self.configs.eval_interval == 0
                 )
-                step_need_save = ( 
+                step_need_save = (
                     self.configs.checkpoint_interval > 0
                     and (self.step + 1) % self.configs.checkpoint_interval == 0
                 )
@@ -833,7 +832,7 @@ class AF3Trainer(object):
                 self.train_step(batch)
                 if use_ema:
                     for wrapper in self.power_law_ema_wrappers:
-                        wrapper.update(t=self.step+1)
+                        wrapper.update(t=self.step + 1)
                 if step_need_log or is_last_step:
                     metrics = self.train_metric_wrapper.calc()
                     self.print(f"Step {self.step} train: {metrics}")
@@ -850,17 +849,15 @@ class AF3Trainer(object):
 
                 if step_need_save or is_last_step:
                     self.print(f"beginning Saving checkpoint at step {self.step}")
-                    self.save_checkpoint() # Saves non-ema checkpoint
+                    self.save_checkpoint()  # Saves non-ema checkpoint
                     if use_ema:
                         for wrapper in self.power_law_ema_wrappers:
                             wrapper.apply_shadow()
                             self.save_checkpoint(
-                                ema_suffix=f"ema_{wrapper.sigma}",
-                                save_model_only=True
+                                ema_suffix=f"ema_{wrapper.sigma}", save_model_only=True
                             )
                             wrapper.restore()
                         wait_for_all_processes()
-                        
 
                 if step_need_eval or is_last_step:
                     self.evaluate()
@@ -868,7 +865,7 @@ class AF3Trainer(object):
 
                 self.global_step += 1
                 if self.global_step % self.iters_to_accumulate == 0:
-                    self.step += 1               
+                    self.step += 1
                 if self.step >= self.configs.max_steps:
                     self.print(f"Finish training after {self.step} steps")
                     break
@@ -878,7 +875,9 @@ class AF3Trainer(object):
 
 
 def main():
-    LOG_FORMAT = "%(asctime)s,%(msecs)-3d %(levelname)-8s [%(filename)s:%(lineno)s %(funcName)s] %(message)s"
+    LOG_FORMAT = (
+        "%(asctime)s,%(msecs)-3d %(levelname)-8s [%(filename)s:%(lineno)s %(funcName)s] %(message)s"
+    )
     logging.basicConfig(
         format=LOG_FORMAT,
         level=logging.INFO,

@@ -70,9 +70,7 @@ class BaseSingleDataset(Dataset):
         # General dataset configs
         self.ref_pos_augment = kwargs.get("ref_pos_augment", True)
         self.lig_atom_rename = kwargs.get("lig_atom_rename", False)
-        self.reassign_continuous_chain_ids = kwargs.get(
-            "reassign_continuous_chain_ids", False
-        )
+        self.reassign_continuous_chain_ids = kwargs.get("reassign_continuous_chain_ids", False)
         self.shuffle_mols = kwargs.get("shuffle_mols", False)
         self.shuffle_sym_ids = kwargs.get("shuffle_sym_ids", False)
 
@@ -95,9 +93,7 @@ class BaseSingleDataset(Dataset):
             self.pdb_list = None
         # Used for removing rows in the indices list. Column names and excluded values are specified in this dict.
         self.exclusion_dict = kwargs.get("exclusion", {})
-        self.limits = kwargs.get(
-            "limits", -1
-        )  # Limit number of indices rows, mainly for test
+        self.limits = kwargs.get("limits", -1)  # Limit number of indices rows, mainly for test
 
         self.error_dir = kwargs.get("error_dir", None)
         if self.error_dir is not None:
@@ -160,9 +156,7 @@ class BaseSingleDataset(Dataset):
             indices_list = indices_list[valid_mask]
             logger.info(f"[removed] #Rows: {len(removed_list)}")
             logger.info(f"[removed] #PDB: {removed_list['pdb_id'].nunique()}")
-            logger.info(
-                f"[filtered by n_token ({self.max_n_token})] #Rows: {len(indices_list)}"
-            )
+            logger.info(f"[filtered by n_token ({self.max_n_token})] #Rows: {len(indices_list)}")
 
         # Filter by exclusion_dict
         for col_name, exclusion_list in self.exclusion_dict.items():
@@ -174,17 +168,13 @@ class BaseSingleDataset(Dataset):
 
             valid_mask = indices_list.apply(is_valid, axis=1)
             indices_list = indices_list[valid_mask].reset_index(drop=True)
-            logger.info(
-                f"[Excluded by {col_name} -- {exclusion_list}] #Rows: {len(indices_list)}"
-            )
+            logger.info(f"[Excluded by {col_name} -- {exclusion_list}] #Rows: {len(indices_list)}")
         self.print_data_stats(indices_list)
 
         # Group by pdb_id
         # A list of dataframe. Each contains one pdb with multiple rows.
         if self.group_by_pdb_id:
-            indices_list = [
-                df.reset_index() for _, df in indices_list.groupby("pdb_id", sort=True)
-            ]
+            indices_list = [df.reset_index() for _, df in indices_list.groupby("pdb_id", sort=True)]
 
         if self.sort_by_n_token:
             # Sort the dataset in a descending order, so that if OOM it will raise Error at an early stage.
@@ -206,22 +196,16 @@ class BaseSingleDataset(Dataset):
                     df
                     for df in indices_list
                     if len(
-                        set(df["eval_type"].to_list()).intersection(
-                            set(EvaluationChainInterface)
-                        )
+                        set(df["eval_type"].to_list()).intersection(set(EvaluationChainInterface))
                     )
                     > 0
                 ]
             else:
                 indices_list = indices_list[
-                    indices_list["eval_type"].apply(
-                        lambda x: x in EvaluationChainInterface
-                    )
+                    indices_list["eval_type"].apply(lambda x: x in EvaluationChainInterface)
                 ]
         if self.limits > 0 and len(indices_list) > self.limits:
-            logger.info(
-                f"Limit indices list size from {len(indices_list)} to {self.limits}"
-            )
+            logger.info(f"Limit indices list size from {len(indices_list)} to {self.limits}")
             indices_list = indices_list[: self.limits]
         return indices_list
 
@@ -277,7 +261,9 @@ class BaseSingleDataset(Dataset):
             data = sample_indice.to_dict()
             data["error"] = error_message
 
-            filename = f"{sample_indice.pdb_id}-{sample_indice.chain_1_id}-{sample_indice.chain_2_id}.json"
+            filename = (
+                f"{sample_indice.pdb_id}-{sample_indice.chain_1_id}-{sample_indice.chain_2_id}.json"
+            )
             fpath = os.path.join(self.error_dir, filename)
             if not os.path.exists(fpath):
                 with open(fpath, "w") as f:
@@ -312,9 +298,7 @@ class BaseSingleDataset(Dataset):
                     raise Exception(e)
         return data
 
-    def _get_bioassembly_data(
-        self, idx: int
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def _get_bioassembly_data(self, idx: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         sample_indice = self._get_sample_indice(idx=idx)
         if self.bioassembly_dict_dir is not None:
             bioassembly_dict_fpath = os.path.join(
@@ -407,9 +391,7 @@ class BaseSingleDataset(Dataset):
             atom_array.sym_id_int[mask] = _shuffle(atom_array.sym_id_int[mask])
         return atom_array
 
-    def process_one(
-        self, idx: int, return_atom_token_array: bool = False
-    ) -> dict[str, dict]:
+    def process_one(self, idx: int, return_atom_token_array: bool = False) -> dict[str, dict]:
         """
         Processes a single data sample by retrieving bioassembly data, applying various transformations, and cropping the data.
         It then extracts features and labels, and optionally returns the processed atom and token arrays.
@@ -422,9 +404,11 @@ class BaseSingleDataset(Dataset):
             A dict containing the input features, labels, basic_info and optionally the processed atom and token arrays.
         """
 
-        sample_indice, bioassembly_dict, bioassembly_dict_fpath = (
-            self._get_bioassembly_data(idx=idx)
-        )
+        (
+            sample_indice,
+            bioassembly_dict,
+            bioassembly_dict_fpath,
+        ) = self._get_bioassembly_data(idx=idx)
 
         if self.use_reference_chains_only:
             # Get the reference chains
@@ -436,24 +420,26 @@ class BaseSingleDataset(Dataset):
             token_centre_atom_indices = bioassembly_dict["token_array"].get_annotation(
                 "centre_atom_index"
             )
-            token_chain_id = bioassembly_dict["atom_array"][
-                token_centre_atom_indices
-            ].chain_id
+            token_chain_id = bioassembly_dict["atom_array"][token_centre_atom_indices].chain_id
             is_ref_chain = np.isin(token_chain_id, ref_chain_ids)
-            bioassembly_dict["token_array"], bioassembly_dict["atom_array"], _, _ = (
-                CropData.select_by_token_indices(
-                    token_array=bioassembly_dict["token_array"],
-                    atom_array=bioassembly_dict["atom_array"],
-                    selected_token_indices=np.arange(len(is_ref_chain))[is_ref_chain],
-                )
+            (
+                bioassembly_dict["token_array"],
+                bioassembly_dict["atom_array"],
+                _,
+                _,
+            ) = CropData.select_by_token_indices(
+                token_array=bioassembly_dict["token_array"],
+                atom_array=bioassembly_dict["atom_array"],
+                selected_token_indices=np.arange(len(is_ref_chain))[is_ref_chain],
             )
 
         if self.shuffle_mols:
-            bioassembly_dict["token_array"], bioassembly_dict["atom_array"] = (
-                self._shuffle_array_based_on_mol_id(
-                    token_array=bioassembly_dict["token_array"],
-                    atom_array=bioassembly_dict["atom_array"],
-                )
+            (
+                bioassembly_dict["token_array"],
+                bioassembly_dict["atom_array"],
+            ) = self._shuffle_array_based_on_mol_id(
+                token_array=bioassembly_dict["token_array"],
+                atom_array=bioassembly_dict["atom_array"],
             )
 
         if self.shuffle_sym_ids:
@@ -518,9 +504,7 @@ class BaseSingleDataset(Dataset):
             basic_info[f"N_{abbr_type}_token"] = torch.tensor([n_token])
 
         # Add chain level chain_id
-        asymn_id_to_chain_id = {
-            atom.asym_id_int: atom.chain_id for atom in cropped_atom_array
-        }
+        asymn_id_to_chain_id = {atom.asym_id_int: atom.chain_id for atom in cropped_atom_array}
         chain_id_list = [
             asymn_id_to_chain_id[asymn_id_int]
             for asymn_id_int in sorted(asymn_id_to_chain_id.keys())
@@ -609,9 +593,7 @@ class BaseSingleDataset(Dataset):
         # Only consider chain/interfaces defined in EvaluationChainInterface
         df = df[df["eval_type"].apply(lambda x: x in EvaluationChainInterface)].copy()
         if len(df) < 1:
-            raise ValueError(
-                f"Cannot find a chain/interface for evaluation in the PDB."
-            )
+            raise ValueError(f"Cannot find a chain/interface for evaluation in the PDB.")
 
         def get_atom_mask(row):
             chain_1_mask = atom_array_chain_id == row["chain_1_id"]
@@ -629,9 +611,7 @@ class BaseSingleDataset(Dataset):
         df = df[df["chain_1_mask"].notna()]  # drop NaN
 
         if len(df) < 1:
-            raise ValueError(
-                f"Cannot find a chain/interface for evaluation in the atom_array."
-            )
+            raise ValueError(f"Cannot find a chain/interface for evaluation in the atom_array.")
 
         eval_type = np.array(df["eval_type"].tolist())
         cluster_id = np.array(df["cluster_id"].tolist())
@@ -719,9 +699,7 @@ class BaseSingleDataset(Dataset):
             if self.find_all_pockets:
                 # Get asym ID of other ligands with the same entity_id
                 all_lig_asym_ids = set(
-                    full_atom_array[
-                        full_atom_array.label_entity_id == lig_entity_id
-                    ].label_asym_id
+                    full_atom_array[full_atom_array.label_entity_id == lig_entity_id].label_asym_id
                 )
                 ligands.extend(list(all_lig_asym_ids - set([lig_asym_id])))
 
@@ -737,10 +715,13 @@ class BaseSingleDataset(Dataset):
 
         # Masks for Chain/Interface Metrics
         if self.find_eval_chain_interface:
-            eval_type, cluster_id, chain_1_mask, chain_2_mask = (
-                self._get_eval_chain_interface_mask(
-                    idx=idx, atom_array_chain_id=full_atom_array.chain_id
-                )
+            (
+                eval_type,
+                cluster_id,
+                chain_1_mask,
+                chain_2_mask,
+            ) = self._get_eval_chain_interface_mask(
+                idx=idx, atom_array_chain_id=full_atom_array.chain_id
             )
             labels_dict["eval_type"] = eval_type  # [N_eval]
             labels_dict["cluster_id"] = cluster_id  # [N_eval]
@@ -760,9 +741,7 @@ class BaseSingleDataset(Dataset):
             template_features = dict_to_tensor(template_features)
             features_dict.update(template_features)
 
-        features_dict = make_dummy_feature(
-            features_dict=features_dict, dummy_feats=dummy_feats
-        )
+        features_dict = make_dummy_feature(features_dict=features_dict, dummy_feats=dummy_feats)
         # Transform to right data type
         features_dict = data_type_transform(feat_or_label_dict=features_dict)
         labels_dict = data_type_transform(feat_or_label_dict=labels_dict)
@@ -864,14 +843,10 @@ class WeightedMultiDataset(Dataset):
             dataset,
             datapoint_weight_list,
             dataset_weight,
-        ) in enumerate(
-            zip(self.datasets, self.datapoint_weights, self.dataset_sample_weights)
-        ):
+        ) in enumerate(zip(self.datasets, self.datapoint_weights, self.dataset_sample_weights)):
             # normalize each dataset weights
             weight_sum = sum(datapoint_weight_list)
-            datapoint_weight_list = [
-                dataset_weight * w / weight_sum for w in datapoint_weight_list
-            ]
+            datapoint_weight_list = [dataset_weight * w / weight_sum for w in datapoint_weight_list]
             self.merged_datapoint_weights.extend(datapoint_weight_list)
             self.weight += dataset_weight
             self.dataset_indices.extend([dataset_index] * len(datapoint_weight_list))
@@ -884,9 +859,7 @@ class WeightedMultiDataset(Dataset):
         return len(self.merged_datapoint_weights)
 
     def __getitem__(self, index: int) -> dict[str, dict]:
-        return self.datasets[self.dataset_indices[index]][
-            self.within_dataset_indices[index]
-        ]
+        return self.datasets[self.dataset_indices[index]][self.within_dataset_indices[index]]
 
 
 def get_weighted_pdb_weight(
@@ -928,9 +901,7 @@ def get_weighted_pdb_weight(
     assert set(chain_count.keys()).issubset(set(alpha_dict.keys()))
     weight = (
         beta
-        * sum(
-            [alpha * chain_count[data_mode] for data_mode, alpha in alpha_dict.items()]
-        )
+        * sum([alpha * chain_count[data_mode] for data_mode, alpha in alpha_dict.items()])
         / (cluster_size + eps)
     )
     return weight
@@ -1067,19 +1038,13 @@ def get_datasets(
 
     data_config = configs.data
     logger.info(f"Using train sets {data_config.train_sets}")
-    assert len(data_config.train_sets) == len(
-        data_config.train_sampler.train_sample_weights
-    )
+    assert len(data_config.train_sets) == len(data_config.train_sampler.train_sample_weights)
     train_datasets = []
     datapoint_weights = []
     for train_name in data_config.train_sets:
         config_dict = data_config[train_name].to_dict()
-        dataset_param = _get_dataset_param(
-            config_dict, dataset_name=train_name, stage="train"
-        )
-        dataset_param["ref_pos_augment"] = data_config.get(
-            "train_ref_pos_augment", True
-        )
+        dataset_param = _get_dataset_param(config_dict, dataset_name=train_name, stage="train")
+        dataset_param["ref_pos_augment"] = data_config.get("train_ref_pos_augment", True)
         dataset_param["limits"] = data_config.get("limits", -1)
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
@@ -1100,9 +1065,7 @@ def get_datasets(
     test_sets = data_config.test_sets
     for test_name in test_sets:
         config_dict = data_config[test_name].to_dict()
-        dataset_param = _get_dataset_param(
-            config_dict, dataset_name=test_name, stage="test"
-        )
+        dataset_param = _get_dataset_param(config_dict, dataset_name=test_name, stage="test")
         dataset_param["ref_pos_augment"] = data_config.get("test_ref_pos_augment", True)
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset

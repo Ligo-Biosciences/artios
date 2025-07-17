@@ -66,9 +66,7 @@ class Clash(nn.Module):
             mol_id=mol_id,
             elements_one_hot=elements_one_hot,
         )
-        return self._check_clash_per_chain_pairs(
-            pred_coordinate=pred_coordinate, **chain_info
-        )
+        return self._check_clash_per_chain_pairs(pred_coordinate=pred_coordinate, **chain_info)
 
     def get_chain_info(
         self,
@@ -83,9 +81,7 @@ class Clash(nn.Module):
     ):
         # Get chain info
         asym_id = asym_id.long()
-        asym_id_to_asym_mask = {
-            aid.item(): asym_id == aid for aid in torch.unique(asym_id)
-        }
+        asym_id_to_asym_mask = {aid.item(): asym_id == aid for aid in torch.unique(asym_id)}
         N_chains = len(asym_id_to_asym_mask)
         # Make sure it is from 0 to N_chain-1
         assert N_chains == asym_id.max() + 1
@@ -103,9 +99,7 @@ class Clash(nn.Module):
             atom_type_i = atom_type[atom_chain_mask]
             assert len(atom_type_i.unique()) == 1
             if atom_type_i[0].item() == 0:
-                logging.warning(
-                    "Unknown asym_id type: not in ligand / protein / dna / rna"
-                )
+                logging.warning("Unknown asym_id type: not in ligand / protein / dna / rna")
             chain_types.append(ID2TYPE[atom_type_i[0].item()])
             if self.compute_vdw_clash:
                 # Check if all atoms in a chain are from the same molecule
@@ -255,9 +249,7 @@ class Clash(nn.Module):
                         af3_clash_details[sample_id, j, i, :] = af3_clash_details[
                             sample_id, i, j, :
                         ]
-                        has_af3_clash_flag[sample_id, j, i] = has_af3_clash_flag[
-                            sample_id, i, j
-                        ]
+                        has_af3_clash_flag[sample_id, j, i] = has_af3_clash_flag[sample_id, i, j]
         return {
             "summary": {
                 "af3_clash": has_af3_clash_flag if self.compute_af3_clash else None,

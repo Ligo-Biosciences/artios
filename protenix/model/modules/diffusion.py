@@ -18,16 +18,15 @@ import torch
 import torch.nn as nn
 
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
-from protenix.model.modules.primitives import LinearNoBias, Transition
+from protenix.model.modules.primitives import LayerNorm, LinearNoBias, Transition
 from protenix.model.modules.transformer import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
     DiffusionTransformer,
 )
-
-from protenix.model.utils import expand_at_dim, add
-from protenix.model.modules.primitives import LayerNorm
+from protenix.model.utils import add, aggregate_atom_to_token, expand_at_dim
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
+
 
 class DiffusionConditioning(nn.Module):
     """
@@ -36,42 +35,41 @@ class DiffusionConditioning(nn.Module):
 
     def __init__(
         self,
-        sigma_data: float = 16.0,
+        sigma_data: float = 12.0,
         c_z: int = 128,
         c_s: int = 384,
-        c_s_inputs: int = 386,
         c_timestep_embedding: int = 256,
     ) -> None:
         """
         Args:
             sigma_data (torch.float, optional): the standard deviation of the data. Defaults to 16.0.
-            c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128. 
-            c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
-            c_s_inputs (int, optional): input embedding dim from InputEmbedder. Defaults to 449.
-            c_noise_embedding (int, optional): noise embedding dim. Defaults to 256.
+            c_z (int, optional): hidden dim [for pair embedding].
+            c_s (int, optional):  hidden dim [for single embedding].
+            c_s_inputs (int, optional): input embedding dim from InputEmbedder.
+            c_noise_embedding (int, optional): noise embedding dim.
         """
         super(DiffusionConditioning, self).__init__()
         self.sigma_data = sigma_data
-        self.c_z = c_z 
+        self.c_z = c_z
         self.c_s = c_s
-        self.c_s_inputs = c_s_inputs
 
-        ### From Main Inference Loop
-        # Line 2-3
-        self.layernorm_s_init = LayerNorm(self.c_s_inputs)
-        self.linear_no_bias_s_init = LinearNoBias(in_features=self.c_s_inputs, out_features=self.c_s) 
-        self.linear_no_bias_z_init_i = LinearNoBias(in_features=self.c_s, out_features=self.c_z)
-        self.linear_no_bias_z_init_j = LinearNoBias(in_features=self.c_s, out_features=self.c_z)
+        ### Ligand reference position embeddings
+        self.linear_no_bias_d = LinearNoBias(in_features=3, out_features=self.c_z)
+        self.linear_no_bias_invd = LinearNoBias(
+            in_features=1, out_features=self.c_z, init="zeros"
+        )
 
-        # Line 4-5
-        self.linear_no_bias_token_bonds = LinearNoBias(in_features=1, out_features=self.c_z)
+        # Token bonds
+        self.linear_no_bias_token_bonds = LinearNoBias(
+            in_features=1, out_features=self.c_z, init="zeros"
+        )
 
         ### From Diffusion Conditioning
         #  Line 1-2
-        self.relpe = RelativePositionEncoding(c_z=c_z) 
-        self.layernorm_z = LayerNorm(2 * self.c_z) 
+        self.relpe = RelativePositionEncoding(c_z=c_z)
+        self.layernorm_z = LayerNorm(2 * self.c_z)
         self.linear_no_bias_z = LinearNoBias(
-            in_features=2 * self.c_z, out_features=self.c_z 
+            in_features=2 * self.c_z, out_features=self.c_z
         )
         # Line 3-5:
         self.transition_z = Transition(c_in=self.c_z, n=2)
@@ -90,7 +88,6 @@ class DiffusionConditioning(nn.Module):
         self,
         timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
-        s_inputs: torch.Tensor,
         inplace_safe: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -98,59 +95,94 @@ class DiffusionConditioning(nn.Module):
             timestep (torch.Tensor): the noising timestep (the t such that x_t = (1-t)*x_0 + t*x_1)
                 [..., N_sample]
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
-            s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
-                [..., N_tokens, c_s_inputs]
             inplace_safe (bool): Whether it is safe to use inplace operations.
         Returns:
             tuple[torch.Tensor, torch.Tensor]: embeddings s and z
                 - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
                 - z (torch.Tensor): [..., N_N_tokens, N_tokens, c_z]
         """
-        ### Logic from Main Inference Loop (Algorithm 1)
-        # Create single embedding from s_inputs (Line 2)
-        s = self.linear_no_bias_s_init(self.layernorm_s_init(s_inputs)) 
+        # Grab data on inputs
+        atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
+        n_token = input_feature_dict["residue_index"].shape[-1]
 
-        # Create pair embedding from s_init (Line 3)
-        z = add(
-            self.linear_no_bias_z_init_i(s)[..., None, :],
-            self.linear_no_bias_z_init_j(s)[..., None, :, :],
-        )  #  [..., N_token, N_token, c_z]
+        ### Initialize pair embedding with ligand conformer features:
+        # 1. Get token-wise ligand reference positions
+        # [..., N_atom, 3]
+        is_ligand = input_feature_dict["is_ligand"].unsqueeze(-1)  # [..., n_atom, 1]
+        ligand_ref_pos = (
+            input_feature_dict["ref_pos"] * is_ligand
+        )  # (zero out non-ligand atoms)
 
-        # Add token bonds to pair embedding (Line 5) 
+        # 2. Aggregate per-atom reference positions to per-token reference positions (trick to get token-level tensor)
+        # [..., N_atom, 3] -> [..., N_token, 3]
+        ligand_ref_pos = aggregate_atom_to_token(
+            x_atom=ligand_ref_pos,
+            atom_to_token_idx=atom_to_token_idx,
+            n_token=n_token,
+            reduce="mean",
+        )
+
+        # Compute v_lm mask
+        token_ref_space_uid = aggregate_atom_to_token(
+            x_atom=input_feature_dict["ref_space_uid"].unsqueeze(-1),
+            atom_to_token_idx=atom_to_token_idx,
+            n_token=n_token,
+            reduce="mean",
+        )  # [..., N_token, 1]
+        v_lm = (
+            token_ref_space_uid[..., None, :, :] == token_ref_space_uid[..., None, :]
+        )  # [..., n_token, n_token, 1]
+
+        # 3. Compute ligand ref pos displacement
+        d_lm = (
+            ligand_ref_pos[..., None, :] - ligand_ref_pos[..., None, :, :]
+        )  # [..., n_token, n_token, 3]
+        z = self.linear_no_bias_d(d_lm) * v_lm  # [..., n_token, n_token, c_z]
+
+        # 4. Embed pairwise inverse squared distances
+        invd_emb = (
+            self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True)))
+            * v_lm
+        )
+        z = add(z, invd_emb, inplace_safe=inplace_safe)
+
+        # Add token bonds to pair embedding
         z = add(
             z,
-            self.linear_no_bias_token_bonds(input_feature_dict["token_bonds"].unsqueeze(-1)),
-            inplace_safe=inplace_safe
+            self.linear_no_bias_token_bonds(
+                input_feature_dict["token_bonds"].unsqueeze(-1)
+            ),
+            inplace_safe=inplace_safe,
         )
 
         ### Logic from Diffusion Conditioning (Algorithm 21)
-        # Concatenate z_init with relative position encoding and embed (Line 1) 
+        # Concatenate z_init with relative position encoding and embed (Line 1)
         z = torch.cat(
-            tensors=[z, self.relpe(input_feature_dict)], dim=-1 
-        ) # [..., N_tokens, N_tokens, 2*c_z]
+            tensors=[z, self.relpe(input_feature_dict)], dim=-1
+        )  # [..., N_tokens, N_tokens, 2*c_z]
 
-        # Normalise and embed pair embedding (Line 2) 
-        z = self.linear_no_bias_z(self.layernorm_z(z)) 
+        # Normalise and embed pair embedding (Line 2)
+        z = self.linear_no_bias_z(self.layernorm_z(z))
 
-        # Send pair embedding through one transition (Line 3-5) 
+        # Send pair embedding through one transition
         z = add(z, self.transition_z(z), inplace_safe=inplace_safe)
 
-        # Fourier embed the noise level (Line 8)  
-        t_hat_timestep = 2 * timestep - 1 # Rescale to [-1, 1] for smoother embedding
-        timestep_t = self.fourier_embedding(t_hat_timestep=t_hat_timestep).to(s.dtype)  # [..., N_sample, c_noise_embedding]
-        
-        # Normalise, embed noise and add to single embed (Line 9)
-        s = add(
-            s.unsqueeze(dim=-3),
-            self.linear_no_bias_t(
-                self.layernorm_t(timestep_t)
-            ).unsqueeze(dim=-2)
+        ### Initialize single embedding
+        # 1. Fourier embed the timestep
+        t_hat_timestep = 2 * timestep - 1  # Rescale to [-1, 1] for smoother embedding
+        timestep_t = self.fourier_embedding(t_hat_timestep=t_hat_timestep).to(
+            z.dtype
+        )  # [..., N_sample, c_noise_embedding]
+
+        # 2. Normalise and embed timestep
+        s = expand_at_dim(
+            self.linear_no_bias_t(self.layernorm_t(timestep_t)), dim=-2, n=n_token
         )  # [..., N_sample, N_tokens, c_s]
-        
-        # Send single embedding through two transitions (Line 10-12)
+
+        # 3. Send single embedding through two transitions
         s = add(s, self.transition_s1(s), inplace_safe=inplace_safe)
         s = add(s, self.transition_s2(s), inplace_safe=inplace_safe)
- 
+
         return s, z
 
 
@@ -161,12 +193,12 @@ class DiffusionModule(nn.Module):
 
     def __init__(
         self,
-        sigma_data: float = 16.0,
+        sigma_data: float = 12.0,
         c_atom: int = 128,
         c_atompair: int = 16,
         c_token: int = 768,
         c_s: int = 384,
-        c_z: int = 128, 
+        c_z: int = 128,
         c_s_inputs: int = 449,
         atom_encoder: dict[str, int] = {"n_blocks": 3, "n_heads": 4},
         transformer: dict[str, int] = {"n_blocks": 24, "n_heads": 16},
@@ -202,14 +234,16 @@ class DiffusionModule(nn.Module):
         self.c_token = c_token
         self.c_s_inputs = c_s_inputs
         self.c_s = c_s
-        self.c_z = c_z 
+        self.c_z = c_z
 
         # Grad checkpoint setting
         self.blocks_per_ckpt = blocks_per_ckpt
         self.use_fine_grained_checkpoint = use_fine_grained_checkpoint
 
         self.diffusion_conditioning = DiffusionConditioning(
-            sigma_data=self.sigma_data, c_z=c_z, c_s=c_s, c_s_inputs=c_s_inputs
+            sigma_data=self.sigma_data,
+            c_z=c_z,
+            c_s=c_s,  # c_s_inputs=c_s_inputs
         )
         self.atom_attention_encoder = AtomAttentionEncoder(
             **atom_encoder,
@@ -218,12 +252,12 @@ class DiffusionModule(nn.Module):
             c_token=c_token,
             has_coords=True,
             c_s=c_s,
-            c_z=c_z, 
+            c_z=c_z,
             blocks_per_ckpt=blocks_per_ckpt,
         )
         # Alg20: line4
-        self.layernorm_s = LayerNorm(c_s)
-        self.linear_no_bias_s = LinearNoBias(in_features=c_s, out_features=c_token)
+        # self.layernorm_s = LayerNorm(c_s)
+        # self.linear_no_bias_s = LinearNoBias(in_features=c_s, out_features=c_token, init="zeros")
         self.diffusion_transformer = DiffusionTransformer(
             **transformer,
             c_a=c_token,
@@ -246,7 +280,6 @@ class DiffusionModule(nn.Module):
         r_noisy: torch.Tensor,
         timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
-        s_inputs: torch.Tensor,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
@@ -280,55 +313,47 @@ class DiffusionModule(nn.Module):
         # use checkpoint here if blocks_per_ckpt is not None.
         if blocks_per_ckpt:
             checkpoint_fn = get_checkpoint_fn()
-            s, z = checkpoint_fn( 
+            s, z = checkpoint_fn(
                 self.diffusion_conditioning,
                 timestep,
                 input_feature_dict,
-                s_inputs,
                 inplace_safe,
             )
         else:
-            s, z = self.diffusion_conditioning( 
+            s, z = self.diffusion_conditioning(
                 timestep=timestep,
                 input_feature_dict=input_feature_dict,
-                s_inputs=s_inputs,
                 inplace_safe=inplace_safe,
             )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
 
         # Expand embeddings to match N_sample
         z = expand_at_dim(
-            z, dim=-4, n=1  # rely on broadcasting for N_sample
+            z,
+            dim=-4,
+            n=1,  # rely on broadcasting for N_sample
         )  # [..., 1, N_token, N_token, c_z]
 
-        # Fine-grained checkpoint for finetuning stage 2 (token num: 768) for avoiding OOM
-        if blocks_per_ckpt and self.use_fine_grained_checkpoint:
-            checkpoint_fn = get_checkpoint_fn()
-            a_token, q_skip, c_skip, p_skip = checkpoint_fn( 
-                self.atom_attention_encoder,
-                input_feature_dict,
-                r_noisy,
-                s, # Replaced s_trunk
-                z, 
-                inplace_safe,
-                chunk_size,
-            )
-        else:
-            # Sequence-local Atom Attention and aggregation to coarse-grained tokens
-            a_token, q_skip, c_skip, p_skip = self.atom_attention_encoder(
-                input_feature_dict=input_feature_dict,
-                r_l=r_noisy,
-                s=s, # Replaced s_trunk
-                z=z, 
-                inplace_safe=inplace_safe,
-                chunk_size=chunk_size,
-            )
+        # Sequence-local Atom Attention and aggregation to coarse-grained tokens
+        a_token, q_skip, c_skip, p_skip = self.atom_attention_encoder(
+            input_feature_dict=input_feature_dict,
+            r_l=r_noisy,
+            s=s,  # Replaced s_trunk
+            z=z,
+            inplace_safe=inplace_safe,
+            chunk_size=chunk_size,
+        )
+
+        # Add token-level conditioning from atom encoder
+        # s = add(s, c_token, inplace_safe=inplace_safe) # [..., N_sample, N_token, c_s]
+
+        # Mix single conditioning into token representation
+        # a_token = add(
+        #    a_token,
+        #    self.linear_no_bias_s(self.layernorm_s(s)),
+        #    inplace_safe=inplace_safe
+        # ) # [..., N_sample, N_token, c_token]
+
         # Full self-attention on token level.
-        a_token = add(
-            a_token, 
-            self.linear_no_bias_s(self.layernorm_s(s)), 
-            inplace_safe=inplace_safe
-        ) # [..., N_sample, N_token, c_token]
-        
         a_token = self.diffusion_transformer(
             a=a_token,
             s=s,
@@ -339,48 +364,34 @@ class DiffusionModule(nn.Module):
 
         a_token = self.layernorm_a(a_token)
 
-        # Fine-grained checkpoint for finetuning stage 2 (token num: 768) for avoiding OOM
-        if blocks_per_ckpt and self.use_fine_grained_checkpoint:
-            checkpoint_fn = get_checkpoint_fn()
-            r_update = checkpoint_fn(
-                self.atom_attention_decoder,
-                input_feature_dict,
-                a_token,
-                q_skip,
-                c_skip,
-                p_skip, 
-                inplace_safe,
-                chunk_size,
-            )
-        else:
-            # Broadcast token activations to atoms and run Sequence-local Atom Attention
-            r_update = self.atom_attention_decoder(
-                input_feature_dict=input_feature_dict,
-                a=a_token,
-                q_skip=q_skip,
-                c_skip=c_skip,
-                p_skip=p_skip, 
-                inplace_safe=inplace_safe,
-                chunk_size=chunk_size,
-            )
+        # Broadcast token activations to atoms and run Sequence-local Atom Attention
+        velocity_pred = self.atom_attention_decoder(
+            input_feature_dict=input_feature_dict,
+            a=a_token,
+            q_skip=q_skip,
+            c_skip=c_skip,
+            p_skip=p_skip,
+            inplace_safe=inplace_safe,
+            chunk_size=chunk_size,
+        )
 
-        return r_update 
+        return velocity_pred
 
     def c_in(self, timestep: torch.Tensor) -> torch.Tensor:
-        return 1 / (self.sigma_data * (timestep ** 2 + (1 - timestep) ** 2).sqrt())
+        return 1 / (self.sigma_data * (timestep**2 + (1 - timestep) ** 2).sqrt())
 
     def c_out(self, timestep: torch.Tensor) -> torch.Tensor:
-        return self.sigma_data * (1 - timestep) / (timestep ** 2 + (1 - timestep) ** 2).sqrt()
+        return 1 - timestep 
+        #return self.sigma_data * (1 - timestep)
 
     def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
-        return timestep / (timestep ** 2 + (1 - timestep) ** 2)
+        return 1.0
 
     def forward(
         self,
         x_noisy: torch.Tensor,
         timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
-        s_inputs: torch.Tensor,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
@@ -392,13 +403,13 @@ class DiffusionModule(nn.Module):
             r_noisy=r_noisy,
             timestep=timestep,  # Return to original shape for f_forward
             input_feature_dict=input_feature_dict,
-            s_inputs=s_inputs,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
 
         # Scale output with direct function calls
-        coords_pred = x_noisy * self.c_skip(timestep[..., None, None]) + \
-                      r_update * self.c_out(timestep[..., None, None])
+        coords_pred = x_noisy * self.c_skip(
+            timestep[..., None, None]
+        ) + r_update * self.c_out(timestep[..., None, None])
 
         return coords_pred

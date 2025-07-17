@@ -48,9 +48,7 @@ class ConfigManager(object):
         self.fill_required_with_null = fill_required_with_null
         self.config_infos, self.default_configs = self.get_config_infos()
 
-    def get_value_info(
-        self, value
-    ) -> tuple[Any, Optional[Any], Optional[bool], Optional[bool]]:
+    def get_value_info(self, value) -> tuple[Any, Optional[Any], Optional[bool], Optional[bool]]:
         """
         Return the type, default value, whether it allows None, and whether it is required for a given value.
 
@@ -169,9 +167,7 @@ class ConfigManager(object):
             dtype, default_value, allow_none, required = self.config_infos[full_key]
             if dtype is None:
                 print(f"Warning: None dtype for key {full_key}, value: {value}")
-            if full_key in new_configs and not isinstance(
-                new_configs[full_key], ArgumentNotSet
-            ):
+            if full_key in new_configs and not isinstance(new_configs[full_key], ArgumentNotSet):
                 if allow_none and new_configs[full_key] in [
                     "None",
                     "none",
@@ -232,9 +228,7 @@ def parse_configs(
         required,
     ) in manager.config_infos.items():
         # All config use str type, strings will be converted to real dtype later
-        parser.add_argument(
-            "--" + key, type=str, default=ArgumentNotSet(), required=required
-        )
+        parser.add_argument("--" + key, type=str, default=ArgumentNotSet(), required=required)
     # Merge user commandline pargs with default ones
     merged_configs = manager.merge_configs(
         vars(parser.parse_args(arg_str.split())) if arg_str else {}

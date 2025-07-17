@@ -16,11 +16,13 @@ import argparse
 import csv
 from pathlib import Path
 from typing import Optional
+
 import pandas as pd
 import ray
 from tqdm import tqdm
-from protenix.utils.file_io import load_gzip_pickle
+
 from protenix.data.parser import MMCIFParser
+from protenix.utils.file_io import load_gzip_pickle
 
 
 def get_indices_from_bioassembly(
@@ -52,7 +54,7 @@ def gen_indices_from_mmcifs(
     """
     Generates training data from a list of mmCIF files using Ray for parallel processing.
     """
-    
+
     # Initialize Ray
     ray.init(num_cpus=num_workers)
 
@@ -63,9 +65,7 @@ def gen_indices_from_mmcifs(
 
     # Submit tasks to Ray
     futures = [
-        gen_indices_from_bioassembly_remote.remote(
-            mmcif, bioassembly_pickle_file, cluster_file
-        )
+        gen_indices_from_bioassembly_remote.remote(mmcif, bioassembly_pickle_file, cluster_file)
         for mmcif, bioassembly_pickle_file in zip(mmcif_list, bioassembly_list)
     ]
 
@@ -88,14 +88,14 @@ def gen_indices_from_mmcifs(
     merged_results = []
     for sample_indices_list in all_sample_indices_list:
         merged_results.extend(sample_indices_list)
-    
+
     df = pd.DataFrame(merged_results)
     df.to_csv(output_indices_csv, index=False, quoting=csv.QUOTE_NONNUMERIC)
 
 
 def run_gen_data(
     bioassembly_dict_dir: Path,
-    mmcif_dir: Path, 
+    mmcif_dir: Path,
     output_indices_csv: Path,
     cluster_file: Optional[Path],
     num_workers: int = 1,
@@ -115,11 +115,11 @@ def run_gen_data(
 
     # Get list of bioassembly pickle files
     bioassembly_files = list(bioassembly_dict_dir.glob("*.pkl.gz"))
-    
+
     # Create list of corresponding mmCIF files
     mmcif_files = []
     for bio_file in bioassembly_files:
-        pdb_id = bio_file.stem.split('.')[0]  # Remove .pkl.gz extension
+        pdb_id = bio_file.stem.split(".")[0]  # Remove .pkl.gz extension
         mmcif_path = mmcif_dir / f"{pdb_id}.cif"
         assert mmcif_path.exists(), f"mmCIF file {mmcif_path} does not exist"
         mmcif_files.append(mmcif_path)
@@ -143,7 +143,7 @@ if __name__ == "__main__":
         help="Path to the directory containing bioassembly pickle files.",
     )
     parser.add_argument(
-        "-m", 
+        "-m",
         "--mmcif_dir",
         type=Path,
         required=True,

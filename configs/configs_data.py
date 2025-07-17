@@ -28,7 +28,7 @@ default_test_configs = {
             0.0,  # SpatialCropping
             1.0,  # SpatialInterfaceCropping
         ],
-        "crop_size": 512,  # -1
+        "crop_size": 256,  # -1
     },
     "lig_atom_rename": GlobalConfigValue("test_lig_atom_rename"),
     "shuffle_mols": GlobalConfigValue("test_shuffle_mols"),
@@ -60,15 +60,23 @@ default_weighted_pdb_configs = {
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
 }
 
-DATA_ROOT_DIR = "af3-dev-backbone/release_data/" 
+
+DATA_ROOT_DIR = "/af3-dev-backbone/release_data/" # BEWARE: adjusted to absolute path for Modal!
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
 CCD_COMPONENTS_FILE_PATH = os.path.join(DATA_ROOT_DIR, "components.cif")
-CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
-    DATA_ROOT_DIR, "components.cif.rdkit_mol.pkl"
-)
+CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(DATA_ROOT_DIR, "components.cif.rdkit_mol.pkl")
 
+if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
+    not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
+):
+    # Try with leading slash if original path doesn't exist
+    alt_data_root = "/" + DATA_ROOT_DIR
+    CCD_COMPONENTS_FILE_PATH = os.path.join(alt_data_root, "components.cif")
+    CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(alt_data_root, "components.cif.rdkit_mol.pkl")
+
+# if still not found, try with date in filename
 if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
     not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
 ):
@@ -76,6 +84,14 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
     CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
         DATA_ROOT_DIR, "components.v20240608.cif.rdkit_mol.pkl"
     )
+    if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
+        not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
+    ):
+        alt_data_root = "/" + DATA_ROOT_DIR
+        CCD_COMPONENTS_FILE_PATH = os.path.join(DATA_ROOT_DIR, "components.v20240608.cif")
+        CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
+            DATA_ROOT_DIR, "components.v20240608.cif.rdkit_mol.pkl"
+        )
 
 
 # This is a patch in inference stage for users that do not have root permission.
@@ -88,38 +104,38 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
 # protenix predict --input examples/example.json --out_dir  ./output
 # ````
 # The checkpoint and the data cache will be downloaded to the current code directory.
-if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
-    not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
-):
-    print("Try to find the ccd cache data in the code directory for inference.")
-    current_file_path = os.path.abspath(__file__)
-    current_directory = os.path.dirname(current_file_path)
-    code_directory = os.path.dirname(current_directory)
+# if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
+#    not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
+# ):
+#    print("Try to find the ccd cache data in the code directory for inference.")
+#    current_file_path = os.path.abspath(__file__)
+#    current_directory = os.path.dirname(current_file_path)
+#    code_directory = os.path.dirname(current_directory)
 
-    data_cache_dir = os.path.join(code_directory, "release_data/ccd_cache")
-    CCD_COMPONENTS_FILE_PATH = os.path.join(data_cache_dir, "components.cif")
-    CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
-        data_cache_dir, "components.cif.rdkit_mol.pkl"
-    )
-    if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
-        not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
-    ):
-
-        CCD_COMPONENTS_FILE_PATH = os.path.join(
-            data_cache_dir, "components.v20240608.cif"
-        )
-        CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
-            data_cache_dir, "components.v20240608.cif.rdkit_mol.pkl"
-        )
+#    data_cache_dir = os.path.join(code_directory, "release_data/ccd_cache")
+#    CCD_COMPONENTS_FILE_PATH = os.path.join(data_cache_dir, "components.cif")
+#    CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
+#        data_cache_dir, "components.cif.rdkit_mol.pkl"
+#    )
+#    if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
+#        not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
+#    ):
+#
+#        CCD_COMPONENTS_FILE_PATH = os.path.join(
+#            data_cache_dir, "components.v20240608.cif"
+#        )
+#        CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
+#            data_cache_dir, "components.v20240608.cif.rdkit_mol.pkl"
+#        )
 
 data_configs = {
     "num_dl_workers": 16,
     "epoch_size": 10000,
     "train_ref_pos_augment": True,
     "test_ref_pos_augment": True,
-    "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925"]),
+    "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925", "distillation"]),
     "train_sampler": {
-        "train_sample_weights": ListValue([1.0]),
+        "train_sample_weights": ListValue([0.5, 0.5]),
         "sampler_type": "weighted",
     },
     "test_sets": ListValue(["posebusters_0925"]),
@@ -129,11 +145,30 @@ data_configs = {
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9_no_nucleic.csv", # .gz
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9_no_nucleic.csv",  # .gz
             ),
             "pdb_list": "",
             "random_sample_if_failed": True,
-            "max_n_token": 3000, # -1,  # can be used for removing data with too many tokens.
+            "max_n_token": 3000,  # -1,  # can be used for removing data with too many tokens.
+            "use_reference_chains_only": False,
+            "exclusion": {  # do not sample the data based on ions.
+                "mol_1_type": ListValue(["ions"]),
+                "mol_2_type": ListValue(["ions"]),
+            },
+        },
+        **deepcopy(default_weighted_pdb_configs),
+    },
+    "distillation": {
+        "base_info": {
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "distillation/mmcif"),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "distillation/mmcif_bioassembly"),
+            "indices_fpath": os.path.join(
+                DATA_ROOT_DIR,
+                "indices/distillation_sample_indices.csv",  # .gz
+            ),
+            "pdb_list": "",
+            "random_sample_if_failed": True,
+            "max_n_token": 3000,  # -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,
             "exclusion": {  # do not sample the data based on ions.
                 "mol_1_type": ListValue(["ions"]),
@@ -145,11 +180,10 @@ data_configs = {
     "recentPDB_1536_sample384_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
-            "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "recentPDB_bioassembly"
-            ),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "recentPDB_bioassembly"),
             "indices_fpath": os.path.join(
-                DATA_ROOT_DIR, "indices/recentPDB_low_homology_maxtoken1536_no_nucleic.csv"
+                DATA_ROOT_DIR,
+                "indices/recentPDB_low_homology_maxtoken1536_no_nucleic.csv",
             ),
             "pdb_list": "",
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
@@ -162,9 +196,7 @@ data_configs = {
     "posebusters_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "posebusters_mmcif"),
-            "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "posebusters_bioassembly"
-            ),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "posebusters_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR, "indices/posebusters_indices_mainchain_interface.csv"
             ),

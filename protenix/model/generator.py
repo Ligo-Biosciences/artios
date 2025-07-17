@@ -305,7 +305,7 @@ class VariableLinQuadScheduler:
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32
     ) -> torch.Tensor:
-        
+
         steps = torch.arange(N_step + 1, dtype=dtype, device=device) / N_step
         linear_steps = steps[steps < self.m]
         quadratic_steps = steps[steps > self.m]
@@ -321,6 +321,24 @@ class VariableLinQuadScheduler:
 
         # Concatenate all the timesteps 
         t = torch.cat([linear_t, quadratic_t])
+        return t
+    
+
+class LaProteinaScheduler:
+    """
+    This shceduler is the same as the shceduler in the La-Proteina paper.
+    """
+    def __init__(self, scale: float = 1.0) -> None:
+        self.scale = scale
+
+    def __call__(
+        self,
+        N_step: int = 50,
+        device: torch.device = torch.device("cpu"),
+        dtype: torch.dtype = torch.float32
+    ) -> torch.Tensor:
+        steps = torch.arange(N_step + 1, dtype=dtype, device=device) / N_step
+        t = (1 - self.scale ** (-2 * steps)) / (1 - self.scale ** (-2))
         return t
     
 
@@ -455,7 +473,11 @@ def sample_diffusion(
             4 * torch.ones_like(t) * 0.5 * (alpha**2)
         ),  # int_{0}^{1}(non_sing) = 1/4
         "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t,  # int_{0}^{1}(zero_ends) = 1/12
-        "proteina": lambda t: alpha / (t + 0.01) / (1 - t),
+        "proteina": lambda t: torch.where(
+            t > 0.95,
+            torch.zeros_like(t),
+            0.5 * ((alpha**2) / (t + 0.01)) / (1 - t)
+        ),
         "beta": lambda t: torch.where(
             t > 0.95,  
             torch.zeros_like(t),

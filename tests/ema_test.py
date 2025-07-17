@@ -1,8 +1,8 @@
+import numpy as np
 import pytest
 import torch
-import numpy as np
 
-from runner.ema import EMAWrapper, PowerLawEMAWrapper, p_dot_p, solve_weights, beta_power_law
+from protenix.utils.ema_utils import p_dot_p, solve_weights
 
 
 class TestEMA:
@@ -33,7 +33,7 @@ class TestEMA:
 
         # Calculate matrices A and B
         t_a_col = rv(t_a)
-        gamma_a_col = rv(gamma_a) 
+        gamma_a_col = rv(gamma_a)
         t_b_row = cv(t_b)
         gamma_b_row = cv(gamma_b)
 
@@ -54,7 +54,7 @@ class TestEMA:
 
         assert not np.any(np.isnan(weights))
         assert not np.any(np.isinf(weights))
-        
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

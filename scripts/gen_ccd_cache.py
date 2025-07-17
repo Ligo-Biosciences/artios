@@ -194,9 +194,7 @@ def precompute_ccd_mol(ccd_cif: Path, output_pkl: Path, num_cpu: int = 1):
 
     # success rate
     n_ccd = len(ccd_codes)
-    logging.info(
-        "success rate: %.2f%% (%d/%d)", len(mols) / n_ccd * 100, len(mols), n_ccd
-    )
+    logging.info("success rate: %.2f%% (%d/%d)", len(mols) / n_ccd * 100, len(mols), n_ccd)
 
     # sanitized rate
     sanitized_num = sum([mol.sanitized for mol in mols.values()])
@@ -225,9 +223,7 @@ def precompute_ccd_mol(ccd_cif: Path, output_pkl: Path, num_cpu: int = 1):
         f.write("\n".join(mols.keys()))
 
 
-def run_update_ccd_cache(
-    ccd_cache_dir: Path, num_cpu: int = 1, disable_download: bool = False
-):
+def run_update_ccd_cache(ccd_cache_dir: Path, num_cpu: int = 1, disable_download: bool = False):
     """
     Updates the CCD (Chemical Component Dictionary) cache by downloading the latest
     CCD CIF file and precomputing RDKit molecule objects.
@@ -249,7 +245,6 @@ def run_update_ccd_cache(
 
 
 if __name__ == "__main__":
-
     current_file_path = Path(__file__)
     current_directory = current_file_path.parent
     code_directory = current_directory.parent

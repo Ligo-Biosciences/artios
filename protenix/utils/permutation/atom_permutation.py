@@ -56,17 +56,20 @@ def run(
             info_dict: a dictionary of logging.
     """
     try:
-        permuted_coord, permuted_mask, info_dict, indices_permutation = (
-            correct_symmetric_atoms(
-                pred_coord=pred_coord,
-                true_coord=true_coord,
-                true_coord_mask=true_coord_mask,
-                ref_space_uid=ref_space_uid,
-                atom_perm_list=atom_perm_list,
-                permute_label=permute_label,
-                alignment_mask=alignment_mask,
-                global_align_wo_symmetric_atom=global_align_wo_symmetric_atom,
-            )
+        (
+            permuted_coord,
+            permuted_mask,
+            info_dict,
+            indices_permutation,
+        ) = correct_symmetric_atoms(
+            pred_coord=pred_coord,
+            true_coord=true_coord,
+            true_coord_mask=true_coord_mask,
+            ref_space_uid=ref_space_uid,
+            atom_perm_list=atom_perm_list,
+            permute_label=permute_label,
+            alignment_mask=alignment_mask,
+            global_align_wo_symmetric_atom=global_align_wo_symmetric_atom,
         )
         if permute_label:
             return (
@@ -149,7 +152,6 @@ def collect_residues_with_symmetric_atoms(
 
     # Traverse residues and store the corresponding data
     for start, end in res_start_end:
-
         assert len(torch.unique(ref_space_uid[start:end])) == 1
 
         # Skip if this residue contains < 3 resolved atoms.
@@ -173,9 +175,7 @@ def collect_residues_with_symmetric_atoms(
             Checker.contains_identity(perm, dim=0)
 
         # If all symmetric atoms are unresolved, drop the permutation
-        identity_perm = torch.arange(len(perm), device=device).unsqueeze(
-            dim=-1
-        )  # [N_res_atom, 1]
+        identity_perm = torch.arange(len(perm), device=device).unsqueeze(dim=-1)  # [N_res_atom, 1]
         is_sym_atom = perm != identity_perm  # [N_res_atom, N_perm]
         is_sym_atom_resolved = is_sym_atom * res_coord_mask.unsqueeze(dim=-1)
         is_valid_perm = is_sym_atom_resolved.any(dim=0)
@@ -224,7 +224,6 @@ def collect_permuted_coords(
 
     N_total_perm = 0
     for perm, res_coord, res_coord_mask in zip(perm_list, coord_list, coord_mask_list):
-
         # Basic shape checks
         N_perm, N_res_atom = perm.size()
         assert res_coord.size(-1) == 3
@@ -293,7 +292,6 @@ class AtomPermutation(object):
         ref_space_uid: torch.Tensor,
         atom_perm_list: list[list],
     ):
-
         N_atom = len(true_coord)
         assert true_coord.dim() == 2
         assert true_coord_mask.dim() == 1
@@ -423,9 +421,7 @@ class AtomPermutation(object):
 
         # Pad 'pred_coord' to the same shape as 'permuted_coord'
         per_residue_pred_coord_list = [
-            pad_at_dim(
-                p_coord, dim=-2, pad_length=(0, N_max_atom - p_coord.size(dim=-2))
-            )
+            pad_at_dim(p_coord, dim=-2, pad_length=(0, N_max_atom - p_coord.size(dim=-2)))
             for p_coord in per_residue_pred_coord_list
         ]
         # Repeat N_perm times for each residue
@@ -433,9 +429,7 @@ class AtomPermutation(object):
             sum(
                 [
                     [p_coord] * N_perm
-                    for N_perm, p_coord in zip(
-                        per_residue_N_perm, per_residue_pred_coord_list
-                    )
+                    for N_perm, p_coord in zip(per_residue_N_perm, per_residue_pred_coord_list)
                 ],
                 [],
             ),
@@ -478,9 +472,7 @@ class AtomPermutation(object):
             best_perm = perm[best_j]  # [batch_shape, N_res_atom]
             best_permutation_list.append(best_perm)
 
-            is_permuted_list.append(
-                best_j > 0
-            )  # The first of the perm lists is the identity
+            is_permuted_list.append(best_j > 0)  # The first of the perm lists is the identity
 
             optimized_rmsd_list.append(best_rmsd)
             original_rmsd_list.append(cur_res_rmsd[..., 0])
@@ -565,9 +557,7 @@ class AtomPermutation(object):
         log_dict = {}
 
         # Initialize the permutation as identity
-        permutation = self.get_identity_permutation(
-            batch_shape, N_atom=N_atom, device=device
-        )
+        permutation = self.get_identity_permutation(batch_shape, N_atom=N_atom, device=device)
 
         # Collect residues that require permutations
         (
@@ -595,9 +585,7 @@ class AtomPermutation(object):
 
         # no_permute_atom_mask: 1 represent this atom can not be permuted
         no_permute_atom_mask = torch.ones_like(true_coord_mask)
-        for (start, end), per_residue_perm in zip(
-            per_residue_position_list, per_residue_perm_list
-        ):
+        for (start, end), per_residue_perm in zip(per_residue_position_list, per_residue_perm_list):
             no_permute_atom_mask[start:end] = 1 - (
                 (per_residue_perm != per_residue_perm[0]).sum(dim=0) > 0
             ).to(torch.int32)
@@ -630,7 +618,7 @@ class AtomPermutation(object):
         )
         log_dict["unpermuted_rmsd"] = aligned_rmsd.mean().item()  # [Batch]
 
-        """ 
+        """
         To efficiently optimize the residues parallely, group the residues
         according to the number of atoms in each residue.
         """
@@ -643,9 +631,7 @@ class AtomPermutation(object):
                     break
             grouped_indices.setdefault(atom_cutoff, []).append(i)
 
-        assert len(sum(list(grouped_indices.values()), [])) == len(
-            per_residue_perm_list
-        )
+        assert len(sum(list(grouped_indices.values()), [])) == len(per_residue_perm_list)
 
         residue_position_list = []
         residue_best_permutation_list = []
@@ -653,7 +639,6 @@ class AtomPermutation(object):
         residue_optimized_rmsd_list = []
         residue_original_rmsd_list = []
         for atom_cutoff, residue_group in grouped_indices.items():
-
             if verbose:
                 print(f"{len(residue_group)} residues have <={atom_cutoff} atoms.")
 
@@ -666,15 +651,10 @@ class AtomPermutation(object):
                 per_res_ori_rmsd,
             ) = self._optimize_per_residue_permutation_by_rmsd(
                 per_residue_pred_coord_list=[
-                    transformed_pred_coord[..., pos[0] : pos[1], :]
-                    for pos in per_res_pos_list
+                    transformed_pred_coord[..., pos[0] : pos[1], :] for pos in per_res_pos_list
                 ],
-                per_residue_coord_list=[
-                    per_residue_coord_list[i] for i in residue_group
-                ],
-                per_residue_coord_mask_list=[
-                    per_residue_coord_mask_list[i] for i in residue_group
-                ],
+                per_residue_coord_list=[per_residue_coord_list[i] for i in residue_group],
+                per_residue_coord_mask_list=[per_residue_coord_mask_list[i] for i in residue_group],
                 per_residue_perm_list=[per_residue_perm_list[i] for i in residue_group],
                 eps=self.eps,
                 run_checker=self.run_checker,
@@ -692,10 +672,7 @@ class AtomPermutation(object):
         ]
         residue_atom_indices = torch.cat(indices_list, dim=-1)  # [N_perm_atom]
         residue_best_permutation = torch.cat(
-            [
-                ind[perm]
-                for ind, perm in zip(indices_list, residue_best_permutation_list)
-            ],
+            [ind[perm] for ind, perm in zip(indices_list, residue_best_permutation_list)],
             dim=-1,
         )  # [Batch, N_perm_atom] or [N_perm_atom]
         permutation[..., residue_atom_indices] = residue_best_permutation
@@ -703,9 +680,7 @@ class AtomPermutation(object):
         # 2. Other statistics
         is_res_permuted = torch.stack(residue_is_permuted_list, dim=-1).float()
         log_dict["N_res_permuted"] = is_res_permuted.sum(dim=-1).mean().item()
-        log_dict["has_res_permuted"] = (
-            (is_res_permuted.sum(dim=-1) > 0).float().mean().item()
-        )
+        log_dict["has_res_permuted"] = (is_res_permuted.sum(dim=-1) > 0).float().mean().item()
 
         return permutation, log_dict
 
@@ -795,9 +770,7 @@ def correct_symmetric_atoms(
             eps=eps,
         )
         log_dict["permuted_rmsd"] = permuted_rmsd.mean().item()
-        log_dict["improved_rmsd"] = (
-            log_dict["unpermuted_rmsd"] - log_dict["permuted_rmsd"]
-        )
+        log_dict["improved_rmsd"] = log_dict["unpermuted_rmsd"] - log_dict["permuted_rmsd"]
 
     if permute_label:
         return (

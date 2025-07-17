@@ -40,9 +40,7 @@ class Token(object):
         if attr in super().__getattribute__("_annot"):
             return self._annot[attr]
         else:
-            raise AttributeError(
-                f"'{type(self).__name__}' object has no attribute '{attr}'"
-            )
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{attr}'")
 
     def __repr__(self):
         annot_lst = []
@@ -91,9 +89,7 @@ class TokenArray(object):
         return [token._annot[category] for token in self.tokens]
 
     def set_annotation(self, category, values):
-        assert len(values) == len(
-            self.tokens
-        ), "Length of values must match the number of tokens"
+        assert len(values) == len(self.tokens), "Length of values must match the number of tokens"
         for token, value in zip(self.tokens, values):
             token._annot[category] = value
 
@@ -128,9 +124,7 @@ class AtomArrayTokenizer(object):
             if res_token is not None and mol_type != "ligand":
                 # for std residues
                 token = Token(res_token)
-                atom_indices = [
-                    i for i in range(total_atom_num, total_atom_num + atom_num)
-                ]
+                atom_indices = [i for i in range(total_atom_num, total_atom_num + atom_num)]
                 atom_names = [self.atom_array[i].atom_name for i in atom_indices]
                 token.atom_indices = atom_indices
                 token.atom_names = atom_names
@@ -145,9 +139,7 @@ class AtomArrayTokenizer(object):
                         raise ValueError(f"Unknown atom element: {atom_elem}")
                     token = Token(atom_token)
                     token.atom_indices = [total_atom_num]
-                    token.atom_names = [
-                        self.atom_array[token.atom_indices[0]].atom_name
-                    ]
+                    token.atom_names = [self.atom_array[token.atom_indices[0]].atom_name]
                     tokens.append(token)
                     total_atom_num += 1
 

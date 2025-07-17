@@ -191,7 +191,9 @@ class Featurizer(object):
                 frame_atom_index (List[int]): The index of the atoms used to construct the frame.
         """
         kdtree, atom_ids = lig_res_ref_conf_kdtree[centre_atom.ref_space_uid]
-        b_ref_pos = ref_pos[token.centre_atom_index].detach().cpu().numpy()  # Convert to numpy array
+        b_ref_pos = (
+            ref_pos[token.centre_atom_index].detach().cpu().numpy()
+        )  # Convert to numpy array
         b_idx = token.centre_atom_index
         if kdtree is None:
             # Atom num < 3
@@ -268,13 +270,8 @@ class Featurizer(object):
         has_frame = []
         for token in token_array_w_frame:
             centre_atom = atom_array[token.centre_atom_index]
-            if (
-                centre_atom.mol_type != "ligand"
-                and centre_atom.res_name in STD_RESIDUES
-            ):
-                has_frame, frame_atom_index = Featurizer.get_prot_nuc_frame(
-                    token, centre_atom
-                )
+            if centre_atom.mol_type != "ligand" and centre_atom.res_name in STD_RESIDUES:
+                has_frame, frame_atom_index = Featurizer.get_prot_nuc_frame(token, centre_atom)
 
             else:
                 has_frame, frame_atom_index = Featurizer.get_lig_frame(
@@ -297,18 +294,14 @@ class Featurizer(object):
         """
         token_features = {}
 
-        centre_atoms_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
+        centre_atoms_indices = self.cropped_token_array.get_annotation("centre_atom_index")
         centre_atoms = self.cropped_atom_array[centre_atoms_indices]
 
         restype = centre_atoms.cano_seq_resname
         restype_onehot = self.restype_onehot_encoded(restype)
 
         token_features["token_index"] = torch.arange(0, len(self.cropped_token_array))
-        token_features["residue_index"] = torch.Tensor(
-            centre_atoms.res_id.astype(int)
-        ).long()
+        token_features["residue_index"] = torch.Tensor(centre_atoms.res_id.astype(int)).long()
         token_features["asym_id"] = torch.Tensor(centre_atoms.asym_id_int).long()
         token_features["entity_id"] = torch.Tensor(centre_atoms.entity_id_int).long()
         token_features["sym_id"] = torch.Tensor(centre_atoms.sym_id_int).long()
@@ -328,9 +321,7 @@ class Featurizer(object):
         """
 
         chain_perm_features = {}
-        chain_perm_features["mol_id"] = torch.Tensor(
-            self.cropped_atom_array.mol_id
-        ).long()
+        chain_perm_features["mol_id"] = torch.Tensor(self.cropped_atom_array.mol_id).long()
         chain_perm_features["mol_atom_index"] = torch.Tensor(
             self.cropped_atom_array.mol_atom_index
         ).long()
@@ -346,9 +337,7 @@ class Featurizer(object):
         Returns:
             np.ndarray: A numpy array of renamed atom names.
         """
-        res_starts = get_residue_starts(
-            self.cropped_atom_array, add_exclusive_stop=True
-        )
+        res_starts = get_residue_starts(self.cropped_atom_array, add_exclusive_stop=True)
         new_atom_names = copy.deepcopy(self.cropped_atom_array.atom_name)
         for start, stop in zip(res_starts[:-1], res_starts[1:]):
             res_mol_type = self.cropped_atom_array.mol_type[start]
@@ -391,9 +380,7 @@ class Featurizer(object):
         ref_features["ref_element"] = Featurizer.elem_onehot_encoded(
             self.cropped_atom_array.element
         ).long()
-        ref_features["ref_charge"] = torch.Tensor(
-            self.cropped_atom_array.ref_charge
-        ).long()
+        ref_features["ref_charge"] = torch.Tensor(self.cropped_atom_array.ref_charge).long()
 
         if self.lig_atom_rename:
             atom_names = self.get_renamed_atom_names()
@@ -403,9 +390,7 @@ class Featurizer(object):
         ref_features["ref_atom_name_chars"] = Featurizer.ref_atom_name_chars_encoded(
             atom_names
         ).long()
-        ref_features["ref_space_uid"] = torch.Tensor(
-            self.cropped_atom_array.ref_space_uid
-        ).long()
+        ref_features["ref_space_uid"] = torch.Tensor(self.cropped_atom_array.ref_space_uid).long()
 
         token_array_with_frame = self.get_token_frame(
             token_array=self.cropped_token_array,
@@ -452,12 +437,9 @@ class Featurizer(object):
                 atoms_j = self.cropped_token_array[j].atom_indices
                 token_j_mol_type = self.cropped_atom_array.mol_type[atoms_j[0]]
                 token_j_res_name = self.cropped_atom_array.res_name[atoms_j[0]]
-                token_j_ref_space_uid = self.cropped_atom_array.ref_space_uid[
-                    atoms_j[0]
-                ]
+                token_j_ref_space_uid = self.cropped_atom_array.ref_space_uid[atoms_j[0]]
                 unstd_res_token_j = (
-                    token_j_res_name not in STD_RESIDUES
-                    and token_j_mol_type != "ligand"
+                    token_j_res_name not in STD_RESIDUES and token_j_mol_type != "ligand"
                 )
                 is_polymer_j = token_j_mol_type in ["protein", "dna", "rna"]
 
@@ -490,8 +472,7 @@ class Featurizer(object):
 
         # Ensure the order of the atom_to_token_idx is the same as the atom_array
         atom_to_token_idx = [
-            atom_to_token_idx_dict[atom_idx]
-            for atom_idx in range(len(self.cropped_atom_array))
+            atom_to_token_idx_dict[atom_idx] for atom_idx in range(len(self.cropped_atom_array))
         ]
 
         extra_features = {}
@@ -500,18 +481,12 @@ class Featurizer(object):
             self.cropped_atom_array.tokatom_idx
         ).long()
 
-        extra_features["is_protein"] = torch.Tensor(
-            self.cropped_atom_array.is_protein
-        ).long()
-        extra_features["is_ligand"] = torch.Tensor(
-            self.cropped_atom_array.is_ligand
-        ).long()
+        extra_features["is_protein"] = torch.Tensor(self.cropped_atom_array.is_protein).long()
+        extra_features["is_ligand"] = torch.Tensor(self.cropped_atom_array.is_ligand).long()
         extra_features["is_dna"] = torch.Tensor(self.cropped_atom_array.is_dna).long()
         extra_features["is_rna"] = torch.Tensor(self.cropped_atom_array.is_rna).long()
         if "resolution" in self.cropped_atom_array._annot:
-            extra_features["resolution"] = torch.Tensor(
-                [self.cropped_atom_array.resolution[0]]
-            )
+            extra_features["resolution"] = torch.Tensor([self.cropped_atom_array.resolution[0]])
         else:
             extra_features["resolution"] = torch.Tensor([-1])
         return extra_features
@@ -561,13 +536,8 @@ class Featurizer(object):
             lig_pos = atom_array.coord[ligand_mask]
 
             # Get atoms in 10 Angstrom radius
-            near_atom_indices = np.unique(
-                np.concatenate(kdtree.query_radius(lig_pos, 10.0))
-            )
-            near_atoms = [
-                True if i in near_atom_indices else False
-                for i in range(len(atom_array))
-            ]
+            near_atom_indices = np.unique(np.concatenate(kdtree.query_radius(lig_pos, 10.0)))
+            near_atoms = [True if i in near_atom_indices else False for i in range(len(atom_array))]
 
             # Get primary chain (protein backone in 10 Angstrom radius)
             primary_chain_candidates = near_atoms & prot_backbone
@@ -576,9 +546,7 @@ class Featurizer(object):
             max_atom = 0
             primary_chain_asym_id_int = None
             for asym_id_int in np.unique(primary_chain_candidates_atoms.asym_id_int):
-                n_atoms = np.sum(
-                    primary_chain_candidates_atoms.asym_id_int == asym_id_int
-                )
+                n_atoms = np.sum(primary_chain_candidates_atoms.asym_id_int == asym_id_int)
                 if n_atoms > max_atom:
                     max_atom = n_atoms
                     primary_chain_asym_id_int = asym_id_int
@@ -592,12 +560,8 @@ class Featurizer(object):
             ligand_mask_list.append(ligand_mask)
             pocket_mask_list.append(pocket_mask)
 
-        ligand_mask_by_pockets = torch.Tensor(
-            np.array(ligand_mask_list).astype(int)
-        ).long()
-        pocket_mask_by_pockets = torch.Tensor(
-            np.array(pocket_mask_list).astype(int)
-        ).long()
+        ligand_mask_by_pockets = torch.Tensor(np.array(ligand_mask_list).astype(int)).long()
+        pocket_mask_by_pockets = torch.Tensor(np.array(pocket_mask_list).astype(int)).long()
         return ligand_mask_by_pockets, pocket_mask_by_pockets
 
     def get_mask_features(self) -> dict[str, torch.Tensor]:
@@ -631,9 +595,7 @@ class Featurizer(object):
         for i, j, _ in lig_polymer_bonds:
             bond_mask_mat[i, j] = 1
             bond_mask_mat[j, i] = 1
-        mask_features["bond_mask"] = torch.Tensor(
-            bond_mask_mat
-        ).long()  # [N_atom, N_atom]
+        mask_features["bond_mask"] = torch.Tensor(bond_mask_mat).long()  # [N_atom, N_atom]
         return mask_features
 
     def get_all_input_features(self):
@@ -669,22 +631,20 @@ class Featurizer(object):
 
         Returns:
             Dict[str, torch.Tensor]: a dict of labels.
-            
+
         Raises:
             ValueError: If any of the label tensors contain NaN values.
         """
         labels = {}
 
         # Check coordinates
-        labels["coordinate"] = torch.Tensor(
-            self.cropped_atom_array.coord
-        )  # [N_atom, 3]
+        labels["coordinate"] = torch.Tensor(self.cropped_atom_array.coord)  # [N_atom, 3]
 
-        # Check coordinate mask 
+        # Check coordinate mask
         labels["coordinate_mask"] = torch.Tensor(
             self.cropped_atom_array.is_resolved.astype(int)
         ).long()  # [N_atom]
-        
+
         return labels
 
     def get_atom_permutation_list(
@@ -717,13 +677,9 @@ class Featurizer(object):
 
         # Get fixed atom permutation for each residue.
         fixed_atom_perm_list = []
-        res_starts = get_residue_starts(
-            self.cropped_atom_array, add_exclusive_stop=True
-        )
+        res_starts = get_residue_starts(self.cropped_atom_array, add_exclusive_stop=True)
         for r_start, r_stop in zip(res_starts[:-1], res_starts[1:]):
-            atom_res_perm = np.array(
-                atom_perm_list[r_start:r_stop]
-            )  # [N_res_atoms, N_res_perm]
+            atom_res_perm = np.array(atom_perm_list[r_start:r_stop])  # [N_res_atoms, N_res_perm]
             res_fixed_atom_mask = fixed_atom_mask[r_start:r_stop]
 
             if np.sum(res_fixed_atom_mask) == 0:
@@ -733,20 +689,14 @@ class Featurizer(object):
 
             # Create a [N_res_atoms, N_res_perm] template of indices
             n_res_atoms, n_perm = atom_res_perm.shape
-            indices_template = (
-                atom_res_perm[:, 0].reshape(n_res_atoms, 1).repeat(n_perm, axis=1)
-            )
+            indices_template = atom_res_perm[:, 0].reshape(n_res_atoms, 1).repeat(n_perm, axis=1)
 
             # Identify the column where the positions of the fixed atoms remain unchanged
-            fixed_atom_perm = atom_res_perm[
-                res_fixed_atom_mask
-            ]  # [N_fixed_res_atoms, N_res_perm]
+            fixed_atom_perm = atom_res_perm[res_fixed_atom_mask]  # [N_fixed_res_atoms, N_res_perm]
             fixed_indices_template = indices_template[
                 res_fixed_atom_mask
             ]  # [N_fixed_res_atoms, N_res_perm]
-            unchanged_columns_mask = np.all(
-                fixed_atom_perm == fixed_indices_template, axis=0
-            )
+            unchanged_columns_mask = np.all(fixed_atom_perm == fixed_indices_template, axis=0)
 
             # Remove the columns related to the position changes of fixed atoms.
             fiedx_atom_res_perm = atom_res_perm[:, unchanged_columns_mask]
@@ -787,9 +737,7 @@ class Featurizer(object):
             )
             mask = [
                 (entity, atom) in entity_atom_set
-                for (entity, atom) in zip(
-                    atom_array.entity_mol_id, atom_array.mol_atom_index
-                )
+                for (entity, atom) in zip(atom_array.entity_mol_id, atom_array.mol_atom_index)
             ]
 
             if get_cropped_asym_only:
@@ -803,7 +751,5 @@ class Featurizer(object):
         gt_features["entity_mol_id"] = torch.Tensor(atom_array.entity_mol_id).long()
         gt_features["mol_id"] = torch.Tensor(atom_array.mol_id).long()
         gt_features["mol_atom_index"] = torch.Tensor(atom_array.mol_atom_index).long()
-        gt_features["pae_rep_atom_mask"] = torch.Tensor(
-            atom_array.centre_atom_mask
-        ).long()
+        gt_features["pae_rep_atom_mask"] = torch.Tensor(atom_array.centre_atom_mask).long()
         return gt_features, atom_array

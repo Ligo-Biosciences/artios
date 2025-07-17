@@ -21,17 +21,17 @@
     ```
 
     After running the script, three files will be generated in the specified "ccd_cache_dir":
-    
+
     - `components.cif` (CCD CIF file downloaded from RCSB)
     - `components.cif.rdkit_mol.pkl` (pre-processed dictionary, where the key is the CCD Code and the value is an RDKit Mol object with 3D structure)
     - `components.txt` (a list containing all the CCD Codes)
 
-    When running Protenix, it first uses 
+    When running Protenix, it first uses
     ```bash
     `release_data/ccd_cache/components.cif`
     `release_data/ccd_cache/components.cif.rdkit_mol.pkl`
     ```
-    if unavailable, it switches to 
+    if unavailable, it switches to
     ```bash
     `release_data/ccd_cache/components.v20240608.cif`
     `release_data/ccd_cache/components.v20240608.cif.rdkit_mol.pkl`
@@ -89,8 +89,8 @@ In the folder specified by the `-b` parameter of the data preprocessing script, 
 ```
 
 ### Indices CSV
-After the script successfully completes, a CSV file will be generated in the directory specified by `-o`. 
-Each row contains information about a pre-processed chain or interface, and the content of each column is described as follows: 
+After the script successfully completes, a CSV file will be generated in the directory specified by `-o`.
+Each row contains information about a pre-processed chain or interface, and the content of each column is described as follows:
 ```
 | Column Name    | Value Type | Meaning                                                                | Required |
 |----------------|------------|------------------------------------------------------------------------|----------|
@@ -114,6 +114,6 @@ Each row contains information about a pre-processed chain or interface, and the 
 | sub_mol_2_type | str        | Sub-classification of Chain 2's entity corresponding to mol_type       | N        |
 | cluster_2_id   | str        | Chain 2's cluster_id                                                   | Y        |
 ```
-Notes: 
-- In the table, columns marked with 'Y' under 'Required' indicate that these columns are essential for training. If you are creating your own CSV for training purposes, these columns must be included. Columns marked with 'N' are optional and can be excluded. 
+Notes:
+- In the table, columns marked with 'Y' under 'Required' indicate that these columns are essential for training. If you are creating your own CSV for training purposes, these columns must be included. Columns marked with 'N' are optional and can be excluded.
 - For rows where the "type" is "chain", the values in columns related to Chain 2 should all be filled with empty strings.

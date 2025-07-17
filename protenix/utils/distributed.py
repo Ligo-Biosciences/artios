@@ -14,8 +14,8 @@
 
 import os
 import time
+
 import torch
-import time
 
 
 def distributed_available() -> bool:
@@ -55,9 +55,7 @@ def traverse_and_aggregate(dict_list, aggregation_func=None):
         agg_value = [m[key] for m in dict_list if key in m]
 
         if isinstance(agg_value[0], dict):
-            merged_dict[key] = traverse_and_aggregate(
-                agg_value, aggregation_func=aggregation_func
-            )
+            merged_dict[key] = traverse_and_aggregate(agg_value, aggregation_func=aggregation_func)
         else:
             if aggregation_func is not None:
                 agg_value = aggregation_func(agg_value)

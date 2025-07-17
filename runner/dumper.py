@@ -90,9 +90,7 @@ class DataDumper:
         """
         Generate the directory path for dumping data based on the dataset name, sample name, and seed.
         """
-        dump_dir = os.path.join(
-            self.base_dir, dataset_name, sample_name, f"seed_{seed}"
-        )
+        dump_dir = os.path.join(self.base_dir, dataset_name, sample_name, f"seed_{seed}")
         return dump_dir
 
     def dump_predictions(
@@ -139,13 +137,13 @@ class DataDumper:
             b_factor=b_factor,
         )
         # Dump confidence
-        #self._save_confidence(
+        # self._save_confidence(
         #    data=pred_dict,
         #    prediction_save_dir=prediction_save_dir,
         #    sample_name=pdb_id,
         #    seed=seed,
         #    sorted_indices=sorted_indices,
-        #)
+        # )
 
     def _save_structure(
         self,
@@ -178,7 +176,9 @@ class DataDumper:
                 # b_factor.shape == [N_sample, N_atom]
                 atom_array.set_annotation("b_factor", np.round(b_factor[idx], 2))
             else:
-                atom_array.set_annotation("b_factor", np.zeros(N_atom)) # NOTE: have assigned dummy b-factors to appease mmCIF parsing downstream
+                atom_array.set_annotation(
+                    "b_factor", np.zeros(N_atom)
+                )  # NOTE: have assigned dummy b-factors to appease mmCIF parsing downstream
 
             save_structure_cif(
                 atom_array=atom_array,
@@ -192,14 +192,9 @@ class DataDumper:
         N_sample = data["coordinate"].shape[-3]
         if self.sorted_by_ranking_score:
             value = torch.tensor(
-                [
-                    data["summary_confidence"][i]["ranking_score"]
-                    for i in range(N_sample)
-                ]
+                [data["summary_confidence"][i]["ranking_score"] for i in range(N_sample)]
             )
-            sorted_indices = [
-                i for i in torch.argsort(torch.argsort(value, descending=True))
-            ]
+            sorted_indices = [i for i in torch.argsort(torch.argsort(value, descending=True))]
         else:
             sorted_indices = [i for i in range(N_sample)]
         return sorted_indices
@@ -215,9 +210,7 @@ class DataDumper:
         N_sample = data["coordinate"].shape[-3]  # len(data["summary_confidence"])
         for idx in range(N_sample):
             if self.need_atom_confidence:
-                data["full_data"][idx] = get_clean_full_confidence(
-                    data["full_data"][idx]
-                )
+                data["full_data"][idx] = get_clean_full_confidence(data["full_data"][idx])
         if sorted_indices is None:
             sorted_indices = range(N_sample)
         for idx, rank in enumerate(sorted_indices):

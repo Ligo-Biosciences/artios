@@ -32,6 +32,7 @@ class InputFeatureEmbedder(nn.Module):
         c_atom: int = 128,
         c_atompair: int = 16,
         c_token: int = 384,
+        n_blocks: int = 3,
     ) -> None:
         """
         Args:
@@ -47,10 +48,11 @@ class InputFeatureEmbedder(nn.Module):
             c_atom=c_atom,
             c_atompair=c_atompair,
             c_token=c_token,
+            n_blocks=n_blocks,
             has_coords=False,
         )
         # Line2
-        self.input_feature = {"restype": 32} # {"restype": 32, "profile": 32, "deletion_mean": 1}
+        # self.input_feature = {"restype": 32} # {"restype": 32, "profile": 32, "deletion_mean": 1}
 
     def forward(
         self,
@@ -76,16 +78,16 @@ class InputFeatureEmbedder(nn.Module):
         )  # [..., N_token, c_token]
         # Concatenate the per-token features.
         batch_shape = input_feature_dict["restype"].shape[:-1]
-        s_inputs = torch.cat(
-            [a]
-            + [
-                input_feature_dict[name].reshape(*batch_shape, d)
-                for name, d in self.input_feature.items()
-            ],
-            dim=-1,
-        )
-        
-        return s_inputs
+        # s_inputs = torch.cat(
+        #    [a]
+        #    + [
+        #        input_feature_dict[name].reshape(*batch_shape, d)
+        #        for name, d in self.input_feature.items()
+        #    ],
+        #    dim=-1,
+        # )
+
+        return a
 
 
 class RelativePositionEncoding(nn.Module):
@@ -190,12 +192,12 @@ class FourierEmbedding(nn.Module):
         """
         super(FourierEmbedding, self).__init__()
         self.c = c
-        
+
         # Register buffers instead of parameters since they don't need gradients
         # This is more memory efficient and semantically clearer
         generator = torch.Generator().manual_seed(seed)
-        self.register_buffer('w', torch.randn(c, generator=generator))
-        self.register_buffer('b', torch.randn(c, generator=generator))
+        self.register_buffer("w", torch.randn(c, generator=generator))
+        self.register_buffer("b", torch.randn(c, generator=generator))
 
     def forward(self, t_hat_timestep: torch.Tensor) -> torch.Tensor:
         """
@@ -207,6 +209,4 @@ class FourierEmbedding(nn.Module):
             torch.Tensor: the output fourier embedding
                 [..., N_sample, c]
         """
-        return torch.cos(
-            input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w + self.b)
-        )
+        return torch.cos(input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w + self.b))

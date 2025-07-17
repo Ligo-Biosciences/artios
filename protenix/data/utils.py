@@ -18,16 +18,16 @@ import functools
 import os
 import re
 from collections import defaultdict
+from io import StringIO
 from typing import Mapping, Sequence
 
 import biotite.structure as struc
 import numpy as np
 import torch
+from Bio import PDB
 from biotite.structure import AtomArray
 from biotite.structure.io import pdbx
 from biotite.structure.io.pdb import PDBFile
-from Bio import PDB
-from io import StringIO
 
 from protenix.data.constants import DNA_STD_RESIDUES, PRO_STD_RESIDUES, RNA_STD_RESIDUES
 
@@ -83,9 +83,7 @@ def get_inter_residue_bonds(atom_array: AtomArray) -> np.ndarray:
     return inter_residue_bonds
 
 
-def get_starts_by(
-    atom_array: AtomArray, by_annot: str, add_exclusive_stop=False
-) -> np.ndarray:
+def get_starts_by(atom_array: AtomArray, by_annot: str, add_exclusive_stop=False) -> np.ndarray:
     """get start indices by given annotation in an AtomArray
 
     Args:
@@ -132,9 +130,7 @@ def atom_select(atom_array: AtomArray, select_dict: dict, as_mask=False) -> np.n
         return np.where(mask)[0]
 
 
-def get_ligand_polymer_bond_mask(
-    atom_array: AtomArray, lig_include_ions=False
-) -> np.ndarray:
+def get_ligand_polymer_bond_mask(atom_array: AtomArray, lig_include_ions=False) -> np.ndarray:
     """
     Ref AlphaFold3 SI Chapter 3.7.1.
     Get bonds between the bonded ligand and its parent chain.
@@ -149,9 +145,7 @@ def get_ligand_polymer_bond_mask(
     """
     if not lig_include_ions:
         # bonded ligand exclude ions
-        unique_chain_id, counts = np.unique(
-            atom_array.label_asym_id, return_counts=True
-        )
+        unique_chain_id, counts = np.unique(atom_array.label_asym_id, return_counts=True)
         chain_id_to_count_map = dict(zip(unique_chain_id, counts))
         ions_mask = np.array(
             [
@@ -171,8 +165,7 @@ def get_ligand_polymer_bond_mask(
     idx_j = atom_array.bonds._bonds[:, 1]
 
     lig_polymer_bond_indices = np.where(
-        (lig_mask[idx_i] & polymer_mask[idx_j])
-        | (lig_mask[idx_j] & polymer_mask[idx_i])
+        (lig_mask[idx_i] & polymer_mask[idx_j]) | (lig_mask[idx_j] & polymer_mask[idx_i])
     )[0]
     if lig_polymer_bond_indices.size == 0:
         # no ligand-polymer bonds
@@ -250,7 +243,7 @@ def save_atoms_to_cif(
     cifwriter.save_to_cif(
         output_path=output_cif_file,
         entry_id=pdb_id,
-        include_bonds=False,
+        include_bonds=True,
     )
 
 
@@ -310,9 +303,7 @@ class CIFWriter:
         entity_poly = defaultdict(list)
         for entity_id, entity_type in self.entity_poly_type.items():
             label_asym_ids = np.unique(
-                self.atom_array.label_asym_id[
-                    self.atom_array.label_entity_id == entity_id
-                ]
+                self.atom_array.label_asym_id[self.atom_array.label_entity_id == entity_id]
             )
             label_asym_ids_str = ",".join(label_asym_ids)
 
@@ -329,21 +320,15 @@ class CIFWriter:
             entity_poly["entity_id"], entity_poly["pdbx_strand_id"]
         ):
             first_label_asym_id = label_asym_ids_str.split(",")[0]
-            first_asym_chain = self.atom_array[
-                self.atom_array.label_asym_id == first_label_asym_id
-            ]
-            chain_starts = struc.get_chain_starts(
-                first_asym_chain, add_exclusive_stop=True
-            )
+            first_asym_chain = self.atom_array[self.atom_array.label_asym_id == first_label_asym_id]
+            chain_starts = struc.get_chain_starts(first_asym_chain, add_exclusive_stop=True)
             asym_chain = first_asym_chain[
                 chain_starts[0] : chain_starts[1]
             ]  # ensure the asym chain is a single chain
 
             res_starts = struc.get_residue_starts(asym_chain, add_exclusive_stop=False)
             asym_chain_entity_id = asym_chain[res_starts].label_entity_id.tolist()
-            asym_chain_hetero = [
-                "n" if not i else "y" for i in asym_chain[res_starts].hetero
-            ]
+            asym_chain_hetero = ["n" if not i else "y" for i in asym_chain[res_starts].hetero]
             asym_chain_res_name = asym_chain[res_starts].res_name.tolist()
             asym_chain_res_id = asym_chain[res_starts].res_id.tolist()
 
@@ -358,9 +343,7 @@ class CIFWriter:
         }
         return block_dict
 
-    def save_to_cif(
-        self, output_path: str, entry_id: str = None, include_bonds: bool = False
-    ):
+    def save_to_cif(self, output_path: str, entry_id: str = None, include_bonds: bool = False):
         """
         Save AtomArray to cif.
 
@@ -385,10 +368,7 @@ class CIFWriter:
 
         block = pdbx.CIFBlock(block_dict)
         cif = pdbx.CIFFile(
-            {
-                os.path.basename(output_path).replace(".cif", "")
-                + "_predicted_by_protenix": block
-            }
+            {os.path.basename(output_path).replace(".cif", "") + "_predicted_by_protenix": block}
         )
         pdbx.set_structure(cif, self.atom_array, include_bonds=include_bonds)
         block = cif.block
@@ -424,9 +404,7 @@ def make_dummy_feature(
             features_dict[feat_name] = torch.zeros(cur_feat_shape)
     if "msa" in dummy_feats:
         # features_dict["msa"] = features_dict["restype"].unsqueeze(0)
-        features_dict["msa"] = torch.nonzero(features_dict["restype"])[:, 1].unsqueeze(
-            0
-        )
+        features_dict["msa"] = torch.nonzero(features_dict["restype"])[:, 1].unsqueeze(0)
         assert features_dict["msa"].shape == feat_shape["msa"]
         features_dict["has_deletion"] = torch.zeros(feat_shape["has_deletion"])
         features_dict["deletion_value"] = torch.zeros(feat_shape["deletion_value"])
@@ -442,12 +420,8 @@ def make_dummy_feature(
             features_dict[key] = torch.tensor(0, dtype=torch.int32)
 
     if "template" in dummy_feats:
-        features_dict["template_restype"] = (
-            torch.ones(feat_shape["template_restype"]) * 31
-        )  # gap
-        features_dict["template_all_atom_mask"] = torch.zeros(
-            feat_shape["template_all_atom_mask"]
-        )
+        features_dict["template_restype"] = torch.ones(feat_shape["template_restype"]) * 31  # gap
+        features_dict["template_all_atom_mask"] = torch.zeros(feat_shape["template_all_atom_mask"])
         features_dict["template_all_atom_positions"] = torch.zeros(
             feat_shape["template_all_atom_positions"]
         )
@@ -455,7 +429,7 @@ def make_dummy_feature(
 
 
 def data_type_transform(
-    feat_or_label_dict: Mapping[str, torch.Tensor]
+    feat_or_label_dict: Mapping[str, torch.Tensor],
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], AtomArray]:
     for key, value in feat_or_label_dict.items():
         if key in IntDataList:
@@ -582,9 +556,7 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
     return all_feat, label
 
 
-def get_lig_lig_bonds(
-    atom_array: AtomArray, lig_include_ions: bool = False
-) -> np.ndarray:
+def get_lig_lig_bonds(atom_array: AtomArray, lig_include_ions: bool = False) -> np.ndarray:
     """
     Get all inter-ligand bonds in order to create "token_bonds".
 
@@ -597,9 +569,7 @@ def get_lig_lig_bonds(
     """
     if not lig_include_ions:
         # bonded ligand exclude ions
-        unique_chain_id, counts = np.unique(
-            atom_array.label_asym_id, return_counts=True
-        )
+        unique_chain_id, counts = np.unique(atom_array.label_asym_id, return_counts=True)
         chain_id_to_count_map = dict(zip(unique_chain_id, counts))
         ions_mask = np.array(
             [
@@ -668,10 +638,7 @@ def pdb_to_cif(input_fname: str, output_fname: str, entry_id: str = None):
             for res_start_atom_idx in uncont_res_starts[0]:
                 new_chain_start = c_start + res_start_atom_idx + 1
                 # atom_array.hetero is True if "HETATM"
-                if (
-                    atom_array.hetero[new_chain_start]
-                    and atom_array.hetero[new_chain_start - 1]
-                ):
+                if atom_array.hetero[new_chain_start] and atom_array.hetero[new_chain_start - 1]:
                     new_chain_starts2.append(new_chain_start)
 
     chain_starts = new_chain_starts2 + [chain_starts[-1]]
@@ -758,11 +725,11 @@ def pdb_to_cif(input_fname: str, output_fname: str, entry_id: str = None):
 
 
 def atom_id_to_type(atom_id: str, atom_dict=None) -> str:
-    """Convert atom ID to element type, including ligands and metals. 
+    """Convert atom ID to element type, including ligands and metals.
     The atom_dict we can provide if the following heuristics fail.
     The atom_dict is a dictionary mapping atom IDs to elements.
     FIXME: make me more robust. check alphafold3 paper for detials of the possible weird atoms we can get
-    
+
     Args:
         atom_id (str): Atom ID from PDB file.
         atom_dict (dict): Optional dictionary mapping atom IDs to elements.
@@ -778,30 +745,30 @@ def atom_id_to_type(atom_id: str, atom_dict=None) -> str:
         return atom_dict[atom_id]
 
     # Standard protein atoms (CA, CB, OG, etc.)
-    if atom_id.startswith('C'):
-        return 'C'
-    elif atom_id.startswith('N'):
-        return 'N'
-    elif atom_id.startswith('O'):
-        return 'O'
-    elif atom_id.startswith('H'):
-        return 'H'
-    elif atom_id.startswith('S'):
-        return 'S'
-    
+    if atom_id.startswith("C"):
+        return "C"
+    elif atom_id.startswith("N"):
+        return "N"
+    elif atom_id.startswith("O"):
+        return "O"
+    elif atom_id.startswith("H"):
+        return "H"
+    elif atom_id.startswith("S"):
+        return "S"
+
     # Regex-based heuristic for ligands (e.g., "C1", "O2", "N3")
-    match = re.match(r'([A-Z]+)(\d*)', atom_id)
+    match = re.match(r"([A-Z]+)(\d*)", atom_id)
     if match:
         element_guess = match.group(1)
-        if element_guess in {'C', 'N', 'O', 'S', 'H', 'P', 'F', 'Cl', 'Br', 'I'}:
+        if element_guess in {"C", "N", "O", "S", "H", "P", "F", "Cl", "Br", "I"}:
             return element_guess
 
     # Handle metal ions (ZN, FE, MG, NA, K, CA, etc.)
-    metal_ions = {'ZN', 'FE', 'MG', 'NA', 'K', 'CA', 'MN', 'CO', 'CU', 'NI', 'AL'}
+    metal_ions = {"ZN", "FE", "MG", "NA", "K", "CA", "MN", "CO", "CU", "NI", "AL"}
     if atom_id in metal_ions:
         return atom_id  # Metals return their own name
 
-    #raise ValueError(f"Atom ID '{atom_id}' not recognized.")
+    # raise ValueError(f"Atom ID '{atom_id}' not recognized.")
     return atom_id
 
 
@@ -809,83 +776,95 @@ def get_atom_name(input_feature_dict):
     """
     Convert one-hot encoded atom names from ref_atom_name_chars to actual atom names and add to label_dict.
     """
-    char_indices = input_feature_dict["ref_atom_name_chars"].argmax(dim=-1) # [N_atom, 4]
+    char_indices = input_feature_dict["ref_atom_name_chars"].argmax(dim=-1)  # [N_atom, 4]
     atom_names = []
     for atom_chars in char_indices:
-        name = ''.join(chr(idx.item() + 32) for idx in atom_chars) # converts indices back to ASCII character
-        atom_names.append(name.strip()) # removes whitespace, store names in list
+        name = "".join(
+            chr(idx.item() + 32) for idx in atom_chars
+        )  # converts indices back to ASCII character
+        atom_names.append(name.strip())  # removes whitespace, store names in list
     return atom_names
 
 
 def to_pdb(coords, input_feature_dict):
     """Convert prediction to PDB format string.
-    
+
     Args:
         coords: Atomic coordinates of a structure
             [..., N_atom, 3]
         input_feature_dict: Dictionary containing input features
-    
+
     Returns:
         str: PDB format string containing all structures
     """
     N_atom = coords.shape[-2]
     atom_names = get_atom_name(input_feature_dict)
     ref_space_uid = input_feature_dict["ref_space_uid"]  # [N_atom]
-    
+
     pdb_lines = []
-    
+
     # Flatten batch and sample dimensions for easier iteration
     flat_coords = coords.view(-1, N_atom, 3)
     total_structures = flat_coords.shape[0]
- 
+
     occupancy = 1.00
     temp_factor = 0.00
-    
+
     for struct_idx in range(total_structures):
-        pdb_lines.append(f"MODEL     {struct_idx + 1}".ljust(80)) 
-        
+        pdb_lines.append(f"MODEL     {struct_idx + 1}".ljust(80))
+
         for atom_idx in range(N_atom):
             coord = flat_coords[struct_idx, atom_idx]
             atom_name = atom_names[atom_idx]
-            res_idx = ref_space_uid[atom_idx] # TODO: I'm not 100% sure this is right when there's multiple chains
-            element = atom_id_to_type(atom_name, atom_dict=None)  # Get element type NICE_TO_HAVE: pass in an atom_dict to handle weirded atom namings if needed
-            
+            res_idx = ref_space_uid[
+                atom_idx
+            ]  # TODO: I'm not 100% sure this is right when there's multiple chains
+            element = atom_id_to_type(
+                atom_name, atom_dict=None
+            )  # Get element type NICE_TO_HAVE: pass in an atom_dict to handle weirded atom namings if needed
+
             # For ligand atoms, use LIG instead of GLY
-            if element not in {'C', 'N', 'O', 'H', 'S'}:  # If not a standard protein atom
+            if element not in {
+                "C",
+                "N",
+                "O",
+                "H",
+                "S",
+            }:  # If not a standard protein atom
                 record = (
-                    f'HETATM{atom_idx:>5} {atom_name:<4} LIG A{res_idx+1:>4}    '
-                    f'{coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}'
+                    f"HETATM{atom_idx:>5} {atom_name:<4} LIG A{res_idx+1:>4}    "
+                    f"{coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}"
                     f"{occupancy:>6.2f}{temp_factor:>6.2f}          {element:>2}"
                 ).ljust(80)
             else:
                 record = (
-                    f'ATOM  {atom_idx:>5} {atom_name:<4} GLY A{res_idx+1:>4}    '
-                    f'{coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}'
+                    f"ATOM  {atom_idx:>5} {atom_name:<4} GLY A{res_idx+1:>4}    "
+                    f"{coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}"
                     f"{occupancy:>6.2f}{temp_factor:>6.2f}          {element:>2}"
                 ).ljust(80)
-            
+
             pdb_lines.append(record)
-            
-        pdb_lines.append('ENDMDL'.ljust(80))
-    
-    pdb_lines.append('END'.ljust(80))
-    return '\n'.join(pdb_lines) + '\n'
+
+        pdb_lines.append("ENDMDL".ljust(80))
+
+    pdb_lines.append("END".ljust(80))
+    return "\n".join(pdb_lines) + "\n"
 
 
 def to_mmcif(pred_dict, input_feature_dict, output_path):
     """Convert prediction to mmCIF format string and save to file.
-    
+
     Args:
         pred_dict: Dictionary containing prediction data
         input_feature_dict: Dictionary containing input features
         output_path: Path to save the mmCIF file.
-    
+
     """
     # First get PDB string using existing function
     coords = pred_dict["coordinate"]
     pdb_string = to_pdb(coords, input_feature_dict)
     pdb_parser = PDB.PDBParser()
-    structure = pdb_parser.get_structure('model', StringIO(pdb_string))
+    structure = pdb_parser.get_structure("model", StringIO(pdb_string))
 
     # Write to mmCIF
     mmcif_writer = PDB.MMCIFIO()
@@ -895,11 +874,7 @@ def to_mmcif(pred_dict, input_feature_dict, output_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--pdb_file", type=str, required=True, help="The pdb file to parse"
-    )
-    parser.add_argument(
-        "--cif_file", type=str, required=True, help="The cif file path to generate"
-    )
+    parser.add_argument("--pdb_file", type=str, required=True, help="The pdb file to parse")
+    parser.add_argument("--cif_file", type=str, required=True, help="The cif file path to generate")
     args = parser.parse_args()
     pdb_to_cif(args.pdb_file, args.cif_file)

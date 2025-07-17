@@ -13,12 +13,7 @@
 # limitations under the License.
 
 # pylint: disable=C0114,C0301
-from protenix.config.extend_types import (
-    GlobalConfigValue,
-    ListValue,
-    RequiredValue,
-    ValueMaybeNone,
-)
+from protenix.config.extend_types import GlobalConfigValue, ListValue, RequiredValue, ValueMaybeNone
 
 basic_configs = {
     "project": RequiredValue(str),
@@ -33,7 +28,7 @@ basic_configs = {
     "eval_only": False,
     "load_checkpoint_path": "",
     "load_ema_checkpoint_paths_directory": "",
-    "load_strict": False,
+    "load_strict": True,
     "load_params_only": True,
     "guiding_net_path": ValueMaybeNone(""),
     "skip_load_step": False,
@@ -41,7 +36,7 @@ basic_configs = {
     "skip_load_scheduler": False,
     "train_confidence_only": False,
     "use_wandb": True,
-    "wandb_id": "", #TODO 
+    "wandb_id": "",  # TODO
     "seed": 42,
     "deterministic": False,
     "post_hoc_ema_checkpoint_dir": "",
@@ -53,9 +48,9 @@ basic_configs = {
 }
 data_configs = {
     # Data
-    "train_crop_size": 256,
+    "train_crop_size": 384,
     "test_max_n_token": -1,
-    "train_lig_atom_rename": False,
+    "train_lig_atom_rename": False,  # TODO:
     "train_shuffle_mols": False,
     "train_shuffle_sym_ids": False,
     "test_lig_atom_rename": False,
@@ -89,17 +84,17 @@ optim_configs = {
 }
 model_configs = {
     # Model
-    "c_s": 384, # 192
-    "c_z": 128, # 64
-    "c_s_inputs": 800,  # c_s_inputs == c_token + 32
-    "c_atom": 128, # 64
-    "c_atompair": 16, # 16
-    "c_token": 768, # 192
-    "n_blocks": 48, # 16
+    "c_s": 256,  # 192
+    "c_z": 128,  # 64
+    "c_s_inputs": 256,  # c_s_inputs == c_token + 32
+    "c_atom": 256,  # 64
+    "c_atompair": 16,  # 16
+    "c_token": 768,  # 192
+    "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
-    "sigma_data": 16.0,
-    "diffusion_batch_size": 48, 
+    "sigma_data": 12.0,
+    "diffusion_batch_size": 48,
     "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
@@ -107,7 +102,7 @@ model_configs = {
     ),  # NOTE: Number of blocks in each activation checkpoint, if None, no checkpointing is performed.
     # switch of kernels
     "use_memory_efficient_kernel": False,
-    "use_deepspeed_evo_attention": True, # TODO: not using deepspeed
+    "use_deepspeed_evo_attention": False,  # TODO: not using deepspeed
     "use_flash": False,
     "use_lma": False,
     "use_xformer": False,
@@ -132,37 +127,42 @@ model_configs = {
             1
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
-    "train_timestep_sampler": { 
-        "loc": 0.0,
-        "scale": 1.0
+    "train_timestep_sampler": {
+        "alpha": 2.2,
+        "uniform_weight": 0.02,
     },
-    "inference_timestep_scheduler": { 
-        "p": -0.7
+    "inference_timestep_scheduler": {
+        "ligo": {"p": -0.7},
+        "variable_linear_quadratic": {"m": 0.35, "n": 0.7},
+        "la_proteina": {"scale": 10.0},
     },
-    "sample_diffusion": { 
-        "N_step": 50, # 25
-        "N_sample": 1, # 1
+    "sample_diffusion": {
+        "N_step": 200,  # 25
+        "N_sample": 1,  # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
-        "stoch_type": "non_singular",
-        "alpha": 0.29, # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "stoch_type": "proteina",
+        "alpha": 0.8,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
         "sigma_data": GlobalConfigValue("sigma_data"),
         "second_order_train": False,
         "second_order_inference": False,
-        "guidance_weight": 2.0,
+        "guidance_weight": 1.2,
+        "beta_mean": 0.5,
+        "beta_std": 0.233,
     },
     "model": {
         "N_model_seed": 1,  # for inference
         "input_embedder": {
             "c_atom": GlobalConfigValue("c_atom"),
             "c_atompair": GlobalConfigValue("c_atompair"),
-            "c_token": GlobalConfigValue("c_token"),
+            "c_token": GlobalConfigValue("c_s_inputs"),
+            "n_blocks": 1,  # default was 3, not much to gain after 1 in design
         },
         "diffusion_module": {
-            "use_fine_grained_checkpoint": True,
+            "use_fine_grained_checkpoint": False,
             "sigma_data": GlobalConfigValue("sigma_data"),
-            "c_token": GlobalConfigValue("c_token"), 
+            "c_token": GlobalConfigValue("c_token"),
             "c_atom": GlobalConfigValue("c_atom"),
             "c_atompair": GlobalConfigValue("c_atompair"),
             "c_z": GlobalConfigValue("c_z"),
@@ -225,14 +225,15 @@ loss_configs = {
         "diffusion_sparse_loss_enable": GlobalConfigValue("loss_metrics_sparse_enable"),
         "diffusion_lddt_loss_dense": True,  # only set true in initial training for training speed
         "resolution": {"min": 0.1, "max": 4.0},
-        "weight": { # TODO: set unused loss weights to 0 (for completion)
+        "weight": {  # TODO: set unused loss weights to 0 (for completion)
             "alpha_confidence": 1e-4,
             "alpha_pae": 0.0,  # or 1 in finetuning stage 3
             "alpha_except_pae": 1.0,
             "alpha_diffusion": 4.0,
             "alpha_distogram": 3e-2,
             "alpha_bond": 0.0,  # or 1 in finetuning stages
-            "smooth_lddt": 1.0,  # or 0 in finetuning stages
+            "smooth_lddt": 0.0,  # or 0 in finetuning stages
+            "neighbour_mse": 1.0,
         },
         "plddt": {
             "min_bin": 0,
@@ -263,9 +264,8 @@ loss_configs = {
                 "weight_rna": 5.0,
                 "weight_ligand": 10.0,
                 "eps": 1e-6,
-                "use_uncertainty": False,
+                # "use_uncertainty": False,
             },
-
             "bond": {
                 "eps": 1e-6,
             },
@@ -273,6 +273,10 @@ loss_configs = {
                 "eps": 1e-6,
                 "k": 300,
                 "use_uncertainty": False,
+            },
+            "neighbour_mse": {
+                "eps": 1e-6,
+                "k": 300,
             },
         },
         "distogram": {
@@ -298,11 +302,11 @@ loss_configs = {
 monitor_configs = {
     "monitor": {
         "loss_distribution": False,
-        "grad_norm": False,
-        "weight_norm": False,
+        "grad_norm": True,
+        "weight_norm": True,
         "eval_metrics": {
             "eval_tests": ListValue(["ss_distribution", "posebusters"]),
-        }
+        },
     },
 }
 

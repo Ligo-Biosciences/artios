@@ -1,15 +1,16 @@
-import pytest
-import torch
 import os
 
+import pytest
+import torch
+
 from protenix.model.modules.transformer import (
-    AttentionPairBias, 
-    DiffusionTransformerBlock, 
-    DiffusionTransformer,
-    AtomTransformer, 
-    AtomAttentionDecoder, 
+    AtomAttentionDecoder,
     AtomAttentionEncoder,
-    ConditionedTransitionBlock
+    AtomTransformer,
+    AttentionPairBias,
+    ConditionedTransitionBlock,
+    DiffusionTransformer,
+    DiffusionTransformerBlock,
 )
 
 
@@ -23,25 +24,19 @@ class TestAttentionPairBias:
         data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path)["input_feature_dict"]
+        return torch.load(data_path, weights_only=False)["input_feature_dict"]
 
     def test_attention_pair_bias(self, device, sample_data):
         n_heads = 16
         c_a = 768
         c_s = 384
         c_z = 128
-        
-        model = AttentionPairBias(
-            has_s=True,
-            n_heads=n_heads,
-            c_a=c_a,
-            c_s=c_s,
-            c_z=c_z
-        ).to(device)
+
+        model = AttentionPairBias(has_s=True, n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z).to(device)
 
         batch_size = 2
         n_tokens = 32
-        
+
         # Create dummy input tensors
         a = torch.randn(batch_size, n_tokens, c_a).to(device)
         s = torch.randn(batch_size, n_tokens, c_s).to(device)
@@ -64,13 +59,8 @@ class TestDiffusionTransformerBlock:
         c_s = 384
         c_z = 128
         n_heads = 16
-        
-        model = DiffusionTransformerBlock(
-            c_a=c_a,
-            c_s=c_s,
-            c_z=c_z,
-            n_heads=n_heads
-        ).to(device)
+
+        model = DiffusionTransformerBlock(c_a=c_a, c_s=c_s, c_z=c_z, n_heads=n_heads).to(device)
 
         batch_size = 2
         n_tokens = 32
@@ -112,11 +102,7 @@ class TestDiffusionTransformer:
         n_heads = 16
 
         model = DiffusionTransformer(
-            c_a=c_a,
-            c_s=c_s,
-            c_z=c_z,
-            n_blocks=n_blocks,
-            n_heads=n_heads
+            c_a=c_a, c_s=c_s, c_z=c_z, n_blocks=n_blocks, n_heads=n_heads
         ).to(device)
 
         batch_size = 2
@@ -144,7 +130,7 @@ class TestAtomTransformer:
         data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path)
+        return torch.load(data_path, weights_only=False)
 
     def test_atom_transformer(self, device, sample_data):
         c_atom = 128
@@ -160,7 +146,7 @@ class TestAtomTransformer:
             n_blocks=n_blocks,
             n_heads=n_heads,
             n_queries=n_queries,
-            n_keys=n_keys
+            n_keys=n_keys,
         ).to(device)
 
         batch_size = 2
@@ -189,12 +175,7 @@ class TestConditionedTransitionBlock:
         n = 2
         biasinit = -2.0
 
-        model = ConditionedTransitionBlock(
-            c_a=c_a,
-            c_s=c_s,
-            n=n,
-            biasinit=biasinit
-        ).to(device)
+        model = ConditionedTransitionBlock(c_a=c_a, c_s=c_s, n=n, biasinit=biasinit).to(device)
 
         batch_size = 2
         n_tokens = 256
@@ -220,7 +201,7 @@ class TestAtomAttentionDecoder:
         data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path)
+        return torch.load(data_path, weights_only=False)
 
     def test_atom_attention_decoder(self, device, sample_data):
         n_blocks = 3
@@ -238,29 +219,30 @@ class TestAtomAttentionDecoder:
             c_atom=c_atom,
             c_atompair=c_atompair,
             n_queries=n_queries,
-            n_keys=n_keys
+            n_keys=n_keys,
         ).to(device)
 
         # Move sample data to device
         n_tokens = sample_data["basic"]["N_token"][0]
         n_atoms = sample_data["basic"]["N_atom"][0]
         sample_data = sample_data["input_feature_dict"]
-        input_dict = {k: v.to(device) if torch.is_tensor(v) else v 
-                     for k, v in sample_data.items()}
+        input_dict = {k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()}
         batch_size = 2
 
         # Create dummy input tensors
         a = torch.randn(batch_size, n_tokens, c_token).to(device)
         q_skip = torch.randn(batch_size, n_atoms, c_atom).to(device)
         c_skip = torch.randn(batch_size, n_atoms, c_atom).to(device)
-        p_skip = torch.randn(batch_size, n_atoms // n_queries, n_queries, n_keys, c_atompair).to(device)
+        p_skip = torch.randn(batch_size, n_atoms // n_queries, n_queries, n_keys, c_atompair).to(
+            device
+        )
 
         out = model(input_dict, a, q_skip, c_skip, p_skip)
 
         # Check output shape and values
         assert out.shape == (batch_size, n_atoms, 3)  # Output should be 3D coordinates
         assert not torch.isnan(out).any()
-    
+
     def test_atom_attention_encoder(self, device, sample_data):
         has_coords = True
         n_blocks = 3
@@ -283,15 +265,14 @@ class TestAtomAttentionDecoder:
             n_blocks=n_blocks,
             n_heads=n_heads,
             n_queries=n_queries,
-            n_keys=n_keys
+            n_keys=n_keys,
         ).to(device)
 
         # Move sample data to device
         n_tokens = sample_data["basic"]["N_token"][0]
         n_atoms = sample_data["basic"]["N_atom"][0]
         sample_data = sample_data["input_feature_dict"]
-        input_dict = {k: v.to(device) if torch.is_tensor(v) else v 
-                     for k, v in sample_data.items()}
+        input_dict = {k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()}
         batch_size = 2
 
         # Create dummy input tensors
@@ -305,7 +286,13 @@ class TestAtomAttentionDecoder:
         assert a.shape == (batch_size, n_tokens, c_token)
         assert q_l.shape == (batch_size, n_atoms, c_atom)
         assert c_l.shape == (batch_size, n_atoms, c_atom)
-        assert p_lm.shape == (batch_size, n_atoms // n_queries, n_queries, n_keys, c_atompair)
+        assert p_lm.shape == (
+            batch_size,
+            n_atoms // n_queries,
+            n_queries,
+            n_keys,
+            c_atompair,
+        )
         assert not torch.isnan(a).any()
         assert not torch.isnan(q_l).any()
         assert not torch.isnan(c_l).any()

@@ -16,10 +16,12 @@ import argparse
 import csv
 from pathlib import Path
 from typing import Optional
+
 import pandas as pd
-import ray
 import psutil
+import ray
 from tqdm import tqdm
+
 from protenix.data.data_pipeline import DataPipeline
 from protenix.utils.file_io import dump_gzip_pickle
 
@@ -73,7 +75,7 @@ def gen_data_from_mmcifs(
     # Calculate object store memory as a fraction of system memory
     total_memory = psutil.virtual_memory().total
     object_store_memory = int(total_memory * memory_fraction)
-    
+
     # Initialize Ray
     ray.init(num_cpus=num_workers, object_store_memory=object_store_memory)
 
@@ -109,7 +111,7 @@ def gen_data_from_mmcifs(
     merged_results = []
     for sample_indices_list in all_sample_indices_list:
         merged_results.extend(sample_indices_list)
-    
+
     df = pd.DataFrame(merged_results)
     df.to_csv(output_indices_csv, index=False, quoting=csv.QUOTE_NONNUMERIC)
 

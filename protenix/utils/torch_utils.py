@@ -116,10 +116,7 @@ def autocasting_disable_decorator(disable_casting: bool):
             dtype = torch.float32 if disable_casting else None
             with _amp_context:
                 return func(
-                    *(
-                        v.to(dtype=dtype) if isinstance(v, torch.Tensor) else v
-                        for v in args
-                    ),
+                    *(v.to(dtype=dtype) if isinstance(v, torch.Tensor) else v for v in args),
                     **{
                         k: v.to(dtype=dtype) if isinstance(v, torch.Tensor) else v
                         for k, v in kwargs.items()

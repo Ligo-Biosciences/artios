@@ -24,7 +24,7 @@ import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, BondType as RDKitBondType
 
 from protenix.data import ccd
 
@@ -76,6 +76,16 @@ PROTEIN_1to3 = {
 }
 
 
+# RDKit bond type to biotite bond type enumerations
+RDKIT_TO_BIOTITE_BOND_TYPE = {
+    RDKitBondType.SINGLE: struc.BondType.SINGLE,
+    RDKitBondType.DOUBLE: struc.BondType.DOUBLE,
+    RDKitBondType.TRIPLE: struc.BondType.TRIPLE,
+    RDKitBondType.QUADRUPLE: struc.BondType.QUADRUPLE,
+    RDKitBondType.AROMATIC: struc.BondType.AROMATIC,
+}
+
+
 def add_reference_features(atom_array: AtomArray) -> AtomArray:
     """
     Add reference features of each resiude to atom_array
@@ -106,9 +116,7 @@ def add_reference_features(atom_array: AtomArray) -> AtomArray:
 
         ref_info = ccd.get_ccd_ref_info(res_name)
         if ref_info:
-            atom_sub_idx = [
-                *map(ref_info["atom_map"].get, atom_array.atom_name[start:stop])
-            ]
+            atom_sub_idx = [*map(ref_info["atom_map"].get, atom_array.atom_name[start:stop])]
             ref_pos[start:stop] = ref_info["coord"][atom_sub_idx]
             ref_charge[start:stop] = ref_info["charge"][atom_sub_idx]
             ref_mask[start:stop] = ref_info["mask"][atom_sub_idx]
@@ -196,9 +204,7 @@ def remove_leaving_atoms(atom_array: AtomArray, bond_count: dict) -> AtomArray:
         res_name = atom_array.res_name[centre_idx]
         centre_name = atom_array.atom_name[centre_idx]
 
-        comp = ccd.get_component_atom_array(
-            res_name, keep_leaving_atoms=True, keep_hydrogens=False
-        )
+        comp = ccd.get_component_atom_array(res_name, keep_leaving_atoms=True, keep_hydrogens=False)
         if comp is None:
             continue
 
@@ -358,9 +364,7 @@ def build_polymer(entity_info: dict) -> dict:
         chain_array = _build_polymer_atom_array(ccd_seqs)
 
     else:
-        raise ValueError(
-            "polymer type must be proteinChain, dnaSequence or rnaSequence"
-        )
+        raise ValueError("polymer type must be proteinChain, dnaSequence or rnaSequence")
     chain_array = add_reference_features(chain_array)
     return {"atom_array": chain_array}
 
@@ -400,7 +404,13 @@ def rdkit_mol_to_atom_array(mol: Chem.Mol, removeHs: bool = True) -> AtomArray:
 
     bonds = []
     for bond in mol.GetBonds():
-        bonds.append([bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()])
+        bonds.append(
+            [
+                bond.GetBeginAtomIdx(),
+                bond.GetEndAtomIdx(),
+                RDKIT_TO_BIOTITE_BOND_TYPE.get(bond.GetBondType(), struc.BondType.ANY),
+            ]
+        )
     atom_array.bonds = struc.BondList(atom_count, np.array(bonds))
     if removeHs:
         atom_array = atom_array[atom_array.element != "H"]
@@ -477,9 +487,7 @@ def lig_file_to_atom_info(lig_file_path: str) -> dict[str, Any]:
     ), f"Failed to retrieve molecule from file, invalid ligand file: {lig_file_path}. \
         Please provide a file with one of the following suffixes: [mol, mol2, sdf, pdb]."
 
-    assert (
-        mol.GetConformer().Is3D()
-    ), f"3D conformer not found in ligand file: {lig_file_path}"
+    assert mol.GetConformer().Is3D(), f"3D conformer not found in ligand file: {lig_file_path}"
     atom_info = rdkit_mol_to_atom_info(mol)
     return atom_info
 

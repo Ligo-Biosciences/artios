@@ -15,83 +15,109 @@
 # pylint: disable=C0114
 import os
 
-from protenix.config.extend_types import (
-    ListValue, RequiredValue, ValueMaybeNone, GlobalConfigValue
-)
-
+from protenix.config.extend_types import GlobalConfigValue, ListValue, RequiredValue, ValueMaybeNone
 
 # Small guidance model
 guidance_model_configs = {
-    "c_s": 384, # 192
-    "c_z": 128, # 64
-    "c_s_inputs": 800,  # c_s_inputs == c_token + 32
-    "c_atom": 128, # 64
-    "c_atompair": 16, # 16
-    "c_token": 768, # 192
-    "n_blocks": 48, # 16
+    # Model
+    "c_s": 256,  # 192
+    "c_z": 128,  # 64
+    "c_s_inputs": 256,  # c_s_inputs == c_token + 32
+    "c_atom": 256,  # 64
+    "c_atompair": 16,  # 16
+    "c_token": 768,  # 192
+    "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
-    "sigma_data": 16.0,
-    "diffusion_batch_size": 48, # 12
-    "compile_model": True,
-    "diffusion_chunk_size": 48,  # chunksize of diffusion_batch_size
-    "blocks_per_ckpt": 1,  # NOTE: Number of blocks in each activation checkpoint, if None, no checkpointing is performed.
+    "sigma_data": 12.0,
+    "diffusion_batch_size": 48,
+    "compile_model": False,
+    "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
+    "blocks_per_ckpt": ValueMaybeNone(
+        1
+    ),  # NOTE: Number of blocks in each activation checkpoint, if None, no checkpointing is performed.
     # switch of kernels
     "use_memory_efficient_kernel": False,
-    "use_deepspeed_evo_attention": True, # TODO: not using deepspeed
+    "use_deepspeed_evo_attention": False,  # TODO: not using deepspeed
     "use_flash": False,
     "use_lma": False,
     "use_xformer": False,
     "find_unused_parameters": False,
     "dtype": "bf16",  # default training dtype: bf16
+    "loss_metrics_sparse_enable": True,  # the swicth for both sparse lddt metrics and sparse bond/smooth lddt loss
     "skip_amp": {
-        "sample_diffusion": False,  # True
-        "confidence_head": False,  # True
+        "sample_diffusion": True,  # True
+        "confidence_head": True,  # True
         "sample_diffusion_training": False,  # True
-        "loss": False,  # True
+        "loss": True,  # True
     },
     "infer_setting": {
-        "chunk_size": ValueMaybeNone(64),  # should set to null for normal training and small dataset eval [for efficiency]
-        "sample_diffusion_chunk_size": ValueMaybeNone(1),  # should set to null for normal training and small dataset eval [for efficiency]
-        "lddt_metrics_sparse_enable": True,
-        "lddt_metrics_chunk_size": ValueMaybeNone(1),  # only works if loss_metrics_sparse_enable, can set as default 1
+        "chunk_size": ValueMaybeNone(
+            64
+        ),  # should set to null for normal training and small dataset eval [for efficiency]
+        "sample_diffusion_chunk_size": ValueMaybeNone(
+            1
+        ),  # should set to null for normal training and small dataset eval [for efficiency]
+        "lddt_metrics_sparse_enable": GlobalConfigValue("loss_metrics_sparse_enable"),
+        "lddt_metrics_chunk_size": ValueMaybeNone(
+            1
+        ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
-    "train_timestep_sampler": { 
-        "loc": 0.0,
-        "scale": 1.0
-    },
-    "inference_timestep_scheduler": { 
-        "p": -0.7
-    },
-    "sample_diffusion": { 
-        "N_step": 50, # 25
-        "N_sample": 1, # 1
-        "N_step_mini_rollout": 25, # 10
+    "train_timestep_sampler": {
+        "distributions_config": ListValue(
+            [
+                {"distribution_type": "beta", "alpha": 6, "beta": 1.5, "weight": 0.85},
+                {
+                    "distribution_type": "uniform",
+                    "low": 0.0,
+                    "high": 1.0,
+                    "weight": 0.1,
+                },
+                {
+                    "distribution_type": "uniform",
+                    "low": 0.9,
+                    "high": 1.0,
+                    "weight": 0.05,
+                },
+            ]
+        ),
+    },    
+    "inference_timestep_scheduler": {
+        "ligo": {"p": -0.7},
+        "variable_linear_quadratic": {"m": 0.1, "n": 0.3},
+        "la_proteina": {"scale": 10.0},
+    },    
+    "sample_diffusion": {
+        "N_step": 200,  # 25
+        "N_sample": 1,  # 1
+        "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
-        "stoch_type": "non_singular",
-        "alpha": 1.0,
+        "stoch_type": "beta",
+        "alpha": 0.8,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
-        "sigma_data": 16.0,
+        "sigma_data": GlobalConfigValue("sigma_data"),
         "second_order_train": False,
         "second_order_inference": False,
-        "guidance_weight": 2.0,
+        "guidance_weight": 1.2,
+        "beta_mean": 0.33,
+        "beta_std": 0.233,
     },
     "model": {
         "N_model_seed": 1,  # for inference
         "input_embedder": {
-            "c_atom": 128,
+            "c_atom": 256,
             "c_atompair": 16,
             "c_token": 768,
         },
         "diffusion_module": {
             "use_fine_grained_checkpoint": True,
             "sigma_data": 16.0,
-            "c_token": 768, 
-            "c_atom": 128,
+            "c_token": 768,
+            "c_atom": 256,
             "c_atompair": 16,
             "c_z": 128,
-            "c_s": 384,
-            "c_s_inputs": 800,
+            "c_s": 256,
+            "c_s_inputs": 256,
             "atom_encoder": {
                 "n_blocks": 3,
                 "n_heads": 4,
@@ -104,7 +130,76 @@ guidance_model_configs = {
                 "n_blocks": 3,
                 "n_heads": 4,
             },
+            "dropout": 0.0,
             "blocks_per_ckpt": 1,
+        },
+    },
+    "loss": {
+        "diffusion_lddt_chunk_size": ValueMaybeNone(1),
+        "diffusion_bond_chunk_size": ValueMaybeNone(1),
+        "diffusion_chunk_size_outer": ValueMaybeNone(-1),
+        "diffusion_sparse_loss_enable": GlobalConfigValue("loss_metrics_sparse_enable"),
+        "diffusion_lddt_loss_dense": True,  # only set true in initial training for training speed
+        "resolution": {"min": 0.1, "max": 4.0},
+        "weight": {  # TODO: set unused loss weights to 0 (for completion)
+            "alpha_confidence": 1e-4,
+            "alpha_pae": 0.0,  # or 1 in finetuning stage 3
+            "alpha_except_pae": 1.0,
+            "alpha_diffusion": 4.0,
+            "alpha_distogram": 3e-2,
+            "alpha_bond": 0.0,  # or 1 in finetuning stages
+            "smooth_lddt": 0.0,  # or 0 in finetuning stages
+            "neighbour_mse": 1.0,
+        },
+        "plddt": {
+            "min_bin": 0,
+            "max_bin": 1.0,
+            "no_bins": 50,
+            "normalize": True,
+            "eps": 1e-6,
+        },
+        "pde": {
+            "min_bin": 0,
+            "max_bin": 32,
+            "no_bins": 64,
+            "eps": 1e-6,
+        },
+        "resolved": {
+            "eps": 1e-6,
+        },
+        "pae": {
+            "min_bin": 0,
+            "max_bin": 32,
+            "no_bins": 64,
+            "eps": 1e-6,
+        },
+        "diffusion": {
+            "mse": {
+                "weight_mse": 1 / 3,
+                "weight_dna": 5.0,
+                "weight_rna": 5.0,
+                "weight_ligand": 10.0,
+                "eps": 1e-6,
+                # "use_uncertainty": False,
+            },
+            "bond": {
+                "eps": 1e-6,
+            },
+            "smooth_lddt": {
+                "eps": 1e-6,
+                "k": 300,
+                "use_uncertainty": False,
+            },
+            "neighbour_mse": {
+                "eps": 1e-6,
+                "k": 300,
+            },
+        },
+        "distogram": {
+            "min_bin": 2.3125,
+            "max_bin": 21.6875,
+            "no_bins": 64,
+            "eps": 1e-6,
         },
     },
 }

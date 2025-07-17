@@ -9,6 +9,7 @@ from protenix.model import sample_confidence
 from protenix.model.generator import (
     InferenceTimestepScheduler,
     VariableLinQuadScheduler,
+    LaProteinaScheduler,
     TrainingTimestepSamplerV2,
     sample_diffusion,
     sample_diffusion_training,
@@ -40,6 +41,9 @@ class ArtiosLigand(nn.Module):
         )
         #self.inference_timestep_scheduler = VariableLinQuadScheduler(
         #    **configs.inference_timestep_scheduler.variable_linear_quadratic
+        #)
+        #self.inference_timestep_scheduler = LaProteinaScheduler(
+        #    **configs.inference_timestep_scheduler.la_proteina
         #)
         self.inference_timestep_scheduler = InferenceTimestepScheduler(
             **configs.inference_timestep_scheduler.ligo

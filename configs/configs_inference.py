@@ -82,19 +82,25 @@ guidance_model_configs = {
             ]
         ),
     },    
-    "inference_timestep_scheduler": {"p": -0.7},
+    "inference_timestep_scheduler": {
+        "ligo": {"p": -0.7},
+        "variable_linear_quadratic": {"m": 0.1, "n": 0.3},
+        "la_proteina": {"scale": 10.0},
+    },    
     "sample_diffusion": {
         "N_step": 200,  # 25
         "N_sample": 1,  # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
-        "stoch_type": "non_singular",
-        "alpha": 0.6,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "stoch_type": "beta",
+        "alpha": 0.8,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
         "sigma_data": GlobalConfigValue("sigma_data"),
         "second_order_train": False,
         "second_order_inference": False,
         "guidance_weight": 1.2,
+        "beta_mean": 0.33,
+        "beta_std": 0.233,
     },
     "model": {
         "N_model_seed": 1,  # for inference

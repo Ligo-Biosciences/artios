@@ -40,6 +40,8 @@ class ArtiosLigand(nn.Module):
         self.eval_timestep_sampler = TrainingTimestepSampler(
            **configs.train_timestep_sampler,
         )
+        # TODO: delete unnecessary stuff here
+        # we don't need separate timestep samplers for train and evaluation
         #self.inference_timestep_scheduler = VariableLinQuadScheduler(
         #    **configs.inference_timestep_scheduler.variable_linear_quadratic
         #)
@@ -242,7 +244,7 @@ class ArtiosLigand(nn.Module):
             N_sample=N_sample,
             timesteps=timesteps,
             inplace_safe=inplace_safe,
-            guiding_denoise_net=guiding_diffusion_module,  # TODO: flow net
+            guiding_denoise_net=guiding_diffusion_module,
         )
 
         timestep = timesteps[-1]  # Get final timestep

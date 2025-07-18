@@ -248,6 +248,7 @@ ATOM29: tuple[str, ...] = (
     "C1'", 'C2', "C2'", "C3'", 'C4', "C4'", 'C5', "C5'", 'C6', 'C7', 'C8', 'N1',
     'N2', 'N3', 'N4', 'N6', 'N7', 'N9', 'OP3', 'O2', "O2'", "O3'", 'O4', "O4'",
     "O5'", 'O6', 'OP1', 'OP2', 'P')  # pyformat: disable
+
 ATOM29_ORDER: Mapping[str, int] = {
     atom_type: i for i, atom_type in enumerate(ATOM29)
 }

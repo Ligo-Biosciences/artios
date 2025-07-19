@@ -303,6 +303,19 @@ loss_configs = {
             "no_bins": 64,
             "eps": 1e-6,
         },
+        "elbo": {
+            "beta": 1.0,
+            "reconstruction":{
+                "mse": {
+                    "weight_mse": 1 / 3,
+                    "weight_dna": 5.0,
+                    "weight_rna": 5.0,
+                    "weight_ligand": 10.0,
+                    "eps": 1e-6,
+                }
+            },
+            "kl_divergence": {},
+        },
     },
     "metrics": {
         "lddt": {

@@ -683,8 +683,9 @@ class AtomAttentionEncoder(nn.Module):
 
     def __init__(
         self,
-        has_coords: bool,
         c_token: int,  # 384 or 768
+        has_noisy_coords: bool = False,
+        has_gt_coords: bool = False,
         c_atom: int = 128,
         c_atompair: int = 16,
         c_s: int = 384,
@@ -697,8 +698,9 @@ class AtomAttentionEncoder(nn.Module):
     ) -> None:
         """
         Args:
-            has_coords (bool): whether the module input will contains coordinates (r_l).
             c_token (int): token embedding dim.
+            has_noisy_coords (bool): whether the module input will contains noisy coordinates (r_l).
+            has_gt_coords (bool): whether the module input will contains ground truth coordinates (b_l).
             c_atom (int, optional): atom embedding dim. Defaults to 128.
             c_atompair (int, optional): atompair embedding dim. Defaults to 16.
             c_s (int, optional):  single embedding dim. Defaults to 384.
@@ -711,7 +713,8 @@ class AtomAttentionEncoder(nn.Module):
                 is performed.
         """
         super(AtomAttentionEncoder, self).__init__()
-        self.has_coords = has_coords
+        self.has_noisy_coords = has_noisy_coords
+        self.has_gt_coords = has_gt_coords
         self.c_atom = c_atom
         self.c_atompair = c_atompair
         self.c_token = c_token
@@ -739,7 +742,7 @@ class AtomAttentionEncoder(nn.Module):
             in_features=1, out_features=self.c_atompair, init="zeros"
         )
 
-        if self.has_coords:
+        if self.has_noisy_coords:
             # Line9
             self.layernorm_s = LayerNorm(self.c_s)
             self.linear_no_bias_s = LinearNoBias(
@@ -754,6 +757,13 @@ class AtomAttentionEncoder(nn.Module):
             self.linear_no_bias_r = LinearNoBias(
                 in_features=3, out_features=self.c_atom, init="default"
             )
+
+        if self.has_gt_coords:
+            # Line12
+            self.linear_no_bias_b = LinearNoBias(
+                in_features=3, out_features=self.c_atom, init="default"
+            )
+
         self.linear_no_bias_cl = LinearNoBias(
             in_features=self.c_atom, out_features=self.c_atompair, init="zeros"
         )
@@ -785,6 +795,7 @@ class AtomAttentionEncoder(nn.Module):
         self,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         r_l: torch.Tensor = None,
+        b_l: torch.Tensor = None,
         s: torch.Tensor = None,
         z: torch.Tensor = None,
         inplace_safe: bool = False,
@@ -793,8 +804,10 @@ class AtomAttentionEncoder(nn.Module):
         """
         Args:
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
-            r_l (torch.Tensor, optional): noisy position.
+            r_l (torch.Tensor, optional): noisy position. Used for diffusion module.
                 [..., N_sample, N_atom, 3] if has_coords else None.
+            b_l (torch.Tensor, optional): ground truth position. Used for autoencoder.
+                [..., N_sample, N_atom, 3] if has_gt_coords else None.
             s (torch.Tensor, optional): single embedding.
                 [..., N_sample, N_token, c_s] if has_coords else None.
             z (torch.Tensor, optional): pair embedding
@@ -813,10 +826,17 @@ class AtomAttentionEncoder(nn.Module):
 
         """
 
-        if self.has_coords:
+        if self.has_noisy_coords:
             assert r_l is not None
             assert s is not None
             assert z is not None
+            assert b_l is None
+        
+        if self.has_gt_coords:  
+            assert r_l is None
+            assert s is None
+            assert z is None
+            assert b_l is not None
 
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
         # Create the atom single conditioning: Embed per-atom meta data
@@ -873,9 +893,9 @@ class AtomAttentionEncoder(nn.Module):
         p_lm = add(p_lm, invd_emb, inplace_safe=inplace_safe)
         p_lm = add(p_lm, mask_emb, inplace_safe=inplace_safe)
 
-        # If provided, add trunk embeddings and noisy positions
         n_token = None
         if r_l is not None:
+            # Add noisy coords and trunk embeddings if provided
             N_sample = r_l.size(-3)
 
             # Broadcast the single and pair embedding from the trunk
@@ -898,7 +918,10 @@ class AtomAttentionEncoder(nn.Module):
 
             # Embed the noisy positions
             q_l = self.linear_no_bias_r(r_l)  # [..., N_sample, N_atom, c_atom]
-        else:
+        elif b_l is not None:
+            # Add gt coords when encoding for autoencoder
+            q_l = self.linear_no_bias_b(b_l)  # [..., N_sample, N_atom, c_atom]
+        else: 
             # Initialise the atom single representation as the single conditioning (input feature embedder)
             q_l = c_l.clone()
 
@@ -923,6 +946,13 @@ class AtomAttentionEncoder(nn.Module):
             inplace_safe=inplace_safe,
         )  # [..., (N_sample), n_blocks, n_queries, n_keys, c_atompair]
         p_lm = add(p_lm, self.small_mlp(p_lm), inplace_safe=inplace_safe)
+
+        # Broadcast single and pair conditioning to include N_sample
+        if b_l is not None:
+            N_sample = b_l.size(-3)
+            # Broadcast single and pair embeddings to include N_sample
+            c_l = expand_at_dim(c_l, dim=-3, n=N_sample)
+            p_lm = expand_at_dim(p_lm, dim=-5, n=N_sample)
 
         # Cross attention transformer
         q_l = self.atom_transformer(

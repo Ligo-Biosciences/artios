@@ -362,10 +362,10 @@ class MSELoss(nn.Module):
         pred_coordinate: torch.Tensor,
         true_coordinate: torch.Tensor,
         coordinate_mask: torch.Tensor,  # TODO: check where this is invoked
-        timestep: torch.Tensor,
         is_dna: torch.Tensor,
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
+        timestep: torch.Tensor = None,
         per_sample_scale: torch.Tensor = None,
     ) -> tuple[torch.Tensor, dict, dict[str, torch.Tensor]]:
         """MSELoss
@@ -432,7 +432,7 @@ class MSELoss(nn.Module):
 
         # Return the loss, metrics and monitor data
         return loss, {}, {"raw_loss": raw_loss, "timestep": timestep.clone()}
-
+    
 
 class ProtenixLoss(nn.Module):
     """Aggregation of the various losses"""
@@ -598,3 +598,239 @@ class ProtenixLoss(nn.Module):
         )
 
         return cum_loss, losses, monitor_data
+    
+
+class ReconstructionLoss(nn.Module):
+    """
+    Reconstruction loss term in the ELBO.
+    TODO: it might be the case we need to adjust the per sample scale to be 1/2sigma_Data**2 
+    now we have changed to the ELBO paradigm.
+    """
+
+    def __init__(self, configs) -> None:
+        super(ReconstructionLoss, self).__init__()
+        self.configs = configs
+
+        self.mse_loss = MSELoss(**configs.mse)
+
+    def coord_loss(
+            self, 
+            pred_coords: torch.Tensor, 
+            true_coords: torch.Tensor,
+            coordinate_mask: torch.Tensor,
+            is_dna: torch.Tensor,
+            is_rna: torch.Tensor,
+            is_ligand: torch.Tensor) -> torch.Tensor:
+        """
+        Coordinate loss.
+        """
+        return self.mse_loss(
+            pred_coordinate=pred_coords,
+            true_coordinate=true_coords,
+            coordinate_mask=coordinate_mask,
+            is_dna=is_dna,
+            is_rna=is_rna,
+            is_ligand=is_ligand,
+        )
+    
+    def seq_loss(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
+        """
+        Sequence loss.
+        TODO: this is not correct right now. make sure pred seq and true seq are both 
+        in the correct form for softmax_cross_entropy
+        """
+        return softmax_cross_entropy(pred_seq, true_seq)
+    
+    def forward(
+        self,
+        pred_coords: torch.Tensor,
+        true_coords: torch.Tensor,
+        coordinate_mask: torch.Tensor,
+        pred_seq: torch.Tensor,
+        true_seq: torch.Tensor,
+        is_rna: torch.Tensor,
+        is_dna: torch.Tensor,
+        is_ligand: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+
+        Args:
+            pred_coordinate (torch.Tensor): the denoised coordinates from diffusion module.
+                [..., N_sample, N_atom, 3]
+            true_coordinate (torch.Tensor): the ground truth coordinates.
+                [..., N_atom, 3]
+            coordinate_mask (torch.Tensor): whether true coordinates exist.
+                [N_atom] or [..., N_atom]
+            pred_seq (torch.Tensor): the predicted sequence logits.
+                [..., N_sample, N_token, N_restype]
+            true_seq (torch.Tensor): the ground truth sequence.
+                [..., N_token]
+            is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
+                [N_atom] or [..., N_atom]
+
+        """
+        coord_loss = self.coord_loss(
+            pred_coords=pred_coords,
+            true_coords=true_coords,
+            coordinate_mask=coordinate_mask,
+            is_dna=is_dna,
+            is_rna=is_rna,
+            is_ligand=is_ligand,
+        )
+        seq_loss = self.seq_loss(
+            pred_seq=pred_seq,
+            true_seq=true_seq,
+        )
+        return coord_loss + seq_loss
+    
+
+class KLDivergenceLoss(nn.Module):
+    """
+    KL divergence loss term in the ELBO.
+    """
+    def __init__(self) -> None:
+        super(KLDivergenceLoss, self).__init__()
+
+    def forward(
+        self,
+        mu: torch.Tensor,
+        logvar: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Forward pass for the KL divergence loss.
+        TODO: establish the reduction procedure that needs to happen here.
+        """
+        return 1/2 * (mu**2 + logvar.exp() - logvar - 1)
+
+
+class ELBOLoss(nn.Module):
+    """
+    The (negative) ELBO:
+    L = -E_q(z|x,s)[log p(x,s|z)] + beta * KL( q(z|x) | p(z)).
+    This reduces to 
+    L = reconstruction_loss + beta * kl_divergence_loss
+
+    
+    reconstruction_loss = 1/2 * sigma_data^2 * ||x - x_hat||^2 
+                          + cross_entropy_loss(s, s_hat)
+
+    where x_hat is the predicted coordinates, s_hat is the predicted sequence, 
+    and s is the ground truth sequence.
+
+    
+    kl_divergence_loss = 1/2 * sum( (mu^2 + exp(logvar) - logvar - 1) )
+    where the sum is over latent dim
+    """
+
+    def __init__(self, configs) -> None:
+        super(ELBOLoss, self).__init__()
+        self.configs = configs
+
+        self.beta = configs.loss.elbo.beta
+
+        self.loss_weight = {
+            "reconstruction_loss": 1.0,
+            "kl_divergence_loss": self.beta,
+        }
+
+        # Reconstruction term
+        self.reconstruction_loss = ReconstructionLoss(**configs.loss.elbo.reconstruction)
+
+        # KL divergence term
+        self.kl_divergence_loss = KLDivergenceLoss(**configs.loss.elbo.kl_divergence)
+
+    def aggregate_losses(self, loss_fns: dict) -> tuple[torch.Tensor, dict]:
+        """
+        Aggregates multiple loss functions and their respective metrics.
+
+        Args:
+            loss_fns (dict): Dictionary of loss functions to be aggregated.
+
+        Returns:
+            tuple[torch.Tensor, dict]:
+                - cum_loss (torch.Tensor): Cumulative loss.
+                - all_metrics (dict): Dictionary containing all metrics.
+                - monitor_data (dict): Dictionary containing non-standard data for monitoring training dynamics.
+        """
+        cum_loss = 0.0
+        all_metrics = {}
+        all_monitor_data = {}
+        for loss_name, loss_fn in loss_fns.items():
+            weight = self.loss_weight[loss_name]
+            loss_outputs = loss_fn()
+            metrics = {}  # NOTE: dummy metrics
+            if isinstance(loss_outputs, tuple):
+                loss, metrics, monitor_data = loss_outputs
+            else:
+                assert isinstance(loss_outputs, torch.Tensor)
+                loss, metrics, monitor_data = loss_outputs, {}, {}
+
+            all_metrics.update({f"{loss_name}/{key}": val for key, val in metrics.items()})
+            all_monitor_data[loss_name] = monitor_data
+
+            if torch.isnan(loss) or torch.isinf(loss):
+                logging.warning(f"{loss_name} loss is NaN. Skipping...")
+            else:
+                all_metrics[loss_name] = loss.detach().clone()
+                all_metrics[f"weighted_{loss_name}"] = weight * loss.detach().clone()
+
+            cum_loss = cum_loss + weight * loss
+        all_metrics["loss"] = cum_loss.detach().clone()
+
+        return cum_loss, all_metrics, all_monitor_data
+    
+    def calculate_losses(
+            self, 
+            feat_dict: dict[str, Any],
+            pred_dict: dict[str, torch.Tensor], 
+            label_dict: dict[str, Any], mode: str = "train"
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        assert mode in ["train", "eval", "inference"]
+        loss_fns = {}
+
+        loss_fns.update(
+            {
+                "reconstruction_loss": lambda: self.reconstruction_loss(
+                    pred_coords=pred_dict["real_pred_coords"],
+                    true_coords=label_dict["coordinate"],
+                    coordinate_mask=label_dict["coordinate_mask"],
+                    pred_seq=pred_dict["seq_logits"],
+                    true_seq=feat_dict["restype"],
+                    is_rna=feat_dict["is_rna"],
+                    is_dna=feat_dict["is_dna"],
+                    is_ligand=feat_dict["is_ligand"],
+                )
+            }
+        )
+
+        loss_fns.update(
+            {
+                "kl_divergence_loss": lambda: self.kl_divergence_loss(
+                    pred_dict=pred_dict,
+                    label_dict=label_dict,
+                )
+            }
+        )
+
+        cum_loss, metrics, monitor_data = self.aggregate_losses(loss_fns)
+        return cum_loss, metrics, monitor_data
+    
+    def forward(
+        self,
+        feat_dict: dict[str, Any],
+        pred_dict: dict[str, torch.Tensor],
+        label_dict: dict[str, Any],
+        mode: str = "train",
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:        
+        assert mode in ["train", "eval", "inference"]
+
+        # Calculate losses
+        cum_loss, losses, monitor_data = self.calculate_losses(
+            feat_dict=feat_dict,
+            pred_dict=pred_dict,
+            label_dict=label_dict,
+            mode=mode,
+        )
+
+        return cum_loss, losses, monitor_data
+        

@@ -252,7 +252,7 @@ class DiffusionModule(nn.Module):
             c_atom=c_atom,
             c_atompair=c_atompair,
             c_token=c_token,
-            has_coords=True,
+            has_noisy_coords=True,
             c_s=c_s,
             c_z=c_z,
             blocks_per_ckpt=blocks_per_ckpt,

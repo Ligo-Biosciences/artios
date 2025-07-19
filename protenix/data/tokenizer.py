@@ -16,7 +16,7 @@ import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
 
-from protenix.data.constants import ELEMS, STD_RESIDUES
+from protenix.common.constants import ELEMS, STD_RESIDUES
 
 
 class Token(object):

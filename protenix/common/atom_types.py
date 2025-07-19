@@ -1,12 +1,13 @@
 
 """List of atom types with reverse look-up."""
 # TODO: temporary solution
-
+import numpy as np
 from collections.abc import Mapping, Sequence, Set
 import itertools
 import sys
 from typing import Final
 from protenix.common import residue_names
+from protenix.common.constants import STD_RESIDUES_AND_GAP  # TODO: merge this file with the Protenix constants, make everything nice. 
 
 # Note:
 # `sys.intern` places the values in the Python internal db for fast lookup.
@@ -244,6 +245,7 @@ ATOM29_ORDER: Mapping[str, int] = {
     atom_type: i for i, atom_type in enumerate(ATOM29)
 }
 ATOM29_NUM: Final[int] = len(ATOM29)  # := 29
+
 
 # Hydrogens that exist depending on the protonation state of the residue.
 # Extracted from third_party/py/openmm/app/data/hydrogens.xml

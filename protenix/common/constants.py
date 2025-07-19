@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from rdkit.Chem import GetPeriodicTable
-# TODO: clean this file up. It has too many raw constants that can be automated. 
-# Makes things hard to read. 
+from rdkit.Chem import GetPeriodicTable  # type: ignore # noqa: F401
+
+# TODO: clean this file up. It has too many raw constants that can be automated.
+# Makes things hard to read.
 
 EvaluationChainInterface = [
     "intra_ligand",
@@ -305,9 +306,7 @@ DNA_STD_RESIDUES = {
     "DN": 30,
 }
 
-GAP = {
-    "-": 31
-}
+GAP = {"-": 31}
 
 STD_RESIDUES = PRO_STD_RESIDUES | RNA_STD_RESIDUES | DNA_STD_RESIDUES
 STD_RESIDUES_AND_GAP = STD_RESIDUES | GAP  # used in restype encoding

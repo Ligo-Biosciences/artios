@@ -9,7 +9,7 @@ import numpy as np
 from biotite.structure import AtomArray, AtomArrayStack
 from biotite.structure.io.mol import MOLFile
 
-from protenix.data.constants import mmcif_restype_3to1
+from protenix.common.constants import mmcif_restype_3to1
 from protenix.data.parser import MMCIFParser
 
 

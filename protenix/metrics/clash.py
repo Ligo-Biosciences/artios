@@ -18,7 +18,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from protenix.data.constants import rdkit_vdws
+from protenix.common.constants import rdkit_vdws
 
 RDKIT_VDWS = torch.tensor(rdkit_vdws)
 ID2TYPE = {0: "UNK", 1: "lig", 2: "prot", 3: "dna", 4: "rna"}

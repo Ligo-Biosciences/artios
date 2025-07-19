@@ -17,7 +17,7 @@ import numpy as np
 from biotite.structure import AtomArray, get_molecule_indices
 from scipy.spatial.distance import cdist
 
-from protenix.data.constants import CRYSTALLIZATION_AIDS
+from protenix.common.constants import CRYSTALLIZATION_AIDS
 
 
 class Filter(object):

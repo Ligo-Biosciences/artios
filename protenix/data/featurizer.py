@@ -21,7 +21,7 @@ import torch
 from biotite.structure import Atom, AtomArray, get_residue_starts
 from sklearn.neighbors import KDTree
 
-from protenix.data.constants import STD_RESIDUES, get_all_elems
+from protenix.common.constants import STD_RESIDUES, get_all_elems
 from protenix.data.tokenizer import Token, TokenArray
 from protenix.data.utils import get_ligand_polymer_bond_mask
 from protenix.utils.geometry import angle_3p, random_transform

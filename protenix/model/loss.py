@@ -361,12 +361,12 @@ class MSELoss(nn.Module):
         self,
         pred_coordinate: torch.Tensor,
         true_coordinate: torch.Tensor,
-        coordinate_mask: torch.Tensor,  # TODO: check where this is invoked
+        coordinate_mask: torch.Tensor,
         is_dna: torch.Tensor,
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
         timestep: torch.Tensor = None,
-        per_sample_scale: torch.Tensor = None,
+        per_sample_scale: torch.Tensor | float = None,
     ) -> tuple[torch.Tensor, dict, dict[str, torch.Tensor]]:
         """MSELoss
 
@@ -381,8 +381,8 @@ class MSELoss(nn.Module):
                 [..., N_sample]
             is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
                 [N_atom] or [..., N_atom]
-            per_sample_scale (torch.Tensor, optional): whether to scale the loss by the per-sample noise-level.
-                [..., N_sample]
+            per_sample_scale (torch.Tensor | float, optional): whether to scale the loss by the per-sample noise-level.
+                [..., N_sample] or float
 
         Returns:
             tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -603,8 +603,6 @@ class ProtenixLoss(nn.Module):
 class ReconstructionLoss(nn.Module):
     """
     Reconstruction loss term in the ELBO.
-    TODO: it might be the case we need to adjust the per sample scale to be 1/2sigma_Data**2 
-    now we have changed to the ELBO paradigm.
     """
 
     def __init__(self, configs) -> None:
@@ -620,7 +618,9 @@ class ReconstructionLoss(nn.Module):
             coordinate_mask: torch.Tensor,
             is_dna: torch.Tensor,
             is_rna: torch.Tensor,
-            is_ligand: torch.Tensor) -> torch.Tensor:
+            is_ligand: torch.Tensor,
+            per_sample_scale: float,
+    ) -> torch.Tensor:
         """
         Coordinate loss.
         """
@@ -631,6 +631,7 @@ class ReconstructionLoss(nn.Module):
             is_dna=is_dna,
             is_rna=is_rna,
             is_ligand=is_ligand,
+            per_sample_scale=per_sample_scale,
         )
     
     def seq_loss(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
@@ -651,6 +652,7 @@ class ReconstructionLoss(nn.Module):
         is_rna: torch.Tensor,
         is_dna: torch.Tensor,
         is_ligand: torch.Tensor,
+        per_sample_scale: float,
     ) -> torch.Tensor:
         """
 
@@ -667,15 +669,16 @@ class ReconstructionLoss(nn.Module):
                 [..., N_token]
             is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
                 [N_atom] or [..., N_atom]
-
+            per_sample_scale (float): the per sample scale.
         """
-        coord_loss = self.coord_loss(
+        coord_loss, _, _ = self.coord_loss(
             pred_coords=pred_coords,
             true_coords=true_coords,
             coordinate_mask=coordinate_mask,
             is_dna=is_dna,
             is_rna=is_rna,
             is_ligand=is_ligand,
+            per_sample_scale=per_sample_scale,
         )
         seq_loss = self.seq_loss(
             pred_seq=pred_seq,
@@ -688,19 +691,30 @@ class KLDivergenceLoss(nn.Module):
     """
     KL divergence loss term in the ELBO.
     """
-    def __init__(self) -> None:
+    def __init__(self, reduction: str = "mean") -> None:
         super(KLDivergenceLoss, self).__init__()
+        self.reduction = reduction
 
     def forward(
         self,
-        mu: torch.Tensor,
+        mean: torch.Tensor,
         logvar: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Forward pass for the KL divergence loss.
-        TODO: establish the reduction procedure that needs to happen here.
+        Forward pass for the KL divergence loss. Calculates average KL over all tokens.
+
+        Args: 
+            mean (torch.Tensor): predicted mean of the latent distribution.
+              [..., N_sample, N_token, c_latent]
+            logvar (torch.Tensor): predicted log variance of the latent distribution.
+              [..., N_sample, N_token, c_latent]
+
+        Returns:
+            torch.Tensor: the KL divergence loss.
+              []
         """
-        return 1/2 * (mu**2 + logvar.exp() - logvar - 1)
+        per_token_kl = 1/2 * (mean**2 + logvar.exp() - logvar - 1).sum(dim=-1)
+        return loss_reduction(per_token_kl, method=self.reduction)
 
 
 class ELBOLoss(nn.Module):
@@ -732,6 +746,8 @@ class ELBOLoss(nn.Module):
             "reconstruction_loss": 1.0,
             "kl_divergence_loss": self.beta,
         }
+
+        self.per_sample_scale = 1 / (self.configs.sigma_data**2)
 
         # Reconstruction term
         self.reconstruction_loss = ReconstructionLoss(**configs.loss.elbo.reconstruction)
@@ -799,6 +815,7 @@ class ELBOLoss(nn.Module):
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
+                    per_sample_scale=self.per_sample_scale,
                 )
             }
         )
@@ -806,8 +823,8 @@ class ELBOLoss(nn.Module):
         loss_fns.update(
             {
                 "kl_divergence_loss": lambda: self.kl_divergence_loss(
-                    pred_dict=pred_dict,
-                    label_dict=label_dict,
+                    mean=pred_dict["latents_mean"],
+                    logvar=pred_dict["latents_logvar"],
                 )
             }
         )

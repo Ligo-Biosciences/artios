@@ -100,6 +100,8 @@ class DiffusionConditioning(nn.Module):
             tuple[torch.Tensor, torch.Tensor]: embeddings s and z
                 - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
                 - z (torch.Tensor): [..., N_N_tokens, N_tokens, c_z]
+
+        TODO: Change all reference to lm indexing to ij indexing since now weare using tokenwise representations 
         """
         # Grab data on inputs
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]

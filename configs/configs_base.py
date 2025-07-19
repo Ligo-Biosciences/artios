@@ -90,6 +90,7 @@ model_configs = {
     "c_atom": 256,  # 64
     "c_atompair": 16,  # 16
     "c_token": 768,  # 192
+    "c_latent": 8,
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
@@ -182,6 +183,23 @@ model_configs = {
             },
             "dropout": 0.0,
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
+        },
+        "autoencoder": {
+            "c_latent": GlobalConfigValue("c_latent"),
+            "c_token": GlobalConfigValue("c_token"),
+            "c_z": GlobalConfigValue("c_z"),
+            "sigma_data": GlobalConfigValue("sigma_data"),
+            "training": {
+                "N_sample": 1,
+            },
+            "encoder": {
+                "n_blocks": 12,
+                "n_heads": 16,
+            },
+            "decoder": {
+                "n_blocks": 12,
+                "n_heads": 4,
+            },
         },
     },
 }

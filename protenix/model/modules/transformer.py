@@ -24,6 +24,7 @@ from protenix.model.modules.primitives import (
     BiasInitLinear,
     LayerNorm,
     LinearNoBias,
+    Transition,
     broadcast_token_to_local_atom_pair,
     rearrange_qk_to_dense_trunk,
 )
@@ -147,8 +148,8 @@ class AttentionPairBias(nn.Module):
     def standard_multihead_attention(
         self,
         a: torch.Tensor,
-        s: torch.Tensor,
         z: torch.Tensor,
+        s: Optional[torch.Tensor] = None,
         inplace_safe: bool = False,
     ) -> torch.Tensor:
         """Used by Algorithm 7/20
@@ -156,10 +157,10 @@ class AttentionPairBias(nn.Module):
         Args:
             a (torch.Tensor): the single feature aggregate per-atom representation
                 [..., N_token, c_a]
-            s (torch.Tensor): single embedding
-                [..., N_token, c_s]
             z (torch.Tensor): pair embedding, used for computing pair bias.
                 [..., N_token, N_token, c_z]
+            s (torch.Tensor, optional): single embedding
+                [..., N_token, c_s]
             inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
 
         Returns:
@@ -179,8 +180,8 @@ class AttentionPairBias(nn.Module):
     def forward(
         self,
         a: torch.Tensor,
-        s: torch.Tensor,
         z: torch.Tensor,
+        s: Optional[torch.Tensor] = None,
         n_queries: Optional[int] = None,
         n_keys: Optional[int] = None,
         inplace_safe: bool = False,
@@ -205,14 +206,14 @@ class AttentionPairBias(nn.Module):
                 chunk_size=chunk_size,
             )
         else:
-            a = self.standard_multihead_attention(a, s, z, inplace_safe=inplace_safe)
+            a = self.standard_multihead_attention(a, z, s, inplace_safe=inplace_safe)
 
         # Output projection (from adaLN-Zero [27])
         if self.has_s:
             a = mul(a, torch.sigmoid(self.linear_a_last(s)), inplace_safe=inplace_safe)
 
         return a
-
+    
 
 class ConditionedTransitionBlock(nn.Module):
     """
@@ -265,6 +266,137 @@ class ConditionedTransitionBlock(nn.Module):
         b = F.dropout(b, p=self.dropout, training=self.training)
         # Output projection (from adaLN-Zero [27])
         a = torch.sigmoid(self.linear_s(s)) * self.linear_nobias_b(b)
+        return a
+    
+
+class TransformerBlock(nn.Module):
+    """
+    Standard Transformer block with pair-bias functionality.
+    """
+    def __init__(
+        self,
+        c_a: int,
+        c_z: int,
+        n_heads: int,
+        bias_init: float = -2.0,
+        dropout: float = 0.0,
+    ) -> None:
+        """
+        Args:
+            c_a (int): dimension of single embedding.
+            c_z (int): dimension of pair embedding.
+            n_heads (int): number of heads in attention.
+            bias_init (float): bias init for bias layer in AttentionPairBias.
+            dropout (float): dropout probability for attention weights.
+        """
+        super(TransformerBlock, self).__init__()
+        self.c_a = c_a
+        self.c_z = c_z
+        self.n_heads = n_heads
+        self.attention_pair_bias = AttentionPairBias(
+            has_s=False,
+            n_heads=n_heads,
+            c_a=c_a,
+            c_z=c_z,
+            biasinit=bias_init,
+            attn_weight_dropout_p=dropout,
+        )
+        self.transition = Transition(c_in=c_a, n=4)
+
+    def forward(
+        self,
+        a: torch.Tensor,
+        z: torch.Tensor,
+        n_queries: Optional[int] = None,
+        n_keys: Optional[int] = None,
+        inplace_safe: bool = False,
+    ) -> torch.Tensor:
+        """
+        Args:
+            a (torch.Tensor): the single feature aggregate per-atom representation
+                [..., N, c_a]
+            z (torch.Tensor): pair embedding
+                [..., N, N, c_z]
+            n_queries (int, optional): local window size of query tensor. If not None, will perform local attention. Defaults to None.
+            n_keys (int, optional): local window size of key tensor. Defaults to None.
+            inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Single and pair embeddings.
+                - a: [..., N, c_a]
+                - z: [..., N, N, c_z]
+        """
+        # Attention
+        attn_out = self.attention_pair_bias(
+            a=a,
+            z=z,
+            n_queries=n_queries,
+            n_keys=n_keys,
+            inplace_safe=inplace_safe,
+        )
+        a = add(attn_out, a, inplace_safe=inplace_safe)
+
+        # MLP
+        a = add(a, self.transition(a), inplace_safe=inplace_safe)
+
+        return a, z
+    
+
+class Transformer(nn.Module):
+    """
+    Standard Transformer with pair-bias functionality.
+    """
+    def __init__(
+        self,
+        c_a: int,
+        c_z: int,
+        n_blocks: int,
+        n_heads: int, 
+        dropout: float = 0.0,
+    ) -> None:
+        """
+        Args: 
+            c_a (int): single embedding dimension.
+            c_z (int): pair embedding dimension.
+            n_blocks (int): number of blocks in Transformer.
+            n_heads (int): number of heads in attention.
+            dropout (float, optional): dropout probability for attention weights.
+        """
+        super(Transformer, self).__init__()
+        self.c_a = c_a
+        self.c_z = c_z
+        self.n_blocks = n_blocks
+        self.n_heads = n_heads
+        self.dropout = dropout
+
+        self.blocks = nn.ModuleList()
+        for _ in range(n_blocks):
+            block = TransformerBlock(
+                c_a=c_a,
+                c_z=c_z,
+                n_heads=n_heads,
+                dropout=dropout,
+            )
+            self.blocks.append(block)
+
+    def forward(
+        self,
+        a: torch.Tensor,
+        z: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            a (torch.Tensor): single embedding
+                [..., N, c_a]
+            z (torch.Tensor): pair embedding to be used for pair bias
+                [..., N, N, c_z]
+
+        Returns:
+            torch.Tensor: the output of Transformer
+                [..., N, c_a]
+        """
+        for block in self.blocks:
+            a, z = block(a, z)
         return a
 
 

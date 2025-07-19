@@ -9,6 +9,8 @@ from protenix.model.modules.transformer import (
     AtomTransformer,
     AttentionPairBias,
     ConditionedTransitionBlock,
+    Transformer,
+    TransformerBlock,
     DiffusionTransformer,
     DiffusionTransformerBlock,
 )
@@ -43,6 +45,69 @@ class TestAttentionPairBias:
         z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
 
         out = model(a, s, z)
+
+        # Check output shape and values
+        assert out.shape == (batch_size, n_tokens, c_a)
+        assert not torch.isnan(out).any()
+
+
+class TestTransformerBlock:
+    @pytest.fixture
+    def device(self):
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def test_transformer_block(self, device):
+        c_a = 768
+        c_z = 128
+        n_heads = 16
+
+        model = TransformerBlock(c_a=c_a, c_z=c_z, n_heads=n_heads).to(device)
+
+        batch_size = 2
+        n_tokens = 32
+
+        # Create dummy input tensors
+        a = torch.randn(batch_size, n_tokens, c_a).to(device)
+        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
+
+        # Keep copies to check if z is modified
+        z_orig = z.clone()
+
+        out_a, out_z = model(a, z)
+
+        # Check output shape and values
+        assert out_a.shape == (batch_size, n_tokens, c_a)
+        assert out_z.shape == (batch_size, n_tokens, n_tokens, c_z)
+        assert not torch.isnan(out_a).any()
+        assert not torch.isnan(out_z).any()
+
+        # Check z is not modified
+        assert torch.allclose(z, z_orig)
+
+
+class TestTransformer:
+    @pytest.fixture
+    def device(self):
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def test_transformer(self, device):
+        c_a = 768
+        c_z = 128
+        n_blocks = 3
+        n_heads = 16
+
+        model = Transformer(
+            c_a=c_a, c_z=c_z, n_blocks=n_blocks, n_heads=n_heads
+        ).to(device)
+
+        batch_size = 2
+        n_tokens = 32
+
+        # Create dummy input tensors
+        a = torch.randn(batch_size, n_tokens, c_a).to(device)
+        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
+
+        out = model(a, z)
 
         # Check output shape and values
         assert out.shape == (batch_size, n_tokens, c_a)

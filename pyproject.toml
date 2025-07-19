@@ -53,7 +53,7 @@ dependencies = [
     "scikit-learn>=1.6.1",
     "torch>=2.3.1",
     "pre-commit",
-    "modal"
+    "modal",
     "boto3"
 ]
 

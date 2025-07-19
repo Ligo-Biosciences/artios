@@ -47,7 +47,7 @@ class TestGenerator:
 
     def test_training_timestep_sampler(self, device):
         # Initialize sampler
-        sampler = TrainingTimestepSampler(loc=0.0, scale=1.0)
+        sampler = TrainingTimestepSampler()
 
         # Test sampling
         batch_size = (2, 3)

@@ -314,7 +314,9 @@ loss_configs = {
                     "eps": 1e-6,
                 }
             },
-            "kl_divergence": {},
+            "kl_divergence": {
+                "reduction": "mean",
+            },
         },
     },
     "metrics": {

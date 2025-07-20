@@ -692,10 +692,14 @@ class Featurizer(object):
             self.cropped_atom_array.is_resolved.astype(int)
         ).long()  # [N_atom]
 
-        # TODO: Get centre atom coords
+        # Get centre atom coords
         centre_atom_mask = self.cropped_atom_array.centre_atom_mask == 1
         labels["centre_atom_coords"] = torch.Tensor(
-            self.cropped_atom_array.coord[centre_atom_mask]
+            random_transform(
+                self.cropped_atom_array.coord[centre_atom_mask],
+                apply_augmentation=True,
+                centralize=True,
+            )
         )
 
         return labels

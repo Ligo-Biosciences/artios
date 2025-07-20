@@ -637,10 +637,21 @@ class ReconstructionLoss(nn.Module):
     def seq_loss(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
         """
         Sequence loss.
-        TODO: this is not correct right now. make sure pred seq and true seq are both 
-        in the correct form for softmax_cross_entropy
+
+        Args:
+            pred_seq (torch.Tensor): the predicted sequence logits.
+                [..., N_sample, N_token, N_restype]
+            true_seq (torch.Tensor): the ground truth sequence.
+                [..., N_token, N_restype]
         """
-        return softmax_cross_entropy(pred_seq, true_seq)
+        # Expand true_seq to over N_sample
+        N_sample = pred_seq.shape[-3]
+        true_seq = expand_at_dim(true_seq, dim=-3, n=N_sample)
+
+        # Calculate the cross entropy loss
+        seq_loss = softmax_cross_entropy(pred_seq, true_seq) # [..., N_sample, N_token]
+
+        return loss_reduction(seq_loss, method="mean")
     
     def forward(
         self,

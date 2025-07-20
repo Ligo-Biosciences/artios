@@ -33,7 +33,9 @@ from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics  # TODO: remove
-from protenix.model.artios_ligand import ArtiosLigand  # TODO: remove, change to VAE
+
+# from protenix.model.artios_ligand import ArtiosLigand
+from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
@@ -42,7 +44,7 @@ from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
-from runner.ema import EMAWrapper  # TODO: EMAWrapper
+from runner.ema import EMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -79,9 +81,6 @@ class ArtiosAllAtomTrainer(object):
         self.run_dir = f"{self.configs.base_dir}/{self.run_name}"
         self.checkpoint_dir = f"{self.run_dir}/checkpoints"
         self.ema_checkpoint_dir = f"{self.run_dir}/ema_checkpoints"
-        self.post_hoc_ema_checkpoint_dir = (
-            f"{self.run_dir}/post_hoc_ema_checkpoints"  # TODO: remove
-        )
         self.prediction_dir = f"{self.run_dir}/predictions"
         self.structure_dir = f"{self.run_dir}/structures"
         self.dump_dir = f"{self.run_dir}/dumps"
@@ -94,7 +93,6 @@ class ArtiosAllAtomTrainer(object):
             os.makedirs(self.run_dir)
             os.makedirs(self.checkpoint_dir)
             os.makedirs(self.ema_checkpoint_dir)
-            os.makedirs(self.post_hoc_ema_checkpoint_dir)
             os.makedirs(self.prediction_dir)
             os.makedirs(self.structure_dir)
             os.makedirs(self.dump_dir)
@@ -106,7 +104,7 @@ class ArtiosAllAtomTrainer(object):
 
         self.print(
             f"Using run name: {self.run_name}, run dir: {self.run_dir}, checkpoint_dir: "
-            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, post_hoc_ema_checkpoint_dir: {self.post_hoc_ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, structure_dir: "
+            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, structure_dir: "
             + f"{self.structure_dir}, error_dir: {self.error_dir}"
         )
 
@@ -168,9 +166,7 @@ class ArtiosAllAtomTrainer(object):
         self.lddt_metrics = LDDTMetrics(self.configs)  # TODO: remove
 
     def init_model(self):
-        self.raw_model = ArtiosLigand(self.configs).to(
-            self.device
-        )  # TODO: change to ArtiosAllAtomVAE
+        self.raw_model = ArtiosAllAtomVAE(self.configs).to(self.device)
         self.loss = self.raw_model.loss
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
@@ -192,11 +188,11 @@ class ArtiosAllAtomTrainer(object):
             return total_params / 1000.0 / 1000.0
 
         self.print(f"Model Parameters: {count_parameters(self.model)}")
-        if self.configs.get("ema_decay", -1) > 0:
-            assert self.configs.ema_decay < 1
+        if self.configs.get("ema_vae_decay", -1) > 0:
+            assert self.configs.ema_vae_decay < 1
             self.ema_wrapper = EMAWrapper(
                 self.model,
-                self.configs.ema_decay,
+                self.configs.ema_vae_decay,
                 self.configs.ema_mutable_param_keywords,
             )
             self.ema_wrapper.register()
@@ -330,7 +326,7 @@ class ArtiosAllAtomTrainer(object):
             mode=mode,
             current_step=self.step if mode == "train" else None,
             symmetric_permutation=self.symmetric_permutation,
-            seed=seed,
+            # seed=seed,
         )
         return batch, log_dict
 
@@ -569,7 +565,7 @@ class ArtiosAllAtomTrainer(object):
 
     def run(self):
         """
-        Main entry for the AF3Trainer.
+        Main entry for the ArtiosAllAtomTrainer.
 
         This function handles the training process, evaluation, logging, and checkpoint saving.
         """

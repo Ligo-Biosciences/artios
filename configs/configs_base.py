@@ -13,7 +13,12 @@
 # limitations under the License.
 
 # pylint: disable=C0114,C0301
-from protenix.config.extend_types import GlobalConfigValue, ListValue, RequiredValue, ValueMaybeNone
+from protenix.config.extend_types import (
+    GlobalConfigValue,
+    ListValue,
+    RequiredValue,
+    ValueMaybeNone,
+)
 
 basic_configs = {
     "project": RequiredValue(str),
@@ -193,7 +198,7 @@ model_configs = {
                 "N_sample": 1,
             },
             "encoder": {
-                "n_blocks": 12,
+                "n_blocks": 12,  # TODO: this is a lot, we should consider shrinking
                 "n_heads": 16,
             },
             "decoder": {
@@ -305,7 +310,7 @@ loss_configs = {
         },
         "elbo": {
             "beta": 1.0,
-            "reconstruction":{
+            "reconstruction": {
                 "mse": {
                     "weight_mse": 1 / 3,
                     "weight_dna": 5.0,

@@ -1,25 +1,18 @@
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
-import numpy as np
 import torch
 import torch.nn as nn
 
-from protenix.model import sample_confidence
 from protenix.model.generator import (
-    sample_diffusion_training, 
-    TrainingTimestepSampler,
     InferenceTimestepScheduler,
-    VariableLinQuadScheduler,
-    LaProteinaScheduler,
+    TrainingTimestepSampler,
     sample_diffusion,
     sample_diffusion_training,
 )
 from protenix.model.loss import ProtenixLoss
 from protenix.model.modules.diffusion import DiffusionModule
-from protenix.model.modules.embedders import InputFeatureEmbedder, RelativePositionEncoding
-from protenix.model.modules.primitives import LinearNoBias
-from protenix.model.utils import add, simple_merge_dict_list
+from protenix.model.utils import simple_merge_dict_list
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.torch_utils import autocasting_disable_decorator
 
@@ -35,19 +28,21 @@ class ArtiosLigand(nn.Module):
         # Fixed eval generator for reproducibility
         # self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
 
-        # Diffusion 
-        self.train_timestep_sampler = TrainingTimestepSampler(**configs.train_timestep_sampler) 
+        # Diffusion
+        self.train_timestep_sampler = TrainingTimestepSampler(
+            **configs.train_timestep_sampler
+        )
         self.eval_timestep_sampler = TrainingTimestepSampler(
-           **configs.train_timestep_sampler,
+            **configs.train_timestep_sampler,
         )
         # TODO: delete unnecessary stuff here
         # we don't need separate timestep samplers for train and evaluation
-        #self.inference_timestep_scheduler = VariableLinQuadScheduler(
+        # self.inference_timestep_scheduler = VariableLinQuadScheduler(
         #    **configs.inference_timestep_scheduler.variable_linear_quadratic
-        #)
-        #self.inference_timestep_scheduler = LaProteinaScheduler(
+        # )
+        # self.inference_timestep_scheduler = LaProteinaScheduler(
         #    **configs.inference_timestep_scheduler.la_proteina
-        #)
+        # )
         self.inference_timestep_scheduler = InferenceTimestepScheduler(
             **configs.inference_timestep_scheduler.ligo
         )
@@ -65,6 +60,7 @@ class ArtiosLigand(nn.Module):
         # Initialize loss as part of model for checkpointing and uncertainty learning
         self.loss = ProtenixLoss(configs)
 
+        # TODO: delete compilation related artifacts
         if configs.compile_model:
             self.diffusion_module.diffusion_transformer = torch.compile(
                 self.diffusion_module.diffusion_transformer
@@ -236,7 +232,9 @@ class ArtiosLigand(nn.Module):
         N_sample = self.configs.sample_diffusion["N_sample"]
         N_step = self.configs.sample_diffusion["N_step"]
         # Generate timesteps for solving the FM SDE
-        timesteps = self.inference_timestep_scheduler(N_step=N_step, device=device, dtype=dtype)
+        timesteps = self.inference_timestep_scheduler(
+            N_step=N_step, device=device, dtype=dtype
+        )
         # N_sample different ouputs created via diffusion
         pred_dict["coordinate"] = self.sample_diffusion(
             denoise_net=self.diffusion_module,
@@ -275,10 +273,10 @@ class ArtiosLigand(nn.Module):
 
         # Summary Confidence & Full Data
         # Computed after coordinates and logits are permuted #TODO: can we get rid of this?
-        if label_dict is None:
-            interested_atom_mask = None
-        else:
-            interested_atom_mask = label_dict.get("interested_ligand_mask", None)
+        # if label_dict is None:
+        #    interested_atom_mask = None
+        # else:
+        #    interested_atom_mask = label_dict.get("interested_ligand_mask", None)
 
         return pred_dict, log_dict, time_tracker
 
@@ -361,7 +359,9 @@ class ArtiosLigand(nn.Module):
             self.configs.skip_amp.sample_diffusion_training
         )(sample_diffusion_training)(
             timestep_sampler=(
-                self.train_timestep_sampler if self.training else self.eval_timestep_sampler
+                self.train_timestep_sampler
+                if self.training
+                else self.eval_timestep_sampler
             ),
             denoise_net=self.diffusion_module,
             label_dict=label_dict,
@@ -369,7 +369,9 @@ class ArtiosLigand(nn.Module):
             sigma_data=self.sigma_data,
             N_sample=N_sample,
             diffusion_chunk_size=self.configs.diffusion_chunk_size,
-            generator=(torch.Generator(device).manual_seed(seed) if not self.training else None),
+            generator=(
+                torch.Generator(device).manual_seed(seed) if not self.training else None
+            ),
         )
 
         # Update dicts
@@ -428,7 +430,7 @@ class ArtiosLigand(nn.Module):
         chunk_size = self.configs.infer_setting.chunk_size if inplace_safe else None
 
         if mode == "train" or mode == "eval":
-            nc_rng = np.random.RandomState(current_step)
+            # nc_rng = np.random.RandomState(current_step)
             assert label_dict is not None
             assert symmetric_permutation is not None
 

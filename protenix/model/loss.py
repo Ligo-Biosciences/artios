@@ -746,7 +746,6 @@ class ELBOLoss(nn.Module):
     kl_divergence_loss = 1/2 * sum( (mu^2 + exp(logvar) - logvar - 1) )
     where the sum is over latent dim
     """
-
     def __init__(self, configs) -> None:
         super(ELBOLoss, self).__init__()
         self.configs = configs

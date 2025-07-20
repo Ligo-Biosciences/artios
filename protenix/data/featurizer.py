@@ -317,9 +317,7 @@ class Featurizer(object):
         token_features["entity_id"] = torch.Tensor(centre_atoms.entity_id_int).long()
         token_features["sym_id"] = torch.Tensor(centre_atoms.sym_id_int).long()
         token_features["restype"] = restype_onehot
-        # TODO: add is_protein, is_ligand, is_dna, is_rna token features.
-        # very easy to do: use restype and the PRO_STD_RESIDUES, RNA_STD_RESIDUES, DNA_STD_RESIDUES
-        # constants in protenix/data/constants.py.
+        token_features["centre_atom_coords"] = torch.Tensor(centre_atoms.coord)
 
         return token_features
 
@@ -691,16 +689,6 @@ class Featurizer(object):
         labels["coordinate_mask"] = torch.Tensor(
             self.cropped_atom_array.is_resolved.astype(int)
         ).long()  # [N_atom]
-
-        # Get centre atom coords
-        centre_atom_mask = self.cropped_atom_array.centre_atom_mask == 1
-        labels["centre_atom_coords"] = torch.Tensor(
-            random_transform(
-                self.cropped_atom_array.coord[centre_atom_mask],
-                apply_augmentation=True,
-                centralize=True,
-            )
-        )
 
         return labels
 

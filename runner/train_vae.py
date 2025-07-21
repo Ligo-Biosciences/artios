@@ -33,9 +33,8 @@ from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics  # TODO: remove
-
-# from protenix.model.artios_ligand import ArtiosLigand
 from protenix.model.artios_vae import ArtiosAllAtomVAE
+from protenix.model.loss import ELBOLoss
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
@@ -52,7 +51,6 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 os.environ["WANDB_CONSOLE"] = "off"
 
 
-# TODO: change name, see where class called
 class ArtiosAllAtomTrainer(object):
     def __init__(self, configs):
         self.configs = configs
@@ -159,7 +157,7 @@ class ArtiosAllAtomTrainer(object):
         logging.info("Finished init ENV.")
 
     def init_loss(self):
-        # self.loss = ProtenixLoss(self.configs)
+        self.loss = ELBOLoss(self.configs)
         self.symmetric_permutation = SymmetricPermutation(
             self.configs, error_dir=self.error_dir
         )
@@ -334,8 +332,7 @@ class ArtiosAllAtomTrainer(object):
         self, batch: dict, mode: str = "train"
     ) -> tuple[torch.Tensor, dict, dict]:
         assert mode in ["train", "eval"]
-        self.loss.to(batch["label_dict"]["coordinate"].device)  # Move loss to device
-        # TODO: check inputs and outputs of ELBO
+        self.loss.to(batch["label_dict"]["coordinate"].device)
         loss, loss_dict, monitor_data = autocasting_disable_decorator(
             self.configs.skip_amp.loss
         )(self.loss)(

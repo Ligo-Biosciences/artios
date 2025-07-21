@@ -24,6 +24,7 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
+import rootutils
 import torch
 import torch.distributed as dist
 import wandb
@@ -37,7 +38,6 @@ from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.artios_ligand import ArtiosLigand
-from protenix.model.loss import ELBOLoss
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
@@ -52,7 +52,7 @@ from runner.ema import PowerLawEMAWrapper
 from runner.evaluate import Evaluator
 from runner.inference import InferenceRunner, infer_predict
 
-# rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 # Disable WANDB's console output capture to reduce unnecessary logging
 os.environ["WANDB_CONSOLE"] = "off"
@@ -166,7 +166,7 @@ class AF3Trainer(object):
         logging.info("Finished init ENV.")
 
     def init_loss(self):
-        self.loss = ELBOLoss(self.configs)
+        # self.loss = ProtenixLoss(self.configs)
         self.symmetric_permutation = SymmetricPermutation(
             self.configs, error_dir=self.error_dir
         )

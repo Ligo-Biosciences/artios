@@ -196,9 +196,6 @@ model_configs = {
             "c_token": GlobalConfigValue("c_token"),
             "c_z": GlobalConfigValue("c_z"),
             "sigma_data": GlobalConfigValue("sigma_data"),
-            "training": {
-                "N_sample": 1,
-            },
             "encoder": {
                 "n_blocks": 12,  # TODO: this is a lot, we should consider shrinking
                 "n_heads": 16,

@@ -43,7 +43,11 @@ from protenix.utils.monitoring import grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
-from protenix.utils.training import get_optimizer, is_loss_nan_check
+from protenix.utils.training import (
+    get_optimizer,
+    is_loss_nan_check,
+    prepare_latent_table_rows,
+)
 from runner.ema import EMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -408,6 +412,8 @@ class ArtiosAllAtomTrainer(object):
             evaluated_pids = []
             total_batch_num = len(test_dl)
 
+            wandb_table = None
+
             for index, batch in enumerate(tqdm(test_dl)):
                 batch = to_device(batch, self.device)
                 pid = batch["basic"]["pdb_id"]
@@ -439,6 +445,31 @@ class ArtiosAllAtomTrainer(object):
                 # Metrics
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(key, value, namespace="val")
+
+                # Log latents
+                if (
+                    self.configs.metrics.track_latents
+                    and self.configs.use_wandb
+                    and DIST_WRAPPER.rank == 0
+                    and index < 100
+                ):
+                    latents = batch["pred_dict"]["latents_mean"].detach().cpu()
+                    c_latent = latents.shape[-1]
+
+                    # Create table
+                    if wandb_table is None:
+                        columns = ["restype"] + [f"latent_{i}" for i in range(c_latent)]
+                        wandb_table = wandb.Table(columns=columns)
+
+                    # Create rows
+                    rows = prepare_latent_table_rows(
+                        latents, batch["label_dict"]["restype_onehot"]
+                    )
+
+                    # Add rows
+                    for row in rows:
+                        wandb_table.add_data(*row)
+                    wandb.log({"latents": wandb_table}, step=self.step)
 
                 del batch, simple_metrics
                 if index % 5 == 0:

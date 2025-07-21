@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -21,11 +21,11 @@ import torch.nn.functional as F
 
 from protenix.metrics.rmsd import weighted_rigid_align
 from protenix.model.modules.embedders import FourierEmbedding
-from protenix.model.modules.frames import expressCoordinatesInFrame, gather_frame_atom_by_indices
+from protenix.model.modules.frames import (
+    expressCoordinatesInFrame,
+)
 from protenix.model.modules.primitives import MLP
-from protenix.model.utils import add, expand_at_dim, mul
-from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
-from protenix.utils.torch_utils import cdist
+from protenix.model.utils import expand_at_dim
 
 
 def loss_reduction(loss: torch.Tensor, method: str = "mean") -> torch.Tensor:
@@ -81,7 +81,9 @@ class SmoothLDDTLoss(nn.Module):
             self.uncertainty_mlp = MLP(uncertainty_embed_dim, 1, n=2)
 
     def _chunk_forward(self, pred_distance, true_distance, c_lm):
-        dist_diff = torch.abs(pred_distance - true_distance)  # [..., N_sample, N_atom, k]
+        dist_diff = torch.abs(
+            pred_distance - true_distance
+        )  # [..., N_sample, N_atom, k]
         # For save cuda memory we use inplace op
         dist_diff_epsilon = 0
         for threshold in [0.5, 1, 2, 4]:
@@ -115,13 +117,19 @@ class SmoothLDDTLoss(nn.Module):
         k = min(self.k, n_atoms - 1)  # -1 to exclude self
 
         # Compute pairwise distances between all atoms
-        distances = torch.cdist(true_coordinates, true_coordinates)  # [..., N_atom, N_atom]
+        distances = torch.cdist(
+            true_coordinates, true_coordinates
+        )  # [..., N_atom, N_atom]
 
         # Set diagonal to infinity to exclude self-pairs
-        distances = distances + torch.eye(distances.shape[-1], device=distances.device) * inf
+        distances = (
+            distances + torch.eye(distances.shape[-1], device=distances.device) * inf
+        )
 
         # Get k smallest distances and their indices for each atom
-        neighbor_distances, neighbor_indices = torch.topk(distances, k=k, dim=-1, largest=False)
+        neighbor_distances, neighbor_indices = torch.topk(
+            distances, k=k, dim=-1, largest=False
+        )
 
         return neighbor_indices, neighbor_distances
 
@@ -153,12 +161,16 @@ class SmoothLDDTLoss(nn.Module):
         """
 
         # Get the indices and distances of the k closest atoms for each atom in the true coordinates
-        neighbor_indices, true_neighbor_distances = self.query_neighbors(true_coordinates)
+        neighbor_indices, true_neighbor_distances = self.query_neighbors(
+            true_coordinates
+        )
 
         # Compute mask for the atoms that have true coordinates
         n_neighbors = neighbor_indices.shape[-1]
         c_lm = coordinate_mask[neighbor_indices]  # [..., N_atom, k]
-        c_lm = c_lm * coordinate_mask.unsqueeze(-1)  # mask atoms that do not have true coordinates
+        c_lm = c_lm * coordinate_mask.unsqueeze(
+            -1
+        )  # mask atoms that do not have true coordinates
         c_lm = c_lm.bool().unsqueeze(-3).detach()  # [..., 1, N_atom, k]
 
         # Get N_sample dimension size
@@ -180,7 +192,9 @@ class SmoothLDDTLoss(nn.Module):
 
         # Expand true_neighbor_distances to include N_sample dimension
         # [..., N_atom, k] -> [..., N_sample, N_atom, k]
-        true_neighbor_distances = expand_at_dim(x=true_neighbor_distances, dim=-3, n=n_samples)
+        true_neighbor_distances = expand_at_dim(
+            x=true_neighbor_distances, dim=-3, n=n_samples
+        )
 
         # Compute predicted neighbour distances
         pred_distance = torch.sqrt(
@@ -328,7 +342,10 @@ class MSELoss(nn.Module):
         """
         N_sample = pred_coordinate.size(-3)
         weight = (
-            1 + self.weight_dna * is_dna + self.weight_rna * is_rna + self.weight_ligand * is_ligand
+            1
+            + self.weight_dna * is_dna
+            + self.weight_rna * is_rna
+            + self.weight_ligand * is_ligand
         )  # [N_atom] or [..., N_atom]
 
         # Apply coordinate_mask
@@ -341,7 +358,9 @@ class MSELoss(nn.Module):
             true_coordinate, dim=-3, n=N_sample
         )  # [..., N_sample, N_atom, 3]
         if len(weight.shape) > 1:
-            weight = expand_at_dim(weight, dim=-2, n=N_sample)  # [..., N_sample, N_atom]
+            weight = expand_at_dim(
+                weight, dim=-2, n=N_sample
+            )  # [..., N_sample, N_atom]
 
         # Align GT coords to predicted coords
         d = pred_coordinate.dtype
@@ -349,8 +368,12 @@ class MSELoss(nn.Module):
         with torch.amp.autocast("cuda", enabled=False):
             true_coordinate_aligned = weighted_rigid_align(
                 x=true_coordinate.to(torch.float32),  # [..., N_sample, N_atom, 3]
-                x_target=pred_coordinate.to(torch.float32),  # [..., N_sample, N_atom, 3]
-                atom_weight=weight.to(torch.float32),  # [N_atom] or [..., N_sample, N_atom]
+                x_target=pred_coordinate.to(
+                    torch.float32
+                ),  # [..., N_sample, N_atom, 3]
+                atom_weight=weight.to(
+                    torch.float32
+                ),  # [N_atom] or [..., N_sample, N_atom]
                 stop_gradient=True,
             )  # [..., N_sample, N_atom, 3]
             true_coordinate_aligned = true_coordinate_aligned.to(d)
@@ -432,7 +455,7 @@ class MSELoss(nn.Module):
 
         # Return the loss, metrics and monitor data
         return loss, {}, {"raw_loss": raw_loss, "timestep": timestep.clone()}
-    
+
 
 class ProtenixLoss(nn.Module):
     """Aggregation of the various losses"""
@@ -485,7 +508,9 @@ class ProtenixLoss(nn.Module):
                 assert isinstance(loss_outputs, torch.Tensor)
                 loss, metrics, monitor_data = loss_outputs, {}, {}
 
-            all_metrics.update({f"{loss_name}/{key}": val for key, val in metrics.items()})
+            all_metrics.update(
+                {f"{loss_name}/{key}": val for key, val in metrics.items()}
+            )
             all_monitor_data[loss_name] = monitor_data
 
             if torch.isnan(loss) or torch.isinf(loss):
@@ -598,7 +623,7 @@ class ProtenixLoss(nn.Module):
         )
 
         return cum_loss, losses, monitor_data
-    
+
 
 class ReconstructionLoss(nn.Module):
     """
@@ -612,14 +637,14 @@ class ReconstructionLoss(nn.Module):
         self.mse_loss = MSELoss(**configs.mse)
 
     def coord_loss(
-            self, 
-            pred_coords: torch.Tensor, 
-            true_coords: torch.Tensor,
-            coordinate_mask: torch.Tensor,
-            is_dna: torch.Tensor,
-            is_rna: torch.Tensor,
-            is_ligand: torch.Tensor,
-            per_sample_scale: float,
+        self,
+        pred_coords: torch.Tensor,
+        true_coords: torch.Tensor,
+        coordinate_mask: torch.Tensor,
+        is_dna: torch.Tensor,
+        is_rna: torch.Tensor,
+        is_ligand: torch.Tensor,
+        per_sample_scale: float,
     ) -> torch.Tensor:
         """
         Coordinate loss.
@@ -633,7 +658,7 @@ class ReconstructionLoss(nn.Module):
             is_ligand=is_ligand,
             per_sample_scale=per_sample_scale,
         )
-    
+
     def seq_loss(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
         """
         Sequence loss.
@@ -649,10 +674,10 @@ class ReconstructionLoss(nn.Module):
         true_seq = expand_at_dim(true_seq, dim=-3, n=N_sample)
 
         # Calculate the cross entropy loss
-        seq_loss = softmax_cross_entropy(pred_seq, true_seq) # [..., N_sample, N_token]
+        seq_loss = softmax_cross_entropy(pred_seq, true_seq)  # [..., N_sample, N_token]
 
         return loss_reduction(seq_loss, method="mean")
-    
+
     def forward(
         self,
         pred_coords: torch.Tensor,
@@ -696,12 +721,13 @@ class ReconstructionLoss(nn.Module):
             true_seq=true_seq,
         )
         return coord_loss + seq_loss
-    
+
 
 class KLDivergenceLoss(nn.Module):
     """
     KL divergence loss term in the ELBO.
     """
+
     def __init__(self, reduction: str = "mean") -> None:
         super(KLDivergenceLoss, self).__init__()
         self.reduction = reduction
@@ -714,7 +740,7 @@ class KLDivergenceLoss(nn.Module):
         """
         Forward pass for the KL divergence loss. Calculates average KL over all tokens.
 
-        Args: 
+        Args:
             mean (torch.Tensor): predicted mean of the latent distribution.
               [..., N_sample, N_token, c_latent]
             logvar (torch.Tensor): predicted log variance of the latent distribution.
@@ -724,7 +750,7 @@ class KLDivergenceLoss(nn.Module):
             torch.Tensor: the KL divergence loss.
               []
         """
-        per_token_kl = 1/2 * (mean**2 + logvar.exp() - logvar - 1).sum(dim=-1)
+        per_token_kl = 1 / 2 * (mean**2 + logvar.exp() - logvar - 1).sum(dim=-1)
         return loss_reduction(per_token_kl, method=self.reduction)
 
 
@@ -732,20 +758,21 @@ class ELBOLoss(nn.Module):
     """
     The (negative) ELBO:
     L = -E_q(z|x,s)[log p(x,s|z)] + beta * KL( q(z|x) | p(z)).
-    This reduces to 
+    This reduces to
     L = reconstruction_loss + beta * kl_divergence_loss
 
-    
-    reconstruction_loss = 1/2 * sigma_data^2 * ||x - x_hat||^2 
+
+    reconstruction_loss = 1/2 * sigma_data^2 * ||x - x_hat||^2
                           + cross_entropy_loss(s, s_hat)
 
-    where x_hat is the predicted coordinates, s_hat is the predicted sequence, 
+    where x_hat is the predicted coordinates, s_hat is the predicted sequence,
     and s is the ground truth sequence.
 
-    
+
     kl_divergence_loss = 1/2 * sum( (mu^2 + exp(logvar) - logvar - 1) )
     where the sum is over latent dim
     """
+
     def __init__(self, configs) -> None:
         super(ELBOLoss, self).__init__()
         self.configs = configs
@@ -760,7 +787,7 @@ class ELBOLoss(nn.Module):
         self.per_sample_scale = 1 / (self.configs.sigma_data**2)
 
         # Reconstruction term
-        self.reconstruction_loss = ReconstructionLoss(**configs.loss.elbo.reconstruction)
+        self.reconstruction_loss = ReconstructionLoss(configs.loss.elbo.reconstruction)
 
         # KL divergence term
         self.kl_divergence_loss = KLDivergenceLoss(**configs.loss.elbo.kl_divergence)
@@ -791,7 +818,9 @@ class ELBOLoss(nn.Module):
                 assert isinstance(loss_outputs, torch.Tensor)
                 loss, metrics, monitor_data = loss_outputs, {}, {}
 
-            all_metrics.update({f"{loss_name}/{key}": val for key, val in metrics.items()})
+            all_metrics.update(
+                {f"{loss_name}/{key}": val for key, val in metrics.items()}
+            )
             all_monitor_data[loss_name] = monitor_data
 
             if torch.isnan(loss) or torch.isinf(loss):
@@ -804,12 +833,13 @@ class ELBOLoss(nn.Module):
         all_metrics["loss"] = cum_loss.detach().clone()
 
         return cum_loss, all_metrics, all_monitor_data
-    
+
     def calculate_losses(
-            self, 
-            feat_dict: dict[str, Any],
-            pred_dict: dict[str, torch.Tensor], 
-            label_dict: dict[str, Any], mode: str = "train"
+        self,
+        feat_dict: dict[str, Any],
+        pred_dict: dict[str, torch.Tensor],
+        label_dict: dict[str, Any],
+        mode: str = "train",
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         assert mode in ["train", "eval", "inference"]
         loss_fns = {}
@@ -841,14 +871,14 @@ class ELBOLoss(nn.Module):
 
         cum_loss, metrics, monitor_data = self.aggregate_losses(loss_fns)
         return cum_loss, metrics, monitor_data
-    
+
     def forward(
         self,
         feat_dict: dict[str, Any],
         pred_dict: dict[str, torch.Tensor],
         label_dict: dict[str, Any],
         mode: str = "train",
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:        
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         assert mode in ["train", "eval", "inference"]
 
         # Calculate losses
@@ -860,4 +890,3 @@ class ELBOLoss(nn.Module):
         )
 
         return cum_loss, losses, monitor_data
-        

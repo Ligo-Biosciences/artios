@@ -165,7 +165,6 @@ class ArtiosAllAtomTrainer(object):
 
     def init_model(self):
         self.raw_model = ArtiosAllAtomVAE(self.configs).to(self.device)
-        self.loss = self.raw_model.loss
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
             self.print("Using DDP")

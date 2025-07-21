@@ -61,12 +61,16 @@ default_weighted_pdb_configs = {
 }
 
 
-DATA_ROOT_DIR = "/af3-dev-backbone/release_data/" # BEWARE: adjusted to absolute path for Modal!
+DATA_ROOT_DIR = (
+    "af3-dev-backbone/release_data/"  # BEWARE: adjusted to absolute path for Modal!
+)
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
 CCD_COMPONENTS_FILE_PATH = os.path.join(DATA_ROOT_DIR, "components.cif")
-CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(DATA_ROOT_DIR, "components.cif.rdkit_mol.pkl")
+CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
+    DATA_ROOT_DIR, "components.cif.rdkit_mol.pkl"
+)
 
 if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
     not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
@@ -74,7 +78,9 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
     # Try with leading slash if original path doesn't exist
     alt_data_root = "/" + DATA_ROOT_DIR
     CCD_COMPONENTS_FILE_PATH = os.path.join(alt_data_root, "components.cif")
-    CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(alt_data_root, "components.cif.rdkit_mol.pkl")
+    CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
+        alt_data_root, "components.cif.rdkit_mol.pkl"
+    )
 
 # if still not found, try with date in filename
 if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
@@ -88,7 +94,9 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
         not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
     ):
         alt_data_root = "/" + DATA_ROOT_DIR
-        CCD_COMPONENTS_FILE_PATH = os.path.join(DATA_ROOT_DIR, "components.v20240608.cif")
+        CCD_COMPONENTS_FILE_PATH = os.path.join(
+            DATA_ROOT_DIR, "components.v20240608.cif"
+        )
         CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
             DATA_ROOT_DIR, "components.v20240608.cif.rdkit_mol.pkl"
         )
@@ -133,7 +141,9 @@ data_configs = {
     "epoch_size": 10000,
     "train_ref_pos_augment": True,
     "test_ref_pos_augment": True,
-    "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925", "distillation"]),
+    "train_sets": ListValue(
+        ["weightedPDB_before2109_wopb_nometalc_0925", "distillation"]
+    ),
     "train_sampler": {
         "train_sample_weights": ListValue([0.5, 0.5]),
         "sampler_type": "weighted",
@@ -161,7 +171,9 @@ data_configs = {
     "distillation": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "distillation/mmcif"),
-            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "distillation/mmcif_bioassembly"),
+            "bioassembly_dict_dir": os.path.join(
+                DATA_ROOT_DIR, "distillation/mmcif_bioassembly"
+            ),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
                 "indices/distillation_sample_indices.csv",  # .gz
@@ -180,7 +192,9 @@ data_configs = {
     "recentPDB_1536_sample384_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
-            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "recentPDB_bioassembly"),
+            "bioassembly_dict_dir": os.path.join(
+                DATA_ROOT_DIR, "recentPDB_bioassembly"
+            ),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
                 "indices/recentPDB_low_homology_maxtoken1536_no_nucleic.csv",
@@ -196,7 +210,9 @@ data_configs = {
     "posebusters_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "posebusters_mmcif"),
-            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "posebusters_bioassembly"),
+            "bioassembly_dict_dir": os.path.join(
+                DATA_ROOT_DIR, "posebusters_bioassembly"
+            ),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR, "indices/posebusters_indices_mainchain_interface.csv"
             ),

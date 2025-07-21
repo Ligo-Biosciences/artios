@@ -707,7 +707,7 @@ class ReconstructionLoss(nn.Module):
                 [N_atom] or [..., N_atom]
             per_sample_scale (float): the per sample scale.
         """
-        coord_loss, _, _ = self.coord_loss(
+        coord_loss = self.coord_loss(
             pred_coords=pred_coords,
             true_coords=true_coords,
             coordinate_mask=coordinate_mask,

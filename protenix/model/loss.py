@@ -437,12 +437,12 @@ class MSELoss(nn.Module):
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
 
-        raw_loss = per_sample_weighted_mse.detach().clone()
+        # raw_loss = per_sample_weighted_mse.detach().clone()
 
         weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
-        raw_loss = (
-            weighted_align_mse_loss.clone().detach()
-        )  # Store raw loss before uncertainty scaling
+        # raw_loss = (
+        #    weighted_align_mse_loss.clone().detach()
+        # )  # Store raw loss before uncertainty scaling
 
         # Balance grads between timesteps during training
         if self.training and self.use_uncertainty:
@@ -454,7 +454,7 @@ class MSELoss(nn.Module):
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
 
         # Return the loss, metrics and monitor data
-        return loss, {}, {"raw_loss": raw_loss, "timestep": timestep.clone()}
+        return loss  # , {}, {"raw_loss": raw_loss, "timestep": timestep.clone()}
 
 
 class ProtenixLoss(nn.Module):

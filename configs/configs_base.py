@@ -336,6 +336,7 @@ loss_configs = {
             ["chain_pair_iptm", "chain_pair_iptm_global", "chain_pair_plddt"]
         ),
         "clash": {"af3_clash_threshold": 1.1, "vdw_clash_threshold": 0.75},
+        "track_latents": True,
     },
 }
 

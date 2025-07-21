@@ -847,7 +847,7 @@ class ELBOLoss(nn.Module):
         loss_fns.update(
             {
                 "reconstruction_loss": lambda: self.reconstruction_loss(
-                    pred_coords=pred_dict["real_pred_coords"],
+                    pred_coords=pred_dict["coordinate"],
                     true_coords=label_dict["coordinate"],
                     coordinate_mask=label_dict["coordinate_mask"],
                     pred_seq=pred_dict["seq_logits"],

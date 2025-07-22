@@ -75,7 +75,8 @@ class SequenceMetrics(nn.Module):
         dim: int = -1,
         aggregators: dict = {},
     ) -> dict:
-        """Aggregate sequence metrics across samples
+        """
+        Aggregate sequence metrics across samples.
 
         Args:
             vals (torch.Tensor): Values to aggregate [..., N_sample]
@@ -104,7 +105,8 @@ class SequenceMetrics(nn.Module):
         }
 
     def aggregate_sequence_metrics(self, sequence_dict: dict) -> tuple[dict, dict]:
-        """Aggregate sequence recovery metrics
+        """
+        Aggregate sequence recovery metrics
 
         Args:
             sequence_dict (dict): Dictionary containing sequence recovery values

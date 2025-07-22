@@ -102,7 +102,7 @@ model_configs = {
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
     "sigma_data": 12.0,
-    "diffusion_batch_size": 48,
+    "diffusion_batch_size": 16,
     "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
@@ -197,11 +197,11 @@ model_configs = {
             "c_z": GlobalConfigValue("c_z"),
             "sigma_data": GlobalConfigValue("sigma_data"),
             "encoder": {
-                "n_blocks": 12,  # TODO: this is a lot, we should consider shrinking
+                "n_blocks": 3,  # TODO: this is a lot, we should consider shrinking
                 "n_heads": 16,
             },
             "decoder": {
-                "n_blocks": 12,
+                "n_blocks": 3,
                 "n_heads": 4,
             },
         },

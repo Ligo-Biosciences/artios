@@ -624,6 +624,8 @@ class ArtiosAllAtomTrainer(object):
 
         while True:
             for batch in self.train_dl:
+                # Print pdb id and step
+                print(f"pdb_id: {batch['basic']['pdb_id']}, step: {self.step}")
                 is_update_step = (self.global_step + 1) % self.iters_to_accumulate == 0
                 is_last_step = (self.step + 1) == self.configs.max_steps
                 step_need_log = (self.step + 1) % self.configs.log_interval == 0

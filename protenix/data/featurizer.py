@@ -319,21 +319,6 @@ class Featurizer(object):
         token_features["restype"] = restype_onehot
         token_features["centre_atom_coords"] = torch.Tensor(centre_atoms.coord)
 
-        is_ligand_atom = torch.Tensor(self.cropped_atom_array.is_ligand).to(
-            dtype=torch.bool
-        )  # [N_atom]
-        atom_token_idx = torch.Tensor(
-            self.cropped_atom_array.atom_to_token_idx
-        ).long()  # [N_atom]
-        is_ligand_token = torch.zeros(
-            len(self.cropped_token_array), dtype=torch.bool
-        )  # [N_token]
-        is_ligand_token.scatter_(
-            dim=-1, index=atom_token_idx, src=is_ligand_atom
-        )  # [N_token]
-
-        token_features["is_ligand_token"] = is_ligand_token
-
         return token_features
 
     def get_chain_perm_features(self) -> dict[str, torch.Tensor]:
@@ -509,13 +494,15 @@ class Featurizer(object):
                 atom_to_token_idx_dict[atom_idx] = idx
 
         # Ensure the order of the atom_to_token_idx is the same as the atom_array
-        atom_to_token_idx = [
-            atom_to_token_idx_dict[atom_idx]
-            for atom_idx in range(len(self.cropped_atom_array))
-        ]
+        atom_to_token_idx = torch.Tensor(
+            [
+                atom_to_token_idx_dict[atom_idx]
+                for atom_idx in range(len(self.cropped_atom_array))
+            ]
+        ).long()
 
         extra_features = {}
-        extra_features["atom_to_token_idx"] = torch.Tensor(atom_to_token_idx).long()
+        extra_features["atom_to_token_idx"] = atom_to_token_idx
         extra_features["atom_to_tokatom_idx"] = torch.Tensor(
             self.cropped_atom_array.tokatom_idx
         ).long()
@@ -534,6 +521,15 @@ class Featurizer(object):
             )
         else:
             extra_features["resolution"] = torch.Tensor([-1])
+
+        for mol_type in ["ligand", "protein", "dna", "rna"]:
+            is_x_atom = torch.Tensor(
+                getattr(self.cropped_atom_array, f"is_{mol_type}")
+            ).to(dtype=torch.bool)
+            is_x_token = torch.zeros(len(self.cropped_token_array), dtype=torch.bool)
+            is_x_token.scatter_(dim=-1, index=atom_to_token_idx, src=is_x_atom)
+            extra_features[f"is_{mol_type}_token"] = is_x_token
+
         return extra_features
 
     @staticmethod

@@ -32,7 +32,8 @@ from configs.configs_data import data_configs
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
-from protenix.metrics.lddt_metrics import LDDTMetrics
+
+# from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import ELBOLoss
@@ -166,7 +167,7 @@ class ArtiosAllAtomTrainer(object):
         self.symmetric_permutation = SymmetricPermutation(
             self.configs, error_dir=self.error_dir
         )
-        self.lddt_metrics = LDDTMetrics(self.configs)
+        # self.lddt_metrics = LDDTMetrics(self.configs)
         self.sequence_metrics = SequenceMetrics()
 
     def init_model(self):
@@ -353,9 +354,9 @@ class ArtiosAllAtomTrainer(object):
         metrics_dict = {}
 
         # LDDT metrics
-        metrics_dict["lddt"] = self.lddt_metrics.compute_lddt(
-            batch["pred_dict"], batch["label_dict"]
-        )
+        # metrics_dict["lddt"] = self.lddt_metrics.compute_lddt(
+        #    batch["pred_dict"], batch["label_dict"]
+        # )
 
         # Sequence metrics
         metrics_dict["sequence"] = self.sequence_metrics.compute_metrics(
@@ -368,12 +369,12 @@ class ArtiosAllAtomTrainer(object):
     def aggregate_metrics(self, metrics_dict: dict) -> dict:
         simple_metrics = {}
 
-        lddt_dict, _ = self.lddt_metrics.aggregate_lddt(metrics_dict["lddt"])
+        # lddt_dict, _ = self.lddt_metrics.aggregate_lddt(metrics_dict["lddt"])
         sequence_dict, _ = self.sequence_metrics.aggregate_sequence_metrics(
             metrics_dict["sequence"]
         )
 
-        simple_metrics.update(lddt_dict)
+        # simple_metrics.update(lddt_dict)
         simple_metrics.update(sequence_dict)
 
         return simple_metrics

@@ -167,7 +167,7 @@ class ArtiosAllAtomTrainer(object):
             self.configs, error_dir=self.error_dir
         )
         self.lddt_metrics = LDDTMetrics(self.configs)
-        self.sequence_metrics = SequenceMetrics(self.configs)
+        self.sequence_metrics = SequenceMetrics()
 
     def init_model(self):
         self.raw_model = ArtiosAllAtomVAE(self.configs).to(self.device)

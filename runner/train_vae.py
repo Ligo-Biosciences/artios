@@ -323,15 +323,20 @@ class ArtiosAllAtomTrainer(object):
             tuple[dict, dict]: Predictions and log dict.
         """
         assert mode in ["train", "eval"]
-        batch["pred_dict"], batch["label_dict"], log_dict = self.model(
-            input_feature_dict=batch["input_feature_dict"],
-            label_dict=batch["label_dict"],
-            label_full_dict=batch["label_full_dict"],
-            mode=mode,
-            current_step=self.step if mode == "train" else None,
-            symmetric_permutation=self.symmetric_permutation,
-            # seed=seed,
-        )
+        try:
+            batch["pred_dict"], batch["label_dict"], log_dict = self.model(
+                input_feature_dict=batch["input_feature_dict"],
+                label_dict=batch["label_dict"],
+                label_full_dict=batch["label_full_dict"],
+                mode=mode,
+                current_step=self.step if mode == "train" else None,
+                symmetric_permutation=self.symmetric_permutation,
+                # seed=seed,
+            )
+        except Exception as e:
+            print(f"Error in model forward: {e}")
+            print(f"pdb_id: {batch['basic']['pdb_id']}, step: {self.step}")
+            raise e
         return batch, log_dict
 
     def get_loss(

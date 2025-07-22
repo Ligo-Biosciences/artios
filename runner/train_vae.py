@@ -515,7 +515,6 @@ class ArtiosAllAtomTrainer(object):
         )
 
         with enable_amp:
-            print(f"pdb_id: {batch['basic']['pdb_id']}, step: {self.step}")
             batch, _ = self.model_forward(batch, mode="train")
             loss, loss_dict, _ = self.get_loss(batch, mode="train")
 

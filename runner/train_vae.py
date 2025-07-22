@@ -32,7 +32,8 @@ from configs.configs_data import data_configs
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
-from protenix.metrics.lddt_metrics import LDDTMetrics  # TODO: remove
+from protenix.metrics.lddt_metrics import LDDTMetrics
+from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import ELBOLoss
 from protenix.utils.distributed import DIST_WRAPPER
@@ -42,7 +43,11 @@ from protenix.utils.monitoring import grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
-from protenix.utils.training import get_optimizer, is_loss_nan_check
+from protenix.utils.training import (
+    get_optimizer,
+    is_loss_nan_check,
+    prepare_latent_table_rows,
+)
 from runner.ema import EMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -161,7 +166,8 @@ class ArtiosAllAtomTrainer(object):
         self.symmetric_permutation = SymmetricPermutation(
             self.configs, error_dir=self.error_dir
         )
-        self.lddt_metrics = LDDTMetrics(self.configs)  # TODO: remove
+        self.lddt_metrics = LDDTMetrics(self.configs)
+        self.sequence_metrics = SequenceMetrics(self.configs)
 
     def init_model(self):
         self.raw_model = ArtiosAllAtomVAE(self.configs).to(self.device)
@@ -344,17 +350,31 @@ class ArtiosAllAtomTrainer(object):
 
     @torch.no_grad()
     def get_metrics(self, batch: dict) -> dict:
-        """TODO: remove function"""
-        lddt_dict = self.lddt_metrics.compute_lddt(
+        metrics_dict = {}
+
+        # LDDT metrics
+        metrics_dict["lddt"] = self.lddt_metrics.compute_lddt(
             batch["pred_dict"], batch["label_dict"]
         )
 
-        return lddt_dict
+        # Sequence metrics
+        metrics_dict["sequence"] = self.sequence_metrics.compute_metrics(
+            batch["pred_dict"], batch["input_feature_dict"]
+        )
+
+        return metrics_dict
 
     @torch.no_grad()
-    def aggregate_metrics(self, lddt_dict: dict, batch: dict) -> dict:
-        """TODO: remove function"""
-        simple_metrics, _ = self.lddt_metrics.aggregate_lddt(lddt_dict)
+    def aggregate_metrics(self, metrics_dict: dict) -> dict:
+        simple_metrics = {}
+
+        lddt_dict, _ = self.lddt_metrics.aggregate_lddt(metrics_dict["lddt"])
+        sequence_dict, _ = self.sequence_metrics.aggregate_sequence_metrics(
+            metrics_dict["sequence"]
+        )
+
+        simple_metrics.update(lddt_dict)
+        simple_metrics.update(sequence_dict)
 
         return simple_metrics
 
@@ -391,6 +411,8 @@ class ArtiosAllAtomTrainer(object):
             evaluated_pids = []
             total_batch_num = len(test_dl)
 
+            wandb_table = None
+
             for index, batch in enumerate(tqdm(test_dl)):
                 batch = to_device(batch, self.device)
                 pid = batch["basic"]["pdb_id"]
@@ -411,15 +433,42 @@ class ArtiosAllAtomTrainer(object):
                     # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode, seed=index)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    # TODO: lddt metrics?
                     loss, loss_dict, monitor_data = self.get_loss(
                         batch, mode="train"
                     )  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)
+                    # Additional metrics
+                    metrics_dict = self.get_metrics(batch)
+                    simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
                 # Metrics
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(key, value, namespace="val")
+
+                # Log latents
+                if (
+                    self.configs.metrics.track_latents
+                    and self.configs.use_wandb
+                    and DIST_WRAPPER.rank == 0
+                    and index < 100
+                ):
+                    latents = batch["pred_dict"]["latents_mean"].detach().cpu()
+                    c_latent = latents.shape[-1]
+
+                    # Create table
+                    if wandb_table is None:
+                        columns = ["restype"] + [f"latent_{i}" for i in range(c_latent)]
+                        wandb_table = wandb.Table(columns=columns)
+
+                    # Create rows
+                    rows = prepare_latent_table_rows(
+                        latents, batch["label_dict"]["restype_onehot"]
+                    )
+
+                    # Add rows
+                    for row in rows:
+                        wandb_table.add_data(*row)
+                    wandb.log({"latents": wandb_table}, step=self.step)
 
                 del batch, simple_metrics
                 if index % 5 == 0:

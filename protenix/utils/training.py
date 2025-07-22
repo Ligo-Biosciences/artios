@@ -13,9 +13,12 @@
 # limitations under the License.
 
 import inspect
+from typing import List
 
 import torch
 import torch.distributed as dist
+
+from protenix.model.utils import expand_at_dim
 
 
 def get_adamw(
@@ -62,7 +65,9 @@ def get_adamw(
     fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
     use_fused = fused_available and device_type == "cuda"
     extra_args = dict(fused=True) if use_fused else dict()
-    optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+    optimizer = torch.optim.AdamW(
+        optim_groups, lr=learning_rate, betas=betas, **extra_args
+    )
     print(f"using fused AdamW: {use_fused}")
 
     return optimizer
@@ -114,3 +119,43 @@ def is_loss_nan_check(loss: torch.Tensor) -> bool:
     if nan_flag.item() > 0.0:
         return True
     return False
+
+
+def prepare_latent_table_rows(
+    latents_mean: torch.Tensor,
+    restype_onehot: torch.Tensor,
+) -> List[List[float]]:
+    """
+    Flatten latents and ground-truth restypes into rows for logging.
+
+    Args:
+        latents_mean: Tensor of shape [..., N_sample, N_token, c_latent]
+        restype_onehot: Tensor of shape [..., N_token, N_restype]
+
+    Returns:
+        rows: A list where each element is
+              [restype_idx, latent_0, latent_1, ..., latent_{c_latent-1}]
+              suitable for wandb.Table.add_data or CSV writing.
+    """
+    N_sample = latents_mean.shape[-3]
+    N_token = latents_mean.shape[-2]
+    c_latent = latents_mean.shape[-1]
+
+    # Detach tensors to CPU
+    z = latents_mean.detach().cpu()
+    r_onehot = restype_onehot.detach().cpu()
+
+    # Convert one-hot to indices
+    restype_idx = torch.argmax(r_onehot, dim=-1)
+
+    # Expand restype indices across samples # [...,N_token] -> [...,N_sample * N_token]
+    restype_flat = expand_at_dim(restype_idx, dim=-2, n=N_sample)
+    restype_flat = restype_flat.reshape(*restype_flat.shape[:-2], N_sample * N_token)
+
+    # Flatten latent vectors across N_sample and N_token
+    z_flat = z.reshape(*z.shape[:-3], N_sample * N_token, c_latent)
+
+    # Build rows: first element = restype, remainder = latent values
+    rows = [[r, *vec.tolist()] for r, vec in zip(restype_flat, z_flat)]
+
+    return rows

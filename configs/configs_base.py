@@ -311,7 +311,7 @@ loss_configs = {
             "beta": 1.0,
             "reconstruction": {
                 "mse": {
-                    "weight_mse": 1 / 3,
+                    "weight_mse": 1.0,
                     "weight_dna": 5.0,
                     "weight_rna": 5.0,
                     "weight_ligand": 10.0,

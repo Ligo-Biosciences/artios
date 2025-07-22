@@ -688,7 +688,7 @@ class ReconstructionLoss(nn.Module):
         is_rna: torch.Tensor,
         is_dna: torch.Tensor,
         is_ligand: torch.Tensor,
-        per_sample_scale: float,
+        per_sample_scale: Optional[float] = None,
     ) -> torch.Tensor:
         """
 
@@ -705,7 +705,7 @@ class ReconstructionLoss(nn.Module):
                 [..., N_token]
             is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
                 [N_atom] or [..., N_atom]
-            per_sample_scale (float): the per sample scale.
+            per_sample_scale (Optional, float): the per sample scale.
         """
         coord_loss = self.coord_loss(
             pred_coords=pred_coords,
@@ -784,7 +784,7 @@ class ELBOLoss(nn.Module):
             "kl_divergence_loss": self.beta,
         }
 
-        self.per_sample_scale = 1 / (self.configs.sigma_data**2)
+        # self.per_sample_scale = 1 / (self.configs.sigma_data**2)
 
         # Reconstruction term
         self.reconstruction_loss = ReconstructionLoss(configs.loss.elbo.reconstruction)
@@ -855,7 +855,7 @@ class ELBOLoss(nn.Module):
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
-                    per_sample_scale=self.per_sample_scale,
+                    # per_sample_scale=self.per_sample_scale,
                 )
             }
         )

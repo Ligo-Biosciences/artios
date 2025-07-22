@@ -319,6 +319,21 @@ class Featurizer(object):
         token_features["restype"] = restype_onehot
         token_features["centre_atom_coords"] = torch.Tensor(centre_atoms.coord)
 
+        is_ligand_atom = torch.Tensor(self.cropped_atom_array.is_ligand).to(
+            dtype=torch.bool
+        )  # [N_atom]
+        atom_token_idx = torch.Tensor(
+            self.cropped_atom_array.atom_to_token_idx
+        ).long()  # [N_atom]
+        is_ligand_token = torch.zeros(
+            len(self.cropped_token_array), dtype=torch.bool
+        )  # [N_token]
+        is_ligand_token.scatter_(
+            dim=-1, index=atom_token_idx, src=is_ligand_atom
+        )  # [N_token]
+
+        token_features["is_ligand_token"] = is_ligand_token
+
         return token_features
 
     def get_chain_perm_features(self) -> dict[str, torch.Tensor]:

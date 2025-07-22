@@ -286,7 +286,7 @@ class Filter(object):
     def remove_polymer_chains_with_unknown_residues(
         atom_array: AtomArray,
         entity_poly_type: dict,
-        condition: str = "all" | "any",
+        condition: str = "all",
     ) -> AtomArray:
         """remove chains with all/any residues unknown"""
         if condition == "all":

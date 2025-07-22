@@ -370,11 +370,11 @@ class ArtiosAllAtomTrainer(object):
         simple_metrics = {}
 
         # lddt_dict, _ = self.lddt_metrics.aggregate_lddt(metrics_dict["lddt"])
+        # simple_metrics.update(lddt_dict)
+
         sequence_dict, _ = self.sequence_metrics.aggregate_sequence_metrics(
             metrics_dict["sequence"]
         )
-
-        # simple_metrics.update(lddt_dict)
         simple_metrics.update(sequence_dict)
 
         return simple_metrics

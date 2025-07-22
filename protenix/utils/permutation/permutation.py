@@ -70,12 +70,18 @@ class SymmetricPermutation(object):
         if self.configs.chain_permutation.train.mini_rollout:
             label_dict.update(permuted_label_dict)
             log_dict.update(
-                {f"minirollout_perm/Chain-{k}": v for k, v in chain_perm_log_dict.items()}
+                {
+                    f"minirollout_perm/Chain-{k}": v
+                    for k, v in chain_perm_log_dict.items()
+                }
             )
         else:
             # Log only, not update the label_dict
             log_dict.update(
-                {f"minirollout_perm/Chain.F-{k}": v for k, v in chain_perm_log_dict.items()}
+                {
+                    f"minirollout_perm/Chain.F-{k}": v
+                    for k, v in chain_perm_log_dict.items()
+                }
             )
 
         # 2. AtomPermutation: permute ground-truth atoms to match mini-rollout prediction
@@ -98,7 +104,10 @@ class SymmetricPermutation(object):
         else:
             # Log only, not update the label_dict
             log_dict.update(
-                {f"minirollout_perm/Atom.F-{k}": v for k, v in atom_perm_log_dict.items()}
+                {
+                    f"minirollout_perm/Atom.F-{k}": v
+                    for k, v in atom_perm_log_dict.items()
+                }
             )
 
         return label_dict, log_dict
@@ -123,9 +132,9 @@ class SymmetricPermutation(object):
             permute_by_pocket (bool): Whether to permute by pocket (for PoseBusters dataset). Defaults to False.
         """
 
-        assert pred_dict["coordinate"].size(-2) == label_dict["coordinate"].size(
-            -2
-        ), "Cannot perform per-sample permutation on predicted structures if the label structure has more atoms."
+        assert (
+            pred_dict["coordinate"].size(-2) == label_dict["coordinate"].size(-2)
+        ), f"Cannot perform per-sample permutation on predicted structures if label structure and predicted structure have different number of atoms (respectively {label_dict['coordinate'].size(-2)} and {pred_dict['coordinate'].size(-2)})."
 
         log_dict = {}
         permute_pred_indices, permute_label_indices = [], []
@@ -155,12 +164,18 @@ class SymmetricPermutation(object):
             if self.configs.chain_permutation.get(stage).diffusion_sample:
                 pred_dict.update(permuted_pred_dict)
                 log_dict.update(
-                    {f"sample_perm/Chain-{k}": v for k, v in chain_perm_log_dict.items()}
+                    {
+                        f"sample_perm/Chain-{k}": v
+                        for k, v in chain_perm_log_dict.items()
+                    }
                 )
             else:
                 # Log only, not update the pred_dict.
                 log_dict.update(
-                    {f"sample_perm/Chain.F-{k}": v for k, v in chain_perm_log_dict.items()}
+                    {
+                        f"sample_perm/Chain.F-{k}": v
+                        for k, v in chain_perm_log_dict.items()
+                    }
                 )
 
         # AtomPermutation: permute predicted atoms to match label structure.
@@ -205,7 +220,9 @@ class SymmetricPermutation(object):
             for chain_perm_indices, atom_perm_indices in zip(
                 permute_pred_indices, atom_perm_pred_indices
             ):
-                updated_permute_pred_indices.append(chain_perm_indices[atom_perm_indices])
+                updated_permute_pred_indices.append(
+                    chain_perm_indices[atom_perm_indices]
+                )
             permute_pred_indices = updated_permute_pred_indices
         elif atom_perm_pred_indices is not None:
             permute_pred_indices = [
@@ -214,10 +231,14 @@ class SymmetricPermutation(object):
 
         if self.configs.atom_permutation.get(stage).diffusion_sample:
             pred_dict.update(permuted_pred_dict)
-            log_dict.update({f"sample_perm/Atom-{k}": v for k, v in atom_perm_log_dict.items()})
+            log_dict.update(
+                {f"sample_perm/Atom-{k}": v for k, v in atom_perm_log_dict.items()}
+            )
         else:
             # Log only, not update the pred_dict.
-            log_dict.update({f"sample_perm/Atom.F-{k}": v for k, v in atom_perm_log_dict.items()})
+            log_dict.update(
+                {f"sample_perm/Atom.F-{k}": v for k, v in atom_perm_log_dict.items()}
+            )
 
         return pred_dict, log_dict, permute_pred_indices, permute_label_indices
 
@@ -377,7 +398,9 @@ class SymmetricPermutation(object):
             for key in ["plddt", "resolved"]:
                 if key in pred_dict:
                     assert pred_dict[key].size(-2) == len(perm_indices)
-                    pred_dict[key][..., i, :, :] = pred_dict[key][..., i, perm_indices, :]
+                    pred_dict[key][..., i, :, :] = pred_dict[key][
+                        ..., i, perm_indices, :
+                    ]
 
             # permute tokens at dim=-2 and -3
             perm_atom_to_token_idx = atom_to_token_idx[perm_indices]
@@ -403,12 +426,16 @@ class SymmetricPermutation(object):
             if "contact_probs" in pred_dict:
                 contact_probs_i = pred_dict["contact_probs"].clone()
                 assert (
-                    contact_probs_i.size(-1) == contact_probs_i.size(-2) == len(perm_token_indices)
+                    contact_probs_i.size(-1)
+                    == contact_probs_i.size(-2)
+                    == len(perm_token_indices)
                 )
                 contact_probs_i = contact_probs_i[..., perm_token_indices, :][
                     ..., perm_token_indices
                 ]  # [N_token, N_token]
-                pred_dict.setdefault("per_sample_contact_probs", []).append(contact_probs_i)
+                pred_dict.setdefault("per_sample_contact_probs", []).append(
+                    contact_probs_i
+                )
 
         if "per_sample_contact_probs" in pred_dict:
             pred_dict["per_sample_contact_probs"] = torch.stack(

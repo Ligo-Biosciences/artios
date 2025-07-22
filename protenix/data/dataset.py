@@ -476,6 +476,10 @@ class BaseSingleDataset(Dataset):
         atom_array = bioassembly_dict["atom_array"]
         token_array = bioassembly_dict["token_array"]
 
+        # TODO: raise exception if UNK residue present
+        if np.any(atom_array.res_name == "UNK"):
+            raise ValueError("UNK residue present in the atom_array")
+
         atom_array = atom_array[atom_array.atom_name != "OXT"]
         token_array = AtomArrayTokenizer(atom_array).get_token_array()
 

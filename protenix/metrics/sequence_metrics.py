@@ -118,7 +118,7 @@ class SequenceMetrics(nn.Module):
 
         # Log metrics
         sequence_recovery = {
-            f"sequence/recovery/{name}": value
+            f"sequence_recovery/{name}": value
             for name, value in sequence_recovery.items()
         }
 

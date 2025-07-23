@@ -458,19 +458,45 @@ class ArtiosAllAtomTrainer(object):
                     and DIST_WRAPPER.rank == 0
                     and index < 100
                 ):
-                    latents = batch["pred_dict"]["latents_mean"].detach().cpu()
-                    c_latent = latents.shape[-1]
+                    try:
+                        latents = batch["pred_dict"]["latents_mean"].detach().cpu()
+                        restype = batch["input_feature_dict"]["restype"].detach().cpu()
 
-                    # Create table
-                    if wandb_table is None:
-                        columns = ["restype"] + [f"latent_{i}" for i in range(c_latent)]
-                        wandb_table = wandb.Table(columns=columns)
+                        # Debug prints
+                        print(f"Processing batch {index} for latent logging")
+                        print(f"Latents shape: {latents.shape}")
+                        print(f"Restype shape: {restype.shape}")
 
-                    # Create rows
-                    rows = prepare_latent_table_rows(
-                        latents, batch["input_feature_dict"]["restype"]
-                    )
-                    assert rows is not None
+                        c_latent = latents.shape[-1]
+
+                        # Create table only once per test dataset
+                        if wandb_table is None:
+                            columns = ["restype"] + [
+                                f"latent_{i}" for i in range(c_latent)
+                            ]
+                            wandb_table = wandb.Table(columns=columns)
+                            print(f"Created wandb table with {len(columns)} columns")
+
+                        # Create rows
+                        rows = prepare_latent_table_rows(latents, restype)
+                        print(f"Generated {len(rows)} rows")
+
+                        # Debug: print first few rows to verify data
+                        if len(rows) > 0:
+                            print(f"Sample row: {rows[0][:5]}...")  # First 5 elements
+
+                            # Add rows to table
+                            for row in rows:
+                                wandb_table.add_data(*row)
+                            print(f"Added {len(rows)} rows to table")
+                        else:
+                            print("WARNING: No rows generated!")
+
+                    except Exception as e:
+                        print(f"Error in latent logging: {e}")
+                        import traceback
+
+                        traceback.print_exc()
 
                     # Add rows
                     for row in rows:

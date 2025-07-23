@@ -625,102 +625,102 @@ class ProtenixLoss(nn.Module):
         return cum_loss, losses, monitor_data
 
 
-class ReconstructionLoss(nn.Module):
-    """
-    Reconstruction loss term in the ELBO.
-    """
+# class ReconstructionLoss(nn.Module):
+#     """
+#     Reconstruction loss term in the ELBO.
+#     """
 
-    def __init__(self, configs) -> None:
-        super(ReconstructionLoss, self).__init__()
-        self.configs = configs
+#     def __init__(self, configs) -> None:
+#         super(ReconstructionLoss, self).__init__()
+#         self.configs = configs
 
-        self.mse_loss = MSELoss(**configs.mse)
+#         self.mse_loss = MSELoss(**configs.mse)
 
-    def coord_loss(
-        self,
-        pred_coords: torch.Tensor,
-        true_coords: torch.Tensor,
-        coordinate_mask: torch.Tensor,
-        is_dna: torch.Tensor,
-        is_rna: torch.Tensor,
-        is_ligand: torch.Tensor,
-        per_sample_scale: float,
-    ) -> torch.Tensor:
-        """
-        Coordinate loss.
-        """
-        return self.mse_loss(
-            pred_coordinate=pred_coords,
-            true_coordinate=true_coords,
-            coordinate_mask=coordinate_mask,
-            is_dna=is_dna,
-            is_rna=is_rna,
-            is_ligand=is_ligand,
-            per_sample_scale=per_sample_scale,
-        )
+#     def coord_loss(
+#         self,
+#         pred_coords: torch.Tensor,
+#         true_coords: torch.Tensor,
+#         coordinate_mask: torch.Tensor,
+#         is_dna: torch.Tensor,
+#         is_rna: torch.Tensor,
+#         is_ligand: torch.Tensor,
+#         per_sample_scale: float,
+#     ) -> torch.Tensor:
+#         """
+#         Coordinate loss.
+#         """
+#         return self.mse_loss(
+#             pred_coordinate=pred_coords,
+#             true_coordinate=true_coords,
+#             coordinate_mask=coordinate_mask,
+#             is_dna=is_dna,
+#             is_rna=is_rna,
+#             is_ligand=is_ligand,
+#             per_sample_scale=per_sample_scale,
+#         )
 
-    def seq_loss(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
-        """
-        Sequence loss.
+#     def seq_loss(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
+#         """
+#         Sequence loss.
 
-        Args:
-            pred_seq (torch.Tensor): the predicted sequence logits.
-                [..., N_sample, N_token, N_restype]
-            true_seq (torch.Tensor): the ground truth sequence.
-                [..., N_token, N_restype]
-        """
-        # Expand true_seq to over N_sample
-        N_sample = pred_seq.shape[-3]
-        true_seq = expand_at_dim(true_seq, dim=-3, n=N_sample)
+#         Args:
+#             pred_seq (torch.Tensor): the predicted sequence logits.
+#                 [..., N_sample, N_token, N_restype]
+#             true_seq (torch.Tensor): the ground truth sequence.
+#                 [..., N_token, N_restype]
+#         """
+#         # Expand true_seq to over N_sample
+#         N_sample = pred_seq.shape[-3]
+#         true_seq = expand_at_dim(true_seq, dim=-3, n=N_sample)
 
-        # Calculate the cross entropy loss
-        seq_loss = softmax_cross_entropy(pred_seq, true_seq)  # [..., N_sample, N_token]
+#         # Calculate the cross entropy loss
+#         seq_loss = softmax_cross_entropy(pred_seq, true_seq)  # [..., N_sample, N_token]
 
-        return loss_reduction(seq_loss, method="mean")
+#         return loss_reduction(seq_loss, method="mean")
 
-    def forward(
-        self,
-        pred_coords: torch.Tensor,
-        true_coords: torch.Tensor,
-        coordinate_mask: torch.Tensor,
-        pred_seq: torch.Tensor,
-        true_seq: torch.Tensor,
-        is_rna: torch.Tensor,
-        is_dna: torch.Tensor,
-        is_ligand: torch.Tensor,
-        per_sample_scale: Optional[float] = None,
-    ) -> torch.Tensor:
-        """
+#     def forward(
+#         self,
+#         pred_coords: torch.Tensor,
+#         true_coords: torch.Tensor,
+#         coordinate_mask: torch.Tensor,
+#         pred_seq: torch.Tensor,
+#         true_seq: torch.Tensor,
+#         is_rna: torch.Tensor,
+#         is_dna: torch.Tensor,
+#         is_ligand: torch.Tensor,
+#         per_sample_scale: Optional[float] = None,
+#     ) -> torch.Tensor:
+#         """
 
-        Args:
-            pred_coordinate (torch.Tensor): the denoised coordinates from diffusion module.
-                [..., N_sample, N_atom, 3]
-            true_coordinate (torch.Tensor): the ground truth coordinates.
-                [..., N_atom, 3]
-            coordinate_mask (torch.Tensor): whether true coordinates exist.
-                [N_atom] or [..., N_atom]
-            pred_seq (torch.Tensor): the predicted sequence logits.
-                [..., N_sample, N_token, N_restype]
-            true_seq (torch.Tensor): the ground truth sequence.
-                [..., N_token]
-            is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
-                [N_atom] or [..., N_atom]
-            per_sample_scale (Optional, float): the per sample scale.
-        """
-        coord_loss = self.coord_loss(
-            pred_coords=pred_coords,
-            true_coords=true_coords,
-            coordinate_mask=coordinate_mask,
-            is_dna=is_dna,
-            is_rna=is_rna,
-            is_ligand=is_ligand,
-            per_sample_scale=per_sample_scale,
-        )
-        seq_loss = self.seq_loss(
-            pred_seq=pred_seq,
-            true_seq=true_seq,
-        )
-        return coord_loss + seq_loss
+#         Args:
+#             pred_coordinate (torch.Tensor): the denoised coordinates from diffusion module.
+#                 [..., N_sample, N_atom, 3]
+#             true_coordinate (torch.Tensor): the ground truth coordinates.
+#                 [..., N_atom, 3]
+#             coordinate_mask (torch.Tensor): whether true coordinates exist.
+#                 [N_atom] or [..., N_atom]
+#             pred_seq (torch.Tensor): the predicted sequence logits.
+#                 [..., N_sample, N_token, N_restype]
+#             true_seq (torch.Tensor): the ground truth sequence.
+#                 [..., N_token]
+#             is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
+#                 [N_atom] or [..., N_atom]
+#             per_sample_scale (Optional, float): the per sample scale.
+#         """
+#         coord_loss = self.coord_loss(
+#             pred_coords=pred_coords,
+#             true_coords=true_coords,
+#             coordinate_mask=coordinate_mask,
+#             is_dna=is_dna,
+#             is_rna=is_rna,
+#             is_ligand=is_ligand,
+#             per_sample_scale=per_sample_scale,
+#         )
+#         seq_loss = self.seq_loss(
+#             pred_seq=pred_seq,
+#             true_seq=true_seq,
+#         )
+#         return coord_loss + seq_loss
 
 
 class SequenceLoss(nn.Module):
@@ -731,15 +731,9 @@ class SequenceLoss(nn.Module):
     def __init__(self) -> None:
         super(SequenceLoss, self).__init__()
 
-    def seq_loss(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
         """
-        Sequence loss.
-
-        Args:
-            pred_seq (torch.Tensor): the predicted sequence logits.
-                [..., N_sample, N_token, N_restype]
-            true_seq (torch.Tensor): the ground truth sequence.
-                [..., N_token, N_restype]
+        Cross entropy loss, averaged over all tokens.
         """
         # Expand true_seq to over N_sample
         N_sample = pred_seq.shape[-3]
@@ -749,12 +743,6 @@ class SequenceLoss(nn.Module):
         seq_loss = softmax_cross_entropy(pred_seq, true_seq)  # [..., N_sample, N_token]
 
         return loss_reduction(seq_loss, method="mean")
-
-    def forward(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass for the sequence loss.
-        """
-        return self.seq_loss(pred_seq, true_seq)
 
 
 class KLDivergenceLoss(nn.Module):
@@ -899,8 +887,8 @@ class ELBOLoss(nn.Module):
         loss_fns.update(
             {
                 "mse_loss": lambda: self.mse_loss(
-                    pred_coords=pred_dict["coordinate"],
-                    true_coords=label_dict["coordinate"],
+                    pred_coordinate=pred_dict["coordinate"],
+                    true_coordinate=label_dict["coordinate"],
                     coordinate_mask=label_dict["coordinate_mask"],
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],

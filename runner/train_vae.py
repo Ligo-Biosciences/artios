@@ -47,7 +47,6 @@ from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import (
     get_optimizer,
     is_loss_nan_check,
-    prepare_latent_table_rows,
 )
 from runner.ema import EMAWrapper
 
@@ -417,8 +416,6 @@ class ArtiosAllAtomTrainer(object):
             evaluated_pids = []
             total_batch_num = len(test_dl)
 
-            wandb_table = None
-
             for index, batch in enumerate(tqdm(test_dl)):
                 batch = to_device(batch, self.device)
                 pid = batch["basic"]["pdb_id"]
@@ -451,60 +448,7 @@ class ArtiosAllAtomTrainer(object):
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(key, value, namespace="val")
 
-                # Log latents
-                if (
-                    self.configs.metrics.track_latents
-                    and self.configs.use_wandb
-                    and DIST_WRAPPER.rank == 0
-                    and index < 100
-                ):
-                    try:
-                        latents = (
-                            batch["pred_dict"]["latents_mean"][:5, :, :].detach().cpu()
-                        )
-                        restype = batch["input_feature_dict"]["restype"].detach().cpu()
-
-                        # Debug prints
-                        print(f"Processing batch {index} for latent logging")
-                        print(f"Latents shape: {latents.shape}")
-                        print(f"Restype shape: {restype.shape}")
-
-                        c_latent = latents.shape[-1]
-
-                        # Create table only once per test dataset
-                        if wandb_table is None:
-                            columns = ["restype"] + [
-                                f"latent_{i}" for i in range(c_latent)
-                            ]
-                            wandb_table = wandb.Table(columns=columns)
-                            print(f"Created wandb table with {len(columns)} columns")
-
-                        # Create rows
-                        rows = prepare_latent_table_rows(latents, restype)
-                        print(f"Generated {len(rows)} rows")
-
-                        # Debug: print first few rows to verify data
-                        if len(rows) > 0:
-                            print(f"Sample row: {rows[0][:5]}...")  # First 5 elements
-
-                            # Add rows to table
-                            for row in rows:
-                                wandb_table.add_data(*row)
-                            print(f"Added {len(rows)} rows to table")
-                        else:
-                            print("WARNING: No rows generated!")
-
-                    except Exception as e:
-                        print(f"Error in latent logging: {e}")
-                        import traceback
-
-                        traceback.print_exc()
-
-                    # Add rows
-                    wandb.log({"latents": wandb_table}, step=self.step)
-
                 del batch, simple_metrics
-                wandb_table = None
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()

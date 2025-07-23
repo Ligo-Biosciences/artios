@@ -723,6 +723,41 @@ class ReconstructionLoss(nn.Module):
         return coord_loss + seq_loss
 
 
+class SequenceLoss(nn.Module):
+    """
+    Sequence loss term in the ELBO.
+    """
+
+    def __init__(self, configs) -> None:
+        super(SequenceLoss, self).__init__()
+        self.configs = configs
+
+    def seq_loss(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
+        """
+        Sequence loss.
+
+        Args:
+            pred_seq (torch.Tensor): the predicted sequence logits.
+                [..., N_sample, N_token, N_restype]
+            true_seq (torch.Tensor): the ground truth sequence.
+                [..., N_token, N_restype]
+        """
+        # Expand true_seq to over N_sample
+        N_sample = pred_seq.shape[-3]
+        true_seq = expand_at_dim(true_seq, dim=-3, n=N_sample)
+
+        # Calculate the cross entropy loss
+        seq_loss = softmax_cross_entropy(pred_seq, true_seq)  # [..., N_sample, N_token]
+
+        return loss_reduction(seq_loss, method="mean")
+
+    def forward(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the sequence loss.
+        """
+        return self.seq_loss(pred_seq, true_seq)
+
+
 class KLDivergenceLoss(nn.Module):
     """
     KL divergence loss term in the ELBO.
@@ -780,14 +815,17 @@ class ELBOLoss(nn.Module):
         self.beta = configs.loss.elbo.beta
 
         self.loss_weight = {
-            "reconstruction_loss": 1.0,
+            "mse_loss": 1.0,
+            "sequence_loss": 1.0,
             "kl_divergence_loss": self.beta,
         }
 
         # self.per_sample_scale = 1 / (self.configs.sigma_data**2)
 
         # Reconstruction term
-        self.reconstruction_loss = ReconstructionLoss(configs.loss.elbo.reconstruction)
+        # self.reconstruction_loss = ReconstructionLoss(configs.loss.elbo.reconstruction)
+        self.mse_loss = MSELoss(**configs.loss.elbo.reconstruction.mse)
+        self.sequence_loss = SequenceLoss(**configs.loss.elbo.reconstruction.sequence)
 
         # KL divergence term
         self.kl_divergence_loss = KLDivergenceLoss(**configs.loss.elbo.kl_divergence)
@@ -844,18 +882,39 @@ class ELBOLoss(nn.Module):
         assert mode in ["train", "eval", "inference"]
         loss_fns = {}
 
+        # loss_fns.update(
+        #     {
+        #         "reconstruction_loss": lambda: self.reconstruction_loss(
+        #             pred_coords=pred_dict["coordinate"],
+        #             true_coords=label_dict["coordinate"],
+        #             coordinate_mask=label_dict["coordinate_mask"],
+        #             pred_seq=pred_dict["seq_logits"],
+        #             true_seq=feat_dict["restype"],
+        #             is_rna=feat_dict["is_rna"],
+        #             is_dna=feat_dict["is_dna"],
+        #             is_ligand=feat_dict["is_ligand"],
+        #             # per_sample_scale=self.per_sample_scale,
+        #         )
+        #     }
+        # )
         loss_fns.update(
             {
-                "reconstruction_loss": lambda: self.reconstruction_loss(
+                "mse_loss": lambda: self.mse_loss(
                     pred_coords=pred_dict["coordinate"],
                     true_coords=label_dict["coordinate"],
                     coordinate_mask=label_dict["coordinate_mask"],
-                    pred_seq=pred_dict["seq_logits"],
-                    true_seq=feat_dict["restype"],
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
-                    # per_sample_scale=self.per_sample_scale,
+                )
+            }
+        )
+
+        loss_fns.update(
+            {
+                "sequence_loss": lambda: self.sequence_loss(
+                    pred_seq=pred_dict["seq_logits"],
+                    true_seq=feat_dict["restype"],
                 )
             }
         )

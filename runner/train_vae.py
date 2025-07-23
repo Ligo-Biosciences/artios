@@ -470,6 +470,7 @@ class ArtiosAllAtomTrainer(object):
                     rows = prepare_latent_table_rows(
                         latents, batch["input_feature_dict"]["restype"]
                     )
+                    assert rows is not None
 
                     # Add rows
                     for row in rows:

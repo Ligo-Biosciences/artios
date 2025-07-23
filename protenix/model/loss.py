@@ -728,9 +728,8 @@ class SequenceLoss(nn.Module):
     Sequence loss term in the ELBO.
     """
 
-    def __init__(self, configs) -> None:
+    def __init__(self) -> None:
         super(SequenceLoss, self).__init__()
-        self.configs = configs
 
     def seq_loss(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
         """
@@ -825,7 +824,7 @@ class ELBOLoss(nn.Module):
         # Reconstruction term
         # self.reconstruction_loss = ReconstructionLoss(configs.loss.elbo.reconstruction)
         self.mse_loss = MSELoss(**configs.loss.elbo.reconstruction.mse)
-        self.sequence_loss = SequenceLoss(**configs.loss.elbo.reconstruction.sequence)
+        self.sequence_loss = SequenceLoss()
 
         # KL divergence term
         self.kl_divergence_loss = KLDivergenceLoss(**configs.loss.elbo.kl_divergence)

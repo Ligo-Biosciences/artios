@@ -308,7 +308,7 @@ loss_configs = {
             "eps": 1e-6,
         },
         "elbo": {
-            "beta": 1.0,
+            "beta": 1e-4,
             "reconstruction": {
                 "mse": {
                     "weight_mse": 1.0,

@@ -121,6 +121,30 @@ def is_loss_nan_check(loss: torch.Tensor) -> bool:
     return False
 
 
+def flatten_nested(d, parent_key="", sep="/"):
+    """Flatten nested dictionaries for Neptune."""
+    items = {}
+
+    if isinstance(d, dict):
+        for k, v in d.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, (dict, list, tuple, set)):
+                items.update(flatten_nested(v, new_key, sep=sep))
+            else:
+                items[new_key] = v
+    elif isinstance(d, (list, tuple, set)):
+        for i, v in enumerate(d):
+            new_key = f"{parent_key}{sep}{i}" if parent_key else str(i)
+            if isinstance(v, (dict, list, tuple, set)):
+                items.update(flatten_nested(v, new_key, sep=sep))
+            else:
+                items[new_key] = v
+    else:
+        return d
+
+    return items
+
+
 def prepare_latent_table_rows(
     latents_mean: torch.Tensor,
     restype: torch.Tensor,

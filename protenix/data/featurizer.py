@@ -21,6 +21,7 @@ import torch
 from biotite.structure import Atom, AtomArray, get_residue_starts
 from sklearn.neighbors import KDTree
 
+from protenix.common.atom_types import DENSE_ATOM_NUM
 from protenix.common.constants import STD_RESIDUES, STD_RESIDUES_AND_GAP, get_all_elems
 from protenix.data.tokenizer import Token, TokenArray
 from protenix.data.utils import get_ligand_polymer_bond_mask
@@ -679,6 +680,21 @@ class Featurizer(object):
         features.update(mask_features)
         return features
 
+    def get_dense_atoms_to_flat_atoms_mask(self) -> torch.Tensor:
+        """
+        Get a per-token mask that is used to convert a dense atom representation
+        from the network to a flat atom representation.
+        """
+        # Initialize the mask
+        num_tokens = len(self.cropped_token_array)
+        dense_to_flat = np.zeros((num_tokens, DENSE_ATOM_NUM), dtype=int)
+
+        # Fill in the mask based on number of atoms in the token
+        for i, token in enumerate(self.cropped_token_array):
+            dense_to_flat[i, : len(token)] = 1
+
+        return torch.Tensor(dense_to_flat).long()
+
     def get_labels(self) -> dict[str, torch.Tensor]:
         """
         Get the input labels required for the training phase.
@@ -700,6 +716,14 @@ class Featurizer(object):
         labels["coordinate_mask"] = torch.Tensor(
             self.cropped_atom_array.is_resolved.astype(int)
         ).long()  # [N_atom]
+
+        # Dense to flat atom mask
+        num_tokens = len(self.cropped_token_array)
+        dense_to_flat = np.zeros((num_tokens, DENSE_ATOM_NUM), dtype=int)
+
+        for i, token in enumerate(self.cropped_token_array):
+            dense_to_flat[i, : len(token)] = 1
+        labels["dense_to_flat_atom_mask"] = torch.Tensor(dense_to_flat).long()
 
         return labels
 

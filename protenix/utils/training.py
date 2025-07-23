@@ -123,14 +123,14 @@ def is_loss_nan_check(loss: torch.Tensor) -> bool:
 
 def prepare_latent_table_rows(
     latents_mean: torch.Tensor,
-    restype_onehot: torch.Tensor,
+    restype: torch.Tensor,
 ) -> List[List[float]]:
     """
     Flatten latents and ground-truth restypes into rows for logging.
 
     Args:
         latents_mean: Tensor of shape [..., N_sample, N_token, c_latent]
-        restype_onehot: Tensor of shape [..., N_token, N_restype]
+        restype: Tensor of shape [..., N_token, N_restype]
 
     Returns:
         rows: A list where each element is
@@ -143,7 +143,7 @@ def prepare_latent_table_rows(
 
     # Detach tensors to CPU
     z = latents_mean.detach().cpu()
-    r_onehot = restype_onehot.detach().cpu()
+    r_onehot = restype.detach().cpu()
 
     # Convert one-hot to indices
     restype_idx = torch.argmax(r_onehot, dim=-1)

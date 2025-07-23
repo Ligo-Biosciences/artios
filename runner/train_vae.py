@@ -468,7 +468,7 @@ class ArtiosAllAtomTrainer(object):
 
                     # Create rows
                     rows = prepare_latent_table_rows(
-                        latents, batch["label_dict"]["restype_onehot"]
+                        latents, batch["input_feature_dict"]["restype"]
                     )
 
                     # Add rows

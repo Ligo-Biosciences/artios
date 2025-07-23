@@ -459,7 +459,9 @@ class ArtiosAllAtomTrainer(object):
                     and index < 100
                 ):
                     try:
-                        latents = batch["pred_dict"]["latents_mean"].detach().cpu()
+                        latents = (
+                            batch["pred_dict"]["latents_mean"][:5, :, :].detach().cpu()
+                        )
                         restype = batch["input_feature_dict"]["restype"].detach().cpu()
 
                         # Debug prints
@@ -499,11 +501,10 @@ class ArtiosAllAtomTrainer(object):
                         traceback.print_exc()
 
                     # Add rows
-                    for row in rows:
-                        wandb_table.add_data(*row)
                     wandb.log({"latents": wandb_table}, step=self.step)
 
                 del batch, simple_metrics
+                wandb_table = None
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()

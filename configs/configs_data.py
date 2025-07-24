@@ -61,9 +61,7 @@ default_weighted_pdb_configs = {
 }
 
 
-DATA_ROOT_DIR = (
-    "af3-dev-backbone/release_data/"  # BEWARE: adjusted to absolute path for Modal!
-)
+DATA_ROOT_DIR = "af3-dev/release_data/"  # BEWARE: adjusted to absolute path for Modal!
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -155,7 +153,7 @@ data_configs = {
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9_no_nucleic.csv",  # .gz
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv",  # .gz
             ),
             "pdb_list": "",
             "random_sample_if_failed": True,
@@ -197,7 +195,7 @@ data_configs = {
             ),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/recentPDB_low_homology_maxtoken1536_no_nucleic.csv",
+                "indices/recentPDB_low_homology_maxtoken1536.csv",
             ),
             "pdb_list": "",
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data

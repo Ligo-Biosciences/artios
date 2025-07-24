@@ -116,7 +116,7 @@ class ArtiosAllAtomTrainer(object):
                 # id=self.configs.wandb_id or None,
                 # TODO: resume logic
             )
-            self.run.log_configs(flatten_nested(self.configs))
+            self.run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["avg"])
 
     def init_env(self):

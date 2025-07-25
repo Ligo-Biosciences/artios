@@ -192,14 +192,17 @@ def analyse_latents(latents: dict, plot_per_batch: bool = False):
     if not latents["mean"]:
         return {}
 
+    # Reshape data across batch dimension
+    latents["mean"] = [a.reshape(-1, a.shape[-1]) for a in latents["mean"]]
+    latents["logvar"] = [a.reshape(-1, a.shape[-1]) for a in latents["logvar"]]
+    latents["restype"] = [a.reshape(-1) for a in latents["restype"]]
+
     # Combine batches if not plotting per batch
     if not plot_per_batch:
         latents = {
             "mean": [np.concatenate(latents["mean"], axis=-2)],
             "logvar": [np.concatenate(latents["logvar"], axis=-2)],
-            "restype": [
-                np.concatenate([a.reshape(-1) for a in latents["restype"]], axis=0)
-            ],
+            "restype": np.concatenate(latents["restype"], axis=0),
         }
 
     figs = {}

@@ -1,6 +1,6 @@
 from typing import Union
 
-import matplotlib.cm as cm
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -8,6 +8,8 @@ import torch
 from scipy.stats import gaussian_kde, probplot
 from sklearn.manifold import TSNE
 from torch.nn import Module
+
+from protenix.common.constants import STD_RESIDUES_AND_GAP
 
 
 def plot_loss_vs_timestep(
@@ -234,16 +236,26 @@ def plot_tsne(
         init="random",
     ).fit_transform(data)
 
+    # Create reverse mapping from index to residue name
+    index_to_residue = {v: k for k, v in STD_RESIDUES_AND_GAP.items()}
+
     # Unique labels and colour map
     uniq = np.unique(labels)
     n_classes = len(uniq)
-    cmap = cm.get_cmap("hsv", n_classes)
+
+    cmap = mpl.colormaps.get_cmap("tab20")
+    colors = cmap(np.linspace(0, 1, n_classes))
 
     fig, ax = plt.subplots(figsize=(10, 8))
-    for idx, label in enumerate(uniq):
-        mask = labels == label
+    for idx, label_idx in enumerate(uniq):
+        mask = labels == label_idx
+        # Map index to actual residue name
+        residue_name = index_to_residue.get(label_idx, f"UNK_{label_idx}")
         ax.scatter(
-            tsne_data[mask, 0], tsne_data[mask, 1], color=cmap(idx), label=str(label)
+            tsne_data[mask, 0],
+            tsne_data[mask, 1],
+            color=colors[idx],
+            label=residue_name,
         )
 
     ax.set_title(f"T-SNE visualization of latent means{batch_suffix}")
@@ -362,7 +374,13 @@ def plot_eigenvalues(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
     cumvar = np.cumsum(eigenvalues) / np.sum(eigenvalues)
 
     fig, ax1 = plt.subplots(figsize=(10, 6))
-    ax1.plot(range(1, len(eigenvalues) + 1), eigenvalues, "o-", markersize=4)
+    ax1.plot(
+        range(1, len(eigenvalues) + 1),
+        eigenvalues,
+        "o-",
+        markersize=4,
+        label="Eigenvalues",
+    )
     ax1.set_title(f"Eigenvalues of covariance matrix{batch_suffix}")
     ax1.set_xlabel("Eigenvalue Index")
     ax1.set_ylabel("Eigenvalue")
@@ -377,7 +395,7 @@ def plot_eigenvalues(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
         alpha=0.7,
         label="Cumulative variance",
     )
-    ax2.set_ylabel("Cumulative Variance Explained", color="r")
+    ax2.set_ylabel("Cumulative Variance", color="r")
     ax2.set_ylim(0, 1)
     # Make sure legend shows
     lines, labels = ax1.get_legend_handles_labels()

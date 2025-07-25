@@ -514,7 +514,7 @@ class ArtiosAllAtomTrainer(object):
                     plot_per_batch=self.configs.monitor.latents.plot_per_batch,
                 ).items():
                     # Save figure to file and log to neptune
-                    fig_path = f"{self.run_dir}/figures/{name}_step_{self.step}.png"
+                    fig_path = f"{self.run_dir}/figures/{name}.png"
                     os.makedirs(os.path.dirname(fig_path), exist_ok=True)
                     fig.savefig(fig_path, dpi=300, bbox_inches="tight")
 
@@ -523,7 +523,7 @@ class ArtiosAllAtomTrainer(object):
                         step=self.step,
                     )
                     plt.close(fig)
-                    os.remove(fig_path)
+                    # os.remove(fig_path)
 
     def update(self):
         # Clip the gradient

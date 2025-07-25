@@ -412,8 +412,8 @@ class ArtiosAllAtomTrainer(object):
         )  # [..., num_sample * N_token]
 
         # Detach and move to CPU
-        latents_mean = latents_mean.detach().cpu().numpy()
-        latents_logvar = latents_logvar.detach().cpu().numpy()
+        latents_mean = latents_mean.detach().cpu().float().numpy()
+        latents_logvar = latents_logvar.detach().cpu().float().numpy()
         restype = restype.cpu().numpy()
 
         return latents_mean, latents_logvar, restype

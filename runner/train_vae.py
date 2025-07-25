@@ -24,9 +24,7 @@ import numpy as np
 import rootutils
 import torch
 import torch.distributed as dist
-import wandb
-
-# from neptune_scale import Run
+from neptune_scale import Run
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
@@ -48,7 +46,7 @@ from protenix.utils.monitoring import analyse_latents, grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
-from protenix.utils.training import get_optimizer, is_loss_nan_check
+from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.ema import EMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -114,13 +112,11 @@ class ArtiosAllAtomTrainer(object):
 
     def init_log(self):
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            wandb.init(
+            self.neptune_run = Run(
                 project=self.configs.project,
-                name=self.run_name,
-                config=vars(self.configs),
-                id=self.configs.wandb_id or None,
+                experiment_name=self.run_name,
             )
-            # self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
+            self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["avg"])
 
     def init_env(self):
@@ -511,17 +507,23 @@ class ArtiosAllAtomTrainer(object):
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                wandb.log(metrics, step=self.step)
+                self.neptune_run.log_metrics(metrics, step=self.step)
 
                 for name, fig in analyse_latents(
                     self.latents,
                     plot_per_batch=self.configs.monitor.latents.plot_per_batch,
                 ).items():
-                    # wandb loggging
-                    wandb.log({name: wandb.Image(fig)}, step=self.step)
+                    # Save figure to file and log to neptune
+                    fig_path = f"{self.run_dir}/figures/{name}_step_{self.step}.png"
+                    os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+                    fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+
+                    self.neptune_run.log_files(
+                        files={f"figures/{name}": fig_path},
+                        step=self.step,
+                    )
                     plt.close(fig)
-                    # neptune logging
-                    # run[name].upload(fig)
+                    os.remove(fig_path)
 
     def update(self):
         # Clip the gradient
@@ -635,7 +637,9 @@ class ArtiosAllAtomTrainer(object):
 
             if DIST_WRAPPER.rank == 0:
                 # Log to wandb
-                wandb.log(weight_norms, step=self.step)
+                self.neptune_run.log_metrics(
+                    flatten_nested(weight_norms), step=self.step
+                )
 
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
@@ -649,7 +653,7 @@ class ArtiosAllAtomTrainer(object):
 
             # Log to wandb
             if DIST_WRAPPER.rank == 0:
-                wandb.log({"grad_norm": total_norm}, step=self.step)
+                self.neptune_run.log_metrics({"grad_norm": total_norm}, step=self.step)
 
     def run(self):
         """
@@ -696,13 +700,13 @@ class ArtiosAllAtomTrainer(object):
                     last_lr = self.lr_scheduler.get_last_lr()[0]
                     if DIST_WRAPPER.rank == 0:
                         if self.configs.use_wandb:
-                            wandb.log(
+                            self.neptune_run.log_metrics(
                                 {"train/lr": last_lr},
                                 step=self.step,
                             )
                         self.print(f"Step {self.step}, lr: {last_lr}")
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                        wandb.log(metrics, step=self.step)
+                        self.neptune_run.log_metrics(metrics, step=self.step)
 
                 if step_need_save or is_last_step:
                     self.print(f"beginning Saving checkpoint at step {self.step}")

@@ -201,7 +201,7 @@ data_configs = {
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
             "sort_by_n_token": False,
             "group_by_pdb_id": True,
-            "find_eval_chain_interface": True,
+            "find_eval_chain_interface": False,
         },
         **deepcopy(default_test_configs),
     },

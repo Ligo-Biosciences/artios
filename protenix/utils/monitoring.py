@@ -1,5 +1,6 @@
 from typing import Union
 
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -172,10 +173,12 @@ def analyse_latents(latents: dict, plot_per_batch: bool = False):
     Args:
         latents (dict): A dictionary containing the latents.
           Keys: "mean", "logvar"
-            mean (list[torch.Tensor]): List of batch_size mean latents. Each tensor
+            mean (list[np.array]): List of mean latents tensors. Each array
                 is of shape [N_sample*N_token, c_latent]
-            logvar (list[torch.Tensor]): List of batch_size logvar latents. Each tensor
+            logvar (list[np.array]): List of logvar latents tensors. Each array
                 is of shape [N_sample*N_token, c_latent]
+            restype (list[np.array]): List of residue labels tensors. Each array
+                is of shape [N_sample*N_token]
         plot_per_batch (bool): Whether to plot per batch. If false, we combine all tokens
                 across all batches and samples and plot from there.
 
@@ -184,49 +187,45 @@ def analyse_latents(latents: dict, plot_per_batch: bool = False):
             Keys: "tsne", "hist", "qq", "cov_heatmap", "eigs"
             Values: plt.Figure
     """
-    plot_functions = [
-        ("tsne", plot_tsne),
-        ("hist", plot_histograms),
-        ("qq", plot_qq_plots),
-        ("cov_heatmap", plot_covariance_heatmap),
-        ("eigs", plot_eigenvalues),
-    ]
+    if not latents["mean"]:
+        return {}
 
     # Combine batches if not plotting per batch
     if not plot_per_batch:
         latents = {
-            "mean": [torch.cat(latents["mean"], dim=0)],
-            "logvar": [torch.cat(latents["logvar"], dim=0)],
+            "mean": [np.concatenate(latents["mean"], axis=0)],
+            "logvar": [np.concatenate(latents["logvar"], axis=0)],
+            "restype": [
+                np.concatenate([a.reshape(-1) for a in latents["restype"]], axis=0)
+            ],
         }
 
     figs = {}
-    for batch_idx, (latents_mean, latents_logvar) in enumerate(
-        zip(latents["mean"], latents["logvar"])
+    for batch_idx, (latents_mean, latents_logvar, latents_restype) in enumerate(
+        zip(latents["mean"], latents["logvar"], latents["restype"])
     ):
-        eps = torch.randn_like(latents_mean)
-        latents_sample = latents_mean + torch.exp(0.5 * latents_logvar) * eps
-
-        latents_mean_np = latents_mean.cpu().numpy()
-        latents_logvar_np = latents_logvar.cpu().numpy()
-        latents_sample_np = latents_sample.cpu().numpy()
+        eps = np.random.randn(*latents_mean.shape)
+        latents_sample = latents_mean + np.exp(0.5 * latents_logvar) * eps
 
         suffix = f"_batch_{batch_idx}" if plot_per_batch else ""
 
-        # Plot figs for samples from latent distribution
-        for tag, plot_func in plot_functions:
-            fig = plot_func(latents_sample_np, suffix)
-            figs[f"{tag}{suffix}"] = fig
+        # Plots figs
+        figs[f"tsne{suffix}"] = plot_tsne(latents_sample, latents_restype, suffix)
+        figs[f"hist{suffix}"] = plot_histograms(latents_sample, suffix)
+        figs[f"qq{suffix}"] = plot_qq_plots(latents_sample, suffix)
+        figs[f"cov_heatmap{suffix}"] = plot_covariance_heatmap(latents_sample, suffix)
+        figs[f"eigs{suffix}"] = plot_eigenvalues(latents_sample, suffix)
 
-        # Plot hist for mean and logvar separately
-        fig = plot_histograms(latents_mean_np, suffix)
-        figs[f"hist_mean{suffix}"] = fig
-        fig = plot_histograms(latents_logvar_np, suffix)
-        figs[f"hist_logvar{suffix}"] = fig
+        # Additional histograms for mean and logvar
+        figs[f"hist_mean{suffix}"] = plot_histograms(latents_mean, suffix)
+        figs[f"hist_logvar{suffix}"] = plot_histograms(latents_logvar, suffix)
 
     return figs
 
 
-def plot_tsne(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
+def plot_tsne(
+    data: np.ndarray, labels: np.ndarray, batch_suffix: str = ""
+) -> plt.Figure:
     """Create T-SNE visualization of latent means and return the figure."""
     tsne_data = TSNE(
         n_components=2,
@@ -235,12 +234,34 @@ def plot_tsne(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
         init="random",
     ).fit_transform(data)
 
+    # Unique labels and colour map
+    uniq = np.unique(labels)
+    n_classes = len(uniq)
+    cmap = cm.get_cmap("hsv", n_classes)
+
     fig, ax = plt.subplots(figsize=(10, 8))
-    ax.scatter(tsne_data[:, 0], tsne_data[:, 1], alpha=0.6, s=1)
+    for idx, label in enumerate(uniq):
+        mask = labels == label
+        ax.scatter(
+            tsne_data[mask, 0], tsne_data[mask, 1], color=cmap(idx), label=str(label)
+        )
+
     ax.set_title(f"T-SNE visualization of latent means{batch_suffix}")
-    ax.set_xlabel("T-SNE Component 1")
-    ax.set_ylabel("T-SNE Component 2")
+    ax.set_xlabel("t-SNE Component 1")
+    ax.set_ylabel("t-SNE Component 2")
     ax.grid(True, alpha=0.3)
+
+    # Legend
+    if n_classes <= 15:
+        ax.legend(loc="best", fontsize="small", markerscale=2)
+    else:
+        ax.legend(
+            bbox_to_anchor=(1.05, 1.0),
+            loc="upper left",
+            fontsize="small",
+            markerscale=2,
+        )
+
     fig.tight_layout()
     return fig
 

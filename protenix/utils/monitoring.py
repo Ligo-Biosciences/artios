@@ -266,15 +266,12 @@ def plot_tsne(
     ax.grid(True, alpha=0.3)
 
     # Legend
-    if n_classes <= 15:
-        ax.legend(loc="best", fontsize="small", markerscale=2)
-    else:
-        ax.legend(
-            bbox_to_anchor=(1.05, 1.0),
-            loc="upper left",
-            fontsize="small",
-            markerscale=2,
-        )
+    ax.legend(
+        bbox_to_anchor=(1.05, 1.0),
+        loc="upper left",
+        fontsize="small",
+        markerscale=2,
+    )
 
     fig.tight_layout()
     return fig

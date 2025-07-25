@@ -348,7 +348,7 @@ monitor_configs = {
         },
         "latents": {
             "track_latents": True,
-            "num_batch": 50,
+            "num_batch": 10,
             "num_sample": 1,
             "plot_per_batch": False,
         },

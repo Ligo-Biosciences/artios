@@ -242,12 +242,11 @@ def plot_tsne(
     # Create reverse mapping from index to residue name
     index_to_residue = {v: k for k, v in STD_RESIDUES_AND_GAP.items()}
 
-    # Unique labels and colour map
+    # unique labels
     uniq = np.unique(labels)
-    n_classes = len(uniq)
-
-    cmap = mpl.colormaps.get_cmap("hsv")
-    colors = cmap(np.linspace(0, 1, n_classes))
+    # keep a stable ordering
+    uniq.sort()
+    colors = distinct_colors(len(uniq))
 
     fig, ax = plt.subplots(figsize=(10, 8))
     for idx, label_idx in enumerate(uniq):
@@ -261,7 +260,7 @@ def plot_tsne(
             label=residue_name,
         )
 
-    ax.set_title(f"T-SNE visualization of latent means{batch_suffix}")
+    ax.set_title(f"T-SNE visualization of latents{batch_suffix}")
     ax.set_xlabel("t-SNE Component 1")
     ax.set_ylabel("t-SNE Component 2")
     ax.grid(True, alpha=0.3)
@@ -407,3 +406,16 @@ def plot_eigenvalues(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
 
     fig.tight_layout()
     return fig
+
+
+def distinct_colors(n: int) -> np.ndarray:
+    """Return n visually distinct RGBA colors using tab20/20b/20c."""
+    tabs = [
+        mpl.colormaps["tab20"].colors,
+        mpl.colormaps["tab20b"].colors,
+        mpl.colormaps["tab20c"].colors,
+    ]
+    full = np.vstack(tabs)  # 60 colors total
+    if n > len(full):
+        raise ValueError(f"Need {n} colors, only {len(full)} pre-defined.")
+    return np.array(full[:n])

@@ -19,6 +19,7 @@ import time
 from contextlib import nullcontext
 from typing import Optional
 
+import matplotlib.pyplot as plt
 import numpy as np
 import rootutils
 import torch
@@ -39,10 +40,11 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import ELBOLoss
+from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
-from protenix.utils.monitoring import grad_norm
+from protenix.utils.monitoring import analyse_latents, grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
@@ -384,6 +386,39 @@ class ArtiosAllAtomTrainer(object):
         return simple_metrics
 
     @torch.no_grad()
+    def get_latents(self, batch: dict) -> dict:
+        """Get the latents and restypes from the batch."""
+        num_sample = self.configs.monitor.latents.num_sample
+
+        # Get num_sample latents and flatten
+        latents_mean = batch["pred_dict"]["latents_mean"][..., :num_sample, :, :]
+        latents_logvar = batch["pred_dict"]["latents_logvar"][..., :num_sample, :, :]
+
+        num_token = latents_mean.shape[-2]
+        c_latent = latents_mean.shape[-1]
+
+        latents_mean = latents_mean.reshape(-1, num_sample * num_token, c_latent)
+        latents_logvar = latents_logvar.reshape(-1, num_sample * num_token, c_latent)
+
+        # Get token restypes and flatten
+        restype = torch.argmax(
+            batch["input_feature_dict"]["restype"], dim=-1
+        )  # [..., N_token]
+        restype = expand_at_dim(
+            restype, dim=-2, n=num_sample
+        )  # [..., num_sample, N_token]
+        restype = restype.reshape(
+            -1, num_sample * num_token
+        )  # [..., num_sample * N_token]
+
+        # Detach and move to CPU
+        latents_mean = latents_mean.detach().cpu().numpy()
+        latents_logvar = latents_logvar.detach().cpu().numpy()
+        restype = restype.cpu().numpy()
+
+        return latents_mean, latents_logvar, restype
+
+    @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
         if not self.configs.eval_ema_only:
             self._evaluate()
@@ -410,6 +445,12 @@ class ArtiosAllAtomTrainer(object):
 
         # Initialize master monitor dict to collect all metrics
         # master_monitor_dict = defaultdict(lambda: defaultdict(list))
+
+        self.latents = (
+            {"mean": [], "logvar": [], "restype": []}
+            if self.configs.monitor.latents.track_latents
+            else None
+        )
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
@@ -444,6 +485,19 @@ class ArtiosAllAtomTrainer(object):
                     metrics_dict = self.get_metrics(batch)
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
+                # Latents
+                if (
+                    self.latents is not None
+                    and index < self.configs.monitor.latents.num_batches
+                ):
+                    latents_mean, latents_logvar, restype = self.get_latents(batch)
+
+                    self.latents["mean"].append(latents_mean)
+                    self.latents["logvar"].append(latents_logvar)
+                    self.latents["restype"].append(restype)
+
+                    del latents_mean, latents_logvar, restype
+
                 # Metrics
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(key, value, namespace="val")
@@ -455,8 +509,19 @@ class ArtiosAllAtomTrainer(object):
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
+
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 wandb.log(metrics, step=self.step)
+
+                for name, fig in analyse_latents(
+                    self.latents,
+                    plot_per_batch=self.configs.monitor.latents.plot_per_batch,
+                ).items():
+                    # wandb loggging
+                    wandb.log({name: wandb.Image(fig)}, step=self.step)
+                    plt.close(fig)
+                    # neptune logging
+                    # run[name].upload(fig)
 
     def update(self):
         # Clip the gradient

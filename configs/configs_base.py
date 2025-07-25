@@ -346,6 +346,12 @@ monitor_configs = {
         "eval_metrics": {
             "eval_tests": ListValue(["ss_distribution", "posebusters"]),
         },
+        "latents": {
+            "track_latents": True,
+            "num_batch": 50,
+            "num_sample": 1,
+            "plot_per_batch": False,
+        },
     },
 }
 

@@ -1,10 +1,12 @@
 from typing import Union
 
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
+import seaborn as sns
 import torch
-from scipy.stats import gaussian_kde
+from scipy.stats import gaussian_kde, probplot
+from sklearn.manifold import TSNE
 from torch.nn import Module
 
 
@@ -157,3 +159,230 @@ def grad_norm(
         total_norm = torch.tensor(list(norms.values())).norm(norm_type)
         norms[f"grad_{norm_type}_norm_total"] = total_norm
     return norms, total_norm
+
+
+def analyse_latents(latents: dict, plot_per_batch: bool = False):
+    """
+    Analyse the latents. These are the plots we will make:
+    1. T-SNE
+    2. Per dimension histogram
+    3. Per dimensions QQ plot
+    4. Covariance heatmap
+    5. Eigenvalues of covariance matrix
+
+    Args:
+        latents (dict): A dictionary containing the latents.
+          Keys: "mean", "logvar"
+            mean (list[np.array]): List of mean latents tensors. Each array
+                is of shape [N_sample*N_token, c_latent]
+            logvar (list[np.array]): List of logvar latents tensors. Each array
+                is of shape [N_sample*N_token, c_latent]
+            restype (list[np.array]): List of residue labels tensors. Each array
+                is of shape [N_sample*N_token]
+        plot_per_batch (bool): Whether to plot per batch. If false, we combine all tokens
+                across all batches and samples and plot from there.
+
+    Returns:
+        figs (dict): A dictionary containing the figures.
+            Keys: "tsne", "hist", "qq", "cov_heatmap", "eigs"
+            Values: plt.Figure
+    """
+    if not latents["mean"]:
+        return {}
+
+    # Combine batches if not plotting per batch
+    if not plot_per_batch:
+        latents = {
+            "mean": [np.concatenate(latents["mean"], axis=0)],
+            "logvar": [np.concatenate(latents["logvar"], axis=0)],
+            "restype": [
+                np.concatenate([a.reshape(-1) for a in latents["restype"]], axis=0)
+            ],
+        }
+
+    figs = {}
+    for batch_idx, (latents_mean, latents_logvar, latents_restype) in enumerate(
+        zip(latents["mean"], latents["logvar"], latents["restype"])
+    ):
+        eps = np.random.randn(*latents_mean.shape)
+        latents_sample = latents_mean + np.exp(0.5 * latents_logvar) * eps
+
+        suffix = f"_batch_{batch_idx}" if plot_per_batch else ""
+
+        # Plots figs
+        figs[f"tsne{suffix}"] = plot_tsne(latents_sample, latents_restype, suffix)
+        figs[f"hist{suffix}"] = plot_histograms(latents_sample, suffix)
+        figs[f"qq{suffix}"] = plot_qq_plots(latents_sample, suffix)
+        figs[f"cov_heatmap{suffix}"] = plot_covariance_heatmap(latents_sample, suffix)
+        figs[f"eigs{suffix}"] = plot_eigenvalues(latents_sample, suffix)
+
+        # Additional histograms for mean and logvar
+        figs[f"hist_mean{suffix}"] = plot_histograms(latents_mean, suffix)
+        figs[f"hist_logvar{suffix}"] = plot_histograms(latents_logvar, suffix)
+
+    return figs
+
+
+def plot_tsne(
+    data: np.ndarray, labels: np.ndarray, batch_suffix: str = ""
+) -> plt.Figure:
+    """Create T-SNE visualization of latent means and return the figure."""
+    tsne_data = TSNE(
+        n_components=2,
+        perplexity=10,
+        max_iter=1000,
+        init="random",
+    ).fit_transform(data)
+
+    # Unique labels and colour map
+    uniq = np.unique(labels)
+    n_classes = len(uniq)
+    cmap = cm.get_cmap("hsv", n_classes)
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    for idx, label in enumerate(uniq):
+        mask = labels == label
+        ax.scatter(
+            tsne_data[mask, 0], tsne_data[mask, 1], color=cmap(idx), label=str(label)
+        )
+
+    ax.set_title(f"T-SNE visualization of latent means{batch_suffix}")
+    ax.set_xlabel("t-SNE Component 1")
+    ax.set_ylabel("t-SNE Component 2")
+    ax.grid(True, alpha=0.3)
+
+    # Legend
+    if n_classes <= 15:
+        ax.legend(loc="best", fontsize="small", markerscale=2)
+    else:
+        ax.legend(
+            bbox_to_anchor=(1.05, 1.0),
+            loc="upper left",
+            fontsize="small",
+            markerscale=2,
+        )
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_histograms(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
+    """Create histograms for each latent dimension and return the figure."""
+    n_dims = data.shape[-1]
+    n_cols = min(4, n_dims)
+    n_rows = (n_dims + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows))
+    # Normalise axes array
+    if n_rows == 1 and n_cols == 1:
+        axes = np.array([[axes]])
+    elif n_rows == 1:
+        axes = axes.reshape(1, -1)
+    elif n_cols == 1:
+        axes = axes.reshape(-1, 1)
+
+    for i in range(n_dims):
+        row, col = divmod(i, n_cols)
+        ax = axes[row, col]
+        ax.hist(data[:, i], bins=50, alpha=0.7, edgecolor="black")
+        ax.set_title(f"Latent dim {i}")
+        ax.set_xlabel("Value")
+        ax.set_ylabel("Frequency")
+        ax.grid(True, alpha=0.3)
+
+    # Hide any unused subplots
+    for i in range(n_dims, n_rows * n_cols):
+        row, col = divmod(i, n_cols)
+        axes[row, col].set_visible(False)
+
+    fig.suptitle(f"Histograms of latent dimensions{batch_suffix}")
+    fig.tight_layout()
+    return fig
+
+
+def plot_qq_plots(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
+    """Create QQ plots comparing each dimension to a normal distribution and return the figure."""
+    n_dims = data.shape[-1]
+    n_cols = min(4, n_dims)
+    n_rows = (n_dims + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows))
+    # Normalise axes array
+    if n_rows == 1 and n_cols == 1:
+        axes = np.array([[axes]])
+    elif n_rows == 1:
+        axes = axes.reshape(1, -1)
+    elif n_cols == 1:
+        axes = axes.reshape(-1, 1)
+
+    for i in range(n_dims):
+        row, col = divmod(i, n_cols)
+        ax = axes[row, col]
+        probplot(data[:, i], dist="norm", plot=ax)
+        ax.set_title(f"QQ plot - dim {i}")
+        ax.grid(True, alpha=0.3)
+
+    # Hide any unused subplots
+    for i in range(n_dims, n_rows * n_cols):
+        row, col = divmod(i, n_cols)
+        axes[row, col].set_visible(False)
+
+    fig.suptitle(f"QQ plots vs Normal distribution{batch_suffix}")
+    fig.tight_layout()
+    return fig
+
+
+def plot_covariance_heatmap(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
+    """Create covariance matrix heatmap and return the figure."""
+    cov_matrix = np.cov(data.T)
+    n_dims = data.shape[-1]
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(
+        cov_matrix,
+        annot=(n_dims <= 20),
+        cmap="RdBu_r",
+        center=0,
+        square=True,
+        fmt=".3f" if n_dims <= 20 else None,
+        ax=ax,
+    )
+    ax.set_title(f"Covariance matrix of latent dimensions{batch_suffix}")
+    ax.set_xlabel("Latent Dimension")
+    ax.set_ylabel("Latent Dimension")
+    fig.tight_layout()
+    return fig
+
+
+def plot_eigenvalues(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
+    """Create eigenvalue plot of covariance matrix and return the figure."""
+    cov_matrix = np.cov(data.T)
+    eigenvalues, _ = np.linalg.eig(cov_matrix)
+    eigenvalues = np.sort(eigenvalues)[::-1]  # Descending order
+    cumvar = np.cumsum(eigenvalues) / np.sum(eigenvalues)
+
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+    ax1.plot(range(1, len(eigenvalues) + 1), eigenvalues, "o-", markersize=4)
+    ax1.set_title(f"Eigenvalues of covariance matrix{batch_suffix}")
+    ax1.set_xlabel("Eigenvalue Index")
+    ax1.set_ylabel("Eigenvalue")
+    ax1.grid(True, alpha=0.3)
+    ax1.set_yscale("log")
+
+    ax2 = ax1.twinx()
+    ax2.plot(
+        range(1, len(eigenvalues) + 1),
+        cumvar,
+        "r--",
+        alpha=0.7,
+        label="Cumulative variance",
+    )
+    ax2.set_ylabel("Cumulative Variance Explained", color="r")
+    ax2.set_ylim(0, 1)
+    # Make sure legend shows
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax2.legend(lines + lines2, labels + labels2, loc="best")
+
+    fig.tight_layout()
+    return fig

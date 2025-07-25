@@ -488,7 +488,7 @@ class ArtiosAllAtomTrainer(object):
                 # Latents
                 if (
                     self.latents is not None
-                    and index < self.configs.monitor.latents.num_batches
+                    and index < self.configs.monitor.latents.num_batch
                 ):
                     latents_mean, latents_logvar, restype = self.get_latents(batch)
 

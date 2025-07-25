@@ -517,8 +517,11 @@ class ArtiosAllAtomTrainer(object):
                     self.latents,
                     plot_per_batch=self.configs.monitor.latents.plot_per_batch,
                 ).items():
+                    # wandb loggging
                     wandb.log({name: wandb.Image(fig)}, step=self.step)
                     plt.close(fig)
+                    # neptune logging
+                    # run[name].upload(fig)
 
     def update(self):
         # Clip the gradient

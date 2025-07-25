@@ -202,7 +202,7 @@ def analyse_latents(latents: dict, plot_per_batch: bool = False):
         latents = {
             "mean": [np.concatenate(latents["mean"], axis=-2)],
             "logvar": [np.concatenate(latents["logvar"], axis=-2)],
-            "restype": np.concatenate(latents["restype"], axis=0),
+            "restype": [np.concatenate(latents["restype"], axis=-1)],
         }
 
     figs = {}
@@ -246,7 +246,7 @@ def plot_tsne(
     uniq = np.unique(labels)
     n_classes = len(uniq)
 
-    cmap = mpl.colormaps.get_cmap("tab20")
+    cmap = mpl.colormaps.get_cmap("hsv")
     colors = cmap(np.linspace(0, 1, n_classes))
 
     fig, ax = plt.subplots(figsize=(10, 8))

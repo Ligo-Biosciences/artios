@@ -75,13 +75,21 @@ def get_adamw(
 
 def get_optimizer(configs, model: torch.nn.Module) -> torch.optim.Optimizer:
     if configs.adam.use_adamw:
-        optimizer = get_adamw(
-            model=model,
-            weight_decay=configs.adam.weight_decay,
-            learning_rate=configs.adam.lr,
-            betas=(configs.adam.beta1, configs.adam.beta2),
-            device_type="cuda" if torch.cuda.is_available() else "cpu",
-        )
+        if configs.adam.only_2d_decay:
+            optimizer = get_adamw(
+                model=model,
+                weight_decay=configs.adam.weight_decay,
+                learning_rate=configs.adam.lr,
+                betas=(configs.adam.beta1, configs.adam.beta2),
+                device_type="cuda" if torch.cuda.is_available() else "cpu",
+            )
+        else:
+            optimizer = torch.optim.AdamW(
+                model.parameters(),
+                lr=configs.adam.lr,
+                weight_decay=configs.adam.weight_decay,
+                betas=(configs.adam.beta1, configs.adam.beta2),
+            )
     else:
         optimizer = torch.optim.Adam(
             model.parameters(),

@@ -80,6 +80,7 @@ optim_configs = {
         "weight_decay": 1e-2,
         "lr": GlobalConfigValue("lr"),
         "use_adamw": True,
+        "only_2d_decay": False,
     },
     # Optim - LRScheduler
     "af3_lr_scheduler": {

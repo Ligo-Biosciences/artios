@@ -743,7 +743,7 @@ def main():
         filename="output.log",
         level=logging.INFO,
         datefmt="%Y-%m-%d %H:%M:%S",
-        filemode="w",
+        filemode="a",
     )
     configs_base["use_deepspeed_evo_attention"] = (
         os.environ.get("USE_DEEPSPEED_EVO_ATTTENTION", False) == "true"

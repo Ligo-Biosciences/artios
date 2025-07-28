@@ -385,6 +385,7 @@ class MSELoss(nn.Module):
         pred_coordinate: torch.Tensor,
         true_coordinate: torch.Tensor,
         coordinate_mask: torch.Tensor,
+        # is_protein: torch.Tensor,
         is_dna: torch.Tensor,
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
@@ -625,104 +626,6 @@ class ProtenixLoss(nn.Module):
         return cum_loss, losses, monitor_data
 
 
-# class ReconstructionLoss(nn.Module):
-#     """
-#     Reconstruction loss term in the ELBO.
-#     """
-
-#     def __init__(self, configs) -> None:
-#         super(ReconstructionLoss, self).__init__()
-#         self.configs = configs
-
-#         self.mse_loss = MSELoss(**configs.mse)
-
-#     def coord_loss(
-#         self,
-#         pred_coords: torch.Tensor,
-#         true_coords: torch.Tensor,
-#         coordinate_mask: torch.Tensor,
-#         is_dna: torch.Tensor,
-#         is_rna: torch.Tensor,
-#         is_ligand: torch.Tensor,
-#         per_sample_scale: float,
-#     ) -> torch.Tensor:
-#         """
-#         Coordinate loss.
-#         """
-#         return self.mse_loss(
-#             pred_coordinate=pred_coords,
-#             true_coordinate=true_coords,
-#             coordinate_mask=coordinate_mask,
-#             is_dna=is_dna,
-#             is_rna=is_rna,
-#             is_ligand=is_ligand,
-#             per_sample_scale=per_sample_scale,
-#         )
-
-#     def seq_loss(self, pred_seq: torch.Tensor, true_seq: torch.Tensor) -> torch.Tensor:
-#         """
-#         Sequence loss.
-
-#         Args:
-#             pred_seq (torch.Tensor): the predicted sequence logits.
-#                 [..., N_sample, N_token, N_restype]
-#             true_seq (torch.Tensor): the ground truth sequence.
-#                 [..., N_token, N_restype]
-#         """
-#         # Expand true_seq to over N_sample
-#         N_sample = pred_seq.shape[-3]
-#         true_seq = expand_at_dim(true_seq, dim=-3, n=N_sample)
-
-#         # Calculate the cross entropy loss
-#         seq_loss = softmax_cross_entropy(pred_seq, true_seq)  # [..., N_sample, N_token]
-
-#         return loss_reduction(seq_loss, method="mean")
-
-#     def forward(
-#         self,
-#         pred_coords: torch.Tensor,
-#         true_coords: torch.Tensor,
-#         coordinate_mask: torch.Tensor,
-#         pred_seq: torch.Tensor,
-#         true_seq: torch.Tensor,
-#         is_rna: torch.Tensor,
-#         is_dna: torch.Tensor,
-#         is_ligand: torch.Tensor,
-#         per_sample_scale: Optional[float] = None,
-#     ) -> torch.Tensor:
-#         """
-
-#         Args:
-#             pred_coordinate (torch.Tensor): the denoised coordinates from diffusion module.
-#                 [..., N_sample, N_atom, 3]
-#             true_coordinate (torch.Tensor): the ground truth coordinates.
-#                 [..., N_atom, 3]
-#             coordinate_mask (torch.Tensor): whether true coordinates exist.
-#                 [N_atom] or [..., N_atom]
-#             pred_seq (torch.Tensor): the predicted sequence logits.
-#                 [..., N_sample, N_token, N_restype]
-#             true_seq (torch.Tensor): the ground truth sequence.
-#                 [..., N_token]
-#             is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
-#                 [N_atom] or [..., N_atom]
-#             per_sample_scale (Optional, float): the per sample scale.
-#         """
-#         coord_loss = self.coord_loss(
-#             pred_coords=pred_coords,
-#             true_coords=true_coords,
-#             coordinate_mask=coordinate_mask,
-#             is_dna=is_dna,
-#             is_rna=is_rna,
-#             is_ligand=is_ligand,
-#             per_sample_scale=per_sample_scale,
-#         )
-#         seq_loss = self.seq_loss(
-#             pred_seq=pred_seq,
-#             true_seq=true_seq,
-#         )
-#         return coord_loss + seq_loss
-
-
 class SequenceLoss(nn.Module):
     """
     Sequence loss term in the ELBO.
@@ -802,16 +705,22 @@ class ELBOLoss(nn.Module):
         self.beta = configs.loss.elbo.beta
 
         self.loss_weight = {
-            "mse_loss": 1.0,
+            "mse_ligand": 10.0,  # TODO: get these from configs
+            "mse_rna": 5.0,
+            "mse_dna": 5.0,
+            "mse_unweighted": 1.0,
             "sequence_loss": 1.0,
             "kl_divergence_loss": self.beta,
         }
 
-        # self.per_sample_scale = 1 / (self.configs.sigma_data**2)
-
-        # Reconstruction term
-        # self.reconstruction_loss = ReconstructionLoss(configs.loss.elbo.reconstruction)
-        self.mse_loss = MSELoss(**configs.loss.elbo.reconstruction.mse)
+        # TODO: clean up the MSE loss implementation
+        self.mse_loss = MSELoss(
+            weight_mse=1.0,  # these are weighted outside of the MSE
+            weight_dna=1.0,
+            weight_rna=1.0,
+            weight_ligand=1.0,
+            # **configs.loss.elbo.reconstruction.mse
+        )  # TODO: get rid of configs
         self.sequence_loss = SequenceLoss()
 
         # KL divergence term
@@ -869,24 +778,49 @@ class ELBOLoss(nn.Module):
         assert mode in ["train", "eval", "inference"]
         loss_fns = {}
 
-        # loss_fns.update(
-        #     {
-        #         "reconstruction_loss": lambda: self.reconstruction_loss(
-        #             pred_coords=pred_dict["coordinate"],
-        #             true_coords=label_dict["coordinate"],
-        #             coordinate_mask=label_dict["coordinate_mask"],
-        #             pred_seq=pred_dict["seq_logits"],
-        #             true_seq=feat_dict["restype"],
-        #             is_rna=feat_dict["is_rna"],
-        #             is_dna=feat_dict["is_dna"],
-        #             is_ligand=feat_dict["is_ligand"],
-        #             # per_sample_scale=self.per_sample_scale,
-        #         )
-        #     }
-        # )
         loss_fns.update(
             {
-                "mse_loss": lambda: self.mse_loss(
+                "mse_ligand": lambda: self.mse_loss(
+                    pred_coordinate=pred_dict["coordinate"],
+                    true_coordinate=label_dict["coordinate"],
+                    coordinate_mask=label_dict["coordinate_mask"]
+                    * feat_dict["is_ligand"],
+                    is_rna=feat_dict["is_rna"],
+                    is_dna=feat_dict["is_dna"],
+                    is_ligand=feat_dict["is_ligand"],
+                )
+            }
+        )
+
+        loss_fns.update(
+            {
+                "mse_rna": lambda: self.mse_loss(
+                    pred_coordinate=pred_dict["coordinate"],
+                    true_coordinate=label_dict["coordinate"],
+                    coordinate_mask=label_dict["coordinate_mask"] * feat_dict["is_rna"],
+                    is_rna=feat_dict["is_rna"],
+                    is_dna=feat_dict["is_dna"],
+                    is_ligand=feat_dict["is_ligand"],
+                )
+            }
+        )
+
+        loss_fns.update(
+            {
+                "mse_dna": lambda: self.mse_loss(
+                    pred_coordinate=pred_dict["coordinate"],
+                    true_coordinate=label_dict["coordinate"],
+                    coordinate_mask=label_dict["coordinate_mask"] * feat_dict["is_dna"],
+                    is_rna=feat_dict["is_rna"],
+                    is_dna=feat_dict["is_dna"],
+                    is_ligand=feat_dict["is_ligand"],
+                )
+            }
+        )
+
+        loss_fns.update(
+            {
+                "mse_unweighted": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
                     coordinate_mask=label_dict["coordinate_mask"],

@@ -248,6 +248,7 @@ loss_configs = {
         "diffusion_sparse_loss_enable": GlobalConfigValue("loss_metrics_sparse_enable"),
         "diffusion_lddt_loss_dense": True,  # only set true in initial training for training speed
         "resolution": {"min": 0.1, "max": 4.0},
+        "loss_spike_log_threshold": 2.0,
         "weight": {  # TODO: set unused loss weights to 0 (for completion)
             "alpha_confidence": 1e-4,
             "alpha_pae": 0.0,  # or 1 in finetuning stage 3

@@ -436,37 +436,22 @@ class MSELoss(nn.Module):
             dim=-1
         )  # [..., N_sample, N_atom]
 
-        # Mask and normalize based on a filter
-        if extra_filter_mask is not None:
-            per_atom_se = (
-                per_atom_se
-                * extra_filter_mask
-                / (
-                    extra_filter_mask.sum(dim=-1) / extra_filter_mask.shape[-1]
-                    + self.eps
-                )
-            )
+        # Mask and normalize based on filter mask
+        if extra_filter_mask is None:
+            extra_filter_mask = torch.ones_like(coordinate_mask)
 
+        # Apply filter as weights
+        weight = weight * extra_filter_mask.unsqueeze(-2)  # [..., N_samples, N_atom]
+
+        # Fancy normalization footwork
         per_sample_weighted_mse = (weight * per_atom_se).sum(dim=-1) / (
-            coordinate_mask.sum(dim=-1, keepdim=True) + self.eps
+            (coordinate_mask * extra_filter_mask).sum(dim=-1, keepdim=True) + self.eps
         )  # [..., N_sample]
 
         if per_sample_scale is not None:
             per_sample_weighted_mse = per_sample_weighted_mse * per_sample_scale
 
-        # raw_loss = per_sample_weighted_mse.detach().clone()
-
         weighted_align_mse_loss = self.weight_mse * per_sample_weighted_mse
-        # raw_loss = (
-        #    weighted_align_mse_loss.clone().detach()
-        # )  # Store raw loss before uncertainty scaling
-
-        # Balance grads between timesteps during training
-        if self.training and self.use_uncertainty:
-            # Compute u(t)
-            timestep_embed = self.fourier_embedding(timestep)  # [..., N_sample, 64]
-            u_t = self.uncertainty_mlp(timestep_embed).squeeze(-1)  # [..., N_sample]
-            weighted_align_mse_loss = (weighted_align_mse_loss / u_t.exp()) + u_t
 
         loss = loss_reduction(weighted_align_mse_loss, method=self.reduction)
 

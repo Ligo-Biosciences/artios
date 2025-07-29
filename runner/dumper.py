@@ -62,7 +62,7 @@ class DataDumper:
         pred_dict: dict,
         atom_array: AtomArray,
         entity_poly_type: dict[str, str],
-    ):
+    ) -> list[str]:
         """
         Dump the predictions and related data to the specified directory.
 
@@ -73,11 +73,14 @@ class DataDumper:
             pred_dict (dict): The dictionary containing the predictions.
             atom_array (AtomArray): The AtomArray object containing the structure data.
             entity_poly_type (dict[str, str]): The entity poly type information.
+
+        Returns:
+            list[str]: List of file paths of saved structure files.
         """
         dump_dir = self._get_dump_dir(dataset_name, pdb_id, seed)
         Path(dump_dir).mkdir(parents=True, exist_ok=True)
 
-        self.dump_predictions(
+        saved_files = self.dump_predictions(
             pred_dict=pred_dict,
             dump_dir=dump_dir,
             pdb_id=pdb_id,
@@ -86,11 +89,15 @@ class DataDumper:
             seed=seed,
         )
 
+        return saved_files
+
     def _get_dump_dir(self, dataset_name: str, sample_name: str, seed: int) -> str:
         """
         Generate the directory path for dumping data based on the dataset name, sample name, and seed.
         """
-        dump_dir = os.path.join(self.base_dir, dataset_name, sample_name, f"seed_{seed}")
+        dump_dir = os.path.join(
+            self.base_dir, dataset_name, sample_name, f"seed_{seed}"
+        )
         return dump_dir
 
     def dump_predictions(
@@ -101,11 +108,14 @@ class DataDumper:
         atom_array: AtomArray,
         entity_poly_type: dict[str, str],
         seed: int,
-    ):
+    ) -> list[str]:
         """
         Dump raw predictions from the model:
             structure: Save the predicted coordinates as CIF files.
             confidence: Save the confidence data as JSON files.
+
+        Returns:
+            list[str]: List of file paths of saved structure files.
         """
         prediction_save_dir = os.path.join(dump_dir, "predictions")
         os.makedirs(prediction_save_dir, exist_ok=True)
@@ -126,7 +136,7 @@ class DataDumper:
             if len(all_atom_plddt) == len(pred_dict["full_data"]):
                 b_factor = all_atom_plddt
         sorted_indices = self._get_ranker_indices(data=pred_dict)
-        self._save_structure(
+        saved_files = self._save_structure(
             pred_coordinates=pred_dict["coordinate"],
             prediction_save_dir=prediction_save_dir,
             sample_name=pdb_id,
@@ -145,6 +155,8 @@ class DataDumper:
         #    sorted_indices=sorted_indices,
         # )
 
+        return saved_files
+
     def _save_structure(
         self,
         pred_coordinates: torch.Tensor,
@@ -155,12 +167,14 @@ class DataDumper:
         seed: int,
         sorted_indices: None,
         b_factor: torch.Tensor = None,
-    ):
+    ) -> list[str]:
         assert atom_array is not None
         N_sample = pred_coordinates.shape[0]
         N_atom = len(atom_array)
         if sorted_indices is None:
             sorted_indices = range(N_sample)  # do not rank the output file
+
+        saved_files = []
         for idx, rank in enumerate(sorted_indices):
             if rank == 0:
                 output_fpath = os.path.join(
@@ -187,14 +201,22 @@ class DataDumper:
                 entity_poly_type=entity_poly_type,
                 pdb_id=sample_name,
             )
+            saved_files.append(output_fpath)
+
+        return saved_files
 
     def _get_ranker_indices(self, data: dict):
         N_sample = data["coordinate"].shape[-3]
         if self.sorted_by_ranking_score:
             value = torch.tensor(
-                [data["summary_confidence"][i]["ranking_score"] for i in range(N_sample)]
+                [
+                    data["summary_confidence"][i]["ranking_score"]
+                    for i in range(N_sample)
+                ]
             )
-            sorted_indices = [i for i in torch.argsort(torch.argsort(value, descending=True))]
+            sorted_indices = [
+                i for i in torch.argsort(torch.argsort(value, descending=True))
+            ]
         else:
             sorted_indices = [i for i in range(N_sample)]
         return sorted_indices
@@ -210,7 +232,9 @@ class DataDumper:
         N_sample = data["coordinate"].shape[-3]  # len(data["summary_confidence"])
         for idx in range(N_sample):
             if self.need_atom_confidence:
-                data["full_data"][idx] = get_clean_full_confidence(data["full_data"][idx])
+                data["full_data"][idx] = get_clean_full_confidence(
+                    data["full_data"][idx]
+                )
         if sorted_indices is None:
             sorted_indices = range(N_sample)
         for idx, rank in enumerate(sorted_indices):

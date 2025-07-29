@@ -47,6 +47,7 @@ from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
+from runner.dumper import DataDumper
 from runner.ema import EMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -91,6 +92,7 @@ class ArtiosAllAtomTrainer(object):
 
         # Add dump dir for training time inference
         self.configs.dump_dir = self.prediction_dir
+        self.dumper = DataDumper(self.configs.dump_dir)
 
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)
@@ -484,6 +486,17 @@ class ArtiosAllAtomTrainer(object):
                     # Additional metrics
                     metrics_dict = self.get_metrics(batch)
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
+
+                # TODO: do model inference, save the structures with dumper and log to neptune
+
+                # self.dumper.dump(
+                #    dataset_name=test_name,
+                #    pdb_id=pid,
+                #    seed=0,
+                #    pred_dict=batch["pred_dict"],
+                #    atom_array=batch["cropped_atom_array"],
+                #    entity_poly_type=batch["cropped_atom_array"].entity_poly_type,
+                # )
 
                 # Latents
                 if (

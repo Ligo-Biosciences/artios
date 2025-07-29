@@ -297,7 +297,10 @@ class BaseSingleDataset(Dataset):
         # Try at most 10 times
         for _ in range(10):
             try:
-                data = self.process_one(idx)
+                data = self.process_one(
+                    idx,
+                    return_atom_token_array=True,  # NOTE: for training time inference of VAE
+                )
                 return data
             except Exception as e:
                 error_message = f"{e} at idx {idx}:\n{traceback.format_exc()}"

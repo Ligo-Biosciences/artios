@@ -293,7 +293,7 @@ class MSELoss(nn.Module):
         weight_dna: float = 5.0,
         weight_rna=5.0,
         weight_ligand=10.0,
-        eps=1e-6,
+        eps=1e-4,
         reduction: str = "mean",
         use_uncertainty: bool = False,
         uncertainty_embed_dim: int = 64,

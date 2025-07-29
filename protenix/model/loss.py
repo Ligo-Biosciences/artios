@@ -392,6 +392,7 @@ class MSELoss(nn.Module):
         is_ligand: torch.Tensor,
         timestep: torch.Tensor = None,
         per_sample_scale: torch.Tensor | float = None,
+        extra_filter_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, dict, dict[str, torch.Tensor]]:
         """MSELoss
 
@@ -408,6 +409,8 @@ class MSELoss(nn.Module):
                 [N_atom] or [..., N_atom]
             per_sample_scale (torch.Tensor | float, optional): whether to scale the loss by the per-sample noise-level.
                 [..., N_sample] or float
+            extra_filter_mask (torch.Tensor, optional): an extra filter mask that is applied after the weighted
+                rigid align
 
         Returns:
             tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -432,6 +435,15 @@ class MSELoss(nn.Module):
         per_atom_se = ((pred_coordinate - true_coordinate_aligned) ** 2).sum(
             dim=-1
         )  # [..., N_sample, N_atom]
+
+        # Mask and normalize based on a filter
+        if extra_filter_mask is not None:
+            per_atom_se = (
+                per_atom_se
+                * extra_filter_mask
+                / (extra_filter_mask.sum(dim=-1) + self.eps)
+            )
+
         per_sample_weighted_mse = (weight * per_atom_se).sum(dim=-1) / (
             coordinate_mask.sum(dim=-1, keepdim=True) + self.eps
         )  # [..., N_sample]
@@ -706,9 +718,9 @@ class ELBOLoss(nn.Module):
         self.beta = configs.loss.elbo.beta
 
         self.loss_weight = {
-            # "mse_ligand": 10.0,  # TODO: get these from configs
-            # "mse_rna": 5.0,
-            # "mse_dna": 5.0,
+            "mse_ligand_loss": 10.0,  # TODO: get these from configs
+            "mse_rna_loss": 5.0,
+            "mse_dna_loss": 5.0,
             "mse_loss": 1.0,
             "sequence_loss": 1.0,
             "kl_divergence_loss": self.beta,
@@ -780,47 +792,47 @@ class ELBOLoss(nn.Module):
         assert mode in ["train", "eval", "inference"]
         loss_fns = {}
 
-        """
         loss_fns.update(
             {
-                "mse_ligand": lambda: self.mse_loss(
+                "mse_ligand_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
-                    coordinate_mask=label_dict["coordinate_mask"]
-                    * feat_dict["is_ligand"],
+                    coordinate_mask=label_dict["coordinate_mask"],
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
+                    extra_filter_mask=feat_dict["is_ligand"],  # only ligands
                 )
             }
         )
 
         loss_fns.update(
             {
-                "mse_rna": lambda: self.mse_loss(
+                "mse_rna_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
-                    coordinate_mask=label_dict["coordinate_mask"] * feat_dict["is_rna"],
+                    coordinate_mask=label_dict["coordinate_mask"],
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
+                    extra_filter_mask=feat_dict["is_rna"],  # only RNA
                 )
             }
         )
 
         loss_fns.update(
             {
-                "mse_dna": lambda: self.mse_loss(
+                "mse_dna_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
-                    coordinate_mask=label_dict["coordinate_mask"] * feat_dict["is_dna"],
+                    coordinate_mask=label_dict["coordinate_mask"],
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
+                    extra_filter_mask=feat_dict["is_dna"],  # only DNAs
                 )
             }
         )
-        """
 
         loss_fns.update(
             {

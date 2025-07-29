@@ -602,7 +602,7 @@ class ArtiosAllAtomTrainer(object):
             old_val = self.curr_loss_dict.get(key, None)
             if (
                 old_val is not None
-                and value / (old_val + 1e-8) > self.loss_spike_log_threshold
+                and value / (old_val + 1e-8) > self.loss_spike_threshold
             ):
                 pdb_id = batch["basic"]["pdb_id"]
                 self.print(

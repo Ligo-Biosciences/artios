@@ -488,7 +488,7 @@ class ArtiosAllAtomTrainer(object):
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
                 # TODO: do model inference, save the structures with dumper and log to neptune
-                if index + 1 % 10 == 0:  # one in 10
+                if index + 1 % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
                     self.dumper.dump(  # TODO: this is quite slow, only do it for a number of structures
                         dataset_name=test_name,
                         pdb_id=pid,

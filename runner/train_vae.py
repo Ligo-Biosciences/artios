@@ -488,8 +488,8 @@ class ArtiosAllAtomTrainer(object):
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
                 # TODO: do model inference, save the structures with dumper and log to neptune
-                if index + 1 % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
-                    self.dumper.dump(  # TODO: this is quite slow, only do it for a number of structures
+                if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
+                    saved_files = self.dumper.dump(
                         dataset_name=test_name,
                         pdb_id=pid,
                         seed=0,
@@ -497,6 +497,20 @@ class ArtiosAllAtomTrainer(object):
                         atom_array=batch["cropped_atom_array"],
                         entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
                     )
+
+                    # Log structure files to Neptune Scale
+                    if self.configs.use_wandb and saved_files:
+                        files_dict = {}
+                        for file_path in saved_files:
+                            # Create a relative key for Neptune using test_name/pdb_id/filename
+                            filename = os.path.basename(file_path)
+                            neptune_key = f"structures/{test_name}/{pid}/{filename}"
+                            files_dict[neptune_key] = file_path
+
+                        self.neptune_run.log_files(
+                            files=files_dict,
+                            step=self.step,
+                        )
 
                 # Latents
                 if (

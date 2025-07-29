@@ -705,9 +705,9 @@ class ELBOLoss(nn.Module):
         self.beta = configs.loss.elbo.beta
 
         self.loss_weight = {
-            "mse_ligand": 10.0,  # TODO: get these from configs
-            "mse_rna": 5.0,
-            "mse_dna": 5.0,
+            # "mse_ligand": 10.0,  # TODO: get these from configs
+            # "mse_rna": 5.0,
+            # "mse_dna": 5.0,
             "mse_unweighted": 1.0,
             "sequence_loss": 1.0,
             "kl_divergence_loss": self.beta,

@@ -436,8 +436,13 @@ class MSELoss(nn.Module):
             dim=-1
         )  # [..., N_sample, N_atom]
 
+        # Mask and normalize based on a filter
         if extra_filter_mask is not None:
-            per_atom_se = per_atom_se * extra_filter_mask
+            per_atom_se = (
+                per_atom_se
+                * extra_filter_mask
+                / (extra_filter_mask.sum(dim=-1) + self.eps)
+            )
 
         per_sample_weighted_mse = (weight * per_atom_se).sum(dim=-1) / (
             coordinate_mask.sum(dim=-1, keepdim=True) + self.eps

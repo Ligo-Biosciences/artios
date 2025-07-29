@@ -19,7 +19,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from protenix.metrics.rmsd import weighted_rigid_align
 from protenix.model.modules.embedders import FourierEmbedding
 from protenix.model.modules.frames import (
     expressCoordinatesInFrame,
@@ -361,7 +360,7 @@ class MSELoss(nn.Module):
             weight = expand_at_dim(
                 weight, dim=-2, n=N_sample
             )  # [..., N_sample, N_atom]
-
+        """
         # Align GT coords to predicted coords
         d = pred_coordinate.dtype
         # Some ops in weighted_rigid_align do not support BFloat16 training
@@ -377,6 +376,8 @@ class MSELoss(nn.Module):
                 stop_gradient=True,
             )  # [..., N_sample, N_atom, 3]
             true_coordinate_aligned = true_coordinate_aligned.to(d)
+        """
+        true_coordinate_aligned = true_coordinate  # the augmented coordinates
 
         return (true_coordinate_aligned.detach(), weight.detach())
 
@@ -705,9 +706,9 @@ class ELBOLoss(nn.Module):
         self.beta = configs.loss.elbo.beta
 
         self.loss_weight = {
-            # "mse_ligand": 10.0,  # TODO: get these from configs
-            # "mse_rna": 5.0,
-            # "mse_dna": 5.0,
+            "mse_ligand": 10.0,  # TODO: get these from configs
+            "mse_rna": 5.0,
+            "mse_dna": 5.0,
             "mse_unweighted": 1.0,
             "sequence_loss": 1.0,
             "kl_divergence_loss": self.beta,
@@ -778,12 +779,11 @@ class ELBOLoss(nn.Module):
         assert mode in ["train", "eval", "inference"]
         loss_fns = {}
 
-        """
         loss_fns.update(
             {
                 "mse_ligand": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
-                    true_coordinate=label_dict["coordinate"],
+                    true_coordinate=label_dict["coordinate_augment"],
                     coordinate_mask=label_dict["coordinate_mask"]
                     * feat_dict["is_ligand"],
                     is_rna=feat_dict["is_rna"],
@@ -797,7 +797,7 @@ class ELBOLoss(nn.Module):
             {
                 "mse_rna": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
-                    true_coordinate=label_dict["coordinate"],
+                    true_coordinate=label_dict["coordinate_augment"],
                     coordinate_mask=label_dict["coordinate_mask"] * feat_dict["is_rna"],
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
@@ -810,7 +810,7 @@ class ELBOLoss(nn.Module):
             {
                 "mse_dna": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
-                    true_coordinate=label_dict["coordinate"],
+                    true_coordinate=label_dict["coordinate_augment"],
                     coordinate_mask=label_dict["coordinate_mask"] * feat_dict["is_dna"],
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
@@ -818,12 +818,12 @@ class ELBOLoss(nn.Module):
                 )
             }
         )
-        """
+
         loss_fns.update(
             {
                 "mse_unweighted": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
-                    true_coordinate=label_dict["coordinate"],
+                    true_coordinate=label_dict["coordinate_augment"],
                     coordinate_mask=label_dict["coordinate_mask"],
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],

@@ -488,15 +488,15 @@ class ArtiosAllAtomTrainer(object):
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
                 # TODO: do model inference, save the structures with dumper and log to neptune
-
-                self.dumper.dump(
-                    dataset_name=test_name,
-                    pdb_id=pid,
-                    seed=0,
-                    pred_dict=batch["pred_dict"],
-                    atom_array=batch["cropped_atom_array"],
-                    entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
-                )
+                if index + 1 % 10 == 0:  # one in 10
+                    self.dumper.dump(  # TODO: this is quite slow, only do it for a number of structures
+                        dataset_name=test_name,
+                        pdb_id=pid,
+                        seed=0,
+                        pred_dict=batch["pred_dict"],
+                        atom_array=batch["cropped_atom_array"],
+                        entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
+                    )
 
                 # Latents
                 if (

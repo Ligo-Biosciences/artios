@@ -792,8 +792,7 @@ class ELBOLoss(nn.Module):
                 "mse_ligand": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
-                    coordinate_mask=label_dict["coordinate_mask"]
-                    * feat_dict["is_ligand"],
+                    coordinate_mask=label_dict["coordinate_mask"],
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
@@ -807,7 +806,7 @@ class ELBOLoss(nn.Module):
                 "mse_rna": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
-                    coordinate_mask=label_dict["coordinate_mask"] * feat_dict["is_rna"],
+                    coordinate_mask=label_dict["coordinate_mask"],
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],

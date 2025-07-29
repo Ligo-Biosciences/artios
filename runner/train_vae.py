@@ -489,14 +489,14 @@ class ArtiosAllAtomTrainer(object):
 
                 # TODO: do model inference, save the structures with dumper and log to neptune
 
-                # self.dumper.dump(
-                #    dataset_name=test_name,
-                #    pdb_id=pid,
-                #    seed=0,
-                #    pred_dict=batch["pred_dict"],
-                #    atom_array=batch["cropped_atom_array"],
-                #    entity_poly_type=batch["cropped_atom_array"].entity_poly_type,
-                # )
+                self.dumper.dump(
+                    dataset_name=test_name,
+                    pdb_id=pid,
+                    seed=0,
+                    pred_dict=batch["pred_dict"],
+                    atom_array=batch["cropped_atom_array"],
+                    entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
+                )
 
                 # Latents
                 if (

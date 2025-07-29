@@ -718,9 +718,9 @@ class ELBOLoss(nn.Module):
         self.beta = configs.loss.elbo.beta
 
         self.loss_weight = {
-            "mse_ligand": 10.0,  # TODO: get these from configs
-            "mse_rna": 5.0,
-            "mse_dna": 5.0,
+            "mse_ligand_loss": 10.0,  # TODO: get these from configs
+            "mse_rna_loss": 5.0,
+            "mse_dna_loss": 5.0,
             "mse_loss": 1.0,
             "sequence_loss": 1.0,
             "kl_divergence_loss": self.beta,
@@ -794,7 +794,7 @@ class ELBOLoss(nn.Module):
 
         loss_fns.update(
             {
-                "mse_ligand": lambda: self.mse_loss(
+                "mse_ligand_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
                     coordinate_mask=label_dict["coordinate_mask"],
@@ -808,7 +808,7 @@ class ELBOLoss(nn.Module):
 
         loss_fns.update(
             {
-                "mse_rna": lambda: self.mse_loss(
+                "mse_rna_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
                     coordinate_mask=label_dict["coordinate_mask"],
@@ -822,7 +822,7 @@ class ELBOLoss(nn.Module):
 
         loss_fns.update(
             {
-                "mse_dna": lambda: self.mse_loss(
+                "mse_dna_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
                     coordinate_mask=label_dict["coordinate_mask"],

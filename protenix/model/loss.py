@@ -778,6 +778,7 @@ class ELBOLoss(nn.Module):
         assert mode in ["train", "eval", "inference"]
         loss_fns = {}
 
+        """
         loss_fns.update(
             {
                 "mse_ligand": lambda: self.mse_loss(
@@ -817,7 +818,7 @@ class ELBOLoss(nn.Module):
                 )
             }
         )
-
+        """
         loss_fns.update(
             {
                 "mse_unweighted": lambda: self.mse_loss(

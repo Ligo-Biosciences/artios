@@ -441,7 +441,10 @@ class MSELoss(nn.Module):
             per_atom_se = (
                 per_atom_se
                 * extra_filter_mask
-                / (extra_filter_mask.mean(dim=-1) + self.eps)
+                / (
+                    extra_filter_mask.sum(dim=-1) / extra_filter_mask.shape[-1]
+                    + self.eps
+                )
             )
 
         per_sample_weighted_mse = (weight * per_atom_se).sum(dim=-1) / (

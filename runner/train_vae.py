@@ -625,7 +625,6 @@ class ArtiosAllAtomTrainer(object):
                     f"Ratio: {(value / old_val):.4f}. "
                     f"Spike details: PDB ID: {pdb_id}, Step: {self.step}"
                 )
-            self.curr_loss_dict[key] = value
             if value != 0:
                 self.curr_loss_dict[key] = value
         torch.cuda.empty_cache()

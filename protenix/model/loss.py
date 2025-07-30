@@ -777,9 +777,9 @@ class ELBOLoss(nn.Module):
 
         # If no centre atom, mask that token completely
         loss_mask = label_dict["coordinate_mask"] * broadcast_token_to_atom(
-            x_token=label_dict["has_centre_atom"],
+            x_token=label_dict["has_centre_atom"].unsqueeze(-1),
             atom_to_token_idx=feat_dict["atom_to_token_idx"],
-        )
+        ).squeeze(-1)
 
         loss_fns.update(
             {

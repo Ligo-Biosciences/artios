@@ -319,6 +319,9 @@ class Featurizer(object):
         token_features["sym_id"] = torch.Tensor(centre_atoms.sym_id_int).long()
         token_features["restype"] = restype_onehot
         token_features["centre_atom_coords"] = torch.Tensor(centre_atoms.coord)
+        token_features["has_centre_atom"] = torch.Tensor(
+            self.cropped_atom_array.is_resolved[centre_atoms_indices].astype(int)
+        ).long()
 
         return token_features
 

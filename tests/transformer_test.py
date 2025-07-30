@@ -9,10 +9,10 @@ from protenix.model.modules.transformer import (
     AtomTransformer,
     AttentionPairBias,
     ConditionedTransitionBlock,
-    Transformer,
-    TransformerBlock,
     DiffusionTransformer,
     DiffusionTransformerBlock,
+    Transformer,
+    TransformerBlock,
 )
 
 
@@ -23,7 +23,9 @@ class TestAttentionPairBias:
 
     @pytest.fixture
     def sample_data(self):
-        data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
+        data_path = os.path.join(
+            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
+        )
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
         return torch.load(data_path, weights_only=False)["input_feature_dict"]
@@ -34,7 +36,9 @@ class TestAttentionPairBias:
         c_s = 384
         c_z = 128
 
-        model = AttentionPairBias(has_s=True, n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z).to(device)
+        model = AttentionPairBias(
+            has_s=True, n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z
+        ).to(device)
 
         batch_size = 2
         n_tokens = 32
@@ -96,9 +100,9 @@ class TestTransformer:
         n_blocks = 3
         n_heads = 16
 
-        model = Transformer(
-            c_a=c_a, c_z=c_z, n_blocks=n_blocks, n_heads=n_heads
-        ).to(device)
+        model = Transformer(c_a=c_a, c_z=c_z, n_blocks=n_blocks, n_heads=n_heads).to(
+            device
+        )
 
         batch_size = 2
         n_tokens = 32
@@ -125,7 +129,9 @@ class TestDiffusionTransformerBlock:
         c_z = 128
         n_heads = 16
 
-        model = DiffusionTransformerBlock(c_a=c_a, c_s=c_s, c_z=c_z, n_heads=n_heads).to(device)
+        model = DiffusionTransformerBlock(
+            c_a=c_a, c_s=c_s, c_z=c_z, n_heads=n_heads
+        ).to(device)
 
         batch_size = 2
         n_tokens = 32
@@ -192,7 +198,9 @@ class TestAtomTransformer:
 
     @pytest.fixture
     def sample_data(self):
-        data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
+        data_path = os.path.join(
+            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
+        )
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
         return torch.load(data_path, weights_only=False)
@@ -220,7 +228,9 @@ class TestAtomTransformer:
         # Create dummy input tensors
         q = torch.randn(batch_size, n_atoms, c_atom).to(device)
         c = torch.randn(batch_size, n_atoms, c_atom).to(device)
-        p = torch.randn(batch_size, n_atoms // n_queries, n_queries, n_keys, c_atompair).to(device)
+        p = torch.randn(
+            batch_size, n_atoms // n_queries, n_queries, n_keys, c_atompair
+        ).to(device)
 
         out = model(q, c, p)
 
@@ -240,7 +250,9 @@ class TestConditionedTransitionBlock:
         n = 2
         biasinit = -2.0
 
-        model = ConditionedTransitionBlock(c_a=c_a, c_s=c_s, n=n, biasinit=biasinit).to(device)
+        model = ConditionedTransitionBlock(c_a=c_a, c_s=c_s, n=n, biasinit=biasinit).to(
+            device
+        )
 
         batch_size = 2
         n_tokens = 256
@@ -263,7 +275,9 @@ class TestAtomAttentionDecoder:
 
     @pytest.fixture
     def sample_data(self):
-        data_path = os.path.join(os.path.dirname(__file__), "testdata", "sample_data_dict.pt")
+        data_path = os.path.join(
+            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
+        )
         if not os.path.exists(data_path):
             pytest.skip(f"Test data not found at {data_path}")
         return torch.load(data_path, weights_only=False)
@@ -291,16 +305,18 @@ class TestAtomAttentionDecoder:
         n_tokens = sample_data["basic"]["N_token"][0]
         n_atoms = sample_data["basic"]["N_atom"][0]
         sample_data = sample_data["input_feature_dict"]
-        input_dict = {k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()}
+        input_dict = {
+            k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()
+        }
         batch_size = 2
 
         # Create dummy input tensors
         a = torch.randn(batch_size, n_tokens, c_token).to(device)
         q_skip = torch.randn(batch_size, n_atoms, c_atom).to(device)
         c_skip = torch.randn(batch_size, n_atoms, c_atom).to(device)
-        p_skip = torch.randn(batch_size, n_atoms // n_queries, n_queries, n_keys, c_atompair).to(
-            device
-        )
+        p_skip = torch.randn(
+            batch_size, n_atoms // n_queries, n_queries, n_keys, c_atompair
+        ).to(device)
 
         out = model(input_dict, a, q_skip, c_skip, p_skip)
 
@@ -337,7 +353,9 @@ class TestAtomAttentionDecoder:
         n_tokens = sample_data["basic"]["N_token"][0]
         n_atoms = sample_data["basic"]["N_atom"][0]
         sample_data = sample_data["input_feature_dict"]
-        input_dict = {k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()}
+        input_dict = {
+            k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()
+        }
         batch_size = 2
 
         # Create dummy input tensors
@@ -362,6 +380,55 @@ class TestAtomAttentionDecoder:
         assert not torch.isnan(q_l).any()
         assert not torch.isnan(c_l).any()
         assert not torch.isnan(p_lm).any()
+
+    def test_atom_attention_encoder_granular_flags(self, device, sample_data):
+        """Test AtomAttentionEncoder with different granular flag combinations"""
+        n_blocks = 3
+        n_heads = 4
+        c_token = 384
+        c_atom = 128
+        c_atompair = 16
+        c_s = 384
+        c_z = 128
+        n_queries = 32
+        n_keys = 128
+
+        # Move sample data to device
+        n_tokens = sample_data["basic"]["N_token"][0]
+        sample_data = sample_data["input_feature_dict"]
+        input_dict = {
+            k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()
+        }
+        batch_size = 2
+
+        # Test with only s embedding enabled
+        model_s_only = AtomAttentionEncoder(
+            has_coords=False,
+            has_s=True,
+            has_z=False,
+            c_token=c_token,
+            c_atom=c_atom,
+            c_atompair=c_atompair,
+            c_s=c_s,
+            c_z=c_z,
+            n_blocks=n_blocks,
+            n_heads=n_heads,
+            n_queries=n_queries,
+            n_keys=n_keys,
+        ).to(device)
+
+        s = torch.randn(batch_size, n_tokens, c_s).to(device)
+        a, q_l, c_l, p_lm = model_s_only(input_dict, s=s)
+        assert a.shape == (batch_size, n_tokens, c_token)
+        assert not torch.isnan(a).any()
+
+        # Test assertion when providing z input but has_z=False
+        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
+        try:
+            model_s_only(input_dict, s=s, z=z)
+            assert False, "Should have raised assertion error"
+        except AssertionError as e:
+            assert "has_z=False" in str(e)
 
 
 if __name__ == "__main__":

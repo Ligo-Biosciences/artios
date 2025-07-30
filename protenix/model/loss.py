@@ -25,7 +25,7 @@ from protenix.model.modules.frames import (
     expressCoordinatesInFrame,
 )
 from protenix.model.modules.primitives import MLP
-from protenix.model.utils import expand_at_dim
+from protenix.model.utils import broadcast_token_to_atom, expand_at_dim
 
 
 def loss_reduction(loss: torch.Tensor, method: str = "mean") -> torch.Tensor:
@@ -775,12 +775,18 @@ class ELBOLoss(nn.Module):
         assert mode in ["train", "eval", "inference"]
         loss_fns = {}
 
+        # If no centre atom, mask that token completely
+        loss_mask = label_dict["coordinate_mask"] * broadcast_token_to_atom(
+            x_token=label_dict["has_centre_atom"],
+            atom_to_token_idx=feat_dict["atom_to_token_idx"],
+        )
+
         loss_fns.update(
             {
                 "mse_ligand_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
-                    coordinate_mask=label_dict["coordinate_mask"],
+                    coordinate_mask=loss_mask,
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
@@ -794,7 +800,7 @@ class ELBOLoss(nn.Module):
                 "mse_rna_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
-                    coordinate_mask=label_dict["coordinate_mask"],
+                    coordinate_mask=loss_mask,
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
@@ -808,7 +814,7 @@ class ELBOLoss(nn.Module):
                 "mse_dna_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
-                    coordinate_mask=label_dict["coordinate_mask"],
+                    coordinate_mask=loss_mask,
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
@@ -840,7 +846,7 @@ class ELBOLoss(nn.Module):
                 "mse_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
-                    coordinate_mask=label_dict["coordinate_mask"],
+                    coordinate_mask=loss_mask,
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],

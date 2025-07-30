@@ -290,11 +290,11 @@ class MSELoss(nn.Module):
 
     def __init__(
         self,
-        weight_mse: float = 1 / 3,
-        weight_dna: float = 5.0,
-        weight_rna=5.0,
-        weight_ligand=10.0,
-        eps=1e-4,
+        weight_mse: float = 1.0,
+        weight_dna: float = 1.0,
+        weight_rna=1.0,
+        weight_ligand=1.0,
+        eps=1e-5,
         reduction: str = "mean",
         use_uncertainty: bool = False,
         uncertainty_embed_dim: int = 64,
@@ -704,24 +704,18 @@ class ELBOLoss(nn.Module):
         self.configs = configs
 
         self.beta = configs.loss.elbo.beta
+        mse_config = configs.loss.elbo.reconstruction.mse
 
         self.loss_weight = {
-            "mse_ligand_loss": 10.0,  # TODO: get these from configs
-            "mse_rna_loss": 5.0,
-            "mse_dna_loss": 5.0,
-            "mse_loss": 1.0,
+            "mse_ligand_loss": mse_config.weight_ligand,
+            "mse_rna_loss": mse_config.weight_rna,
+            "mse_dna_loss": mse_config.weight_dna,
+            "mse_loss": mse_config.weight_mse,
             "sequence_loss": 1.0,
             "kl_divergence_loss": self.beta,
         }
 
-        # TODO: clean up the MSE loss implementation
-        self.mse_loss = MSELoss(
-            weight_mse=1.0,  # these are weighted outside of the MSE
-            weight_dna=1.0,
-            weight_rna=1.0,
-            weight_ligand=1.0,
-            # **configs.loss.elbo.reconstruction.mse
-        )  # TODO: get rid of configs
+        self.mse_loss = MSELoss()
 
         self.sequence_loss = SequenceLoss()
 

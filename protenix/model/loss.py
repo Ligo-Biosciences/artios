@@ -710,6 +710,7 @@ class ELBOLoss(nn.Module):
             "mse_ligand_loss": mse_config.weight_ligand,
             "mse_rna_loss": mse_config.weight_rna,
             "mse_dna_loss": mse_config.weight_dna,
+            "mse_protein_loss": 0.0,
             "mse_loss": mse_config.weight_mse,
             "sequence_loss": 1.0,
             "kl_divergence_loss": self.beta,
@@ -812,6 +813,24 @@ class ELBOLoss(nn.Module):
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
                     extra_filter_mask=feat_dict["is_dna"],  # only DNAs
+                )
+            }
+        )
+
+        is_protein = torch.ones_like(feat_dict["is_dna"]) - torch.clamp(
+            (feat_dict["is_dna"] + feat_dict["is_rna"] + feat_dict["is_ligand"]),
+            max=1.0,
+        )
+        loss_fns.update(
+            {
+                "mse_protein_loss": lambda: self.mse_loss(
+                    pred_coordinate=pred_dict["coordinate"],
+                    true_coordinate=label_dict["coordinate"],
+                    coordinate_mask=label_dict["coordinate_mask"],
+                    is_rna=feat_dict["is_rna"],
+                    is_dna=feat_dict["is_dna"],
+                    is_ligand=feat_dict["is_ligand"],
+                    extra_filter_mask=is_protein,  # only proteins
                 )
             }
         )

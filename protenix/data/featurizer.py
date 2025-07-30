@@ -319,9 +319,6 @@ class Featurizer(object):
         token_features["sym_id"] = torch.Tensor(centre_atoms.sym_id_int).long()
         token_features["restype"] = restype_onehot
         token_features["centre_atom_coords"] = torch.Tensor(centre_atoms.coord)
-        token_features["has_centre_atom"] = torch.Tensor(
-            self.cropped_atom_array.is_resolved[centre_atoms_indices].astype(int)
-        ).long()
 
         return token_features
 
@@ -719,6 +716,16 @@ class Featurizer(object):
         labels["coordinate_mask"] = torch.Tensor(
             self.cropped_atom_array.is_resolved.astype(int)
         ).long()  # [N_atom]
+
+        # Find centre atom indices
+        centre_atoms_indices = self.cropped_token_array.get_annotation(
+            "centre_atom_index"
+        )
+
+        # Does centre atom exist?
+        labels["has_centre_atom"] = torch.Tensor(
+            self.cropped_atom_array.is_resolved[centre_atoms_indices].astype(int)
+        ).long()
 
         # Dense to flat atom mask
         num_tokens = len(self.cropped_token_array)

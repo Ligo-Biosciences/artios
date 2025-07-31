@@ -612,21 +612,6 @@ class ArtiosAllAtomTrainer(object):
             if "loss" not in key:
                 continue
             self.train_metric_wrapper.add(key, value, namespace="train")
-            # Loss spike detection
-            old_val = self.curr_loss_dict.get(key, None)
-            if (
-                old_val is not None
-                and value / (old_val + 1e-8) > self.loss_spike_threshold
-            ):
-                pdb_id = batch["basic"]["pdb_id"]
-                self.print(
-                    f"WARNING: Loss spike detected for {key}. "
-                    f"Current value: {value:.4f}, Previous value: {old_val:.4f}, "
-                    f"Ratio: {(value / old_val):.4f}. "
-                    f"Spike details: PDB ID: {pdb_id}, Step: {self.step}"
-                )
-            if value != 0:
-                self.curr_loss_dict[key] = value
         torch.cuda.empty_cache()
 
     def progress_bar(self, desc: str = ""):

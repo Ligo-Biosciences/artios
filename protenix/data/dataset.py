@@ -31,7 +31,7 @@ from protenix.common.constants import EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
 from protenix.data.msa_featurizer import MSAFeaturizer
-from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
+from protenix.data.tokenizer import TokenArray
 from protenix.data.utils import data_type_transform, make_dummy_feature
 from protenix.utils.cropping import CropData
 from protenix.utils.file_io import read_indices_csv
@@ -476,18 +476,18 @@ class BaseSingleDataset(Dataset):
             )
 
         # TODO: temporary workaround for removing terminal oxygens
-        atom_array = bioassembly_dict["atom_array"]
-        token_array = bioassembly_dict["token_array"]
+        # atom_array = bioassembly_dict["atom_array"]
+        # token_array = bioassembly_dict["token_array"]
 
         # TODO: raise exception if UNK residue present
         # if np.any(atom_array.res_name == "UNK"):
         #    raise ValueError("UNK residue present in the atom_array")
 
-        atom_array = atom_array[atom_array.atom_name != "OXT"]
-        token_array = AtomArrayTokenizer(atom_array).get_token_array()
+        # atom_array = atom_array[atom_array.atom_name != "OXT"]
+        # token_array = AtomArrayTokenizer(atom_array).get_token_array()
 
-        bioassembly_dict["atom_array"] = atom_array
-        bioassembly_dict["token_array"] = token_array
+        # bioassembly_dict["atom_array"] = atom_array
+        # bioassembly_dict["token_array"] = token_array
 
         # Crop
         (

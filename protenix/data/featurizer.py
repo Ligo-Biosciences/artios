@@ -318,7 +318,8 @@ class Featurizer(object):
         token_features["entity_id"] = torch.Tensor(centre_atoms.entity_id_int).long()
         token_features["sym_id"] = torch.Tensor(centre_atoms.sym_id_int).long()
         token_features["restype"] = restype_onehot
-        token_features["centre_atom_coords"] = torch.Tensor(centre_atoms.coord)
+        #token_features["centre_atom_coords"] = torch.Tensor(centre_atoms.coord)
+        #TODO: 
 
         return token_features
 
@@ -484,7 +485,6 @@ class Featurizer(object):
     def get_extra_features(self) -> dict[str, torch.Tensor]:
         """
         Get other features not listed in AlphaFold3 SI Chapter 2.8 Table 5.
-        The size of these features is [N_atom].
 
         Returns:
             Dict[str, torch.Tensor]: a dict of extra features.
@@ -503,25 +503,30 @@ class Featurizer(object):
         ).long()
 
         extra_features = {}
-        extra_features["atom_to_token_idx"] = atom_to_token_idx
+        extra_features["atom_to_token_idx"] = atom_to_token_idx # [N_atom]
         extra_features["atom_to_tokatom_idx"] = torch.Tensor(
             self.cropped_atom_array.tokatom_idx
-        ).long()
+        ).long() # [N_atom]
 
         extra_features["is_protein"] = torch.Tensor(
             self.cropped_atom_array.is_protein
-        ).long()
+        ).long() # [N_atom]
         extra_features["is_ligand"] = torch.Tensor(
             self.cropped_atom_array.is_ligand
-        ).long()
-        extra_features["is_dna"] = torch.Tensor(self.cropped_atom_array.is_dna).long()
-        extra_features["is_rna"] = torch.Tensor(self.cropped_atom_array.is_rna).long()
+        ).long() # [N_atom]
+        extra_features["is_dna"] = torch.Tensor(self.cropped_atom_array.is_dna).long() # [N_atom]
+        extra_features["is_rna"] = torch.Tensor(self.cropped_atom_array.is_rna).long() # [N_atom]
+
+        centre_atom_indices = self.cropped_token_array.get_annotation(
+            "centre_atom_index"
+        )
+
         if "resolution" in self.cropped_atom_array._annot:
             extra_features["resolution"] = torch.Tensor(
                 [self.cropped_atom_array.resolution[0]]
             )
         else:
-            extra_features["resolution"] = torch.Tensor([-1])
+            extra_features["resolution"] = torch.Tensor([-1]) 
 
         for mol_type in ["ligand", "protein", "dna", "rna"]:
             is_x_atom = torch.Tensor(
@@ -529,7 +534,11 @@ class Featurizer(object):
             ).to(dtype=torch.bool)
             is_x_token = torch.zeros(len(self.cropped_token_array), dtype=torch.bool)
             is_x_token.scatter_(dim=-1, index=atom_to_token_idx, src=is_x_atom)
-            extra_features[f"is_{mol_type}_token"] = is_x_token
+            extra_features[f"is_{mol_type}_token"] = is_x_token # [N_token]
+
+        extra_features["is_target_token"] = torch.Tensor(
+            self.cropped_atom_array.is_target[centre_atom_indices]
+        ).long() # [N_token]
 
         return extra_features
 
@@ -726,6 +735,11 @@ class Featurizer(object):
         labels["has_centre_atom"] = torch.Tensor(
             self.cropped_atom_array.is_resolved[centre_atoms_indices].astype(int)
         ).long()
+
+        # Get centre coordinates
+        labels["centre_coordinate"] = torch.Tensor(
+            self.cropped_atom_array.coord[centre_atoms_indices]
+        )  # [N_token, 3]
 
         # Dense to flat atom mask
         num_tokens = len(self.cropped_token_array)

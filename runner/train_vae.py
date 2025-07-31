@@ -170,7 +170,6 @@ class ArtiosAllAtomTrainer(object):
         )
         # self.lddt_metrics = LDDTMetrics(self.configs)
         self.sequence_metrics = SequenceMetrics()
-        self.loss_spike_threshold = self.configs.loss.loss_spike_log_threshold
         self.curr_loss_dict = {}
 
     def init_model(self):

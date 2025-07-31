@@ -31,7 +31,7 @@ from protenix.common.constants import EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
 from protenix.data.msa_featurizer import MSAFeaturizer
-from protenix.data.tokenizer import TokenArray
+from protenix.data.tokenizer import TokenArray, AtomArrayTokenizer
 from protenix.data.utils import data_type_transform, make_dummy_feature
 from protenix.utils.cropping import CropData
 from protenix.utils.file_io import read_indices_csv
@@ -98,6 +98,9 @@ class BaseSingleDataset(Dataset):
         self.limits = kwargs.get(
             "limits", -1
         )  # Limit number of indices rows, mainly for test
+
+        # Binding target configs
+        self.train_with_binding_target = kwargs.get("train_with_binding_target", False)
 
         self.error_dir = kwargs.get("error_dir", None)
         if self.error_dir is not None:
@@ -410,6 +413,28 @@ class BaseSingleDataset(Dataset):
             atom_array.sym_id_int[mask] = _shuffle(atom_array.sym_id_int[mask])
         return atom_array
 
+    @staticmethod
+    def _assign_binding_target(atom_array: AtomArray, train_with_binding_target: bool):
+        """
+        Assign a random asymmetric unit as the target if train_with_binding_target is True.
+        Otherwise, assign all False.
+        """
+        # Pick target chain
+        unique_asym_ids = np.unique(atom_array.asym_id_int)
+        target_asym_id = np.random.choice(unique_asym_ids)
+
+        if train_with_binding_target:
+            # Add target annotation to atom array
+            atom_array.set_annotation(
+                "is_target", atom_array.asym_id_int == target_asym_id
+            )
+        else:
+            atom_array.set_annotation(
+                "is_target", np.zeros_like(atom_array.asym_id_int, dtype=bool)
+            )
+
+        return atom_array
+
     def process_one(
         self, idx: int, return_atom_token_array: bool = False
     ) -> dict[str, dict]:
@@ -476,18 +501,18 @@ class BaseSingleDataset(Dataset):
             )
 
         # TODO: temporary workaround for removing terminal oxygens
-        # atom_array = bioassembly_dict["atom_array"]
-        # token_array = bioassembly_dict["token_array"]
+        atom_array = bioassembly_dict["atom_array"]
+        token_array = bioassembly_dict["token_array"]
 
         # TODO: raise exception if UNK residue present
         # if np.any(atom_array.res_name == "UNK"):
         #    raise ValueError("UNK residue present in the atom_array")
 
-        # atom_array = atom_array[atom_array.atom_name != "OXT"]
-        # token_array = AtomArrayTokenizer(atom_array).get_token_array()
+        atom_array = atom_array[atom_array.atom_name != "OXT"]
+        token_array = AtomArrayTokenizer(atom_array).get_token_array()
 
-        # bioassembly_dict["atom_array"] = atom_array
-        # bioassembly_dict["token_array"] = token_array
+        bioassembly_dict["atom_array"] = atom_array
+        bioassembly_dict["token_array"] = token_array
 
         # Crop
         (
@@ -501,6 +526,11 @@ class BaseSingleDataset(Dataset):
             sample_indice=sample_indice,
             bioassembly_dict=bioassembly_dict,
             **self.cropping_configs,
+        )
+
+        cropped_atom_array = self._assign_binding_target(
+            atom_array=cropped_atom_array, 
+            train_with_binding_target=self.train_with_binding_target
         )
 
         feat, label, label_full = self.get_feature_and_label(
@@ -1103,6 +1133,9 @@ def get_datasets(
         )
         dataset_param["ref_pos_augment"] = data_config.get(
             "train_ref_pos_augment", True
+        )
+        dataset_param["train_with_binding_target"] = data_config.get(
+            "train_with_binding_target", False
         )
         dataset_param["limits"] = data_config.get("limits", -1)
         train_dataset = BaseSingleDataset(**dataset_param)

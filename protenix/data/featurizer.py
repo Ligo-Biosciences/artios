@@ -319,7 +319,10 @@ class Featurizer(object):
         token_features["sym_id"] = torch.Tensor(centre_atoms.sym_id_int).long()
         token_features["restype"] = restype_onehot
         #token_features["centre_atom_coords"] = torch.Tensor(centre_atoms.coord)
-        #TODO: 
+
+        # Get target centre coordinates
+        target_centre_mask = self.cropped_atom_array.is_target[centre_atoms_indices]  # [N_token]
+        token_features["target_centre_coordinate"] = torch.Tensor(centre_atoms.coord) * target_centre_mask.unsqueeze(-1) # [N_token, 3]
 
         return token_features
 

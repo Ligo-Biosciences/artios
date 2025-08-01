@@ -271,6 +271,7 @@ class ArtiosAllatom(nn.Module):
         input_feature_dict: dict[str, Any],
         label_full_dict: dict[str, Any],
         label_dict: dict,
+        encoder: nn.Module,
         symmetric_permutation: SymmetricPermutation,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
@@ -283,6 +284,7 @@ class ArtiosAllatom(nn.Module):
             input_feature_dict (dict[str, Any]): Input features dictionary.
             label_full_dict (dict[str, Any]): Full label dictionary (uncropped).
             label_dict (dict): Label dictionary (cropped).
+            encoder (nn.Module): Encoder model.
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object.
             inplace_safe (bool): Whether to use inplace operations safely. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
@@ -299,8 +301,21 @@ class ArtiosAllatom(nn.Module):
         device = input_feature_dict["residue_index"].device
 
         # TODO: 1. encode the entire biomolecule in the batch to get latents
+        # x_augment = centre_random_augment(label_dict["coordinate"], ...)
+        # latents, _ = encoder(input_feature_dict, x_augment) # [..., N_sample, N_token, c_latent]
 
         # TODO: 2. Sample diffusion for latents and centre atom coordinates
+        # This needs to: 
+        # - Augment centre coords:centre_random_augment(label_dict["centre_coordinate"],...) # [..., N_sample, N_token, 3]
+        # - generate timesteps (timestep_latent, timestep_coord) from a timestep sampler [..., N_sample]
+        # - generate noise for latents, magnitude 1, shape [..., N_sample, N_token, c_latent]
+        # - generate noise for centre coords, magnitude sigma_data, shape [..., N_sample, N_token, 3]
+        # - use noise_w_flow_matching to get latents_noisy, centre_coords_noisy
+        # - send latents_noisy, centre_coords_noisy through diffusion module and return 
+        # latents, centre_coords_augment, latents_pred, centre_coords_pred, timestep_latent, timestep_coord
+        # - update pred_dict with latents_pred, centre_coords_pred, timestep_latent, timestep_coord
+        # - update label_dict with latents, centre_coords_augment
+
 
         ### Diffusion training
         N_sample = self.diffusion_batch_size
@@ -340,6 +355,8 @@ class ArtiosAllatom(nn.Module):
         mode: str = "inference",
         current_step: Optional[int] = None,
         symmetric_permutation: SymmetricPermutation = None,
+        encoder: Optional[nn.Module] = None,
+        decoder: Optional[nn.Module] = None,
         guiding_net: Optional[nn.Module] = None,
         seed: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
@@ -353,6 +370,8 @@ class ArtiosAllatom(nn.Module):
             mode (str): Mode of operation ('train', 'inference', 'eval'). Defaults to 'inference'.
             current_step (Optional[int]): Current training step. Defaults to None.
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object. Defaults to None.
+            encoder (Optional[nn.Module]): Encoder model. Defaults to None.
+            decoder (Optional[nn.Module]): Decoder model. Defaults to None.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
@@ -373,6 +392,7 @@ class ArtiosAllatom(nn.Module):
                 input_feature_dict=input_feature_dict,
                 label_full_dict=label_full_dict,
                 label_dict=label_dict,
+                encoder=encoder,
                 symmetric_permutation=symmetric_permutation,
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,

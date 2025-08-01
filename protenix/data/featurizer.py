@@ -722,6 +722,10 @@ class Featurizer(object):
 
         mask_features = self.get_mask_features()
         features.update(mask_features)
+
+        target_features = self.get_target_features()
+        features.update(target_features)
+
         return features
 
     def get_dense_atoms_to_flat_atoms_mask(self) -> torch.Tensor:

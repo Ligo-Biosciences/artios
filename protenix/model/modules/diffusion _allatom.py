@@ -76,6 +76,7 @@ class DiffusionConditioning(nn.Module):
 
         # Line 8-9
         self.fourier_embedding = FourierEmbedding(c=c_timestep_embedding)
+        # TODO: two fourier embeddings for latent and coord or same fourier and different linears?
         self.layernorm_t = LayerNorm(c_timestep_embedding)
         self.linear_no_bias_t = LinearNoBias(
             in_features=c_timestep_embedding, out_features=self.c_s
@@ -86,14 +87,17 @@ class DiffusionConditioning(nn.Module):
 
     def forward(
         self,
-        timestep: torch.Tensor,  # TODO: add both the latent and the coord timesteps
+        coord_timestep: torch.Tensor,
+        latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         inplace_safe: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            timestep (torch.Tensor): the noising timestep (the t such that x_t = (1-t)*x_0 + t*x_1)
-                [..., N_sample]  # TODO: latent and coord timesteps
+            coord_timestep (torch.Tensor): the noising timestep for coords
+                [..., N_sample]
+            latent_timestep (torch.Tensor): the noising timestep for latents
+                [..., N_sample]
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
             inplace_safe (bool): Whether it is safe to use inplace operations.
         Returns:
@@ -101,7 +105,7 @@ class DiffusionConditioning(nn.Module):
                 - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
                 - z (torch.Tensor): [..., N_N_tokens, N_tokens, c_z]
 
-        TODO: Change all reference to lm indexing to ij indexing since now weare using tokenwise representations
+        TODO: Change all reference to lm indexing to ij indexing since now we are using tokenwise representations
         """
         # Grab data on inputs
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
@@ -111,18 +115,19 @@ class DiffusionConditioning(nn.Module):
         # 1. Get token-wise ligand reference positions
         # [..., N_atom, 3]
         is_ligand = input_feature_dict["is_ligand"].unsqueeze(-1)  # [..., n_atom, 1]
-        # TODO: we can switch to is_ligand_token feature here instead.
         ligand_ref_pos = (
             input_feature_dict["ref_pos"] * is_ligand
         )  # (zero out non-ligand atoms)
 
         # 2. Aggregate per-atom reference positions to per-token reference positions (trick to get token-level tensor)
         # [..., N_atom, 3] -> [..., N_token, 3]
-        ligand_ref_pos = aggregate_atom_to_token(
-            x_atom=ligand_ref_pos,
-            atom_to_token_idx=atom_to_token_idx,
-            n_token=n_token,
-            reduce="mean",
+        ligand_ref_pos = (
+            aggregate_atom_to_token(  # TODO: maybe we move this to featurizer
+                x_atom=ligand_ref_pos,
+                atom_to_token_idx=atom_to_token_idx,
+                n_token=n_token,
+                reduce="mean",
+            )
         )
 
         # Compute v_lm mask
@@ -142,6 +147,12 @@ class DiffusionConditioning(nn.Module):
         )  # [..., n_token, n_token, 3]
         z = self.linear_no_bias_d(d_lm) * v_lm  # [..., n_token, n_token, c_z]
         # TODO: add the rest of the target features here
+
+        # Embed the target coordinates ()
+
+        # Embed the target pairwise distances
+
+        # Embed the target restype
 
         # 4. Embed pairwise inverse squared distances
         invd_emb = (
@@ -173,15 +184,25 @@ class DiffusionConditioning(nn.Module):
 
         ### Initialize single embedding
         # 1. Fourier embed the timestep
-        t_hat_timestep = 2 * timestep - 1  # Rescale to [-1, 1] for smoother embedding
-        # TODO: embed both timesteps separately
-        timestep_t = self.fourier_embedding(t_hat_timestep=t_hat_timestep).to(
-            z.dtype
-        )  # [..., N_sample, c_noise_embedding]
+        # t_hat_coord_timestep = (
+        #    2 * coord_timestep - 1
+        # )  # Rescale to [-1, 1] for smoother embedding
+        t_hat_latent_timestep = 2 * latent_timestep - 1
 
+        # NOTE: nothing learned in the Fourier embeddings
+        # timestep_coord_t = self.fourier_embedding(
+        #    t_hat_timestep=t_hat_coord_timestep
+        # ).to(z.dtype)  # [..., N_sample, c_noise_embedding]
+        timestep_latent_t = self.fourier_embedding(
+            t_hat_timestep=t_hat_latent_timestep
+        ).to(z.dtype)
+
+        # TODO: embed both timesteps separately
         # 2. Normalise and embed timestep
         s = expand_at_dim(
-            self.linear_no_bias_t(self.layernorm_t(timestep_t)), dim=-2, n=n_token
+            self.linear_no_bias_t(self.layernorm_t(timestep_latent_t)),
+            dim=-2,
+            n=n_token,
         )  # [..., N_sample, N_tokens, c_s]
 
         # 3. Send single embedding through two transitions
@@ -355,6 +376,7 @@ class DiffusionModule(nn.Module):
         )
 
         # Add token-level conditioning from atom encoder
+        # TODO: put this back in since it'll have target coords etc.
         # s = add(s, c_token, inplace_safe=inplace_safe) # [..., N_sample, N_token, c_s]
 
         # Mix single conditioning into token representation

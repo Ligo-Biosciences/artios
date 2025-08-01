@@ -59,7 +59,7 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 os.environ["WANDB_CONSOLE"] = "off"
 
 
-class AF3Trainer(object):
+class ArtiosAllAtomFlowTrainer(object):
     def __init__(self, configs):
         self.configs = configs
         self.init_env()
@@ -850,7 +850,7 @@ class AF3Trainer(object):
 
     def run(self):
         """
-        Main entry for the AF3Trainer.
+        Main entry for the ArtiosAllAtomFlowTrainer.
 
         This function handles the training process, evaluation, logging, and checkpoint saving.
         """
@@ -947,7 +947,7 @@ def main():
 
     print(configs.run_name)
     print(configs)
-    trainer = AF3Trainer(configs)
+    trainer = ArtiosAllAtomFlowTrainer(configs)
     trainer.run()
 
 

@@ -773,7 +773,7 @@ class Featurizer(object):
         # Does centre atom exist?
         labels["has_centre_atom"] = torch.Tensor(
             self.cropped_atom_array.is_resolved[centre_atoms_indices].astype(int)
-        ).long()
+        ).long()  # [N_token]
 
         # Get centre coordinates
         labels["centre_coordinate"] = torch.Tensor(

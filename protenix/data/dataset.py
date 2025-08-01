@@ -31,7 +31,7 @@ from protenix.common.constants import EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
 from protenix.data.msa_featurizer import MSAFeaturizer
-from protenix.data.tokenizer import TokenArray, AtomArrayTokenizer
+from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.data.utils import data_type_transform, make_dummy_feature
 from protenix.utils.cropping import CropData
 from protenix.utils.file_io import read_indices_csv
@@ -423,6 +423,7 @@ class BaseSingleDataset(Dataset):
         unique_asym_ids = np.unique(atom_array.asym_id_int)
         target_asym_id = np.random.choice(unique_asym_ids)
 
+        # TODO: with some probability, we should not have a target (e.g. 30% of training examples).
         if train_with_binding_target:
             # Add target annotation to atom array
             atom_array.set_annotation(
@@ -529,8 +530,8 @@ class BaseSingleDataset(Dataset):
         )
 
         cropped_atom_array = self._assign_binding_target(
-            atom_array=cropped_atom_array, 
-            train_with_binding_target=self.train_with_binding_target
+            atom_array=cropped_atom_array,
+            train_with_binding_target=self.train_with_binding_target,
         )
 
         feat, label, label_full = self.get_feature_and_label(

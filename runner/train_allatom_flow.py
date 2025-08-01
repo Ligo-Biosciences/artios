@@ -28,6 +28,7 @@ import rootutils
 import torch
 import torch.distributed as dist
 import wandb
+import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
@@ -179,6 +180,9 @@ class ArtiosAllAtomFlowTrainer(object):
         self.raw_model = ArtiosLigand(self.configs).to(
             self.device
         )  # TODO: change to ArtiosAllAtom
+        #TODO: load in the VAE. split into encoder and decoder after ckpt loading
+        # self.vae = ArtiosAllAtomVAE(self.configs).to(self.device)
+        # DDP not required for VAE loading since model is frozen - no need for gradient aggregation
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
             self.print("Using DDP")
@@ -361,17 +365,22 @@ class ArtiosAllAtomFlowTrainer(object):
         if DIST_WRAPPER.rank == 0:
             logging.info(msg)
 
-    # TODO: adapt model_forward to handle the different models. Probably keep as one method but have
-    # a model argument that takes in "encoder", "decoder" or "flow". All three required if
-    # we want to see what denoised outputs look like in atom space (say, during validation).
+    # TODO: model forward accepts the encoder and the decoder
     def model_forward(
-        self, batch: dict, mode: str = "train", seed: Optional[int] = None
+        self, 
+        batch: dict, 
+        mode: str = "train", 
+        encoder: Optional[nn.Module] = None, 
+        decoder: Optional[nn.Module] = None,
+        seed: Optional[int] = None
     ) -> tuple[dict, dict]:
         """Forward pass of the model.
 
         Args:
             batch (dict): Batch of data.
             mode (str): Mode of the forward pass.
+            encoder (Optional[nn.Module]): Encoder model. Defaults to None.
+            decoder (Optional[nn.Module]): Decoder model. Defaults to None.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
@@ -385,6 +394,8 @@ class ArtiosAllAtomFlowTrainer(object):
             mode=mode,
             current_step=self.step if mode == "train" else None,
             symmetric_permutation=self.symmetric_permutation,
+            encoder=encoder,
+            decoder=decoder,
             seed=seed,
         )
         return batch, log_dict
@@ -417,7 +428,7 @@ class ArtiosAllAtomFlowTrainer(object):
         # TODO: building on the above todo, comparing the latent distribution to the VAE's
         # latent distribution is going to be key for analysing training performance. Ideas
         # for what we want to see:
-        # - Wasserstein dist aggregated per sample
+        # - Wasserstein dist aggregated over seeds, per sample
         # - histograms, tsne, qq aggregated over samples
         # - histograms, tsne, qq aggregated over seeds, per sample
         # - it is likely that specific molecular properties get mapped to specific subsets of
@@ -518,7 +529,10 @@ class ArtiosAllAtomFlowTrainer(object):
                 simple_metrics = {}
                 with enable_amp:
                     # Model forward - adds the pred_dict and label_dict to batch
+                    # TODO: pass in encoder to forward pass
+                    # batch, _ = self.model_forward(batch, encoder=self.vae.encoder, mode="train")
                     batch, _ = self.model_forward(batch, mode=mode, seed=index)
+
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict, monitor_data = self.get_loss(
                         batch, mode="train"
@@ -630,7 +644,8 @@ class ArtiosAllAtomFlowTrainer(object):
         )
 
         with enable_amp:
-            # TODO: here we need to do two forward passes (one for flow, one for encoder), both take in batch, output batch
+            # TODO: pass in encoder to forward pass
+            # batch, _ = self.model_forward(batch, encoder=self.vae.encoder, mode="train")
             batch, _ = self.model_forward(batch, mode="train")
             loss, loss_dict, _ = self.get_loss(batch, mode="train")
 

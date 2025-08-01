@@ -318,11 +318,6 @@ class Featurizer(object):
         token_features["entity_id"] = torch.Tensor(centre_atoms.entity_id_int).long()
         token_features["sym_id"] = torch.Tensor(centre_atoms.sym_id_int).long()
         token_features["restype"] = restype_onehot
-        #token_features["centre_atom_coords"] = torch.Tensor(centre_atoms.coord)
-
-        # Get target centre coordinates
-        target_centre_mask = self.cropped_atom_array.is_target[centre_atoms_indices]  # [N_token]
-        token_features["target_centre_coordinate"] = torch.Tensor(centre_atoms.coord) * target_centre_mask.unsqueeze(-1) # [N_token, 3]
 
         return token_features
 
@@ -506,30 +501,30 @@ class Featurizer(object):
         ).long()
 
         extra_features = {}
-        extra_features["atom_to_token_idx"] = atom_to_token_idx # [N_atom]
+        extra_features["atom_to_token_idx"] = atom_to_token_idx  # [N_atom]
         extra_features["atom_to_tokatom_idx"] = torch.Tensor(
             self.cropped_atom_array.tokatom_idx
-        ).long() # [N_atom]
+        ).long()  # [N_atom]
 
         extra_features["is_protein"] = torch.Tensor(
             self.cropped_atom_array.is_protein
-        ).long() # [N_atom]
+        ).long()  # [N_atom]
         extra_features["is_ligand"] = torch.Tensor(
             self.cropped_atom_array.is_ligand
-        ).long() # [N_atom]
-        extra_features["is_dna"] = torch.Tensor(self.cropped_atom_array.is_dna).long() # [N_atom]
-        extra_features["is_rna"] = torch.Tensor(self.cropped_atom_array.is_rna).long() # [N_atom]
-
-        centre_atom_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
+        ).long()  # [N_atom]
+        extra_features["is_dna"] = torch.Tensor(
+            self.cropped_atom_array.is_dna
+        ).long()  # [N_atom]
+        extra_features["is_rna"] = torch.Tensor(
+            self.cropped_atom_array.is_rna
+        ).long()  # [N_atom]
 
         if "resolution" in self.cropped_atom_array._annot:
             extra_features["resolution"] = torch.Tensor(
                 [self.cropped_atom_array.resolution[0]]
             )
         else:
-            extra_features["resolution"] = torch.Tensor([-1]) 
+            extra_features["resolution"] = torch.Tensor([-1])
 
         for mol_type in ["ligand", "protein", "dna", "rna"]:
             is_x_atom = torch.Tensor(
@@ -537,11 +532,7 @@ class Featurizer(object):
             ).to(dtype=torch.bool)
             is_x_token = torch.zeros(len(self.cropped_token_array), dtype=torch.bool)
             is_x_token.scatter_(dim=-1, index=atom_to_token_idx, src=is_x_atom)
-            extra_features[f"is_{mol_type}_token"] = is_x_token # [N_token]
-
-        extra_features["is_target_token"] = torch.Tensor(
-            self.cropped_atom_array.is_target[centre_atom_indices]
-        ).long() # [N_token]
+            extra_features[f"is_{mol_type}_token"] = is_x_token  # [N_token]
 
         return extra_features
 
@@ -664,6 +655,47 @@ class Featurizer(object):
             bond_mask_mat
         ).long()  # [N_atom, N_atom]
         return mask_features
+
+    def get_target_features(self) -> dict[str, torch.Tensor]:
+        """
+        Get target-specific features for training.
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary containing target features.
+        """
+        target_features = {}
+
+        centre_atom_indices = self.cropped_token_array.get_annotation(
+            "centre_atom_index"
+        )
+        centre_atoms = self.cropped_atom_array[centre_atom_indices]
+        is_target_token = self.cropped_atom_array.is_target[
+            centre_atom_indices
+        ]  # [N_token]
+
+        # Centre atom coordinates of the target
+        target_features["target_centre_coordinate"] = torch.Tensor(
+            centre_atoms.coord * is_target_token.reshape(-1, 1)
+        )  # [N_token, 3]
+
+        # Restypes of the target
+        # [N_token, 32] one-hot encoded residue types
+        restype = centre_atoms.cano_seq_resname
+        restype_onehot = self.restype_onehot_encoded(restype)
+        target_features["target_restype"] = restype_onehot * torch.Tensor(
+            is_target_token
+        ).unsqueeze(-1)
+
+        # Target is_hotspot feature
+        # [N_token] binary indicator for hotspot residues
+        # TODO: iteration number 2 will have this, but not yet.
+
+        # Binary indicator for target tokens
+        target_features["is_target_token"] = torch.Tensor(
+            is_target_token
+        ).long()  # [N_token]
+
+        return target_features
 
     def get_all_input_features(self):
         """

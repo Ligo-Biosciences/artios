@@ -31,9 +31,12 @@ basic_configs = {
     "eval_first": False,  # run evaluate() before training steps
     "iters_to_accumulate": 1,
     "eval_only": False,
-    "load_checkpoint_path": "",
-    "load_ema_checkpoint_path": "",
-    "load_ema_checkpoint_paths_directory": "",
+    "load_flow_checkpoint_path": "",
+    "load_vae_checkpoint_path": "",
+    "load_ema_flow_checkpoint_path": "",
+    "load_ema_vae_checkpoint_path": "",
+    "load_ema_flow_checkpoint_paths_directory": "",
+    "load_ema_vae_checkpoint_paths_directory": "",
     "load_strict": True,
     "load_params_only": True,
     "guiding_net_path": ValueMaybeNone(""),
@@ -136,8 +139,16 @@ model_configs = {
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
     "train_timestep_sampler": {
-        "alpha": 2.2,
-        "uniform_weight": 0.02,
+        "coord": {
+            "alpha": 2.2,
+            "beta": 1.0,
+            "uniform_weight": 0.02,
+        },
+        "latent": {
+            "alpha": 1.0,
+            "beta": 1.5,
+            "uniform_weight": 0.02,
+        },
     },
     "inference_timestep_scheduler": {
         "ligo": {"p": -0.7},
@@ -323,6 +334,15 @@ loss_configs = {
                 "reduction": "mean",
             },
         },
+        "flow": { 
+            "centre_atom": {
+                "weight_mse": 1.0,
+                "weight_dna": 5.0,
+                "weight_rna": 5.0,
+                "weight_ligand": 10.0,
+                "eps": 1e-6,
+            },
+        }
     },
     "metrics": {
         "lddt": {

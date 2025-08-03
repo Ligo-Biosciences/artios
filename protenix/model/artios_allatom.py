@@ -8,11 +8,15 @@ from protenix.model.generator import (
     InferenceTimestepScheduler,
     TrainingTimestepSampler,
     sample_diffusion,
-    sample_diffusion_training,
+    sample_noising,
 )
 from protenix.model.loss import ProtenixLoss
 from protenix.model.modules.diffusion import DiffusionModule
-from protenix.model.utils import simple_merge_dict_list
+from protenix.model.utils import (
+    simple_merge_dict_list, 
+    centre_random_augmentation, 
+    noise_w_flow_matching
+)
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.torch_utils import autocasting_disable_decorator
 
@@ -29,8 +33,11 @@ class ArtiosAllatom(nn.Module):
         # self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
 
         # Diffusion
-        self.train_timestep_sampler = TrainingTimestepSampler(
-            **configs.train_timestep_sampler
+        self.coord_timestep_sampler = TrainingTimestepSampler(
+            **configs.train_timestep_sampler.coord
+        )
+        self.latent_timestep_sampler = TrainingTimestepSampler(
+            **configs.train_timestep_sampler.latent
         )
         # TODO: separate timestep schedulers for the sidechain and backbone coordinates
         self.inference_timestep_scheduler = InferenceTimestepScheduler(
@@ -49,7 +56,7 @@ class ArtiosAllatom(nn.Module):
 
         # Initialize loss as part of model for checkpointing and uncertainty learning
         # TODO: this should be the new coordinate flow + latent flow losses
-        self.loss = ProtenixLoss(configs)
+        #self.loss = ProtenixLoss(configs)
 
         self.sigma_data = configs.sigma_data
 
@@ -294,56 +301,68 @@ class ArtiosAllatom(nn.Module):
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
                 Prediction, updated label, and log dictionaries.
         """
-
         log_dict = {}
         pred_dict = {}
 
-        device = input_feature_dict["residue_index"].device
+        device = label_dict["coordinate"].device
 
-        # TODO: 1. encode the entire biomolecule in the batch to get latents
-        # x_augment = centre_random_augment(label_dict["coordinate"], ...)
-        # latents, _ = encoder(input_feature_dict, x_augment) # [..., N_sample, N_token, c_latent]
-
-        # TODO: 2. Sample diffusion for latents and centre atom coordinates
-        # This needs to: 
-        # - Augment centre coords:centre_random_augment(label_dict["centre_coordinate"],...) # [..., N_sample, N_token, 3]
-        # - generate timesteps (timestep_latent, timestep_coord) from a timestep sampler [..., N_sample]
-        # - generate noise for latents, magnitude 1, shape [..., N_sample, N_token, c_latent]
-        # - generate noise for centre coords, magnitude sigma_data, shape [..., N_sample, N_token, 3]
-        # - use noise_w_flow_matching to get latents_noisy, centre_coords_noisy
-        # - send latents_noisy, centre_coords_noisy through diffusion module and return 
-        # latents, centre_coords_augment, latents_pred, centre_coords_pred, timestep_latent, timestep_coord
-        # - update pred_dict with latents_pred, centre_coords_pred, timestep_latent, timestep_coord
-        # - update label_dict with latents, centre_coords_augment
-
-
-        ### Diffusion training
         N_sample = self.diffusion_batch_size
-        x_target_augment, coords_pred, timestep = autocasting_disable_decorator(
-            self.configs.skip_amp.sample_diffusion_training
-        )(sample_diffusion_training)(
-            timestep_sampler=self.train_timestep_sampler,  # TODO: adjust the parameters here for multi-modal training
-            denoise_net=self.diffusion_module,
-            label_dict=label_dict,
+        generator = torch.Generator(device).manual_seed(seed) if not self.training else None
+
+        # Noising
+        latents_noisy, timestep_latent, latents = sample_noising(
+            input=label_dict["coordinate"],
+            mask=label_dict["coordinate_mask"],
+            timestep_sampler=self.latent_timestep_sampler,
+            num_sample=N_sample,
+            scale=1.0,
+            generator=generator,
             input_feature_dict=input_feature_dict,
-            sigma_data=self.sigma_data,
-            N_sample=N_sample,
-            diffusion_chunk_size=self.configs.diffusion_chunk_size,
-            generator=(
-                torch.Generator(device).manual_seed(seed) if not self.training else None
-            ),
+            encoder=encoder,
         )
 
-        # TODO: update the dictionaries with the return value dict from sample diff training
+        centre_coords_noisy, timestep_coord, _ = sample_noising(
+            input=label_dict["centre_coordinate"],
+            mask=label_dict["has_centre_atom"],
+            timestep_sampler=self.coord_timestep_sampler,
+            num_sample=N_sample,
+            scale=self.sigma_data,
+            generator=generator,
+        )
 
-        # Update dicts
+        # Denoising
+        latents_pred, centre_coords_pred = self.diffusion_module( #TODO: adjust for finished signature
+            latents_noisy=latents_noisy,
+            centre_coords_noisy=centre_coords_noisy,
+            timestep_latent=timestep_latent,
+            timestep_coord=timestep_coord,
+            input_feature_dict=input_feature_dict,
+        )
+
         pred_dict.update(
             {
-                # [..., N_sample=48, N_atom, 3]: diffusion loss
-                "coordinate": coords_pred,
-                "timestep": timestep,
+                "latents": latents_pred, # [..., N_sample, N_token, c_latent]
+                "centre_coordinate": centre_coords_pred,
+                "timestep_latent": timestep_latent,
+                "timestep_coord": timestep_coord,
             }
         )
+        label_dict.update(
+            {
+                "latents": latents, # [..., N_sample, N_token, c_latent]
+            }
+        )
+
+        # Permute symmetric atom/chain in each sample to match true structure
+        #(
+        #    pred_dict,
+        #    perm_log_dict,
+        #    _,
+        #    _,
+        #) = symmetric_permutation.permute_diffusion_sample_to_match_label(
+        #    input_feature_dict, pred_dict, label_dict, stage="train"
+        #)
+        #log_dict.update(perm_log_dict)
 
         return pred_dict, label_dict, log_dict
 

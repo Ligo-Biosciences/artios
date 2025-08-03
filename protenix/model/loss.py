@@ -400,7 +400,7 @@ class MSELoss(nn.Module):
             pred_coordinate (torch.Tensor): the denoised coordinates from diffusion module.
                 [..., N_sample, N_atom, 3]
             true_coordinate (torch.Tensor): the ground truth coordinates.
-                [..., N_atom, 3]
+                [..., N_atom, 3] or [..., N_sample, N_atom, 3]
             coordinate_mask (torch.Tensor): whether true coordinates exist.
                 [N_atom] or [..., N_atom]
             timestep (torch.Tensor): the timestep for the current sample.
@@ -871,6 +871,155 @@ class ELBOLoss(nn.Module):
                 )
             }
         )
+
+        cum_loss, metrics, monitor_data = self.aggregate_losses(loss_fns)
+        return cum_loss, metrics, monitor_data
+
+    def forward(
+        self,
+        feat_dict: dict[str, Any],
+        pred_dict: dict[str, torch.Tensor],
+        label_dict: dict[str, Any],
+        mode: str = "train",
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        assert mode in ["train", "eval", "inference"]
+
+        # Calculate losses
+        cum_loss, losses, monitor_data = self.calculate_losses(
+            feat_dict=feat_dict,
+            pred_dict=pred_dict,
+            label_dict=label_dict,
+            mode=mode,
+        )
+
+        return cum_loss, losses, monitor_data
+
+
+class FlowLoss(nn.Module):
+    """
+    Loss function for the flow model.
+    
+    L = centre_coord_mse + weight * latent_mse
+    """
+
+    def __init__(self, configs) -> None:
+        super(ELBOLoss, self).__init__()
+        self.configs = configs
+
+        centre_atom_config = configs.loss.flow.centre_atom
+
+        self.loss_weight = {
+            # MSE losses
+            "mse_centre_atom_loss": centre_atom_config.weight_mse,
+            "mse_ligand_centre_atom_loss": centre_atom_config.weight_ligand,
+            "mse_rna_centre_atom_loss": centre_atom_config.weight_rna,
+            "mse_dna_centre_atom_loss": centre_atom_config.weight_dna,
+            "mse_protein_centre_atom_loss": 0.0,
+            "mse_target_centre_atom_loss": 0.0,
+            # Latent losses TODO: same weights?
+            "mse_latent_loss": 1.0,
+            "mse_ligand_latent_loss": 1.0,
+            "mse_rna_latent_loss": 1.0,
+            "mse_dna_latent_loss": 1.0,
+            "mse_protein_latent_loss": 0.0,
+            "mse_target_latent_loss": 0.0,
+        }
+
+        self.mse_loss = MSELoss()
+
+    def aggregate_losses(self, loss_fns: dict) -> tuple[torch.Tensor, dict]:
+        """
+        Aggregates multiple loss functions and their respective metrics.
+
+        Args:
+            loss_fns (dict): Dictionary of loss functions to be aggregated.
+
+        Returns:
+            tuple[torch.Tensor, dict]:
+                - cum_loss (torch.Tensor): Cumulative loss.
+                - all_metrics (dict): Dictionary containing all metrics.
+                - monitor_data (dict): Dictionary containing non-standard data for monitoring training dynamics.
+        """
+        cum_loss = 0.0
+        all_metrics = {}
+        all_monitor_data = {}
+        for loss_name, loss_fn in loss_fns.items():
+            weight = self.loss_weight[loss_name]
+            loss_outputs = loss_fn()
+            metrics = {}  # NOTE: dummy metrics
+            if isinstance(loss_outputs, tuple):
+                loss, metrics, monitor_data = loss_outputs
+            else:
+                assert isinstance(loss_outputs, torch.Tensor)
+                loss, metrics, monitor_data = loss_outputs, {}, {}
+
+            all_metrics.update(
+                {f"{loss_name}/{key}": val for key, val in metrics.items()}
+            )
+            all_monitor_data[loss_name] = monitor_data
+
+            if torch.isnan(loss) or torch.isinf(loss):
+                logging.warning(f"{loss_name} loss is NaN. Skipping...")
+            else:
+                all_metrics[loss_name] = loss.detach().clone()
+                all_metrics[f"weighted_{loss_name}"] = weight * loss.detach().clone()
+
+            cum_loss = cum_loss + weight * loss
+        all_metrics["loss"] = cum_loss.detach().clone()
+
+        return cum_loss, all_metrics, all_monitor_data
+
+    def calculate_losses(
+        self,
+        feat_dict: dict[str, Any],
+        pred_dict: dict[str, torch.Tensor],
+        label_dict: dict[str, Any],
+        mode: str = "train",
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        assert mode in ["train", "eval", "inference"]
+        loss_fns = {}
+
+        # If no centre atom, mask that token completely TODO: double check wha'ts going on here
+        loss_mask = label_dict["coordinate_mask"] * broadcast_token_to_atom(
+            x_token=label_dict["has_centre_atom"].unsqueeze(-1),
+            atom_to_token_idx=feat_dict["atom_to_token_idx"],
+        ).squeeze(-1)
+
+        def create_mse_loss_fn(key: str, filter_mask_key: str = None):
+            """Helper function to create MSE loss functions with different prediction types and filter masks."""
+            return lambda: self.mse_loss(
+                pred_coordinate=pred_dict[key],
+                true_coordinate=label_dict[key], 
+                coordinate_mask=loss_mask,
+                is_rna=feat_dict["is_rna"],
+                is_dna=feat_dict["is_dna"],
+                is_ligand=feat_dict["is_ligand"],
+                extra_filter_mask=feat_dict[filter_mask_key] if filter_mask_key else None,
+            )
+
+        # loss configurations: (loss_name, key, filter_mask_key)
+        mse_loss_configurations = [
+            # Centre coordinate losses
+            ("mse_centre_atom_loss", "centre_coordinate", None),
+            ("mse_protein_centre_atom_loss", "centre_coordinate", "is_protein_token"),
+            ("mse_ligand_centre_atom_loss", "centre_coordinate", "is_ligand_token"), 
+            ("mse_rna_centre_atom_loss", "centre_coordinate", "is_rna_token"),
+            ("mse_dna_centre_atom_loss", "centre_coordinate", "is_dna_token"),
+            ("mse_target_centre_atom_loss", "centre_coordinate", "is_target_token"),
+            
+            # Latent losses
+             #TODO: remove the aligment from MSE for latents and make sure works with N_sample
+            ("mse_latent_loss", "latents", None),
+            ("mse_protein_latent_loss", "latents", "is_protein_token"),
+            ("mse_ligand_latent_loss", "latents", "is_ligand_token"),
+            ("mse_rna_latent_loss", "latents", "is_rna_token"), 
+            ("mse_dna_latent_loss", "latents", "is_dna_token"),
+            ("mse_target_latent_loss", "latents", "is_target_token"),
+        ]
+
+        # Create all mse losses
+        for loss_name, key, filter_mask_key in mse_loss_configurations:
+            loss_fns[loss_name] = create_mse_loss_fn(key, filter_mask_key)
 
         cum_loss, metrics, monitor_data = self.aggregate_losses(loss_fns)
         return cum_loss, metrics, monitor_data

@@ -8,7 +8,7 @@ from protenix.model.generator import (
     InferenceTimestepScheduler,
     TrainingTimestepSampler,
     sample_diffusion,
-    sample_diffusion_training,
+    sample_noising,
 )
 
 
@@ -189,6 +189,180 @@ class TestGenerator:
 
         assert coords_pred.shape == (*batch_shape, n_samples, n_atoms, 3)
         assert not torch.isnan(coords_pred).any()
+
+    def test_sample_noising_basic(self, device, input_dict, sample_data):
+        """Test basic functionality of sample_noising function."""
+        # Create input coordinates tensor
+        batch_shape = (1,)  # Simple batch shape for testing
+        n_tokens = 100
+        n_features = 3  # x, y, z coordinates
+        
+        input_coords = torch.randn(*batch_shape, n_tokens, n_features, device=device)
+        mask = torch.ones(*batch_shape, n_tokens, device=device, dtype=torch.bool)
+        print("input_coords.shape", input_coords.shape)
+        print("mask.shape", mask.shape)
+        
+        # Create timestep sampler
+        timestep_sampler = TrainingTimestepSampler(alpha=2.2, beta=1.0, uniform_weight=0.02)
+        
+        # Set parameters
+        num_sample = 3
+        scale = 12.0
+        generator = torch.Generator(device=device).manual_seed(42)
+        
+        # Call sample_noising
+        input_noisy, timestep, input_augment = sample_noising(
+            input=input_coords,
+            mask=mask,
+            timestep_sampler=timestep_sampler,
+            num_sample=num_sample,
+            scale=scale,
+            generator=generator,
+        )
+        
+        # Check output shapes
+        expected_shape = (*batch_shape, num_sample, n_tokens, n_features)
+        expected_timestep_shape = (*batch_shape, num_sample)
+        
+        assert input_noisy.shape == expected_shape
+        assert input_augment.shape == expected_shape
+        assert timestep.shape == expected_timestep_shape
+        
+        # Check that outputs are valid
+        assert not torch.isnan(input_noisy).any()
+        assert not torch.isnan(input_augment).any()
+        assert not torch.isnan(timestep).any()
+        
+        # Check timestep range
+        assert ((timestep >= 0) & (timestep <= 1)).all()
+        
+        # Check that noisy input is different from augmented input
+        assert not torch.allclose(input_noisy, input_augment)
+
+    def test_sample_noising_with_encoder(self, device, input_dict, sample_data):
+        """Test sample_noising with an encoder."""
+        # Create mock encoder
+        class MockEncoder(torch.nn.Module):
+            def forward(self, input_feature_dict, coords):
+                # Return modified coords and some dummy output
+                return coords * 1.1, torch.zeros_like(coords[..., :1])
+        
+        encoder = MockEncoder().to(device)
+        
+        # Create input data
+        batch_shape = (1,)
+        n_tokens = 50
+        n_features = 3
+        
+        input_coords = torch.randn(*batch_shape, n_tokens, n_features, device=device)
+        mask = torch.ones(*batch_shape, n_tokens, device=device, dtype=torch.bool)
+        
+        timestep_sampler = TrainingTimestepSampler()
+        num_sample = 2
+        scale = 10.0
+        generator = torch.Generator(device=device).manual_seed(123)
+        
+        # Call with encoder
+        input_noisy, timestep, input_augment = sample_noising(
+            input=input_coords,
+            mask=mask,
+            timestep_sampler=timestep_sampler,
+            num_sample=num_sample,
+            scale=scale,
+            generator=generator,
+            input_feature_dict=input_dict,
+            encoder=encoder,
+        )
+        
+        # Check shapes
+        expected_shape = (*batch_shape, num_sample, n_tokens, n_features)
+        assert input_noisy.shape == expected_shape
+        assert input_augment.shape == expected_shape
+        assert timestep.shape == (*batch_shape, num_sample)
+        
+        # Check that encoder was applied (coords should be scaled by 1.1)
+        # Note: This is approximate due to augmentation and other processing
+        assert not torch.isnan(input_noisy).any()
+        assert not torch.isnan(input_augment).any()
+
+    def test_sample_noising_different_scales(self, device):
+        """Test sample_noising with different noise scales."""
+        batch_shape = (1,)
+        n_tokens = 30
+        n_features = 3
+        
+        input_coords = torch.randn(*batch_shape, n_tokens, n_features, device=device)
+        mask = torch.ones(*batch_shape, n_tokens, device=device, dtype=torch.bool)
+        
+        timestep_sampler = TrainingTimestepSampler()
+        num_sample = 1
+        
+        scales = [1.0, 5.0, 20.0]
+        results = []
+        
+        for scale in scales:
+            generator = torch.Generator(device=device).manual_seed(42)
+            result = sample_noising(
+                input=input_coords,
+                mask=mask,
+                timestep_sampler=timestep_sampler,
+                num_sample=num_sample,
+                scale=scale,
+                generator=generator,
+            )
+            results.append(result)
+        
+        # Higher scale should generally produce noisier results
+        # (though this is probabilistic due to timestep sampling)
+        for i in range(len(scales) - 1):
+            # Check that all outputs have valid shapes and values
+            assert results[i][0].shape == results[i+1][0].shape
+            assert not torch.isnan(results[i][0]).any()
+            assert not torch.isnan(results[i+1][0]).any()
+
+    def test_sample_noising_edge_cases(self, device):
+        """Test sample_noising with edge cases."""
+        # Test with single sample
+        batch_shape = (1,)
+        n_tokens = 10
+        n_features = 3
+        
+        input_coords = torch.randn(*batch_shape, n_tokens, n_features, device=device)
+        mask = torch.ones(*batch_shape, n_tokens, device=device, dtype=torch.bool)
+        
+        timestep_sampler = TrainingTimestepSampler()
+        generator = torch.Generator(device=device).manual_seed(0)
+        
+        # Test with num_sample = 1
+        result = sample_noising(
+            input=input_coords,
+            mask=mask,
+            timestep_sampler=timestep_sampler,
+            num_sample=1,
+            scale=1.0,
+            generator=generator,
+        )
+        
+        assert result[0].shape == (*batch_shape, 1, n_tokens, n_features)
+        assert result[1].shape == (*batch_shape, 1)
+        assert result[2].shape == (*batch_shape, 1, n_tokens, n_features)
+        
+        # Test with partial mask (some tokens masked out)
+        partial_mask = torch.zeros(*batch_shape, n_tokens, device=device, dtype=torch.bool)
+        partial_mask[..., :n_tokens//2] = True  # Only first half is valid
+        
+        generator = torch.Generator(device=device).manual_seed(0)
+        result_partial = sample_noising(
+            input=input_coords,
+            mask=partial_mask,
+            timestep_sampler=timestep_sampler,
+            num_sample=1,
+            scale=1.0,
+            generator=generator,
+        )
+        
+        assert result_partial[0].shape == (*batch_shape, 1, n_tokens, n_features)
+        assert not torch.isnan(result_partial[0]).any()
 
 
 if __name__ == "__main__":

@@ -310,7 +310,7 @@ class ArtiosAllatom(nn.Module):
         generator = torch.Generator(device).manual_seed(seed) if not self.training else None
 
         # Noising
-        latents_noisy, timestep_latent, latents = sample_noising(
+        noisy_latent, latent_timestep, gt_latents = sample_noising(
             input=label_dict["coordinate"],
             mask=label_dict["coordinate_mask"],
             timestep_sampler=self.latent_timestep_sampler,
@@ -321,7 +321,7 @@ class ArtiosAllatom(nn.Module):
             encoder=encoder,
         )
 
-        centre_coords_noisy, timestep_coord, _ = sample_noising(
+        noisy_centre_coords, coord_timestep, _ = sample_noising(
             input=label_dict["centre_coordinate"],
             mask=label_dict["has_centre_atom"],
             timestep_sampler=self.coord_timestep_sampler,
@@ -331,25 +331,26 @@ class ArtiosAllatom(nn.Module):
         )
 
         # Denoising
-        latents_pred, centre_coords_pred = self.diffusion_module( #TODO: adjust for finished signature
-            latents_noisy=latents_noisy,
-            centre_coords_noisy=centre_coords_noisy,
-            timestep_latent=timestep_latent,
-            timestep_coord=timestep_coord,
+        denoise_dict = self.diffusion_module(
+            noisy_coord=noisy_centre_coords,
+            noisy_latent=noisy_latent,
+            coord_timestep=coord_timestep,
+            latent_timestep=latent_timestep,
             input_feature_dict=input_feature_dict,
         )
+        
+        pred_dict.update(denoise_dict)
 
         pred_dict.update(
             {
-                "latents": latents_pred, # [..., N_sample, N_token, c_latent]
-                "centre_coordinate": centre_coords_pred,
-                "timestep_latent": timestep_latent,
-                "timestep_coord": timestep_coord,
+                "latent_timestep": latent_timestep,
+                "coord_timestep": coord_timestep,
             }
         )
+
         label_dict.update(
             {
-                "latents": latents, # [..., N_sample, N_token, c_latent]
+                "latents": gt_latents, # [..., N_sample, N_token, c_latent]
             }
         )
 

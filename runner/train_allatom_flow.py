@@ -28,17 +28,18 @@ import rootutils
 import torch
 import torch.distributed as dist
 import wandb
+import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
-# TODO: import VAE too
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
-from protenix.model.artios_ligand import ArtiosLigand  # TODO: change to ArtiosAllAtom
+from protenix.model.artios_allatom import ArtiosAllatom
+from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
@@ -176,29 +177,32 @@ class ArtiosAllAtomFlowTrainer(object):
         self.lddt_metrics = LDDTMetrics(self.configs)
 
     def init_model(self):
-        self.raw_model = ArtiosLigand(self.configs).to(
-            self.device
-        )  # TODO: change to ArtiosAllAtom
+        #self.raw_model = ArtiosLigand(self.configs).to(
+        #    self.device
+        #) 
+        self.raw_flow_model = ArtiosAllatom(self.configs).to(self.device)
+        self.vae = ArtiosAllAtomVAE(self.configs).to(self.device)
+        # DDP not required for VAE loading since model is frozen - no need for gradient aggregation
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
             self.print("Using DDP")
             self.use_ddp = True
             # Fix DDP/checkpoint https://discuss.pytorch.org/t/ddp-and-gradient-checkpointing/132244
-            self.model = DDP(
-                self.raw_model,
+            self.flow_model = DDP(
+                self.raw_flow_model,
                 find_unused_parameters=self.configs.find_unused_parameters,
                 device_ids=[DIST_WRAPPER.local_rank],
                 output_device=DIST_WRAPPER.local_rank,
                 static_graph=True,
             )
         else:
-            self.model = self.raw_model
+            self.flow_model = self.raw_flow_model
 
         if self.configs.get("power_law_ema_sigma", []):  # Check if list is not empty
             self.power_law_ema_wrappers = []  # Store wrappers in a list
             for sigma in self.configs.power_law_ema_sigma:
                 wrapper = PowerLawEMAWrapper(
-                    model=self.model,
+                    model=self.flow_model,
                     sigma=sigma,
                     mutable_param_keywords=self.configs.ema_mutable_param_keywords,
                 )
@@ -209,7 +213,7 @@ class ArtiosAllAtomFlowTrainer(object):
             )
 
         torch.cuda.empty_cache()
-        self.optimizer = get_optimizer(self.configs, self.model)
+        self.optimizer = get_optimizer(self.configs, self.flow_model)
         self.init_scheduler()
 
     def init_scheduler(self, **kwargs):
@@ -235,7 +239,7 @@ class ArtiosAllAtomFlowTrainer(object):
             if not save_model_only:
                 # Save model, optimizer, scheduler, and step
                 checkpoint = {
-                    "model": self.model.state_dict(),
+                    "model": self.flow_model.state_dict(),
                     "optimizer": self.optimizer.state_dict(),
                     "scheduler": (
                         self.lr_scheduler.state_dict()
@@ -246,7 +250,7 @@ class ArtiosAllAtomFlowTrainer(object):
                 }
             else:
                 # Save model and step (used for EMA wrappers)
-                checkpoint = {"model": self.model.state_dict(), "step": self.step}
+                checkpoint = {"model": self.flow_model.state_dict(), "step": self.step}
 
             torch.save(checkpoint, path)
             self.print(f"Saved checkpoint to {path}")
@@ -257,6 +261,7 @@ class ArtiosAllAtomFlowTrainer(object):
         def _load_checkpoint(
             checkpoint_path: str,
             load_params_only: bool,
+            model: nn.Module,
             skip_load_optimizer: bool = False,
             skip_load_step: bool = False,
             skip_load_scheduler: bool = False,
@@ -275,10 +280,11 @@ class ArtiosAllAtomFlowTrainer(object):
                     k[len("module.") :]: v for k, v in checkpoint["model"].items()
                 }
 
-            self.model.load_state_dict(  # TODO: adapt to handle different models
-                state_dict=checkpoint["model"],
-                strict=self.configs.load_strict,
+            model.load_state_dict(
+                    checkpoint["model"],
+                    strict=self.configs.load_strict,
             )
+
             if not load_params_only:
                 if not skip_load_optimizer:
                     self.print("Loading optimizer state")
@@ -296,8 +302,10 @@ class ArtiosAllAtomFlowTrainer(object):
                     self.init_scheduler(last_epoch=self.step - 1)
             self.print(f"Finish loading checkpoint, current step: {self.step}")
 
-        if self.configs.load_ema_checkpoint_paths_directory:
-            checkpoint_dir = self.configs.load_ema_checkpoint_paths_directory
+            return model
+
+        if self.configs.load_ema_flow_checkpoint_paths_directory:
+            checkpoint_dir = self.configs.load_ema_flow_checkpoint_paths_directory
             if not os.path.exists(checkpoint_dir):
                 raise Exception(
                     f"EMA checkpoint directory does not exist: {checkpoint_dir}"
@@ -338,6 +346,7 @@ class ArtiosAllAtomFlowTrainer(object):
                 _load_checkpoint(
                     checkpoint_path,
                     load_params_only=True,
+                    model="flow",
                 )
 
                 # Register only the wrapper corresponding to this sigma
@@ -348,43 +357,58 @@ class ArtiosAllAtomFlowTrainer(object):
                 )
 
         # Load model parameters (With no EMA) from checkpoint
-        if self.configs.load_checkpoint_path:
-            _load_checkpoint(
-                self.configs.load_checkpoint_path,
+        if self.configs.load_flow_checkpoint_path:
+            self.flow_model = _load_checkpoint(
+                self.configs.load_flow_checkpoint_path,
                 self.configs.load_params_only,
+                model=self.flow_model,
                 skip_load_optimizer=self.configs.skip_load_optimizer,
                 skip_load_scheduler=self.configs.skip_load_scheduler,
                 skip_load_step=self.configs.skip_load_step,
+            )
+
+        if self.configs.load_vae_checkpoint_path:
+            self.vae = _load_checkpoint(
+                self.configs.load_vae_checkpoint_path,
+                load_params_only=True,
+                model=self.vae,
             )
 
     def print(self, msg: str):
         if DIST_WRAPPER.rank == 0:
             logging.info(msg)
 
-    # TODO: adapt model_forward to handle the different models. Probably keep as one method but have
-    # a model argument that takes in "encoder", "decoder" or "flow". All three required if
-    # we want to see what denoised outputs look like in atom space (say, during validation).
+    # TODO: model forward accepts the encoder and the decoder
     def model_forward(
-        self, batch: dict, mode: str = "train", seed: Optional[int] = None
+        self, 
+        batch: dict, 
+        mode: str = "train", 
+        encoder: Optional[nn.Module] = None, 
+        decoder: Optional[nn.Module] = None,
+        seed: Optional[int] = None
     ) -> tuple[dict, dict]:
         """Forward pass of the model.
 
         Args:
             batch (dict): Batch of data.
             mode (str): Mode of the forward pass.
+            encoder (Optional[nn.Module]): Encoder model. Defaults to None.
+            decoder (Optional[nn.Module]): Decoder model. Defaults to None.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
             tuple[dict, dict]: Predictions and log dict.
         """
         assert mode in ["train", "eval"]
-        batch["pred_dict"], batch["label_dict"], log_dict = self.model(
+        batch["pred_dict"], batch["label_dict"], log_dict = self.flow_model(
             input_feature_dict=batch["input_feature_dict"],
             label_dict=batch["label_dict"],
             label_full_dict=batch["label_full_dict"],
             mode=mode,
             current_step=self.step if mode == "train" else None,
             symmetric_permutation=self.symmetric_permutation,
+            encoder=encoder,
+            decoder=decoder,
             seed=seed,
         )
         return batch, log_dict
@@ -417,7 +441,7 @@ class ArtiosAllAtomFlowTrainer(object):
         # TODO: building on the above todo, comparing the latent distribution to the VAE's
         # latent distribution is going to be key for analysing training performance. Ideas
         # for what we want to see:
-        # - Wasserstein dist aggregated per sample
+        # - Wasserstein dist aggregated over seeds, per sample
         # - histograms, tsne, qq aggregated over samples
         # - histograms, tsne, qq aggregated over seeds, per sample
         # - it is likely that specific molecular properties get mapped to specific subsets of
@@ -490,7 +514,7 @@ class ArtiosAllAtomFlowTrainer(object):
             else nullcontext()
         )
 
-        self.model.eval()
+        self.flow_model.eval()
 
         # Initialize master monitor dict to collect all metrics
         master_monitor_dict = defaultdict(lambda: defaultdict(list))
@@ -518,7 +542,10 @@ class ArtiosAllAtomFlowTrainer(object):
                 simple_metrics = {}
                 with enable_amp:
                     # Model forward - adds the pred_dict and label_dict to batch
-                    batch, _ = self.model_forward(batch, mode=mode, seed=index)
+                    #batch, _ = self.model_forward(batch, mode=mode, seed=index)
+
+                    batch, _ = self.model_forward(batch, encoder=self.vae.encoder, mode=mode, seed=index)
+
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict, monitor_data = self.get_loss(
                         batch, mode="train"
@@ -609,7 +636,7 @@ class ArtiosAllAtomFlowTrainer(object):
             )
 
     def train_step(self, batch: dict):
-        self.model.train()
+        self.flow_model.train()
         # FP16 training has not been verified yet
         train_precision = {
             "fp32": torch.float32,
@@ -630,8 +657,10 @@ class ArtiosAllAtomFlowTrainer(object):
         )
 
         with enable_amp:
-            # TODO: here we need to do two forward passes (one for flow, one for encoder), both take in batch, output batch
-            batch, _ = self.model_forward(batch, mode="train")
+            #batch, _ = self.model_forward(batch, mode="train")
+
+            # TODO: pass in encoder to forward pass
+            batch, _ = self.model_forward(batch, encoder=self.vae.encoder, mode="train")
             loss, loss_dict, _ = self.get_loss(batch, mode="train")
 
         if self.configs.dtype in ["bf16", "fp32"]:
@@ -727,7 +756,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
         # Calculate and log weight norms for each parameter
         weight_norms = {}
-        for name, param in self.model.named_parameters():
+        for name, param in self.flow_model.named_parameters():
             if not param.requires_grad:  # Skip non-trainable parameters
                 continue
 
@@ -753,7 +782,7 @@ class ArtiosAllAtomFlowTrainer(object):
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
         if self.configs.monitor.grad_norm:
-            _, total_norm = grad_norm(self.model, norm_type=2)
+            _, total_norm = grad_norm(self.flow_model, norm_type=2)
 
             # Average across all ranks
             # def numpy_mean_aggregation(values):

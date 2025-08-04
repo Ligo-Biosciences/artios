@@ -16,30 +16,32 @@ from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 from protenix.model.utils import (
     centre_random_augmentation,
     noise_w_flow_matching,
-    sample_logit_normal,
     beta_function,
 )
 
 
 class TrainingTimestepSampler:
-    """Sample timesteps using a mixture of Beta(alpha,1) and Uniform(0,1) distributions.
+    """Sample timesteps using a mixture of Beta(alpha,beta) and Uniform(0,1) distributions.
 
     Args:
-        alpha (float): Shape parameter for Beta(alpha,1) distribution. Defaults to 1.9.
-        uniform_weight (float): Weight allocated to the Beta distribution. Defaults to 0.02.
-        seed (Optional[int]): Random seed for reproducibility. Defaults to None.
+        alpha (float): First shape parameter for Beta(alpha,beta) distribution. Defaults to 2.2.
+        beta (float): Second shape parameter for Beta(alpha,beta) distribution. Defaults to 1.0.
+        uniform_weight (float): Weight allocated to the Uniform distribution. Defaults to 0.02.
     """
 
     def __init__(
         self,
         alpha: float = 2.2,
+        beta: float = 1.0,
         uniform_weight: float = 0.02,
     ):
         self.alpha = alpha
+        self.beta = beta
         self.p_beta = 1.0 - uniform_weight
 
     def __call__(
@@ -49,7 +51,7 @@ class TrainingTimestepSampler:
         generator: Optional[torch.Generator] = None,
         eps: float = 1e-4
     ) -> torch.Tensor:
-        """Sample timesteps from the mixture distribution. It is a mixture of Beta(alpha,1) and Uniform(0,1) distributions.
+        """Sample timesteps from the mixture distribution. It is a mixture of Beta(alpha,beta) and Uniform(0,1) distributions.
 
         Args:
             size (torch.Size): Shape of output tensor
@@ -63,8 +65,13 @@ class TrainingTimestepSampler:
         # Component selector: 1 → take Beta, 0 → take Uniform
         take_beta = (torch.rand(size, generator=generator, device=device) < self.p_beta)
 
-        # Beta(α,1) ⇔ U**(1/α) with U ~ Uniform(0,1)
-        beta_part = torch.rand(size, generator=generator, device=device).pow(1.0 / self.alpha)
+        # Beta(alpha, beta) distribution using torch.distributions
+        beta_dist = torch.distributions.Beta(self.alpha, self.beta)
+        
+        # Sample from Beta(alpha, beta)
+        beta_part = beta_dist.sample(size).to(device)
+        
+        # Sample from Uniform(0, 1)
         uniform_part = torch.rand(size, generator=generator, device=device)
 
         timesteps = torch.where(take_beta, beta_part, uniform_part)
@@ -405,6 +412,77 @@ def sample_diffusion(
         coords_pred = torch.cat(coords_pred, -3)  # [..., N_sample, N_atom, 3]
 
     return coords_pred
+
+
+def sample_noising(
+    input: torch.Tensor, 
+    mask: torch.Tensor,
+    timestep_sampler: TrainingTimestepSampler, 
+    num_sample: int, 
+    scale: float,
+    generator: torch.Generator,
+    input_feature_dict: Optional[dict[str, Any]] = None,
+    encoder: Optional[nn.Module] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    The core noising function used for sample training FM models. 
+    1. Augment input
+    2. (Optional) Encode input
+    3. Generate timesteps
+    4. Generate noise
+    5. Noise input FM style ( x_t = (1-t)*x_0 + t*x_1 )
+
+    Args:
+        input (torch.Tensor): The input to noise.
+            [..., num_tokens, num_features]
+        mask (torch.Tensor): The mask of the input.
+            [..., num_tokens]
+        timestep_sampler (TrainingTimestepSampler): The timestep sampler to use.
+        num_sample (int): The number of samples to generate.
+        scale (float): The scale of the noise.
+        generator (torch.Generator): The generator to use for sampling.
+        input_feature_dict (Optional[dict[str, Any]]): Input feature dictionary, used for encoding.
+        encoder (Optional[nn.Module]): The encoder to use for encoding the input
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]: The noised input, associated noising timesteps, and augmented input.
+            [..., num_sample, num_tokens, num_features], [..., num_sample], [..., num_sample, num_tokens, num_features]
+    """
+    batch_size_shape = input.shape[:-2]
+    device = input.device
+    dtype = input.dtype
+
+    # Augment
+    x_target_augment = centre_random_augmentation(
+        x_input_coords=input,
+        N_sample=num_sample,
+        mask=mask,
+    ).to(dtype) 
+
+    # (Optional) Encode
+    if encoder is not None:
+        x_target_augment, _ = encoder(input_feature_dict, x_target_augment)
+
+    # Generate timestep
+    timestep = timestep_sampler(
+        size=(*batch_size_shape, num_sample), 
+        device=device, 
+        generator=generator
+    ).to(dtype) 
+
+    # Generate noise
+    noise = torch.randn(
+        x_target_augment.shape,
+        dtype=dtype,
+        device=x_target_augment.device,
+        generator=generator,
+    ) * scale
+
+    # Noise input
+    x_noisy = noise_w_flow_matching(
+        x_target_augment, noise, timestep[..., :, None, None])
+
+    return x_noisy, timestep, x_target_augment
 
 
 def sample_diffusion_training(

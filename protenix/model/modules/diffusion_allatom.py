@@ -463,6 +463,10 @@ class DiffusionModule(nn.Module):
         # Coordinate embedding layer
         self.linear_no_bias_r = LinearNoBias(3, c_token)
 
+        # Latent embedding layer
+        self.layernorm_latent = LayerNorm(c_latent)
+        self.linear_no_bias_latent = LinearNoBias(c_latent, c_token)
+
         # Alg20: line4
         self.layernorm_s = LayerNorm(c_s)
         self.linear_no_bias_s = LinearNoBias(
@@ -561,6 +565,13 @@ class DiffusionModule(nn.Module):
 
         # Embed noisy coordinates into token space
         a_token = self.linear_no_bias_r(r_noisy_coord)
+
+        # Embed noisy latents
+        a_token = add(
+            a_token,
+            self.linear_no_bias_latent(self.layernorm_latent(r_noisy_latent)),
+            inplace_safe=inplace_safe,
+        )
 
         # Mix single conditioning into token representation
         a_token = add(

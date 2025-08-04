@@ -5,17 +5,15 @@ import torch
 import torch.nn as nn
 
 from protenix.model.generator import (
-    InferenceTimestepScheduler,
+    LaProteinaScheduler,
     TrainingTimestepSampler,
     sample_diffusion,
     sample_noising,
 )
-from protenix.model.loss import ProtenixLoss
-from protenix.model.modules.diffusion import DiffusionModule
+from protenix.model.loss import FlowLoss
+from protenix.model.modules.diffusion_allatom import DiffusionModule
 from protenix.model.utils import (
     simple_merge_dict_list, 
-    centre_random_augmentation, 
-    noise_w_flow_matching
 )
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.torch_utils import autocasting_disable_decorator
@@ -40,8 +38,11 @@ class ArtiosAllatom(nn.Module):
             **configs.train_timestep_sampler.latent
         )
         # TODO: separate timestep schedulers for the sidechain and backbone coordinates
-        self.inference_timestep_scheduler = InferenceTimestepScheduler(
-            **configs.inference_timestep_scheduler.ligo
+        self.coord_inference_timestep_scheduler = LaProteinaScheduler(
+            **configs.inference_timestep_scheduler.la_proteina.coord
+        )
+        self.latent_inference_timestep_scheduler = LaProteinaScheduler(
+            **configs.inference_timestep_scheduler.la_proteina.latent
         )
 
         self.diffusion_batch_size = self.configs.diffusion_batch_size
@@ -54,9 +55,7 @@ class ArtiosAllatom(nn.Module):
 
         self.diffusion_module = DiffusionModule(**configs.model.diffusion_module)
 
-        # Initialize loss as part of model for checkpointing and uncertainty learning
-        # TODO: this should be the new coordinate flow + latent flow losses
-        #self.loss = ProtenixLoss(configs)
+        self.loss = FlowLoss(configs)
 
         self.sigma_data = configs.sigma_data
 
@@ -107,14 +106,13 @@ class ArtiosAllatom(nn.Module):
         mode: str,
         inplace_safe: bool = True,
         chunk_size: Optional[int] = 4,
-        N_model_seed: int = 1,
         symmetric_permutation: SymmetricPermutation = None,
         guiding_net: Optional[nn.Module] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         TODO: this should be completely re-written for the all-atom diffusion model.
 
-        Main inference loop (multiple model seeds) for the Alphafold3 model.
+        Main inference loop for the Alphafold3 model.
 
         Args:
             input_feature_dict (dict[str, Any]): Input features dictionary.
@@ -122,54 +120,23 @@ class ArtiosAllatom(nn.Module):
             mode (str): Mode of operation (e.g., 'inference').
             inplace_safe (bool): Whether to use inplace operations safely. Defaults to True.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to 4.
-            N_model_seed (int): Number of model seeds. Defaults to 1.
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object. Defaults to None.
             guiding_net (Optional[Callable]): Guiding net. Defaults to None.
 
         Returns:
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
         """
-        pred_dicts = []
-        log_dicts = []
-        time_trackers = []
-        for _ in range(N_model_seed):
-            pred_dict, log_dict, time_tracker = self._main_inference_loop(
-                input_feature_dict=input_feature_dict,
-                label_dict=label_dict,
-                mode=mode,
-                inplace_safe=inplace_safe,
-                chunk_size=chunk_size,
-                symmetric_permutation=symmetric_permutation,
-                guiding_net=guiding_net,
-            )
-            pred_dicts.append(pred_dict)
-            log_dicts.append(log_dict)
-            time_trackers.append(time_tracker)
+        pred_dict, log_dict, time_tracker = self._main_inference_loop(
+            input_feature_dict=input_feature_dict,
+            label_dict=label_dict,
+            mode=mode,
+            inplace_safe=inplace_safe,
+            chunk_size=chunk_size,
+            symmetric_permutation=symmetric_permutation,
+            guiding_net=guiding_net,
+        )
 
-        # Combine outputs of multiple models
-        def _cat(dict_list, key):
-            return torch.cat([x[key] for x in dict_list], dim=0)
-
-        def _list_join(dict_list, key):
-            return sum([x[key] for x in dict_list], [])
-
-        # all_pred_dict = {
-        #    "coordinate": _cat(pred_dicts, "coordinate"),
-        #    "summary_confidence": _list_join(pred_dicts, "summary_confidence"),
-        #    "full_data": _list_join(pred_dicts, "full_data"),
-        #    "plddt": _cat(pred_dicts, "plddt"),
-        #    "pae": _cat(pred_dicts, "pae"),
-        #    "pde": _cat(pred_dicts, "pde"),
-        #    "resolved": _cat(pred_dicts, "resolved"),
-        # }
-        all_pred_dict = {
-            "coordinate": _cat(pred_dicts, "coordinate"),
-            "timestep": _cat(pred_dicts, "timestep"),
-        }
-
-        all_log_dict = simple_merge_dict_list(log_dicts)
-        all_time_dict = simple_merge_dict_list(time_trackers)
-        return all_pred_dict, all_log_dict, all_time_dict
+        return pred_dict, log_dict, time_tracker
 
     def _main_inference_loop(
         self,
@@ -188,32 +155,34 @@ class ArtiosAllatom(nn.Module):
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
         """
         step_st = time.time()
+
         N_token = input_feature_dict["residue_index"].shape[-1]
         device = input_feature_dict["residue_index"].device
         dtype = input_feature_dict["residue_index"].dtype
+
+        N_sample = self.configs.sample_diffusion["N_sample"]
+        N_step = self.configs.sample_diffusion["N_step"]
 
         log_dict = {}
         pred_dict = {}
         time_tracker = {}
 
-        if mode == "inference":
-            keys_to_delete = []
-            for key in input_feature_dict.keys():
-                if "template_" in key or key in [
-                    "msa",
-                    "has_deletion",
-                    "deletion_value",
-                    "profile",
-                    "deletion_mean",
-                    # "token_bonds",
-                ]:
-                    keys_to_delete.append(key)
+        #if mode == "inference":
+        #    keys_to_delete = []
+        #    for key in input_feature_dict.keys():
+        #        if "template_" in key or key in [
+        #            "msa",
+        #            "has_deletion",
+        #            "deletion_value",
+        #            "profile",
+        #            "deletion_mean",
+        #            "token_bonds",
+        #        ]:
+        #            keys_to_delete.append(key)
 
-            for key in keys_to_delete:
-                del input_feature_dict[key]
-            torch.cuda.empty_cache()
-        step_trunk = time.time()
-        time_tracker.update({"input_embed": step_trunk - step_st})
+        #    for key in keys_to_delete:
+        #        del input_feature_dict[key]
+        #    torch.cuda.empty_cache()
 
         ### Diffusion
         # Initialise guiding diffusion module
@@ -221,14 +190,16 @@ class ArtiosAllatom(nn.Module):
         if guiding_net is not None:
             guiding_diffusion_module = guiding_net.diffusion_module
 
-        # Number of samples to generate from the same conditioning
-        N_sample = self.configs.sample_diffusion["N_sample"]
-        N_step = self.configs.sample_diffusion["N_step"]
         # Generate timesteps for solving the FM SDE
-        timesteps = self.inference_timestep_scheduler(
+        coord_timesteps = self.coord_inference_timestep_scheduler(
             N_step=N_step, device=device, dtype=dtype
         )
+        latent_timesteps = self.latent_inference_timestep_scheduler(
+            N_step=N_step, device=device, dtype=dtype
+        )
+
         # N_sample different ouputs created via diffusion
+        #TODO: sample_diffusion needs big rewrite
         pred_dict["coordinate"] = self.sample_diffusion(
             denoise_net=self.diffusion_module,
             input_feature_dict=input_feature_dict,
@@ -245,7 +216,7 @@ class ArtiosAllatom(nn.Module):
 
         step_diffusion = time.time()
 
-        time_tracker.update({"diffusion": step_diffusion - step_trunk})
+        time_tracker.update({"diffusion": step_diffusion - step_st})
         if mode == "inference" and N_token > 2000:
             torch.cuda.empty_cache()
         time_tracker.update({"model_forward": time.time() - step_st})
@@ -337,6 +308,8 @@ class ArtiosAllatom(nn.Module):
             coord_timestep=coord_timestep,
             latent_timestep=latent_timestep,
             input_feature_dict=input_feature_dict,
+            inplace_safe=inplace_safe,
+            chunk_size=chunk_size,
         )
         
         pred_dict.update(denoise_dict)

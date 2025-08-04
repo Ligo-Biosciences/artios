@@ -106,6 +106,7 @@ model_configs = {
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
     "sigma_data": 12.0,
+    "sigma_latent": 1.0,
     "diffusion_batch_size": 16,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
@@ -153,7 +154,10 @@ model_configs = {
     "inference_timestep_scheduler": {
         "ligo": {"p": -0.7},
         "variable_linear_quadratic": {"m": 0.35, "n": 0.7},
-        "la_proteina": {"scale": 10.0},
+        "la_proteina": {
+            "coord": {"scale": 10.0},
+            "latent": {"scale": 10.0},
+        },
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
@@ -180,7 +184,8 @@ model_configs = {
         },
         "diffusion_module": {
             "use_fine_grained_checkpoint": False,
-            "sigma_data": GlobalConfigValue("sigma_data"),
+            "sigma_coord": GlobalConfigValue("sigma_data"),
+            "sigma_latent": GlobalConfigValue("sigma_latent"),
             "c_token": GlobalConfigValue("c_token"),
             "c_atom": GlobalConfigValue("c_atom"),
             "c_atompair": GlobalConfigValue("c_atompair"),

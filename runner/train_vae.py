@@ -118,7 +118,7 @@ class ArtiosAllAtomTrainer(object):
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
             self.neptune_run = Run(
                 project=self.configs.project,
-                experiment_name=self.run_name,
+                experiment_name=self.configs.run_name,
             )
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])

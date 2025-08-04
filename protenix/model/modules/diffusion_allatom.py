@@ -632,4 +632,4 @@ class DiffusionModule(nn.Module):
             latent_timestep_
         ) + r_latent * self.sigma_latent * self.c_out(latent_timestep_)
 
-        return {"coords_pred": coords_pred, "latent_pred": latent_pred}
+        return {"centre_coordinate": coords_pred, "latents": latent_pred}

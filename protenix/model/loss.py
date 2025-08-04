@@ -317,10 +317,7 @@ class MSELoss(nn.Module):
         self,
         pred_coordinate: torch.Tensor,
         true_coordinate: torch.Tensor,
-        coordinate_mask: torch.Tensor,
-        is_dna: torch.Tensor,
-        is_rna: torch.Tensor,
-        is_ligand: torch.Tensor,
+        weight: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """compute weighted rigid alignment results
 
@@ -328,11 +325,9 @@ class MSELoss(nn.Module):
             pred_coordinate (torch.Tensor): the denoised coordinates from diffusion module
                 [..., N_sample, N_atom, 3]
             true_coordinate (torch.Tensor): the ground truth coordinates
-                [..., N_atom, 3]
-            coordinate_mask (torch.Tensor): whether true coordinates exist
-                [N_atom] or [..., N_atom]
-            is_dna / is_rna / is_ligand (torch.Tensor): mol type mask
-                [N_atom] or [..., N_atom]
+                [..., N_sample, N_atom, 3]
+            weight (torch.Tensor): weights for each atom
+                [N_atom] or [..., N_sample, N_atom]
 
         Returns:
             true_coordinate_aligned (torch.Tensor): aligned coordinates for each sample
@@ -340,28 +335,6 @@ class MSELoss(nn.Module):
             weight (torch.Tensor): weights for each atom
                 [N_atom] or [..., N_sample, N_atom]
         """
-        N_sample = pred_coordinate.size(-3)
-        weight = (
-            1
-            + self.weight_dna * is_dna
-            + self.weight_rna * is_rna
-            + self.weight_ligand * is_ligand
-        )  # [N_atom] or [..., N_atom]
-
-        # Apply coordinate_mask
-        weight = weight * coordinate_mask  # [N_atom] or [..., N_atom]
-        true_coordinate = true_coordinate * coordinate_mask.unsqueeze(dim=-1)
-        pred_coordinate = pred_coordinate * coordinate_mask[..., None, :, None]
-
-        # Reshape to add "N_sample" dimension
-        true_coordinate = expand_at_dim(
-            true_coordinate, dim=-3, n=N_sample
-        )  # [..., N_sample, N_atom, 3]
-        if len(weight.shape) > 1:
-            weight = expand_at_dim(
-                weight, dim=-2, n=N_sample
-            )  # [..., N_sample, N_atom]
-
         # Align GT coords to predicted coords
         d = pred_coordinate.dtype
         # Some ops in weighted_rigid_align do not support BFloat16 training
@@ -378,8 +351,6 @@ class MSELoss(nn.Module):
             )  # [..., N_sample, N_atom, 3]
             true_coordinate_aligned = true_coordinate_aligned.to(d)
 
-        # true_coordinate_aligned = true_coordinate  # the augmented coordinates
-
         return (true_coordinate_aligned.detach(), weight.detach())
 
     def forward(
@@ -391,6 +362,8 @@ class MSELoss(nn.Module):
         is_rna: torch.Tensor,
         is_ligand: torch.Tensor,
         timestep: torch.Tensor = None,
+        need_align: bool = True,
+        need_expand_gt: bool = True,
         per_sample_scale: torch.Tensor | float = None,
         extra_filter_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, dict, dict[str, torch.Tensor]]:
@@ -400,11 +373,13 @@ class MSELoss(nn.Module):
             pred_coordinate (torch.Tensor): the denoised coordinates from diffusion module.
                 [..., N_sample, N_atom, 3]
             true_coordinate (torch.Tensor): the ground truth coordinates.
-                [..., N_atom, 3]
+                [..., N_atom, 3] or [..., N_sample, N_atom, 3]
             coordinate_mask (torch.Tensor): whether true coordinates exist.
                 [N_atom] or [..., N_atom]
             timestep (torch.Tensor): the timestep for the current sample.
                 [..., N_sample]
+            need_align (bool): whether to align the predicted coordinates to the true coordinates.
+            need_expand_gt (bool): whether true coordinates need N_sample expanding.
             is_dna / is_rna / is_ligand (torch.Tensor): mol type mask.
                 [N_atom] or [..., N_atom]
             per_sample_scale (torch.Tensor | float, optional): whether to scale the loss by the per-sample noise-level.
@@ -421,18 +396,44 @@ class MSELoss(nn.Module):
         """
         # True_coordinate_aligned: [..., N_sample, N_atom, 3]
         # Weight: [N_atom] or [..., N_sample, N_atom]
-        with torch.no_grad():
-            true_coordinate_aligned, weight = self.weighted_rigid_align(
-                pred_coordinate=pred_coordinate,
-                true_coordinate=true_coordinate,
-                coordinate_mask=coordinate_mask,
-                is_dna=is_dna,
-                is_rna=is_rna,
-                is_ligand=is_ligand,
-            )
+        N_sample = pred_coordinate.shape[-3]
+
+        # Calculate weight
+        weight = (
+            1
+            + self.weight_dna * is_dna
+            + self.weight_rna * is_rna
+            + self.weight_ligand * is_ligand
+        )  # [N_atom] or [..., N_atom]
+        weight = weight * coordinate_mask  # [N_atom] or [..., N_atom]
+
+        # Expand 
+        if need_expand_gt: 
+            true_coordinate = expand_at_dim(
+                true_coordinate, dim=-3, n=N_sample
+            )  # [..., N_sample, N_atom, 3]
+
+        if len(weight.shape) > 1:
+            weight = expand_at_dim(
+                weight, dim=-2, n=N_sample
+            )  # [..., N_sample, N_atom]
+
+        # Mask coords
+        true_coordinate = true_coordinate * coordinate_mask[..., None, :, None]
+        pred_coordinate = pred_coordinate * coordinate_mask[..., None, :, None]
+
+        # Perform rigid align 
+        if need_align:
+            with torch.no_grad():
+                true_coordinate, weight = self.weighted_rigid_align(
+                    pred_coordinate=pred_coordinate,
+                    true_coordinate=true_coordinate,
+                    weight=weight,
+                )
+        assert true_coordinate.shape == pred_coordinate.shape, f"True coordinate shape {true_coordinate.shape} does not match pred coordinate shape {pred_coordinate.shape}"
 
         # Calculate MSE loss
-        per_atom_se = ((pred_coordinate - true_coordinate_aligned) ** 2).sum(
+        per_atom_se = ((pred_coordinate - true_coordinate) ** 2).sum(
             dim=-1
         )  # [..., N_sample, N_atom]
 
@@ -871,6 +872,155 @@ class ELBOLoss(nn.Module):
                 )
             }
         )
+
+        cum_loss, metrics, monitor_data = self.aggregate_losses(loss_fns)
+        return cum_loss, metrics, monitor_data
+
+    def forward(
+        self,
+        feat_dict: dict[str, Any],
+        pred_dict: dict[str, torch.Tensor],
+        label_dict: dict[str, Any],
+        mode: str = "train",
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        assert mode in ["train", "eval", "inference"]
+
+        # Calculate losses
+        cum_loss, losses, monitor_data = self.calculate_losses(
+            feat_dict=feat_dict,
+            pred_dict=pred_dict,
+            label_dict=label_dict,
+            mode=mode,
+        )
+
+        return cum_loss, losses, monitor_data
+
+
+class FlowLoss(nn.Module):
+    """
+    Loss function for the flow model.
+    
+    L = centre_coord_mse + weight * latent_mse
+    """
+
+    def __init__(self, configs) -> None:
+        super(FlowLoss, self).__init__()
+        self.configs = configs
+
+        centre_atom_config = configs.loss.flow.centre_atom
+
+        self.loss_weight = {
+            # MSE losses
+            "mse_centre_atom_loss": centre_atom_config.weight_mse,
+            "mse_ligand_centre_atom_loss": centre_atom_config.weight_ligand,
+            "mse_rna_centre_atom_loss": centre_atom_config.weight_rna,
+            "mse_dna_centre_atom_loss": centre_atom_config.weight_dna,
+            "mse_protein_centre_atom_loss": 0.0,
+            "mse_target_centre_atom_loss": 0.0,
+            # Latent losses
+            "mse_latent_loss": 1.0,
+            "mse_ligand_latent_loss": 0.0,
+            "mse_rna_latent_loss": 0.0,
+            "mse_dna_latent_loss": 0.0,
+            "mse_protein_latent_loss": 0.0,
+            "mse_target_latent_loss": 0.0,
+        }
+
+        self.mse_loss = MSELoss()
+
+    def aggregate_losses(self, loss_fns: dict) -> tuple[torch.Tensor, dict]:
+        """
+        Aggregates multiple loss functions and their respective metrics.
+
+        Args:
+            loss_fns (dict): Dictionary of loss functions to be aggregated.
+
+        Returns:
+            tuple[torch.Tensor, dict]:
+                - cum_loss (torch.Tensor): Cumulative loss.
+                - all_metrics (dict): Dictionary containing all metrics.
+                - monitor_data (dict): Dictionary containing non-standard data for monitoring training dynamics.
+        """
+        cum_loss = 0.0
+        all_metrics = {}
+        all_monitor_data = {}
+        for loss_name, loss_fn in loss_fns.items():
+            weight = self.loss_weight[loss_name]
+            loss_outputs = loss_fn()
+            metrics = {}  # NOTE: dummy metrics
+            if isinstance(loss_outputs, tuple):
+                loss, metrics, monitor_data = loss_outputs
+            else:
+                assert isinstance(loss_outputs, torch.Tensor)
+                loss, metrics, monitor_data = loss_outputs, {}, {}
+
+            all_metrics.update(
+                {f"{loss_name}/{key}": val for key, val in metrics.items()}
+            )
+            all_monitor_data[loss_name] = monitor_data
+
+            if torch.isnan(loss) or torch.isinf(loss):
+                logging.warning(f"{loss_name} loss is NaN. Skipping...")
+            else:
+                all_metrics[loss_name] = loss.detach().clone()
+                all_metrics[f"weighted_{loss_name}"] = weight * loss.detach().clone()
+
+            cum_loss = cum_loss + weight * loss
+        all_metrics["loss"] = cum_loss.detach().clone()
+
+        return cum_loss, all_metrics, all_monitor_data
+
+    def calculate_losses(
+        self,
+        feat_dict: dict[str, Any],
+        pred_dict: dict[str, torch.Tensor],
+        label_dict: dict[str, Any],
+        mode: str = "train",
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        assert mode in ["train", "eval", "inference"]
+        loss_fns = {}
+
+        # Mask tokens with no gt centre atom
+        loss_mask = label_dict["has_centre_atom"] # [..., N_token]
+
+        def _create_mse_loss_fn(key: str, filter_mask_key: str = None):
+            """Helper function to create MSE loss functions with different prediction types and filter masks."""
+            need_align = key != "latents"
+            need_expand_gt = key != "latents"
+            return lambda: self.mse_loss(
+                pred_coordinate=pred_dict[key],
+                true_coordinate=label_dict[key], 
+                coordinate_mask=loss_mask,
+                is_rna=feat_dict["is_rna_token"],
+                is_dna=feat_dict["is_dna_token"],
+                is_ligand=feat_dict["is_ligand_token"],
+                need_align=need_align,
+                need_expand_gt=need_expand_gt,
+                extra_filter_mask=feat_dict[filter_mask_key] if filter_mask_key else None,
+            )
+
+        # loss configurations: (loss_name, key, filter_mask_key)
+        mse_loss_configurations = [
+            # Centre coordinate losses
+            ("mse_centre_atom_loss", "centre_coordinate", None),
+            ("mse_protein_centre_atom_loss", "centre_coordinate", "is_protein_token"),
+            ("mse_ligand_centre_atom_loss", "centre_coordinate", "is_ligand_token"), 
+            ("mse_rna_centre_atom_loss", "centre_coordinate", "is_rna_token"),
+            ("mse_dna_centre_atom_loss", "centre_coordinate", "is_dna_token"),
+            ("mse_target_centre_atom_loss", "centre_coordinate", "is_target_token"),
+            
+            # Latent losses
+            ("mse_latent_loss", "latents", None),
+            ("mse_protein_latent_loss", "latents", "is_protein_token"),
+            ("mse_ligand_latent_loss", "latents", "is_ligand_token"),
+            ("mse_rna_latent_loss", "latents", "is_rna_token"), 
+            ("mse_dna_latent_loss", "latents", "is_dna_token"),
+            ("mse_target_latent_loss", "latents", "is_target_token"),
+        ]
+
+        # Create all mse losses
+        for loss_name, key, filter_mask_key in mse_loss_configurations:
+            loss_fns[loss_name] = _create_mse_loss_fn(key, filter_mask_key)
 
         cum_loss, metrics, monitor_data = self.aggregate_losses(loss_fns)
         return cum_loss, metrics, monitor_data

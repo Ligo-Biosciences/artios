@@ -8,11 +8,15 @@ from protenix.model.generator import (
     InferenceTimestepScheduler,
     TrainingTimestepSampler,
     sample_diffusion,
-    sample_diffusion_training,
+    sample_noising,
 )
 from protenix.model.loss import ProtenixLoss
 from protenix.model.modules.diffusion import DiffusionModule
-from protenix.model.utils import simple_merge_dict_list
+from protenix.model.utils import (
+    simple_merge_dict_list, 
+    centre_random_augmentation, 
+    noise_w_flow_matching
+)
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.torch_utils import autocasting_disable_decorator
 
@@ -29,8 +33,11 @@ class ArtiosAllatom(nn.Module):
         # self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
 
         # Diffusion
-        self.train_timestep_sampler = TrainingTimestepSampler(
-            **configs.train_timestep_sampler
+        self.coord_timestep_sampler = TrainingTimestepSampler(
+            **configs.train_timestep_sampler.coord
+        )
+        self.latent_timestep_sampler = TrainingTimestepSampler(
+            **configs.train_timestep_sampler.latent
         )
         # TODO: separate timestep schedulers for the sidechain and backbone coordinates
         self.inference_timestep_scheduler = InferenceTimestepScheduler(
@@ -49,7 +56,7 @@ class ArtiosAllatom(nn.Module):
 
         # Initialize loss as part of model for checkpointing and uncertainty learning
         # TODO: this should be the new coordinate flow + latent flow losses
-        self.loss = ProtenixLoss(configs)
+        #self.loss = ProtenixLoss(configs)
 
         self.sigma_data = configs.sigma_data
 
@@ -271,6 +278,7 @@ class ArtiosAllatom(nn.Module):
         input_feature_dict: dict[str, Any],
         label_full_dict: dict[str, Any],
         label_dict: dict,
+        encoder: nn.Module,
         symmetric_permutation: SymmetricPermutation,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
@@ -283,6 +291,7 @@ class ArtiosAllatom(nn.Module):
             input_feature_dict (dict[str, Any]): Input features dictionary.
             label_full_dict (dict[str, Any]): Full label dictionary (uncropped).
             label_dict (dict): Label dictionary (cropped).
+            encoder (nn.Module): Encoder model.
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object.
             inplace_safe (bool): Whether to use inplace operations safely. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
@@ -292,43 +301,69 @@ class ArtiosAllatom(nn.Module):
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
                 Prediction, updated label, and log dictionaries.
         """
-
         log_dict = {}
         pred_dict = {}
 
-        device = input_feature_dict["residue_index"].device
+        device = label_dict["coordinate"].device
 
-        # TODO: 1. encode the entire biomolecule in the batch to get latents
-
-        # TODO: 2. Sample diffusion for latents and centre atom coordinates
-
-        ### Diffusion training
         N_sample = self.diffusion_batch_size
-        x_target_augment, coords_pred, timestep = autocasting_disable_decorator(
-            self.configs.skip_amp.sample_diffusion_training
-        )(sample_diffusion_training)(
-            timestep_sampler=self.train_timestep_sampler,  # TODO: adjust the parameters here for multi-modal training
-            denoise_net=self.diffusion_module,
-            label_dict=label_dict,
+        generator = torch.Generator(device).manual_seed(seed) if not self.training else None
+
+        # Noising
+        noisy_latent, latent_timestep, gt_latents = sample_noising(
+            input=label_dict["coordinate"],
+            mask=label_dict["coordinate_mask"],
+            timestep_sampler=self.latent_timestep_sampler,
+            num_sample=N_sample,
+            scale=1.0,
+            generator=generator,
             input_feature_dict=input_feature_dict,
-            sigma_data=self.sigma_data,
-            N_sample=N_sample,
-            diffusion_chunk_size=self.configs.diffusion_chunk_size,
-            generator=(
-                torch.Generator(device).manual_seed(seed) if not self.training else None
-            ),
+            encoder=encoder,
         )
 
-        # TODO: update the dictionaries with the return value dict from sample diff training
+        noisy_centre_coords, coord_timestep, _ = sample_noising(
+            input=label_dict["centre_coordinate"],
+            mask=label_dict["has_centre_atom"],
+            timestep_sampler=self.coord_timestep_sampler,
+            num_sample=N_sample,
+            scale=self.sigma_data,
+            generator=generator,
+        )
 
-        # Update dicts
+        # Denoising
+        denoise_dict = self.diffusion_module(
+            noisy_coord=noisy_centre_coords,
+            noisy_latent=noisy_latent,
+            coord_timestep=coord_timestep,
+            latent_timestep=latent_timestep,
+            input_feature_dict=input_feature_dict,
+        )
+        
+        pred_dict.update(denoise_dict)
+
         pred_dict.update(
             {
-                # [..., N_sample=48, N_atom, 3]: diffusion loss
-                "coordinate": coords_pred,
-                "timestep": timestep,
+                "latent_timestep": latent_timestep,
+                "coord_timestep": coord_timestep,
             }
         )
+
+        label_dict.update(
+            {
+                "latents": gt_latents, # [..., N_sample, N_token, c_latent]
+            }
+        )
+
+        # Permute symmetric atom/chain in each sample to match true structure
+        #(
+        #    pred_dict,
+        #    perm_log_dict,
+        #    _,
+        #    _,
+        #) = symmetric_permutation.permute_diffusion_sample_to_match_label(
+        #    input_feature_dict, pred_dict, label_dict, stage="train"
+        #)
+        #log_dict.update(perm_log_dict)
 
         return pred_dict, label_dict, log_dict
 
@@ -340,6 +375,8 @@ class ArtiosAllatom(nn.Module):
         mode: str = "inference",
         current_step: Optional[int] = None,
         symmetric_permutation: SymmetricPermutation = None,
+        encoder: Optional[nn.Module] = None,
+        decoder: Optional[nn.Module] = None,
         guiding_net: Optional[nn.Module] = None,
         seed: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
@@ -353,6 +390,8 @@ class ArtiosAllatom(nn.Module):
             mode (str): Mode of operation ('train', 'inference', 'eval'). Defaults to 'inference'.
             current_step (Optional[int]): Current training step. Defaults to None.
             symmetric_permutation (SymmetricPermutation): Symmetric permutation object. Defaults to None.
+            encoder (Optional[nn.Module]): Encoder model. Defaults to None.
+            decoder (Optional[nn.Module]): Decoder model. Defaults to None.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
@@ -373,6 +412,7 @@ class ArtiosAllatom(nn.Module):
                 input_feature_dict=input_feature_dict,
                 label_full_dict=label_full_dict,
                 label_dict=label_dict,
+                encoder=encoder,
                 symmetric_permutation=symmetric_permutation,
                 inplace_safe=inplace_safe,
                 chunk_size=chunk_size,

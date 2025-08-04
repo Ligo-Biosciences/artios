@@ -658,7 +658,8 @@ class Featurizer(object):
 
     def get_target_features(self) -> dict[str, torch.Tensor]:
         """
-        Get target-specific features for training.
+        Get target-specific features for training. 
+        Adds the target_centre_coordinate, target_restype, and is_target_token features.
 
         Returns:
             Dict[str, torch.Tensor]: A dictionary containing target features.

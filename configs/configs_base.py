@@ -198,12 +198,12 @@ model_configs = {
             "c_z": GlobalConfigValue("c_z"),
             "sigma_data": GlobalConfigValue("sigma_data"),
             "encoder": {
-                "n_blocks": 3,  # TODO: this is a lot, we should consider shrinking
-                "n_heads": 16,
+                "n_blocks": 6,
+                "n_heads": 4,
             },
             "decoder": {
-                "n_blocks": 3,
-                "n_heads": 4,
+                "n_blocks": 6,
+                "n_heads": 16,
             },
         },
     },
@@ -313,12 +313,12 @@ loss_configs = {
             "reconstruction": {
                 "mse": {
                     "weight_mse": 1.0,
-                    "weight_dna": 5.0,
-                    "weight_rna": 5.0,
-                    "weight_ligand": 10.0,
+                    "weight_dna": 4.0,  # 5
+                    "weight_rna": 4.0,  # 5
+                    "weight_ligand": 1.0,  # 10
                     "eps": 1e-6,
                 },
-                "sequence": {},
+                "sequence": {},  # TODO: link with loss
             },
             "kl_divergence": {
                 "reduction": "mean",

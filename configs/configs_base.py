@@ -45,6 +45,7 @@ basic_configs = {
     "wandb_id": "",  # TODO
     "seed": 42,
     "deterministic": False,
+    "deterministic_seed": False,
     "post_hoc_ema_checkpoint_dir": "",
     "ema_vae_decay": 0.999,
     "power_law_ema_sigma": ListValue([0.08, 0.12]),

@@ -20,8 +20,6 @@ import torch.nn as nn
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias, Transition
 from protenix.model.modules.transformer import (
-    AtomAttentionDecoder,
-    AtomAttentionEncoder,
     DiffusionTransformer,
 )
 from protenix.model.utils import (
@@ -41,7 +39,7 @@ class DiffusionConditioning(nn.Module):
 
     def __init__(
         self,
-        sigma_data: float = 12.0,
+        sigma_coord: float = 12.0,
         c_z: int = 128,
         c_s: int = 384,
         c_timestep_embedding: int = 256,
@@ -51,7 +49,7 @@ class DiffusionConditioning(nn.Module):
     ) -> None:
         """
         Args:
-            sigma_data (torch.float, optional): the standard deviation of the data. Defaults to 16.0.
+            sigma_coord (torch.float, optional): the standard deviation of the coordinates. Defaults to 16.0.
             c_z (int, optional): hidden dim [for pair embedding].
             c_s (int, optional):  hidden dim [for single embedding].
             c_timestep_embedding (int, optional): timestep embedding dim.
@@ -60,7 +58,7 @@ class DiffusionConditioning(nn.Module):
             target_dist_bin_size (float, optional): bin size for target pair distance binning. Defaults to 0.5.
         """
         super(DiffusionConditioning, self).__init__()
-        self.sigma_data = sigma_data
+        self.sigma_coord = sigma_coord
         self.c_z = c_z
         self.c_s = c_s
 
@@ -225,7 +223,7 @@ class DiffusionConditioning(nn.Module):
             centre_random_augmentation(
                 target_coord, mask=is_target_token, N_sample=N_sample, s_trans=1.0
             )
-            / self.sigma_data
+            / self.sigma_coord
         )  # [..., N_sample, N_token, c_s]
 
         # Combine single embeddings
@@ -277,7 +275,7 @@ class DiffusionConditioning(nn.Module):
 
     def forward(
         self,
-        r_noisy: torch.Tensor,
+        r_noisy_coord: torch.Tensor,
         coord_timestep: torch.Tensor,
         latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
@@ -285,7 +283,7 @@ class DiffusionConditioning(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            r_noisy (torch.Tensor): noisy coordinates
+            r_noisy_coord (torch.Tensor): noisy coordinates
                 [..., N_sample, 3]
             coord_timestep (torch.Tensor): the noising timestep for coords
                 [..., N_sample]
@@ -329,8 +327,8 @@ class DiffusionConditioning(nn.Module):
 
         ### Distance featurization for noisy coordinates
         # Compute pairwise distances between noisy coordinates
-        r_noisy_i = r_noisy.unsqueeze(-2)  # [..., N_sample, N_token, 1, 3]
-        r_noisy_j = r_noisy.unsqueeze(-3)  # [..., N_sample, 1, N_token, 3]
+        r_noisy_i = r_noisy_coord.unsqueeze(-2)  # [..., N_sample, N_token, 1, 3]
+        r_noisy_j = r_noisy_coord.unsqueeze(-3)  # [..., N_sample, 1, N_token, 3]
         noisy_pair_dists = torch.norm(
             r_noisy_i - r_noisy_j, dim=-1
         )  # [..., N_sample, N_token, N_token]
@@ -412,12 +410,12 @@ class DiffusionModule(nn.Module):
 
     def __init__(
         self,
-        sigma_data: float = 12.0,
-        c_atom: int = 128,
-        c_atompair: int = 16,
+        sigma_coord: float = 12.0,
+        sigma_latent: float = 3.0,
+        c_latent: int = 8,
+        c_z: int = 128,
         c_token: int = 768,
         c_s: int = 384,
-        c_z: int = 128,
         c_s_inputs: int = 449,
         atom_encoder: dict[str, int] = {"n_blocks": 3, "n_heads": 4},
         transformer: dict[str, int] = {"n_blocks": 24, "n_heads": 16},
@@ -428,9 +426,8 @@ class DiffusionModule(nn.Module):
     ) -> None:
         """
         Args:
-            sigma_data (torch.float, optional): the standard deviation of the data. Defaults to 16.0.
-            c_atom (int, optional): embedding dim for atom feature. Defaults to 128.
-            c_atompair (int, optional): embedding dim for atompair feature. Defaults to 16.
+            sigma_coord (torch.float, optional): the standard deviation of the coordinates. Defaults to 12.0.
+            sigma_latent (torch.float, optional): the standard deviation of the latents. Defaults to 3.0.
             c_token (int, optional): feature channel of token (single a). Defaults to 768.
             c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
             c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128.
@@ -447,9 +444,8 @@ class DiffusionModule(nn.Module):
         """
 
         super(DiffusionModule, self).__init__()
-        self.sigma_data = sigma_data
-        self.c_atom = c_atom
-        self.c_atompair = c_atompair
+        self.sigma_coord = sigma_coord
+        self.sigma_latent = sigma_latent
         self.c_token = c_token
         self.c_s_inputs = c_s_inputs
         self.c_s = c_s
@@ -460,25 +456,18 @@ class DiffusionModule(nn.Module):
         self.use_fine_grained_checkpoint = use_fine_grained_checkpoint
 
         self.diffusion_conditioning = DiffusionConditioning(
-            sigma_data=self.sigma_data,
+            sigma_coord=sigma_coord,
             c_z=c_z,
-            c_s=c_s,  # c_s_inputs=c_s_inputs
+            c_s=c_s,
         )
-        self.atom_attention_encoder = (
-            AtomAttentionEncoder(  # TODO: no need for this anymore
-                **atom_encoder,
-                c_atom=c_atom,
-                c_atompair=c_atompair,
-                c_token=c_token,
-                has_noisy_coords=True,
-                c_s=c_s,
-                c_z=c_z,
-                blocks_per_ckpt=blocks_per_ckpt,
-            )
-        )
+        # Coordinate embedding layer
+        self.linear_no_bias_r = LinearNoBias(3, c_token)
+
         # Alg20: line4
-        # self.layernorm_s = LayerNorm(c_s)
-        # self.linear_no_bias_s = LinearNoBias(in_features=c_s, out_features=c_token, init="zeros")
+        self.layernorm_s = LayerNorm(c_s)
+        self.linear_no_bias_s = LinearNoBias(
+            in_features=c_s, out_features=c_token, init="zeros"
+        )
         self.diffusion_transformer = DiffusionTransformer(
             **transformer,
             c_a=c_token,
@@ -487,23 +476,34 @@ class DiffusionModule(nn.Module):
             dropout=dropout,
             blocks_per_ckpt=blocks_per_ckpt,
         )
-        self.layernorm_a = LayerNorm(c_token)
-        self.atom_attention_decoder = (
-            AtomAttentionDecoder(  # TODO: no need for this either
-                **atom_decoder,
-                c_token=c_token,
-                c_atom=c_atom,
-                c_atompair=c_atompair,
-                blocks_per_ckpt=blocks_per_ckpt,
-            )
-        )
+        # self.layernorm_a = LayerNorm(c_token)
 
-        # TODO: two lightweight heads for coord and latent prediction here
+        # Coordinate velocity head
+        self.coord_head_transition = Transition(c_in=c_token, n=2)
+        self.coord_final_layernorm = LayerNorm(c_token)
+        self.coord_final_linear = LinearNoBias(c_token, 3)
+
+        # Latent velocity head
+        self.latent_head_transition = Transition(c_in=c_token, n=2)
+        self.latent_final_layernorm = LayerNorm(c_token)
+        self.latent_final_linear = LinearNoBias(c_token, c_latent)
+
+    def coord_head(self, a_token: torch.Tensor):
+        """Coordinate head for velocity prediction."""
+        a_token = a_token + self.coord_head_transition(a_token)
+        return self.coord_final_linear(self.coord_final_layernorm(a_token))
+
+    def latent_head(self, a_token: torch.Tensor):
+        """Latent head for velocity prediction."""
+        a_token = a_token + self.latent_head_transition(a_token)
+        return self.latent_final_linear(self.latent_final_layernorm(a_token))
 
     def f_forward(
         self,
-        r_noisy: torch.Tensor,
-        timestep: torch.Tensor,  # TODO: two different timesteps for coord and latent
+        r_noisy_coord: torch.Tensor,
+        r_noisy_latent: torch.Tensor,
+        coord_timestep: torch.Tensor,
+        latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
@@ -513,22 +513,26 @@ class DiffusionModule(nn.Module):
         Here, c_noise(sigma) is computed in Conditioning module.
 
         Args:
-            r_noisy (torch.Tensor): scaled x_noisy (i.e., c_in * x)
-                [..., N_sample, N_atom, 3]
-            timestep (torch.Tensor): the noising timestep (the t such that x_t = (1-t)*x_0 + t*x_1)
+            r_noisy_coord (torch.Tensor): scaled noisy coords (i.e., c_in * x)
+                [..., N_sample, N_token, 3]
+            r_noisy_latent (torch.Tensor): scaled noisy latents
+                [..., N_sample, N_token, c_latent]
+            coord_timestep (torch.Tensor): the noising timestep for coordinates
                 [..., N_sample]
-            input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input feature
-            s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
-                [..., N_tokens, c_s_inputs]
+            latent_timestep (torch.Tensor): the noising timestep for latents
+                [..., N_sample]
+            input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input feature dictionary
             inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 
         Returns:
-            torch.Tensor: denoised coords
-                [..., N_sample, N_atom, 3]
+            tuple[torch.Tensor, torch.Tensor]: coordinate and latent velocities
+                - coord_velocity: [..., N_sample, N_token, 3]
+                - latent_velocity: [..., N_sample, N_token, c_latent]
         """
-        N_sample = r_noisy.size(-3)
-        assert timestep.size(-1) == N_sample
+        N_sample = r_noisy_coord.size(-3)
+        assert coord_timestep.size(-1) == N_sample
+        assert latent_timestep.size(-1) == N_sample
 
         blocks_per_ckpt = self.blocks_per_ckpt
         if not torch.is_grad_enabled():
@@ -540,46 +544,32 @@ class DiffusionModule(nn.Module):
             checkpoint_fn = get_checkpoint_fn()
             s, z = checkpoint_fn(
                 self.diffusion_conditioning,
-                timestep,
+                r_noisy_coord,
+                coord_timestep,
+                latent_timestep,
                 input_feature_dict,
                 inplace_safe,
             )
         else:
             s, z = self.diffusion_conditioning(
-                timestep=timestep,
+                r_noisy_coord=r_noisy_coord,
+                coord_timestep=coord_timestep,
+                latent_timestep=latent_timestep,
                 input_feature_dict=input_feature_dict,
                 inplace_safe=inplace_safe,
-            )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
+            )  # [..., N_sample, N_token, c_s], [..., N_sample, N_token, N_token, c_z]
 
-        # Expand embeddings to match N_sample
-        z = expand_at_dim(
-            z,
-            dim=-4,  # TODO: since we'll embed the distances, there will be no more broadcasting here.
-            n=1,  # rely on broadcasting for N_sample
-        )  # [..., 1, N_token, N_token, c_z]
-
-        # Sequence-local Atom Attention and aggregation to coarse-grained tokens
-        a_token, q_skip, c_skip, p_skip = self.atom_attention_encoder(  # TODO: delete
-            input_feature_dict=input_feature_dict,
-            r_l=r_noisy,
-            s=s,  # Replaced s_trunk
-            z=z,
-            inplace_safe=inplace_safe,
-            chunk_size=chunk_size,
-        )
-
-        # Add token-level conditioning from atom encoder
-        # TODO: put this back in since it'll have target coords etc.
-        # s = add(s, c_token, inplace_safe=inplace_safe) # [..., N_sample, N_token, c_s]
+        # Embed noisy coordinates into token space
+        a_token = self.linear_no_bias_r(r_noisy_coord)
 
         # Mix single conditioning into token representation
-        # a_token = add(
-        #    a_token,
-        #    self.linear_no_bias_s(self.layernorm_s(s)),
-        #    inplace_safe=inplace_safe
-        # ) # [..., N_sample, N_token, c_token]
+        a_token = add(
+            a_token,
+            self.linear_no_bias_s(self.layernorm_s(s)),
+            inplace_safe=inplace_safe,
+        )  # [..., N_sample, N_token, c_token]
 
-        # Full self-attention on token level.
+        # Apply diffusion transformer on token representations
         a_token = self.diffusion_transformer(  # NOTE: this looks like it'll remain unchanged for now.
             a=a_token,
             s=s,
@@ -588,56 +578,58 @@ class DiffusionModule(nn.Module):
             chunk_size=chunk_size,
         )
 
-        a_token = self.layernorm_a(a_token)
+        # Apply separate velocity prediction heads for coordinates and latents
+        latent_velocity = self.latent_head(a_token)
+        coord_velocity = self.coord_head(a_token)
 
-        # Broadcast token activations to atoms and run Sequence-local Atom Attention
-        velocity_pred = self.atom_attention_decoder(  # TODO: two different velocity preds for coords and latents
-            input_feature_dict=input_feature_dict,
-            a=a_token,
-            q_skip=q_skip,
-            c_skip=c_skip,
-            p_skip=p_skip,
-            inplace_safe=inplace_safe,
-            chunk_size=chunk_size,
-        )
-
-        return velocity_pred
+        return coord_velocity, latent_velocity
 
     def c_in(self, timestep: torch.Tensor) -> torch.Tensor:
-        return 1 / (self.sigma_data * (timestep**2 + (1 - timestep) ** 2).sqrt())
+        return 1 / (timestep**2 + (1 - timestep) ** 2).sqrt()
 
     def c_out(self, timestep: torch.Tensor) -> torch.Tensor:
-        # return 1 - timestep
-        return self.sigma_data * (1 - timestep)
+        return 1 - timestep
 
     def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
         return 1.0
 
     def forward(
         self,
-        x_noisy: torch.Tensor,
-        timestep: torch.Tensor,
+        noisy_coord: torch.Tensor,
+        noisy_latent: torch.Tensor,
+        coord_timestep: torch.Tensor,
+        latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
-    ) -> torch.Tensor:
-        # Scale input noisy coords to unit variance
-        r_noisy = x_noisy * self.c_in(timestep[..., None, None])
+    ) -> dict[str, torch.Tensor]:
+        # Expand timesteps
+        coord_timestep_ = coord_timestep[..., None, None]
+        latent_timestep_ = latent_timestep[..., None, None]
 
-        # Predict velocity from noisy coords
-        r_update = self.f_forward(
-            r_noisy=r_noisy,
-            timestep=timestep,  # Return to original shape for f_forward
+        # Scale input noisy coords to unit variance
+        r_noisy_coord = (noisy_coord / self.sigma_coord) * self.c_in(coord_timestep_)
+        r_noisy_latent = (noisy_latent / self.sigma_latent) * self.c_in(
+            latent_timestep_
+        )
+
+        # Predict velocities using separate heads for coordinates and latents
+        r_coord, r_latent = self.f_forward(
+            r_noisy_coord=r_noisy_coord,
+            r_noisy_latent=r_noisy_latent,
+            coord_timestep=coord_timestep,  # Return to original shape for f_forward
+            latent_timestep=latent_timestep,
             input_feature_dict=input_feature_dict,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
 
-        # Scale output with direct function calls
-        coords_pred = x_noisy * self.c_skip(
-            timestep[..., None, None]
-        ) + r_update * self.c_out(
-            timestep[..., None, None]
-        )  # return 2 separate entities (in a dict potentially)
+        # Apply skip connections and output scaling for both coordinate and latent predictions
+        coords_pred = noisy_coord * self.c_skip(
+            coord_timestep_
+        ) + r_coord * self.sigma_coord * self.c_out(coord_timestep_)
+        latent_pred = noisy_latent * self.c_skip(
+            latent_timestep_
+        ) + r_latent * self.sigma_latent * self.c_out(latent_timestep_)
 
-        return coords_pred
+        return {"coords_pred": coords_pred, "latent_pred": latent_pred}

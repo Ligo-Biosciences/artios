@@ -24,7 +24,13 @@ from protenix.model.modules.transformer import (
     AtomAttentionEncoder,
     DiffusionTransformer,
 )
-from protenix.model.utils import add, aggregate_atom_to_token, expand_at_dim
+from protenix.model.utils import (
+    add,
+    aggregate_atom_to_token,
+    centre_random_augmentation,
+    expand_at_dim,
+    one_hot,
+)
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 
 
@@ -39,19 +45,32 @@ class DiffusionConditioning(nn.Module):
         c_z: int = 128,
         c_s: int = 384,
         c_timestep_embedding: int = 256,
+        target_dist_min: float = 1.0,
+        target_dist_max: float = 30.0,
+        target_dist_bin_size: float = 0.5,
     ) -> None:
         """
         Args:
             sigma_data (torch.float, optional): the standard deviation of the data. Defaults to 16.0.
             c_z (int, optional): hidden dim [for pair embedding].
             c_s (int, optional):  hidden dim [for single embedding].
-            c_s_inputs (int, optional): input embedding dim from InputEmbedder.
-            c_noise_embedding (int, optional): noise embedding dim.
+            c_timestep_embedding (int, optional): timestep embedding dim.
+            target_dist_min (float, optional): minimum distance for target pair distance binning. Defaults to 1.0.
+            target_dist_max (float, optional): maximum distance for target pair distance binning. Defaults to 30.0.
+            target_dist_bin_size (float, optional): bin size for target pair distance binning. Defaults to 0.5.
         """
         super(DiffusionConditioning, self).__init__()
         self.sigma_data = sigma_data
         self.c_z = c_z
         self.c_s = c_s
+
+        # Target distance binning parameters
+        self.target_dist_min = target_dist_min
+        self.target_dist_max = target_dist_max
+        self.target_dist_bin_size = target_dist_bin_size
+        self.n_target_dist_bins = int(
+            (target_dist_max - target_dist_min) / target_dist_bin_size
+        )
 
         ### Ligand reference position embeddings
         self.linear_no_bias_d = LinearNoBias(in_features=3, out_features=self.c_z)
@@ -76,42 +95,55 @@ class DiffusionConditioning(nn.Module):
 
         # Line 8-9
         self.fourier_embedding = FourierEmbedding(c=c_timestep_embedding)
-        # TODO: two fourier embeddings for latent and coord or same fourier and different linears?
-        self.layernorm_t = LayerNorm(c_timestep_embedding)
-        self.linear_no_bias_t = LinearNoBias(
+
+        # Latent and coordinate timestep embeddings
+        self.layernorm_latent_t = LayerNorm(c_timestep_embedding)
+        self.linear_no_bias_latent_t = LinearNoBias(
             in_features=c_timestep_embedding, out_features=self.c_s
         )
+        self.layernorm_coord_t = LayerNorm(c_timestep_embedding)
+        self.linear_no_bias_coord_t = LinearNoBias(
+            in_features=c_timestep_embedding, out_features=self.c_s
+        )
+
         # Line 10-12
         self.transition_s1 = Transition(c_in=self.c_s, n=2)
         self.transition_s2 = Transition(c_in=self.c_s, n=2)
 
-    def forward(
+        # Target feature embeddings
+        self.linear_target_restype = LinearNoBias(
+            in_features=32, out_features=self.c_s
+        )  # Target restype one-hot -> single embedding
+        self.linear_target_coord = LinearNoBias(
+            in_features=3, out_features=self.c_s
+        )  # Target center coords -> single embedding
+        self.linear_target_pair_dist = LinearNoBias(
+            in_features=self.n_target_dist_bins, out_features=self.c_z
+        )  # Target pair distances -> pair embedding
+
+        # Noisy coordinate feature embeddings
+        self.linear_noisy_pair_dist = LinearNoBias(
+            in_features=self.n_target_dist_bins, out_features=self.c_z
+        )  # Noisy pair distances -> pair embedding
+
+    def get_ligand_condition(
         self,
-        coord_timestep: torch.Tensor,
-        latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         inplace_safe: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
-            coord_timestep (torch.Tensor): the noising timestep for coords
-                [..., N_sample]
-            latent_timestep (torch.Tensor): the noising timestep for latents
-                [..., N_sample]
-            input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
-            inplace_safe (bool): Whether it is safe to use inplace operations.
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: embeddings s and z
-                - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
-                - z (torch.Tensor): [..., N_N_tokens, N_tokens, c_z]
+    ) -> torch.Tensor:
+        """Generate ligand conditioning for pair embedding initialization.
 
-        TODO: Change all reference to lm indexing to ij indexing since now we are using tokenwise representations
+        Args:
+            input_feature_dict: Input feature dictionary containing ligand data
+            inplace_safe: Whether it is safe to use inplace operations
+
+        Returns:
+            torch.Tensor: Initial pair embedding z with ligand conditioning
+                [..., n_token, n_token, c_z]
         """
-        # Grab data on inputs
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
         n_token = input_feature_dict["residue_index"].shape[-1]
 
-        ### Initialize pair embedding with ligand conformer features:
         # 1. Get token-wise ligand reference positions
         # [..., N_atom, 3]
         is_ligand = input_feature_dict["is_ligand"].unsqueeze(-1)  # [..., n_atom, 1]
@@ -119,15 +151,13 @@ class DiffusionConditioning(nn.Module):
             input_feature_dict["ref_pos"] * is_ligand
         )  # (zero out non-ligand atoms)
 
-        # 2. Aggregate per-atom reference positions to per-token reference positions (trick to get token-level tensor)
+        # 2. Aggregate per-atom reference positions to per-token reference positions
         # [..., N_atom, 3] -> [..., N_token, 3]
-        ligand_ref_pos = (
-            aggregate_atom_to_token(  # TODO: maybe we move this to featurizer
-                x_atom=ligand_ref_pos,
-                atom_to_token_idx=atom_to_token_idx,
-                n_token=n_token,
-                reduce="mean",
-            )
+        ligand_ref_pos = aggregate_atom_to_token(
+            x_atom=ligand_ref_pos,
+            atom_to_token_idx=atom_to_token_idx,
+            n_token=n_token,
+            reduce="mean",
         )
 
         # Compute v_lm mask
@@ -146,13 +176,6 @@ class DiffusionConditioning(nn.Module):
             ligand_ref_pos[..., None, :] - ligand_ref_pos[..., None, :, :]
         )  # [..., n_token, n_token, 3]
         z = self.linear_no_bias_d(d_lm) * v_lm  # [..., n_token, n_token, c_z]
-        # TODO: add the rest of the target features here
-
-        # Embed the target coordinates ()
-
-        # Embed the target pairwise distances
-
-        # Embed the target restype
 
         # 4. Embed pairwise inverse squared distances
         invd_emb = (
@@ -160,6 +183,131 @@ class DiffusionConditioning(nn.Module):
             * v_lm
         )
         z = add(z, invd_emb, inplace_safe=inplace_safe)
+
+        return z
+
+    def get_target_condition(
+        self,
+        input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
+        N_sample: int,
+        inplace_safe: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Generate target embeddings from target features.
+
+        Args:
+            input_feature_dict: Input feature dictionary containing target data
+            N_sample (int): number of samples for target coordinate augmentation
+            inplace_safe (bool): Whether it is safe to use inplace operations
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Target single and pair embeddings
+                - s_target (torch.Tensor): [..., N_token, c_s]
+                - z_target (torch.Tensor): [..., N_token, N_token, c_z]
+        """
+        target_coord = input_feature_dict[
+            "target_centre_coordinate"
+        ]  # [..., N_token, 3]
+        target_restype = input_feature_dict["target_restype"]  # [..., N_token, 32]
+        is_target_token = input_feature_dict["is_target_token"]  # [..., N_token]
+
+        # Augment the coordinates
+        target_coord_augment = centre_random_augmentation(
+            target_coord, mask=is_target_token, N_sample=N_sample, s_trans=1.0
+        )
+
+        # 1. Target restype embedding (single embedding)
+        s_target_restype = self.linear_target_restype(
+            target_restype
+        )  # [..., N_token, c_s]
+
+        # 2. Target center coordinate embedding (single embedding)
+        s_target_coord = self.linear_target_coord(
+            centre_random_augmentation(
+                target_coord, mask=is_target_token, N_sample=N_sample, s_trans=1.0
+            )
+            / self.sigma_data
+        )  # [..., N_sample, N_token, c_s]
+
+        # Combine single embeddings
+        s_target = (
+            s_target_restype.unsqueeze(-3) + s_target_coord
+        )  # [..., N_sample, N_token, c_s]
+
+        # 3. Target pair distance embedding (pair embedding)
+        # Compute pairwise distances between target center coordinates
+        target_coord_i = target_coord_augment.unsqueeze(
+            -2
+        )  # [..., N_sample, N_token, 1, 3]
+        target_coord_j = target_coord_augment.unsqueeze(
+            -3
+        )  # [..., N_sample, 1, N_token, 3]
+        pair_dists = torch.norm(
+            target_coord_i - target_coord_j, dim=-1
+        )  # [..., N_token, N_token]
+
+        # Create distance bins using the one_hot utility
+        lower_bins = torch.arange(
+            self.target_dist_min,
+            self.target_dist_max,
+            self.target_dist_bin_size,
+            device=pair_dists.device,
+            dtype=pair_dists.dtype,
+        )  # [n_bins]
+        upper_bins = lower_bins + self.target_dist_bin_size  # [n_bins]
+
+        # One-hot encode distances
+        pair_dist_onehot = one_hot(
+            pair_dists, lower_bins, upper_bins
+        )  # [..., N_token, N_token, n_bins]
+
+        # Embed one-hot distances
+        z_target = self.linear_target_pair_dist(
+            pair_dist_onehot
+        )  # [..., N_token, N_token, c_z]
+
+        # Mask pair embeddings for target tokens only
+        # TODO: safety measure necessary here?
+        # target_mask = is_target_token.unsqueeze(-1)  # [..., N_token, 1]
+        # target_mask_pair = (
+        #    target_mask.unsqueeze(-2) * target_mask.unsqueeze(-3)
+        # )  # [..., N_token, N_token, 1]
+        # z_target = z_target_dist * target_mask_pair  # [..., N_token, N_token, c_z]
+
+        return s_target, z_target
+
+    def forward(
+        self,
+        r_noisy: torch.Tensor,
+        coord_timestep: torch.Tensor,
+        latent_timestep: torch.Tensor,
+        input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
+        inplace_safe: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            r_noisy (torch.Tensor): noisy coordinates
+                [..., N_sample, 3]
+            coord_timestep (torch.Tensor): the noising timestep for coords
+                [..., N_sample]
+            latent_timestep (torch.Tensor): the noising timestep for latents
+                [..., N_sample]
+            input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
+            inplace_safe (bool): Whether it is safe to use inplace operations.
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: embeddings s and z
+                - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
+                - z (torch.Tensor): [..., N_sample, N_tokens, N_tokens, c_z]
+
+        TODO: Change all reference to lm indexing to ij indexing since now we are using tokenwise representations
+        TODO: this will be quite memory intensive conditioning.
+        """
+        N_sample = coord_timestep.shape[-1]
+
+        # Grab data on inputs
+        n_token = input_feature_dict["residue_index"].shape[-1]
+
+        ### Initialize pair embedding with ligand conformer features
+        z = self.get_ligand_condition(input_feature_dict, inplace_safe)
 
         # Add token bonds to pair embedding
         z = add(
@@ -170,44 +318,89 @@ class DiffusionConditioning(nn.Module):
             inplace_safe=inplace_safe,
         )
 
-        ### Logic from Diffusion Conditioning (Algorithm 21)
+        ### Relative position encodings
         # Concatenate z_init with relative position encoding and embed (Line 1)
         z = torch.cat(
             tensors=[z, self.relpe(input_feature_dict)], dim=-1
-        )  # [..., N_tokens, N_tokens, 2*c_z]
+        )  # [..., N_sample, N_tokens, N_tokens, 2*c_z]
 
         # Normalise and embed pair embedding (Line 2)
         z = self.linear_no_bias_z(self.layernorm_z(z))
 
-        # Send pair embedding through one transition
-        z = add(z, self.transition_z(z), inplace_safe=inplace_safe)
+        ### Distance featurization for noisy coordinates
+        # Compute pairwise distances between noisy coordinates
+        r_noisy_i = r_noisy.unsqueeze(-2)  # [..., N_sample, N_token, 1, 3]
+        r_noisy_j = r_noisy.unsqueeze(-3)  # [..., N_sample, 1, N_token, 3]
+        noisy_pair_dists = torch.norm(
+            r_noisy_i - r_noisy_j, dim=-1
+        )  # [..., N_sample, N_token, N_token]
+
+        # Create distance bins using the one_hot utility
+        lower_bins = torch.arange(
+            self.target_dist_min,
+            self.target_dist_max,
+            self.target_dist_bin_size,
+            device=noisy_pair_dists.device,
+            dtype=noisy_pair_dists.dtype,
+        )  # [n_bins]
+        upper_bins = lower_bins + self.target_dist_bin_size  # [n_bins]
+
+        # One-hot encode distances
+        noisy_pair_dist_onehot = one_hot(
+            noisy_pair_dists, lower_bins, upper_bins
+        )  # [..., N_sample, N_token, N_token, n_bins]
+
+        # Embed one-hot distances
+        z_noisy = self.linear_noisy_pair_dist(
+            noisy_pair_dist_onehot
+        )  # [..., N_sample, N_token, N_token, c_z]
+
+        # Add noisy distance features to pair embedding
+        z = add(z.unsqueeze(-4), z_noisy, inplace_safe=inplace_safe)
 
         ### Initialize single embedding
         # 1. Fourier embed the timestep
-        # t_hat_coord_timestep = (
-        #    2 * coord_timestep - 1
-        # )  # Rescale to [-1, 1] for smoother embedding
-        t_hat_latent_timestep = 2 * latent_timestep - 1
-
-        # NOTE: nothing learned in the Fourier embeddings
-        # timestep_coord_t = self.fourier_embedding(
-        #    t_hat_timestep=t_hat_coord_timestep
-        # ).to(z.dtype)  # [..., N_sample, c_noise_embedding]
-        timestep_latent_t = self.fourier_embedding(
-            t_hat_timestep=t_hat_latent_timestep
+        timestep_coord = self.fourier_embedding(
+            t_hat_timestep=(
+                2 * coord_timestep - 1
+            )  # Rescale to [-1, 1] for smoother embedding
+        ).to(z.dtype)  # [..., N_sample, c_noise_embedding]
+        timestep_latent = self.fourier_embedding(
+            t_hat_timestep=(2 * latent_timestep - 1)
         ).to(z.dtype)
 
-        # TODO: embed both timesteps separately
-        # 2. Normalise and embed timestep
+        # 2. Normalise and embed both timesteps
         s = expand_at_dim(
-            self.linear_no_bias_t(self.layernorm_t(timestep_latent_t)),
+            self.linear_no_bias_latent_t(self.layernorm_latent_t(timestep_latent)),
             dim=-2,
             n=n_token,
         )  # [..., N_sample, N_tokens, c_s]
+        s = add(
+            s,
+            expand_at_dim(
+                self.linear_no_bias_coord_t(self.layernorm_coord_t(timestep_coord)),
+                dim=-2,
+                n=n_token,
+            ),
+            inplace_safe=inplace_safe,
+        )  # [..., N_sample, N_token, c_s]
 
-        # 3. Send single embedding through two transitions
+        # Target features
+        s_target, z_target = self.get_target_condition(
+            input_feature_dict, N_sample=N_sample, inplace_safe=inplace_safe
+        )
+
+        # Add target embeedings
+        s = add(s, s_target, inplace_safe=inplace_safe)
+        z = add(z, z_target, inplace_safe=inplace_safe)
+
+        ### Transition for both single and pair embeddings
+        # Send single embedding through two transitions
         s = add(s, self.transition_s1(s), inplace_safe=inplace_safe)
         s = add(s, self.transition_s2(s), inplace_safe=inplace_safe)
+
+        # Send pair embedding through one transition
+        z = add(z, self.transition_z(z), inplace_safe=inplace_safe)
 
         return s, z
 

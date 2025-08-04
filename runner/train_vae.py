@@ -146,11 +146,17 @@ class ArtiosAllAtomTrainer(object):
             dist.init_process_group(
                 backend="nccl", timeout=datetime.timedelta(seconds=timeout_seconds)
             )
-        # All ddp process got the same seed
+
+        if not self.configs.deterministic_seed:
+            rank_seed = hash(self.configs.seed, DIST_WRAPPER.rank, "init_seed")
+            rank_seed = rank_seed % (2**32)
+        else:
+            rank_seed = self.configs.seed
+
         seed_everything(
-            seed=self.configs.seed,
+            seed=rank_seed,
             deterministic=self.configs.deterministic,
-        )
+        )  # different ddp processes have diff seeds
 
         if self.configs.use_deepspeed_evo_attention:
             env = os.getenv("CUTLASS_PATH", None)

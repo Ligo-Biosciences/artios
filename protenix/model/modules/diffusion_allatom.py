@@ -70,6 +70,15 @@ class DiffusionConditioning(nn.Module):
             (target_dist_max - target_dist_min) / target_dist_bin_size
         )
 
+        # Initialize distance bins as parameters during initialization
+        lower_bins = torch.arange(
+            target_dist_min, target_dist_max, target_dist_bin_size
+        )
+        upper_bins = torch.cat([lower_bins[1:], lower_bins.new_tensor([1e6])], dim=-1)
+        self.lower_bins = nn.Parameter(lower_bins, requires_grad=False)
+        self.upper_bins = nn.Parameter(upper_bins, requires_grad=False)
+        self.num_bins = len(lower_bins)
+
         ### Ligand reference position embeddings
         self.linear_no_bias_d = LinearNoBias(in_features=3, out_features=self.c_z)
         self.linear_no_bias_invd = LinearNoBias(
@@ -233,29 +242,21 @@ class DiffusionConditioning(nn.Module):
 
         # 3. Target pair distance embedding (pair embedding)
         # Compute pairwise distances between target center coordinates
-        target_coord_i = target_coord_augment.unsqueeze(
-            -2
-        )  # [..., N_sample, N_token, 1, 3]
-        target_coord_j = target_coord_augment.unsqueeze(
-            -3
-        )  # [..., N_sample, 1, N_token, 3]
         pair_dists = torch.norm(
-            target_coord_i - target_coord_j, dim=-1
-        )  # [..., N_token, N_token]
+            target_coord_augment[..., None, :, :]
+            - target_coord_augment[..., :, None, :],
+            dim=-1,
+        )  # [..., N_sample, N_token, N_token]
 
-        # Create distance bins using the one_hot utility
-        lower_bins = torch.arange(
-            self.target_dist_min,
-            self.target_dist_max,
-            self.target_dist_bin_size,
-            device=pair_dists.device,
-            dtype=pair_dists.dtype,
-        )  # [n_bins]
-        upper_bins = lower_bins + self.target_dist_bin_size  # [n_bins]
+        # Use pre-initialized bins with matching dtype
+        # lower_bins = self.lower_bins.to(dtype=pair_dists.dtype)
+        # upper_bins = self.upper_bins.to(dtype=pair_dists.dtype)
 
         # One-hot encode distances
         pair_dist_onehot = one_hot(
-            pair_dists, lower_bins, upper_bins
+            pair_dists,
+            self.lower_bins,
+            self.upper_bins,  # TODO: watch for dtype errors
         )  # [..., N_token, N_token, n_bins]
 
         # Embed one-hot distances
@@ -327,25 +328,19 @@ class DiffusionConditioning(nn.Module):
 
         ### Distance featurization for noisy coordinates
         # Compute pairwise distances between noisy coordinates
-        r_noisy_i = r_noisy_coord.unsqueeze(-2)  # [..., N_sample, N_token, 1, 3]
-        r_noisy_j = r_noisy_coord.unsqueeze(-3)  # [..., N_sample, 1, N_token, 3]
         noisy_pair_dists = torch.norm(
-            r_noisy_i - r_noisy_j, dim=-1
+            r_noisy_coord[..., None, :, :] - r_noisy_coord[..., :, None, :], dim=-1
         )  # [..., N_sample, N_token, N_token]
 
-        # Create distance bins using the one_hot utility
-        lower_bins = torch.arange(
-            self.target_dist_min,
-            self.target_dist_max,
-            self.target_dist_bin_size,
-            device=noisy_pair_dists.device,
-            dtype=noisy_pair_dists.dtype,
-        )  # [n_bins]
-        upper_bins = lower_bins + self.target_dist_bin_size  # [n_bins]
+        # Use pre-initialized bins with matching dtype
+        # lower_bins = self.lower_bins.to(dtype=noisy_pair_dists.dtype)
+        # upper_bins = self.upper_bins.to(dtype=noisy_pair_dists.dtype)
 
         # One-hot encode distances
         noisy_pair_dist_onehot = one_hot(
-            noisy_pair_dists, lower_bins, upper_bins
+            noisy_pair_dists,
+            self.lower_bins,
+            self.upper_bins,  # TODO: watch for dtype errors
         )  # [..., N_sample, N_token, N_token, n_bins]
 
         # Embed one-hot distances
@@ -599,7 +594,8 @@ class DiffusionModule(nn.Module):
         return 1 / (timestep**2 + (1 - timestep) ** 2).sqrt()
 
     def c_out(self, timestep: torch.Tensor) -> torch.Tensor:
-        return 1 - timestep
+        return 1 - timestep  # velocity parametrization
+        # TODO: these are wrong
 
     def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
         return 1.0
@@ -636,11 +632,12 @@ class DiffusionModule(nn.Module):
         )
 
         # Apply skip connections and output scaling for both coordinate and latent predictions
-        coords_pred = noisy_coord * self.c_skip(
+        coord_pred = noisy_coord * self.c_skip(
             coord_timestep_
         ) + r_coord * self.sigma_coord * self.c_out(coord_timestep_)
         latent_pred = noisy_latent * self.c_skip(
             latent_timestep_
         ) + r_latent * self.sigma_latent * self.c_out(latent_timestep_)
+        # TODO: return velocity for training?
 
-        return {"centre_coordinate": coords_pred, "latents": latent_pred}
+        return coord_pred, latent_pred

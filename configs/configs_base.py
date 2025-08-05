@@ -35,8 +35,6 @@ basic_configs = {
     "load_vae_checkpoint_path": "",
     "load_ema_flow_checkpoint_path": "",
     "load_ema_vae_checkpoint_path": "",
-    "load_ema_flow_checkpoint_paths_directory": "",
-    "load_ema_vae_checkpoint_paths_directory": "",
     "load_strict": True,
     "load_params_only": True,
     "guiding_net_path": ValueMaybeNone(""),
@@ -339,7 +337,7 @@ loss_configs = {
                 "reduction": "mean",
             },
         },
-        "flow": { 
+        "flow": {
             "centre_atom": {
                 "weight_mse": 1.0,
                 "weight_dna": 5.0,
@@ -347,7 +345,7 @@ loss_configs = {
                 "weight_ligand": 10.0,
                 "eps": 1e-6,
             },
-        }
+        },
     },
     "metrics": {
         "lddt": {

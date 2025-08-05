@@ -1,4 +1,3 @@
-import time
 from typing import Any, Optional
 
 import torch
@@ -12,9 +11,6 @@ from protenix.model.generator import (
 )
 from protenix.model.loss import FlowLoss
 from protenix.model.modules.diffusion_allatom import DiffusionModule
-from protenix.model.utils import (
-    simple_merge_dict_list, 
-)
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.torch_utils import autocasting_disable_decorator
 
@@ -154,6 +150,7 @@ class ArtiosAllatom(nn.Module):
         Returns:
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
         """
+        """
         step_st = time.time()
 
         N_token = input_feature_dict["residue_index"].shape[-1]
@@ -243,6 +240,8 @@ class ArtiosAllatom(nn.Module):
         #    interested_atom_mask = label_dict.get("interested_ligand_mask", None)
 
         return pred_dict, log_dict, time_tracker
+        """
+        raise NotImplementedError
 
     def main_train_loop(
         self,
@@ -278,21 +277,23 @@ class ArtiosAllatom(nn.Module):
         device = label_dict["coordinate"].device
 
         N_sample = self.diffusion_batch_size
-        generator = torch.Generator(device).manual_seed(seed) if not self.training else None
+        generator = (
+            torch.Generator(device).manual_seed(seed) if not self.training else None
+        )
 
         # Noising
-        noisy_latent, latent_timestep, gt_latents = sample_noising(
+        noisy_latent, latent_timestep, latent_velocity = sample_noising(
             input=label_dict["coordinate"],
             mask=label_dict["coordinate_mask"],
             timestep_sampler=self.latent_timestep_sampler,
             num_sample=N_sample,
-            scale=1.0,
+            scale=1.0,  # TODO: sigma_latent
             generator=generator,
             input_feature_dict=input_feature_dict,
             encoder=encoder,
         )
 
-        noisy_centre_coords, coord_timestep, _ = sample_noising(
+        noisy_centre_coords, coord_timestep, coord_velocity = sample_noising(
             input=label_dict["centre_coordinate"],
             mask=label_dict["has_centre_atom"],
             timestep_sampler=self.coord_timestep_sampler,
@@ -302,7 +303,7 @@ class ArtiosAllatom(nn.Module):
         )
 
         # Denoising
-        denoise_dict = self.diffusion_module(
+        coord_pred, latent_pred = self.diffusion_module(
             noisy_coord=noisy_centre_coords,
             noisy_latent=noisy_latent,
             coord_timestep=coord_timestep,
@@ -311,32 +312,33 @@ class ArtiosAllatom(nn.Module):
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
-        
-        pred_dict.update(denoise_dict)
 
         pred_dict.update(
             {
                 "latent_timestep": latent_timestep,
                 "coord_timestep": coord_timestep,
+                "latent_velocity": latent_pred,
+                "coord_velocity": coord_pred,
             }
         )
 
         label_dict.update(
             {
-                "latents": gt_latents, # [..., N_sample, N_token, c_latent]
+                "latent_velocity": latent_velocity,  # [..., N_sample, N_token, c_latent]
+                "coord_velocity": coord_velocity,
             }
         )
 
         # Permute symmetric atom/chain in each sample to match true structure
-        #(
+        # (
         #    pred_dict,
         #    perm_log_dict,
         #    _,
         #    _,
-        #) = symmetric_permutation.permute_diffusion_sample_to_match_label(
+        # ) = symmetric_permutation.permute_diffusion_sample_to_match_label(
         #    input_feature_dict, pred_dict, label_dict, stage="train"
-        #)
-        #log_dict.update(perm_log_dict)
+        # )
+        # log_dict.update(perm_log_dict)
 
         return pred_dict, label_dict, log_dict
 

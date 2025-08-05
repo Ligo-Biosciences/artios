@@ -27,8 +27,8 @@ import numpy as np
 import rootutils
 import torch
 import torch.distributed as dist
-import wandb
 import torch.nn as nn
+import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
@@ -177,9 +177,9 @@ class ArtiosAllAtomFlowTrainer(object):
         self.lddt_metrics = LDDTMetrics(self.configs)
 
     def init_model(self):
-        #self.raw_model = ArtiosLigand(self.configs).to(
+        # self.raw_model = ArtiosLigand(self.configs).to(
         #    self.device
-        #) 
+        # )
         self.raw_flow_model = ArtiosAllatom(self.configs).to(self.device)
         self.vae = ArtiosAllAtomVAE(self.configs).to(self.device)
         # DDP not required for VAE loading since model is frozen - no need for gradient aggregation
@@ -281,8 +281,8 @@ class ArtiosAllAtomFlowTrainer(object):
                 }
 
             model.load_state_dict(
-                    checkpoint["model"],
-                    strict=self.configs.load_strict,
+                checkpoint["model"],
+                strict=self.configs.load_strict,
             )
 
             if not load_params_only:
@@ -303,58 +303,6 @@ class ArtiosAllAtomFlowTrainer(object):
             self.print(f"Finish loading checkpoint, current step: {self.step}")
 
             return model
-
-        if self.configs.load_ema_flow_checkpoint_paths_directory:
-            checkpoint_dir = self.configs.load_ema_flow_checkpoint_paths_directory
-            if not os.path.exists(checkpoint_dir):
-                raise Exception(
-                    f"EMA checkpoint directory does not exist: {checkpoint_dir}"
-                )
-
-            # Get all checkpoint files from directory
-            checkpoint_files = [
-                f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")
-            ]
-            self.print(
-                f"Found {len(checkpoint_files)} EMA checkpoints in {checkpoint_dir}"
-            )
-
-            # Create mapping of sigma values to their corresponding wrappers
-            sigma_to_wrapper = {
-                wrapper.sigma: wrapper for wrapper in self.power_law_ema_wrappers
-            }
-
-            # Load each checkpoint and match with corresponding wrapper
-            for checkpoint_file in checkpoint_files:
-                # Extract sigma value from filename (assuming format like "*_ema_6.94.pt")
-                try:
-                    sigma_str = checkpoint_file.split("_ema_")[-1].replace(".pt", "")
-                    sigma = float(sigma_str)
-                except (IndexError, ValueError):
-                    self.print(
-                        f"Warning: Could not extract a sigma value from checkpoint filename: {checkpoint_file}"
-                    )
-                    continue
-
-                if sigma not in sigma_to_wrapper:
-                    self.print(
-                        f"Warning: No matching wrapper found for sigma={sigma} in checkpoint: {checkpoint_file}"
-                    )
-                    continue
-
-                checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
-                _load_checkpoint(
-                    checkpoint_path,
-                    load_params_only=True,
-                    model="flow",
-                )
-
-                # Register only the wrapper corresponding to this sigma
-                matching_wrapper = sigma_to_wrapper[sigma]
-                matching_wrapper.register()
-                self.print(
-                    f"Loaded and registered EMA checkpoint for sigma={sigma}: {checkpoint_file}"
-                )
 
         # Load model parameters (With no EMA) from checkpoint
         if self.configs.load_flow_checkpoint_path:
@@ -380,12 +328,12 @@ class ArtiosAllAtomFlowTrainer(object):
 
     # TODO: model forward accepts the encoder and the decoder
     def model_forward(
-        self, 
-        batch: dict, 
-        mode: str = "train", 
-        encoder: Optional[nn.Module] = None, 
+        self,
+        batch: dict,
+        mode: str = "train",
+        encoder: Optional[nn.Module] = None,
         decoder: Optional[nn.Module] = None,
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
     ) -> tuple[dict, dict]:
         """Forward pass of the model.
 
@@ -482,7 +430,7 @@ class ArtiosAllAtomFlowTrainer(object):
                 self.model.load_state_dict(checkpoint["model"])
 
                 # Evaluate
-                print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
+                self.print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
                 metrics = self._evaluate(ema_suffix=f"_post_hoc_ema_{sigma}", mode=mode)
                 all_eval_metrics[f"post_hoc_ema_{sigma}"] = metrics
 
@@ -542,9 +490,11 @@ class ArtiosAllAtomFlowTrainer(object):
                 simple_metrics = {}
                 with enable_amp:
                     # Model forward - adds the pred_dict and label_dict to batch
-                    #batch, _ = self.model_forward(batch, mode=mode, seed=index)
+                    # batch, _ = self.model_forward(batch, mode=mode, seed=index)
 
-                    batch, _ = self.model_forward(batch, encoder=self.vae.encoder, mode=mode, seed=index)
+                    batch, _ = self.model_forward(
+                        batch, encoder=self.vae.encoder, mode=mode, seed=index
+                    )
 
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict, monitor_data = self.get_loss(
@@ -657,7 +607,7 @@ class ArtiosAllAtomFlowTrainer(object):
         )
 
         with enable_amp:
-            #batch, _ = self.model_forward(batch, mode="train")
+            # batch, _ = self.model_forward(batch, mode="train")
 
             # TODO: pass in encoder to forward pass
             batch, _ = self.model_forward(batch, encoder=self.vae.encoder, mode="train")

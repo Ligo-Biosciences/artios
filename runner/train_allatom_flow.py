@@ -51,6 +51,7 @@ from protenix.utils.structure_io import cif_to_pdb
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
+from runner.dumper import DataDumper
 from runner.evaluate import Evaluator
 from runner.inference import InferenceRunner, infer_predict
 
@@ -96,6 +97,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
         # Add dump dir for training time inference
         self.configs.dump_dir = self.prediction_dir
+        self.dumper = DataDumper(self.configs.dump_dir)
 
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)
@@ -572,37 +574,70 @@ class ArtiosAllAtomFlowTrainer(object):
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(key, value, namespace="val")
 
-                del batch, simple_metrics
+                # Inference
+                if self.configs.run_training_time_inference and index < 20 and DIST_WRAPPER.rank == 0:
+                    pred_dict, _, _ = self.flow_model(
+                        input_feature_dict=batch["input_feature_dict"], 
+                        label_full_dict=batch["label_full_dict"],
+                        label_dict=batch["label_dict"],
+                        decoder=self.vae.decoder, 
+                        mode="inference"
+                    )
+                    saved_files = self.dumper.dump(
+                        dataset_name=test_name,
+                        pdb_id=pid,
+                        seed=0,
+                        pred_dict=pred_dict,
+                    )
+                    
+                    # Log structure files to Neptune Scale
+                    if self.configs.use_wandb and saved_files:
+                        files_dict = {}
+                        for file_path in saved_files:
+                            # Create a relative key for Neptune using test_name/pdb_id/filename
+                            filename = os.path.basename(file_path)
+                            neptune_key = f"structures/{test_name}/{pid}/{filename}"
+                            files_dict[neptune_key] = file_path
+
+                        self.neptune_run.log_files(
+                            files=files_dict,
+                            step=self.step,
+                        )
+
+                del batch, simple_metrics, saved_files
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()
 
+
             if self.configs.run_training_time_inference:
+                pass
+
                 # TODO: adapt inference runner. Need to keep inference runner this time
                 # to do handle full diffusion. Will need to taken in flow and decoder model.
-                runner = InferenceRunner(self.configs, model=self.model)
-                infer_predict(runner, self.configs)
+                #runner = InferenceRunner(self.configs, model=self.model)
+                #infer_predict(runner, self.configs)
 
-                if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                #if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                     # Find all .cif files recursively in structure_dir and subdirectories
-                    cif_files = glob(
-                        os.path.join(self.prediction_dir, "**/*.cif"), recursive=True
-                    )
-                    cif_files = [Path(cif_file) for cif_file in cif_files]
-                    try:
-                        # Log each structure file to wandb
-                        self.log_structure_files_to_wandb(
-                            cif_files, ema_suffix=ema_suffix
-                        )
+                #    cif_files = glob(
+                #        os.path.join(self.prediction_dir, "**/*.cif"), recursive=True
+                #    )
+                #    cif_files = [Path(cif_file) for cif_file in cif_files]
+                #    try:
+                #        # Log each structure file to wandb
+                #        self.log_structure_files_to_wandb(
+                #            cif_files, ema_suffix=ema_suffix
+                #        )
+                #
+                    #     # Run evaluation tests
+                    #     self.run_evaluation_tests(cif_files, ema_suffix=ema_suffix)
+                    # except Exception as e:
+                    #     self.print(f"Failed evaluation / logging: {e}")
 
-                        # Run evaluation tests
-                        self.run_evaluation_tests(cif_files, ema_suffix=ema_suffix)
-                    except Exception as e:
-                        self.print(f"Failed evaluation / logging: {e}")
-
-                    # Delete the CIF files
-                    for cif_file in cif_files:
-                        os.remove(cif_file)
+                    # # Delete the CIF files
+                    # for cif_file in cif_files:
+                    #     os.remove(cif_file)
 
             # Log the distribution of loss values over timesteps
             if self.configs.monitor.loss_distribution:

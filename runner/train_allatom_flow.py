@@ -316,11 +316,14 @@ class ArtiosAllAtomFlowTrainer(object):
             )
 
         if self.configs.load_vae_checkpoint_path:
+            use_ddp = self.use_ddp  # workaround for VAE specific
+            self.use_ddp = False
             self.vae_shell = _load_checkpoint(
                 self.configs.load_vae_checkpoint_path,
                 load_params_only=True,
                 model=self.vae_shell,
             )
+            self.use_ddp = use_ddp
 
     def print(self, msg: str):
         if DIST_WRAPPER.rank == 0:

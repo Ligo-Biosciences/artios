@@ -588,8 +588,10 @@ class ArtiosAllAtomFlowTrainer(object):
                         pdb_id=pid,
                         seed=0,
                         pred_dict=pred_dict,
+                        atom_array=batch["cropped_atom_array"],
+                        entity_poly_type=None,
                     )
-                    
+
                     # Log structure files to Neptune Scale
                     if self.configs.use_wandb and saved_files:
                         files_dict = {}

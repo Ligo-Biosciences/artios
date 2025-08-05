@@ -912,18 +912,18 @@ class FlowLoss(nn.Module):
         self.sigma_coord = configs.loss.flow.sigma_coord
         self.sigma_latent = configs.loss.flow.sigma_latent
 
-        centre_atom_config = configs.loss.flow.centre_atom
+        # centre_atom_config = configs.loss.flow.centre_atom
 
         self.loss_weight = {
             # MSE losses
-            "mse_centre_atom_loss": centre_atom_config.weight_mse,
-            "mse_ligand_centre_atom_loss": centre_atom_config.weight_ligand,
-            "mse_rna_centre_atom_loss": centre_atom_config.weight_rna,
-            "mse_dna_centre_atom_loss": centre_atom_config.weight_dna,
+            "mse_centre_atom_loss": 1 / 3,
+            "mse_ligand_centre_atom_loss": 0.0,
+            "mse_rna_centre_atom_loss": 0.0,
+            "mse_dna_centre_atom_loss": 0.0,
             "mse_protein_centre_atom_loss": 0.0,
             "mse_target_centre_atom_loss": 0.0,
             # Latent losses
-            "mse_latent_loss": 1.0,
+            "mse_latent_loss": 1 / self.configs.c_latent,
             "mse_ligand_latent_loss": 0.0,
             "mse_rna_latent_loss": 0.0,
             "mse_dna_latent_loss": 0.0,

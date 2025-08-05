@@ -123,7 +123,7 @@ class ArtiosAllAtomFlowTrainer(object):
                 experiment_name=self.run_name,
             )
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
-        self.train_metric_wrapper = SimpleMetricAggregator(["avg"])
+        self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 
     def init_env(self):
         """Init pytorch/cuda envs."""

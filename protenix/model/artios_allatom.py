@@ -53,7 +53,8 @@ class ArtiosAllatom(nn.Module):
 
         self.loss = FlowLoss(configs)
 
-        self.sigma_data = configs.sigma_data
+        self.sigma_coord = configs.sigma_coord
+        self.sigma_latent = configs.sigma_latent
 
     def sample_diffusion(self, **kwargs) -> torch.Tensor:
         """
@@ -287,7 +288,7 @@ class ArtiosAllatom(nn.Module):
             mask=label_dict["coordinate_mask"],
             timestep_sampler=self.latent_timestep_sampler,
             num_sample=N_sample,
-            scale=1.0,  # TODO: sigma_latent
+            scale=self.sigma_latent,  # TODO: sigma_latent
             generator=generator,
             input_feature_dict=input_feature_dict,
             encoder=encoder,
@@ -298,7 +299,7 @@ class ArtiosAllatom(nn.Module):
             mask=label_dict["has_centre_atom"],
             timestep_sampler=self.coord_timestep_sampler,
             num_sample=N_sample,
-            scale=self.sigma_data,
+            scale=self.sigma_coord,
             generator=generator,
         )
 

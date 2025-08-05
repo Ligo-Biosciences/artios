@@ -34,7 +34,7 @@ basic_configs = {
     "load_flow_checkpoint_path": "",
     "load_vae_checkpoint_path": "",
     "load_ema_flow_checkpoint_path": "",
-    "load_ema_vae_checkpoint_path": "",
+    "load_ema_vae_checkpoint_path": "",  # TODO: no need?
     "load_strict": True,
     "load_params_only": True,
     "guiding_net_path": ValueMaybeNone(""),
@@ -185,23 +185,23 @@ model_configs = {
             "sigma_coord": GlobalConfigValue("sigma_coord"),
             "sigma_latent": GlobalConfigValue("sigma_latent"),
             "c_token": GlobalConfigValue("c_token"),
-            "c_atom": GlobalConfigValue("c_atom"),
-            "c_atompair": GlobalConfigValue("c_atompair"),
+            # "c_atom": GlobalConfigValue("c_atom"),
+            # "c_atompair": GlobalConfigValue("c_atompair"),
             "c_z": GlobalConfigValue("c_z"),
             "c_s": GlobalConfigValue("c_s"),
             "c_s_inputs": GlobalConfigValue("c_s_inputs"),
-            "atom_encoder": {
-                "n_blocks": 3,
-                "n_heads": 4,
-            },
+            # "atom_encoder": {
+            #    "n_blocks": 3,
+            #    "n_heads": 4,
+            # },
             "transformer": {
                 "n_blocks": 24,
                 "n_heads": 16,
             },
-            "atom_decoder": {
-                "n_blocks": 3,
-                "n_heads": 4,
-            },
+            # "atom_decoder": {
+            #    "n_blocks": 3,
+            #    "n_heads": 4,
+            # },
             "dropout": 0.0,
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },

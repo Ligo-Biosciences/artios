@@ -316,7 +316,9 @@ class ArtiosAllAtomFlowTrainer(object):
             )
 
         if self.configs.load_vae_checkpoint_path:
-            use_ddp = self.use_ddp  # workaround for VAE specific
+            use_ddp = (
+                self.use_ddp
+            )  # workaround for loading VAE checkpoint trained with DDP
             self.use_ddp = False
             self.vae_shell = _load_checkpoint(
                 self.configs.load_vae_checkpoint_path,

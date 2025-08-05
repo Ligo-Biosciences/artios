@@ -282,7 +282,7 @@ class ArtiosAllatom(nn.Module):
         )
 
         # Noising
-        noisy_latent, latent_timestep, latent_velocity = sample_noising(
+        noisy_latent, latent_timestep, gt_latents = sample_noising(
             input=label_dict["coordinate"],
             mask=label_dict["coordinate_mask"],
             timestep_sampler=self.latent_timestep_sampler,
@@ -293,7 +293,7 @@ class ArtiosAllatom(nn.Module):
             encoder=encoder,
         )
 
-        noisy_centre_coords, coord_timestep, coord_velocity = sample_noising(
+        noisy_centre_coords, coord_timestep, _ = sample_noising(
             input=label_dict["centre_coordinate"],
             mask=label_dict["has_centre_atom"],
             timestep_sampler=self.coord_timestep_sampler,
@@ -317,15 +317,14 @@ class ArtiosAllatom(nn.Module):
             {
                 "latent_timestep": latent_timestep,
                 "coord_timestep": coord_timestep,
-                "latent_velocity": latent_pred,
-                "coord_velocity": coord_pred,
+                "latents": latent_pred,
+                "centre_coordinate": coord_pred,
             }
         )
 
         label_dict.update(
             {
-                "latent_velocity": latent_velocity,  # [..., N_sample, N_token, c_latent]
-                "coord_velocity": coord_velocity,
+                "latents": gt_latents,  # [..., N_sample, N_token, c_latent]
             }
         )
 

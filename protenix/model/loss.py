@@ -407,8 +407,8 @@ class MSELoss(nn.Module):
         )  # [N_atom] or [..., N_atom]
         weight = weight * coordinate_mask  # [N_atom] or [..., N_atom]
 
-        # Expand 
-        if need_expand_gt: 
+        # Expand
+        if need_expand_gt:
             true_coordinate = expand_at_dim(
                 true_coordinate, dim=-3, n=N_sample
             )  # [..., N_sample, N_atom, 3]
@@ -422,7 +422,7 @@ class MSELoss(nn.Module):
         true_coordinate = true_coordinate * coordinate_mask[..., None, :, None]
         pred_coordinate = pred_coordinate * coordinate_mask[..., None, :, None]
 
-        # Perform rigid align 
+        # Perform rigid align
         if need_align:
             with torch.no_grad():
                 true_coordinate, weight = self.weighted_rigid_align(
@@ -430,7 +430,9 @@ class MSELoss(nn.Module):
                     true_coordinate=true_coordinate,
                     weight=weight,
                 )
-        assert true_coordinate.shape == pred_coordinate.shape, f"True coordinate shape {true_coordinate.shape} does not match pred coordinate shape {pred_coordinate.shape}"
+        assert (
+            true_coordinate.shape == pred_coordinate.shape
+        ), f"True coordinate shape {true_coordinate.shape} does not match pred coordinate shape {pred_coordinate.shape}"
 
         # Calculate MSE loss
         per_atom_se = ((pred_coordinate - true_coordinate) ** 2).sum(
@@ -899,13 +901,16 @@ class ELBOLoss(nn.Module):
 class FlowLoss(nn.Module):
     """
     Loss function for the flow model.
-    
+
     L = centre_coord_mse + weight * latent_mse
     """
 
     def __init__(self, configs) -> None:
         super(FlowLoss, self).__init__()
         self.configs = configs
+
+        self.sigma_coord = configs.loss.flow.sigma_coord
+        self.sigma_latent = configs.loss.flow.sigma_latent
 
         centre_atom_config = configs.loss.flow.centre_atom
 
@@ -980,23 +985,39 @@ class FlowLoss(nn.Module):
         assert mode in ["train", "eval", "inference"]
         loss_fns = {}
 
-        # Mask tokens with no gt centre atom
-        loss_mask = label_dict["has_centre_atom"] # [..., N_token]
+        # Per-sample scales for latent and coordinates
+        sqrt2 = 1.414
+        latent_per_sample_scale = 1 / (
+            sqrt2 * (self.sigma_latent * (1 - pred_dict["latent_timestep"])) ** 2
+        )
+        coord_per_sample_scale = 1 / (
+            sqrt2 * (self.sigma_coord * (1 - pred_dict["coord_timestep"])) ** 2
+        )
 
         def _create_mse_loss_fn(key: str, filter_mask_key: str = None):
             """Helper function to create MSE loss functions with different prediction types and filter masks."""
             need_align = key != "latents"
             need_expand_gt = key != "latents"
+
+            # Per-sample scale for FM losses
+            if key == "latents":
+                per_sample_scale = latent_per_sample_scale
+            else:
+                per_sample_scale = coord_per_sample_scale
+
             return lambda: self.mse_loss(
                 pred_coordinate=pred_dict[key],
-                true_coordinate=label_dict[key], 
-                coordinate_mask=loss_mask,
+                true_coordinate=label_dict[key],
+                coordinate_mask=label_dict["has_centre_atom"],
                 is_rna=feat_dict["is_rna_token"],
                 is_dna=feat_dict["is_dna_token"],
                 is_ligand=feat_dict["is_ligand_token"],
                 need_align=need_align,
                 need_expand_gt=need_expand_gt,
-                extra_filter_mask=feat_dict[filter_mask_key] if filter_mask_key else None,
+                extra_filter_mask=feat_dict[filter_mask_key]
+                if filter_mask_key
+                else None,
+                per_sample_scale=per_sample_scale,
             )
 
         # loss configurations: (loss_name, key, filter_mask_key)
@@ -1004,16 +1025,15 @@ class FlowLoss(nn.Module):
             # Centre coordinate losses
             ("mse_centre_atom_loss", "centre_coordinate", None),
             ("mse_protein_centre_atom_loss", "centre_coordinate", "is_protein_token"),
-            ("mse_ligand_centre_atom_loss", "centre_coordinate", "is_ligand_token"), 
+            ("mse_ligand_centre_atom_loss", "centre_coordinate", "is_ligand_token"),
             ("mse_rna_centre_atom_loss", "centre_coordinate", "is_rna_token"),
             ("mse_dna_centre_atom_loss", "centre_coordinate", "is_dna_token"),
             ("mse_target_centre_atom_loss", "centre_coordinate", "is_target_token"),
-            
             # Latent losses
             ("mse_latent_loss", "latents", None),
             ("mse_protein_latent_loss", "latents", "is_protein_token"),
             ("mse_ligand_latent_loss", "latents", "is_ligand_token"),
-            ("mse_rna_latent_loss", "latents", "is_rna_token"), 
+            ("mse_rna_latent_loss", "latents", "is_rna_token"),
             ("mse_dna_latent_loss", "latents", "is_dna_token"),
             ("mse_target_latent_loss", "latents", "is_target_token"),
         ]

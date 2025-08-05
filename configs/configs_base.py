@@ -103,8 +103,8 @@ model_configs = {
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
-    "sigma_data": 12.0,
-    "sigma_latent": 1.0,
+    "sigma_coord": 12.0,
+    "sigma_latent": 3.0,
     "diffusion_batch_size": 16,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
@@ -165,7 +165,7 @@ model_configs = {
         "stoch_type": "proteina",
         "alpha": 0.8,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
-        "sigma_data": GlobalConfigValue("sigma_data"),
+        "sigma_coord": GlobalConfigValue("sigma_coord"),
         "second_order_train": False,
         "second_order_inference": False,
         "guidance_weight": 1.2,
@@ -182,7 +182,7 @@ model_configs = {
         },
         "diffusion_module": {
             "use_fine_grained_checkpoint": False,
-            "sigma_coord": GlobalConfigValue("sigma_data"),
+            "sigma_coord": GlobalConfigValue("sigma_coord"),
             "sigma_latent": GlobalConfigValue("sigma_latent"),
             "c_token": GlobalConfigValue("c_token"),
             "c_atom": GlobalConfigValue("c_atom"),
@@ -209,7 +209,7 @@ model_configs = {
             "c_latent": GlobalConfigValue("c_latent"),
             "c_token": GlobalConfigValue("c_token"),
             "c_z": GlobalConfigValue("c_z"),
-            "sigma_data": GlobalConfigValue("sigma_data"),
+            "sigma_coord": GlobalConfigValue("sigma_coord"),
             "encoder": {
                 "n_blocks": 3,  # TODO: this is a lot, we should consider shrinking
                 "n_heads": 16,
@@ -345,6 +345,8 @@ loss_configs = {
                 "weight_ligand": 10.0,
                 "eps": 1e-6,
             },
+            "sigma_coord": GlobalConfigValue("sigma_coord"),
+            "sigma_latent": GlobalConfigValue("sigma_latent"),
         },
     },
     "metrics": {

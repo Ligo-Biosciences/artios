@@ -419,7 +419,9 @@ class ArtiosAllAtomFlowTrainer(object):
         # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:
             # Perform post hoc ema calculation
-            post_hoc_checkpoints = self.calc_post_hoc_ema()
+            post_hoc_checkpoints = (
+                self.calc_post_hoc_ema()
+            )  # TODO: this leads to NoneType
 
             # Store current model state
             current_state = {

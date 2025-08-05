@@ -12,16 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 
 from protenix.model.utils import (
+    beta_function,
     centre_random_augmentation,
     noise_w_flow_matching,
-    beta_function,
 )
 
 
@@ -45,11 +45,11 @@ class TrainingTimestepSampler:
         self.p_beta = 1.0 - uniform_weight
 
     def __call__(
-        self, 
+        self,
         size: torch.Size,
         device: torch.device = torch.device("cpu"),
         generator: Optional[torch.Generator] = None,
-        eps: float = 1e-4
+        eps: float = 1e-4,
     ) -> torch.Tensor:
         """Sample timesteps from the mixture distribution. It is a mixture of Beta(alpha,beta) and Uniform(0,1) distributions.
 
@@ -63,22 +63,22 @@ class TrainingTimestepSampler:
             torch.Tensor: Sampled timesteps tensor of shape 'size'
         """
         # Component selector: 1 → take Beta, 0 → take Uniform
-        take_beta = (torch.rand(size, generator=generator, device=device) < self.p_beta)
+        take_beta = torch.rand(size, generator=generator, device=device) < self.p_beta
 
         # Beta(alpha, beta) distribution using torch.distributions
         beta_dist = torch.distributions.Beta(self.alpha, self.beta)
-        
+
         # Sample from Beta(alpha, beta)
         beta_part = beta_dist.sample(size).to(device)
-        
+
         # Sample from Uniform(0, 1)
         uniform_part = torch.rand(size, generator=generator, device=device)
 
         timesteps = torch.where(take_beta, beta_part, uniform_part)
 
         # Clamp timesteps to avoid numerical instability at t=0 or t=1
-        return timesteps.clamp(min=eps, max=1.0-eps)
-    
+        return timesteps.clamp(min=eps, max=1.0 - eps)
+
 
 class InferenceTimestepScheduler:
     """
@@ -107,16 +107,15 @@ class InferenceTimestepScheduler:
         steps = torch.arange(N_step + 1, dtype=dtype, device=device)
         t = (steps / N_step) ** np.exp(self.p)
         return t
-    
+
 
 class VariableLinQuadScheduler:
     """
     This scheduler will be lienar between the points (0,0) and (m,n)
     and then will be concave quadratic between (m,n) and (1,1)
     """
-    def __init__(self,
-                 m = 0.097,
-                 n = 0.418) -> None:
+
+    def __init__(self, m=0.097, n=0.418) -> None:
         self.m = m
         self.n = n
 
@@ -124,31 +123,31 @@ class VariableLinQuadScheduler:
         self,
         N_step: int = 50,
         device: torch.device = torch.device("cpu"),
-        dtype: torch.dtype = torch.float32
+        dtype: torch.dtype = torch.float32,
     ) -> torch.Tensor:
-
         steps = torch.arange(N_step + 1, dtype=dtype, device=device) / N_step
         linear_steps = steps[steps < self.m]
         quadratic_steps = steps[steps > self.m]
 
         # Create the timesteps on the linear section
-        linear_t = linear_steps * (self.n/self.m) 
-        
+        linear_t = linear_steps * (self.n / self.m)
+
         # Create the timeteps on the quadratic section
-        a = (self.n - 1) / ((self.m - 1)**2)
+        a = (self.n - 1) / ((self.m - 1) ** 2)
         b = -2 * a
         c = a + 1
         quadratic_t = a * (quadratic_steps**2) + b * quadratic_steps + c
 
-        # Concatenate all the timesteps 
+        # Concatenate all the timesteps
         t = torch.cat([linear_t, quadratic_t])
         return t
-    
+
 
 class LaProteinaScheduler:
     """
     This shceduler is the same as the shceduler in the La-Proteina paper.
     """
+
     def __init__(self, scale: float = 1.0) -> None:
         self.scale = scale
 
@@ -156,12 +155,12 @@ class LaProteinaScheduler:
         self,
         N_step: int = 50,
         device: torch.device = torch.device("cpu"),
-        dtype: torch.dtype = torch.float32
+        dtype: torch.dtype = torch.float32,
     ) -> torch.Tensor:
         steps = torch.arange(N_step + 1, dtype=dtype, device=device) / N_step
         t = (1 - self.scale ** (-2 * steps)) / (1 - self.scale ** (-2))
         return t
-    
+
 
 def _calculate_velocity_and_score(
     x_noisy: torch.Tensor,
@@ -222,10 +221,12 @@ def _calculate_velocity_and_score(
 
         # Velocity and score interpolation for guidance
         velocity_pred = (
-            guidance_weight * velocity_pred + (1 - guidance_weight) * guidance_velocity_pred
+            guidance_weight * velocity_pred
+            + (1 - guidance_weight) * guidance_velocity_pred
         )
         scaled_score = (
-            guidance_weight * scaled_score + (1 - guidance_weight) * scaled_guidance_score
+            guidance_weight * scaled_score
+            + (1 - guidance_weight) * scaled_guidance_score
         )
 
     return velocity_pred, scaled_score
@@ -291,18 +292,23 @@ def sample_diffusion(
         "non_singular": lambda t: torch.where(
             t > 0.95,  # do not noise close to 1 for ligand's sake
             torch.zeros_like(t),
-            4 * torch.ones_like(t) * 0.5 * (alpha**2)
+            4 * torch.ones_like(t) * 0.5 * (alpha**2),
         ),  # int_{0}^{1}(non_sing) = 1/4
-        "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t,  # int_{0}^{1}(zero_ends) = 1/12
+        "zero_ends": lambda t: 12
+        * 0.5
+        * (alpha**2)
+        * t,  # int_{0}^{1}(zero_ends) = 1/12
         "proteina": lambda t: torch.where(
-            t > 0.95,
-            torch.zeros_like(t),
-            0.5 * ((alpha**2) / (t + 0.01)) / (1 - t)
+            t > 0.95, torch.zeros_like(t), 0.5 * ((alpha**2) / (t + 0.01)) / (1 - t)
         ),
         "beta": lambda t: torch.where(
-            t > 0.95,  
+            t > 0.95,
             torch.zeros_like(t),
-            2 * 0.5 * (alpha**2) * beta_function(t, beta_mean, beta_std, device=device, dtype=dtype) / (1 - t)
+            2
+            * 0.5
+            * (alpha**2)
+            * beta_function(t, beta_mean, beta_std, device=device, dtype=dtype)
+            / (1 - t),
         ),
     }
 
@@ -337,14 +343,18 @@ def sample_diffusion(
                 noise = torch.randn_like(x)
 
             # Stochastic schedule at current time step. No stochasticity near end of sampling.
-            #if t_cur < 0.95:
+            # if t_cur < 0.95:
             #    g_t = g[i]
-            #else:
+            # else:
             #    g_t = 0.0
             g_t = g[i]
 
             # Centre and rotate coords [..., N_sample, N_atom, 3]
-            x = centre_random_augmentation(x_input_coords=x, N_sample=1).squeeze(dim=-3).to(dtype)
+            x = (
+                centre_random_augmentation(x_input_coords=x, N_sample=1)
+                .squeeze(dim=-3)
+                .to(dtype)
+            )
 
             # Calculate velocity and scaled score
             velocity_pred, scaled_score = _calculate_velocity_and_score(
@@ -391,10 +401,16 @@ def sample_diffusion(
                 )
 
                 # Calculate update at intermediate point
-                update_2 = step * (velocity_pred_2.to(torch.float64) + g_t * scaled_score_2)
+                update_2 = step * (
+                    velocity_pred_2.to(torch.float64) + g_t * scaled_score_2
+                )
 
                 # Perform second order Euler step
-                x = x + 1 / 2 * (update + update_2) + torch.sqrt(2 * step * g_t * gamma) * noise
+                x = (
+                    x
+                    + 1 / 2 * (update + update_2)
+                    + torch.sqrt(2 * step * g_t * gamma) * noise
+                )
 
         return x
 
@@ -402,12 +418,18 @@ def sample_diffusion(
         coords_pred = _chunk_sample_diffusion(N_sample, inplace_safe=inplace_safe)
     else:
         coords_pred = []
-        no_chunks = N_sample // diffusion_chunk_size + (N_sample % diffusion_chunk_size != 0)
+        no_chunks = N_sample // diffusion_chunk_size + (
+            N_sample % diffusion_chunk_size != 0
+        )
         for i in range(no_chunks):
             chunk_n_sample = (
-                diffusion_chunk_size if i < no_chunks - 1 else N_sample - i * diffusion_chunk_size
+                diffusion_chunk_size
+                if i < no_chunks - 1
+                else N_sample - i * diffusion_chunk_size
             )
-            chunk_coords_pred = _chunk_sample_diffusion(chunk_n_sample, inplace_safe=inplace_safe)
+            chunk_coords_pred = _chunk_sample_diffusion(
+                chunk_n_sample, inplace_safe=inplace_safe
+            )
             coords_pred.append(chunk_coords_pred)
         coords_pred = torch.cat(coords_pred, -3)  # [..., N_sample, N_atom, 3]
 
@@ -415,17 +437,17 @@ def sample_diffusion(
 
 
 def sample_noising(
-    input: torch.Tensor, 
+    input: torch.Tensor,
     mask: torch.Tensor,
-    timestep_sampler: TrainingTimestepSampler, 
-    num_sample: int, 
+    timestep_sampler: TrainingTimestepSampler,
+    num_sample: int,
     scale: float,
     generator: torch.Generator,
     input_feature_dict: Optional[dict[str, Any]] = None,
     encoder: Optional[nn.Module] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    The core noising function used for sample training FM models. 
+    The core noising function used for sample training FM models.
     1. Augment input
     2. (Optional) Encode input
     3. Generate timesteps
@@ -457,30 +479,33 @@ def sample_noising(
         x_input_coords=input,
         N_sample=num_sample,
         mask=mask,
-    ).to(dtype) 
+    ).to(dtype)
 
     # (Optional) Encode
     if encoder is not None:
-        x_target_augment, _ = encoder(input_feature_dict, x_target_augment)
+        with torch.no_grad():
+            x_target_augment, _ = encoder(input_feature_dict, x_target_augment)
 
     # Generate timestep
     timestep = timestep_sampler(
-        size=(*batch_size_shape, num_sample), 
-        device=device, 
-        generator=generator
-    ).to(dtype) 
+        size=(*batch_size_shape, num_sample), device=device, generator=generator
+    ).to(dtype)
 
     # Generate noise
-    noise = torch.randn(
-        x_target_augment.shape,
-        dtype=dtype,
-        device=x_target_augment.device,
-        generator=generator,
-    ) * scale
+    noise = (
+        torch.randn(
+            x_target_augment.shape,
+            dtype=dtype,
+            device=x_target_augment.device,
+            generator=generator,
+        )
+        * scale
+    )
 
     # Noise input
     x_noisy = noise_w_flow_matching(
-        x_target_augment, noise, timestep[..., :, None, None])
+        x_target_augment, noise, timestep[..., :, None, None]
+    )
 
     return x_noisy, timestep, x_target_augment
 
@@ -526,17 +551,13 @@ def sample_diffusion_training(
         x_input_coords=label_dict["coordinate"],
         N_sample=N_sample,
         mask=label_dict["coordinate_mask"],
-    ).to(
-        dtype
-    )  # [..., N_sample, N_atom, 3]
+    ).to(dtype)  # [..., N_sample, N_atom, 3]
 
     # Get timestep for noising
     # timestep: independent timesteps for each sample [..., N_sample]
     timestep = timestep_sampler(
-        size=(*batch_size_shape, N_sample), 
-        device=device, 
-        generator=generator
-    ).to(dtype) 
+        size=(*batch_size_shape, N_sample), device=device, generator=generator
+    ).to(dtype)
 
     # Generate noise
     noise = (
@@ -550,7 +571,9 @@ def sample_diffusion_training(
     )  # [..., N_sample, N_atom, 3]
 
     # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )
-    x_noisy = noise_w_flow_matching(x_target_augment, noise, timestep[..., :, None, None])
+    x_noisy = noise_w_flow_matching(
+        x_target_augment, noise, timestep[..., :, None, None]
+    )
 
     # Get denoised output predictions [..., N_sample, N_atom, 3]
     if diffusion_chunk_size is None:
@@ -561,12 +584,16 @@ def sample_diffusion_training(
         )
     else:
         coords_pred = []
-        no_chunks = N_sample // diffusion_chunk_size + (N_sample % diffusion_chunk_size != 0)
+        no_chunks = N_sample // diffusion_chunk_size + (
+            N_sample % diffusion_chunk_size != 0
+        )
         for i in range(no_chunks):
             x_noisy_i = x_noisy[
                 ..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size, :, :
             ]
-            timestep_i = timestep[..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size]
+            timestep_i = timestep[
+                ..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size
+            ]
             coords_pred_i = denoise_net(
                 x_noisy=x_noisy_i,
                 timestep=timestep_i,

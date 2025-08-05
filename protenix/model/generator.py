@@ -272,13 +272,34 @@ def sample_latent_diffusion(
     Optional guidance net can be supplied.
     Second order functionality (basic Midpoint ODE solver).
     Centre coords and latents denoise at different speeds, as recommended by LaProteina paper. 
+
+    Args:
+        denoise_net (Callable): The denoising network.
+        input_feature_dict (dict[str, Any]): The input feature dictionary.
+        coord_timesteps (torch.Tensor): The denoising timesteps for the centre coords.
+        latent_timesteps (torch.Tensor): The denoising timesteps for the latents.
+        c_latent (int): The latent dimension.
+        N_sample (int): The number of samples.
+        sigma_coord (float): Scale of the centre coords.
+        sigma_latent (float): Scale of the latents.
+        stoch_type_coord (str): The stochasticity function for the centre coords.
+        stoch_type_latent (str): The stochasticity function for the latents.
+        alpha (float): Size of stochasticity.
+        gamma (float): Temperature of the stochasticity.
+        second_order (bool): Whether to use the second order method.
+        inplace_safe (bool): Whether to use inplace operations.
+        guiding_denoise_net (Optional[Callable]): The guiding denoising network.
+        guidance_weight (float): The weight of the guidance.
+        beta_mean (Optional[float]): The mean of the beta distribution.
+        beta_std (Optional[float]): The std of the beta distribution.
+
     """
     batch_shape = input_feature_dict["residue_index"].shape[:-1]
     N_token = input_feature_dict["residue_index"].shape[-1]
     device = input_feature_dict["residue_index"].device
-    dtype = torch.float32  # input_feature_dict["residue_index"].dtype
+    dtype = torch.float32  
 
-    # Normalised stochasticity schedule g (scaled by 1/(1-t) for numerical stability)
+    # Stochasticity functions (normalised such that int_{0}^{1}(g(t)) = 1)
     #TODO: check these integrals. I think off by factor of 2.
     stoch_schedules = {
         "deterministic": lambda t: torch.zeros_like(t),
@@ -300,12 +321,12 @@ def sample_latent_diffusion(
             2 * 0.5 * (alpha**2) * beta_function(t, beta_mean, beta_std, device=device, dtype=dtype)
         ),
     }
-
     if stoch_type_coord not in stoch_schedules:
         raise ValueError(f"Invalid stochasticity type: {stoch_type_coord}")
     if stoch_type_latent not in stoch_schedules:
         raise ValueError(f"Invalid stochasticity type: {stoch_type_latent}")
 
+    # Stochasticity schedules for centre coords and latents
     g_coord = stoch_schedules[stoch_type_coord](coord_timesteps)
     g_latent = stoch_schedules[stoch_type_latent](latent_timesteps)
 
@@ -324,7 +345,7 @@ def sample_latent_diffusion(
     noise_r = torch.zeros_like(r)
     noise_l = torch.zeros_like(l)
 
-    # Sampling loop
+    # Denoising loop
     for i, (t_coord_cur, t_coord_next, t_latent_cur, t_latent_next) in enumerate(zip(coord_timesteps[:-1], coord_timesteps[1:], latent_timesteps[:-1], latent_timesteps[1:])):
         # Generate noise (for stochastic sampling)
         if stoch_type_coord != "deterministic":
@@ -352,7 +373,7 @@ def sample_latent_diffusion(
             guidance_weight=guidance_weight,
         )
 
-        # Calculate update
+        # Calculate updates
         step_coord = t_coord_next - t_coord_cur
         step_latent = t_latent_next - t_latent_cur
 

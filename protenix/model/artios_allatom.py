@@ -9,7 +9,6 @@ from protenix.model.generator import (
     sample_diffusion,
     sample_noising,
 )
-from protenix.model.loss import FlowLoss
 from protenix.model.modules.diffusion_allatom import DiffusionModule
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.torch_utils import autocasting_disable_decorator
@@ -50,8 +49,6 @@ class ArtiosAllatom(nn.Module):
         )
 
         self.diffusion_module = DiffusionModule(**configs.model.diffusion_module)
-
-        self.loss = FlowLoss(configs)
 
         self.sigma_coord = configs.sigma_coord
         self.sigma_latent = configs.sigma_latent

@@ -140,6 +140,7 @@ data_configs = {
     "train_ref_pos_augment": True,
     "test_ref_pos_augment": True,
     "train_with_binding_target": True,
+    "binding_target_train_rate": 0.75,
     "train_sets": ListValue(
         ["weightedPDB_before2109_wopb_nometalc_0925", "distillation"]
     ),

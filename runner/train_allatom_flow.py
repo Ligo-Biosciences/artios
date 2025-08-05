@@ -181,7 +181,7 @@ class ArtiosAllAtomFlowTrainer(object):
         #    self.device
         # )
         self.raw_flow_model = ArtiosAllatom(self.configs).to(self.device)
-        self.vae = ArtiosAllAtomVAE(self.configs).vae.to(self.device)
+        self.vae_shell = ArtiosAllAtomVAE(self.configs).to(self.device)
         # DDP not required for VAE loading since model is frozen - no need for gradient aggregation
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
@@ -316,10 +316,10 @@ class ArtiosAllAtomFlowTrainer(object):
             )
 
         if self.configs.load_vae_checkpoint_path:
-            self.vae = _load_checkpoint(
+            self.vae_shell = _load_checkpoint(
                 self.configs.load_vae_checkpoint_path,
                 load_params_only=True,
-                model=self.vae,
+                model=self.vae_shell,
             )
 
     def print(self, msg: str):
@@ -493,7 +493,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     # batch, _ = self.model_forward(batch, mode=mode, seed=index)
 
                     batch, _ = self.model_forward(
-                        batch, encoder=self.vae.encoder, mode=mode, seed=index
+                        batch, encoder=self.vae_shell.vae.encoder, mode=mode, seed=index
                     )
 
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
@@ -610,7 +610,9 @@ class ArtiosAllAtomFlowTrainer(object):
             # batch, _ = self.model_forward(batch, mode="train")
 
             # TODO: pass in encoder to forward pass
-            batch, _ = self.model_forward(batch, encoder=self.vae.encoder, mode="train")
+            batch, _ = self.model_forward(
+                batch, encoder=self.vae_shell.vae.encoder, mode="train"
+            )
             loss, loss_dict, _ = self.get_loss(batch, mode="train")
 
         if self.configs.dtype in ["bf16", "fp32"]:

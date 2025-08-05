@@ -7,7 +7,7 @@ import torch.nn as nn
 from protenix.model.generator import (
     LaProteinaScheduler,
     TrainingTimestepSampler,
-    sample_diffusion,
+    sample_latent_diffusion,
     sample_noising,
 )
 from protenix.model.loss import FlowLoss
@@ -57,9 +57,10 @@ class ArtiosAllatom(nn.Module):
 
         self.loss = FlowLoss(configs)
 
-        self.sigma_data = configs.sigma_data
+        self.sigma_coord = configs.sigma_coord
+        self.sigma_latent = configs.sigma_latent
 
-    def sample_diffusion(self, **kwargs) -> torch.Tensor:
+    def sample_latent_diffusion(self, **kwargs) -> torch.Tensor:
         """
         Samples diffusion process based on the provided configurations.
 
@@ -69,83 +70,29 @@ class ArtiosAllatom(nn.Module):
         _configs = {
             key: self.configs.sample_diffusion.get(key)
             for key in [
-                "stoch_type",
+                "sigma_coord",
+                "sigma_latent",
+                "stoch_type_coord",
+                "stoch_type_latent",
                 "alpha",
                 "gamma",
-                "sigma_data",
+                "second_order",
                 "guidance_weight",
                 "beta_mean",
                 "beta_std",
             ]
         }
-        _configs.update(
-            {
-                "attn_chunk_size": (
-                    self.configs.infer_setting.chunk_size if not self.training else None
-                ),
-                "diffusion_chunk_size": (
-                    self.configs.infer_setting.sample_diffusion_chunk_size
-                    if not self.training
-                    else None
-                ),
-                "second_order": (
-                    self.configs.sample_diffusion.second_order_train
-                    if self.training
-                    else self.configs.sample_diffusion.second_order_inference
-                ),
-            }
-        )
         return autocasting_disable_decorator(self.configs.skip_amp.sample_diffusion)(
-            sample_diffusion
+            sample_latent_diffusion
         )(**_configs, **kwargs)
+
 
     def main_inference_loop(
         self,
         input_feature_dict: dict[str, Any],
-        label_dict: dict[str, Any],
-        mode: str,
-        inplace_safe: bool = True,
-        chunk_size: Optional[int] = 4,
-        symmetric_permutation: SymmetricPermutation = None,
-        guiding_net: Optional[nn.Module] = None,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
-        """
-        TODO: this should be completely re-written for the all-atom diffusion model.
-
-        Main inference loop for the Alphafold3 model.
-
-        Args:
-            input_feature_dict (dict[str, Any]): Input features dictionary.
-            label_dict (dict[str, Any]): Label dictionary.
-            mode (str): Mode of operation (e.g., 'inference').
-            inplace_safe (bool): Whether to use inplace operations safely. Defaults to True.
-            chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to 4.
-            symmetric_permutation (SymmetricPermutation): Symmetric permutation object. Defaults to None.
-            guiding_net (Optional[Callable]): Guiding net. Defaults to None.
-
-        Returns:
-            tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
-        """
-        pred_dict, log_dict, time_tracker = self._main_inference_loop(
-            input_feature_dict=input_feature_dict,
-            label_dict=label_dict,
-            mode=mode,
-            inplace_safe=inplace_safe,
-            chunk_size=chunk_size,
-            symmetric_permutation=symmetric_permutation,
-            guiding_net=guiding_net,
-        )
-
-        return pred_dict, log_dict, time_tracker
-
-    def _main_inference_loop(
-        self,
-        input_feature_dict: dict[str, Any],
-        label_dict: dict[str, Any],
         mode: str,
         inplace_safe: bool = False,
-        chunk_size: Optional[int] = 4,
-        symmetric_permutation: SymmetricPermutation = None,
+        decoder: Optional[nn.Module] = None,
         guiding_net: Optional[nn.Module] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
@@ -185,6 +132,7 @@ class ArtiosAllatom(nn.Module):
         #    torch.cuda.empty_cache()
 
         ### Diffusion
+
         # Initialise guiding diffusion module
         guiding_diffusion_module = None
         if guiding_net is not None:
@@ -199,20 +147,21 @@ class ArtiosAllatom(nn.Module):
         )
 
         # N_sample different ouputs created via diffusion
-        #TODO: sample_diffusion needs big rewrite
-        pred_dict["coordinate"] = self.sample_diffusion(
+        pred_dict["centre_coordinate"], pred_dict["latents"] = self.sample_latent_diffusion(
             denoise_net=self.diffusion_module,
             input_feature_dict=input_feature_dict,
+            coord_timesteps=coord_timesteps,
+            latent_timesteps=latent_timesteps,
+            c_latent=self.configs.c_latent,
             N_sample=N_sample,
-            timesteps=timesteps,
             inplace_safe=inplace_safe,
             guiding_denoise_net=guiding_diffusion_module,
         )
 
-        timestep = timesteps[-1]  # Get final timestep
-        pred_dict["timestep"] = timestep.expand(
-            *pred_dict["coordinate"].shape[:-2]
-        )  # Expand to [..., N_sample]
+        #timestep = timesteps[-1]  # Get final timestep
+        #pred_dict["timestep"] = timestep.expand(
+        #    *pred_dict["coordinate"].shape[:-2]
+        #)  # Expand to [..., N_sample]
 
         step_diffusion = time.time()
 
@@ -221,26 +170,13 @@ class ArtiosAllatom(nn.Module):
             torch.cuda.empty_cache()
         time_tracker.update({"model_forward": time.time() - step_st})
 
-        ### Permutation
-        # When label is given, permute coordinates and other heads
-        step_permutation = time.time()
-        if label_dict is not None and symmetric_permutation is not None:
-            pred_dict, log_dict = symmetric_permutation.permute_inference_pred_dict(
+        if decoder is not None:
+            pred_dict["coordinate"], pred_dict["seq_logits"] = decoder(
+                latents=pred_dict["latents"],
+                centre_atom_augment_coords=pred_dict["centre_coordinate"],
                 input_feature_dict=input_feature_dict,
-                pred_dict=pred_dict,
-                label_dict=label_dict,
-                permute_by_pocket=("pocket_mask" in label_dict)
-                and ("interested_ligand_mask" in label_dict),
+                inplace_safe=inplace_safe,
             )
-            last_step_seconds = step_permutation
-            time_tracker.update({"permutation": time.time() - last_step_seconds})
-
-        # Summary Confidence & Full Data
-        # Computed after coordinates and logits are permuted #TODO: can we get rid of this?
-        # if label_dict is None:
-        #    interested_atom_mask = None
-        # else:
-        #    interested_atom_mask = label_dict.get("interested_ligand_mask", None)
 
         return pred_dict, log_dict, time_tracker
 
@@ -297,7 +233,7 @@ class ArtiosAllatom(nn.Module):
             mask=label_dict["has_centre_atom"],
             timestep_sampler=self.coord_timestep_sampler,
             num_sample=N_sample,
-            scale=self.sigma_data,
+            scale=self.sigma_coord,
             generator=generator,
         )
 
@@ -394,12 +330,9 @@ class ArtiosAllatom(nn.Module):
         elif mode == "inference":
             pred_dict, log_dict, time_tracker = self.main_inference_loop(
                 input_feature_dict=input_feature_dict,
-                label_dict=None,
                 mode=mode,
-                inplace_safe=False,  # inplace_safe,  TODO: temporary workaround
-                chunk_size=chunk_size,
-                N_model_seed=self.N_model_seed,
-                symmetric_permutation=None,
+                inplace_safe=False,  # inplace_safe,
+                decoder=decoder,
                 guiding_net=guiding_net,
             )
             log_dict.update({"time": time_tracker})

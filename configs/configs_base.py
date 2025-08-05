@@ -105,7 +105,7 @@ model_configs = {
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
-    "sigma_data": 12.0,
+    "sigma_coord": 12.0,
     "sigma_latent": 1.0,
     "diffusion_batch_size": 16,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
@@ -164,12 +164,13 @@ model_configs = {
         "N_sample": 1,  # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
-        "stoch_type": "proteina",
+        "stoch_type_coord": "proteina",
+        "stoch_type_latent": "proteina",
         "alpha": 0.8,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
-        "sigma_data": GlobalConfigValue("sigma_data"),
-        "second_order_train": False,
-        "second_order_inference": False,
+        "sigma_coord": GlobalConfigValue("sigma_coord"),
+        "sigma_latent": GlobalConfigValue("sigma_latent"),
+        "second_order": False,
         "guidance_weight": 1.2,
         "beta_mean": 0.5,
         "beta_std": 0.233,
@@ -184,7 +185,7 @@ model_configs = {
         },
         "diffusion_module": {
             "use_fine_grained_checkpoint": False,
-            "sigma_coord": GlobalConfigValue("sigma_data"),
+            "sigma_coord": GlobalConfigValue("sigma_coord"),
             "sigma_latent": GlobalConfigValue("sigma_latent"),
             "c_token": GlobalConfigValue("c_token"),
             "c_atom": GlobalConfigValue("c_atom"),

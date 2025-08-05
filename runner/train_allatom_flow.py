@@ -40,6 +40,7 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
+from protenix.model.loss import FlowLoss
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
@@ -168,7 +169,7 @@ class ArtiosAllAtomFlowTrainer(object):
         logging.info("Finished init ENV.")
 
     def init_loss(self):
-        # self.loss = ProtenixLoss(self.configs) #TODO: mse losses for latents and centre coords
+        self.loss = FlowLoss(self.configs)
         self.symmetric_permutation = (
             SymmetricPermutation(  # TODO: still needed for ligands
                 self.configs, error_dir=self.error_dir

@@ -216,7 +216,7 @@ model_configs = {
             },
             "decoder": {
                 "n_blocks": 6,
-                "n_heads": 12,
+                "n_heads": 16,
             },
         },
     },

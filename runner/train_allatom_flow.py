@@ -28,7 +28,7 @@ import rootutils
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-import wandb
+from neptune_scale import Run
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
@@ -48,17 +48,14 @@ from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.monitoring import grad_norm, visualize_loss_histogram
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
-from protenix.utils.structure_io import cif_to_pdb
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
-from protenix.utils.training import get_optimizer, is_loss_nan_check
+from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
-from runner.evaluate import Evaluator
 from runner.inference import InferenceRunner, infer_predict
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-# Disable WANDB's console output capture to reduce unnecessary logging
-os.environ["WANDB_CONSOLE"] = "off"
+# Neptune logging configuration handled in init_log
 
 
 class ArtiosAllAtomFlowTrainer(object):
@@ -119,13 +116,13 @@ class ArtiosAllAtomFlowTrainer(object):
         )
 
     def init_log(self):
+        self.neptune_run = None
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            wandb.init(
+            self.neptune_run = Run(
                 project=self.configs.project,
-                name=self.run_name,
-                config=vars(self.configs),
-                id=self.configs.wandb_id or None,
+                experiment_name=self.run_name,
             )
+            self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["avg"])
 
     def init_env(self):
@@ -453,9 +450,9 @@ class ArtiosAllAtomFlowTrainer(object):
             # Restore original model state
             self.flow_model.load_state_dict(current_state)
 
-            # Plot all the metrics on wandb
+            # Plot all the metrics on Neptune
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                log_ema_validation_curves(all_eval_metrics, self.step)
+                log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):
@@ -550,13 +547,10 @@ class ArtiosAllAtomFlowTrainer(object):
                     )
                     cif_files = [Path(cif_file) for cif_file in cif_files]
                     try:
-                        # Log each structure file to wandb
-                        self.log_structure_files_to_wandb(
+                        # Log each structure file to Neptune
+                        self.log_structure_files_to_neptune(
                             cif_files, ema_suffix=ema_suffix
                         )
-
-                        # Run evaluation tests
-                        self.run_evaluation_tests(cif_files, ema_suffix=ema_suffix)
                     except Exception as e:
                         self.print(f"Failed evaluation / logging: {e}")
 
@@ -574,11 +568,14 @@ class ArtiosAllAtomFlowTrainer(object):
                             losses=np.array(monitor_data_dict["raw_loss"]),
                             title=f"{loss_name} Distribution {ema_suffix}",
                         )
-                        # Log to wandb
-                        wandb.log(
-                            {
-                                f"loss_dist/{ema_suffix}_{loss_name}": wandb.Image(fig),
-                            },
+                        # Log to Neptune
+                        # Save figure to file and log to neptune
+                        fig_path = f"{self.run_dir}/figures/loss_dist_{ema_suffix}_{loss_name}.png"
+                        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+                        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+
+                        self.neptune_run.log_files(
+                            files={f"loss_dist/{ema_suffix}_{loss_name}": fig_path},
                             step=self.step,
                         )
                         plt.close(fig)  # Clean up matplotlib figure
@@ -738,8 +735,10 @@ class ArtiosAllAtomFlowTrainer(object):
             weight_norms[f"weight_norms/{name}"] = norm
 
             if DIST_WRAPPER.rank == 0:
-                # Log to wandb
-                wandb.log(weight_norms, step=self.step)
+                # Log to neptune
+                self.neptune_run.log_metrics(
+                    flatten_nested(weight_norms), step=self.step
+                )
 
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
@@ -751,96 +750,41 @@ class ArtiosAllAtomFlowTrainer(object):
             #    return float(np.mean(values))  # Convert to float in case of numpy types
             # total_norm = gather_and_merge(total_norm, numpy_mean_aggregation)
 
-            # Log to wandb
+            # Log to neptune
             if DIST_WRAPPER.rank == 0:
-                wandb.log({"grad_norm": total_norm}, step=self.step)
+                self.neptune_run.log_metrics({"grad_norm": total_norm}, step=self.step)
 
-    def log_structure_files_to_wandb(self, cif_files: list[Path], ema_suffix: str = ""):
+    def log_structure_files_to_neptune(
+        self, cif_files: list[Path], ema_suffix: str = ""
+    ):
         if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
             return
+
+        files_dict = {}
         for cif_path in cif_files:
             try:
-                # Create temporary PDB file path with full path
-                cif_path = os.path.abspath(cif_path)
-                temp_pdb_path = os.path.abspath(str(Path(cif_path).with_suffix(".pdb")))
-
-                # Convert CIF to PDB
-                cif_to_pdb(cif_path, temp_pdb_path)
-
-                # Verify the PDB file was created
-                if not os.path.exists(temp_pdb_path):
-                    self.print(f"Warning: Failed to create PDB file at {temp_pdb_path}")
-                    continue
-
-                # Get relative path for the wandb key
+                # Get relative path for the neptune key
                 rel_path = os.path.relpath(cif_path, self.prediction_dir)
                 structure_name = os.path.splitext(rel_path)[0].replace(os.sep, "_")
 
-                # Log PDB file to wandb
-                wandb.log(
-                    {
-                        f"structures/{ema_suffix}_{structure_name}_step_{self.step}": wandb.Molecule(
-                            temp_pdb_path
-                        )
-                    },
-                    step=self.step,
+                # Create Neptune key and add to files dict
+                neptune_key = (
+                    f"structures/{ema_suffix}_{structure_name}_step_{self.step}"
                 )
-
-                # Clean up both files
-                if os.path.exists(temp_pdb_path):
-                    os.remove(temp_pdb_path)
+                files_dict[neptune_key] = str(cif_path)
 
             except Exception as e:
                 self.print(f"Error processing CIF file {cif_path}: {e}")
                 continue
 
-            # Explicitly clean up memory
-            torch.cuda.empty_cache()
+        # Log all files to Neptune in one call
+        if files_dict:
+            self.neptune_run.log_files(
+                files=files_dict,
+                step=self.step,
+            )
 
-    def run_evaluation_tests(self, cif_files: list[Path], ema_suffix: str = ""):
-        if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
-            return
-
-        print(f"Evaluating tests: {self.configs.monitor.eval_metrics.eval_tests}...")
-        results = {}
-
-        # Valid evaluation tests
-        valid_eval_tests = {
-            "ss_distribution": Evaluator.ss_distribution,
-            "posebusters": Evaluator.evaluate_posebusters,
-        }
-
-        for eval_test in self.configs.monitor.eval_metrics.eval_tests:
-            assert (
-                eval_test in valid_eval_tests
-            ), f"Invalid evaluation type: {eval_test}. Valid types are: {list(valid_eval_tests.keys())}"
-
-            print(f"Running {eval_test} evaluation...")
-            try:
-                results[eval_test] = valid_eval_tests[eval_test](cif_files=cif_files)
-                print(f"{eval_test} evaluation complete.")
-            except Exception as e:
-                self.print(f"Error running {eval_test} evaluation: {e}")
-                results.pop(eval_test, None)
-                continue
-
-            # Clean up after each test
-            torch.cuda.empty_cache()
-
-        # Log metrics to WandB
-        wandb_metrics = {}
-        for test_name, df in results.items():
-            for col in df.columns:
-                if col == "Ligand CCD":
-                    continue
-                wandb_metrics[f"{test_name}/{ema_suffix}_{col}"] = (
-                    df[col].astype(float).mean()
-                )
-
-        wandb.log(wandb_metrics, step=self.step)
-
-        # Clean up memory again
-        del results, wandb_metrics
+        # Explicitly clean up memory
         torch.cuda.empty_cache()
 
     def run(self):
@@ -888,13 +832,13 @@ class ArtiosAllAtomFlowTrainer(object):
                     last_lr = self.lr_scheduler.get_last_lr()[0]
                     if DIST_WRAPPER.rank == 0:
                         if self.configs.use_wandb:
-                            wandb.log(
+                            self.neptune_run.log_metrics(
                                 {"train/lr": last_lr},
                                 step=self.step,
                             )
                         self.print(f"Step {self.step}, lr: {last_lr}")
                     if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                        wandb.log(metrics, step=self.step)
+                        self.neptune_run.log_metrics(metrics, step=self.step)
 
                 if step_need_save or is_last_step:
                     self.print(f"beginning Saving checkpoint at step {self.step}")

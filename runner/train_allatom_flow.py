@@ -422,7 +422,9 @@ class ArtiosAllAtomFlowTrainer(object):
             post_hoc_checkpoints = self.calc_post_hoc_ema()
 
             # Store current model state
-            current_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+            current_state = {
+                k: v.clone() for k, v in self.flow_model.state_dict().items()
+            }
 
             for checkpoint_path in post_hoc_checkpoints:
                 # Extract sigma value from filename
@@ -432,7 +434,7 @@ class ArtiosAllAtomFlowTrainer(object):
                 checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
                 # Load post-hoc EMA weights
-                self.model.load_state_dict(checkpoint["model"])
+                self.flow_model.load_state_dict(checkpoint["model"])
 
                 # Evaluate
                 self.print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
@@ -446,7 +448,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     os.remove(checkpoint_path)
 
             # Restore original model state
-            self.model.load_state_dict(current_state)
+            self.flow_model.load_state_dict(current_state)
 
             # Plot all the metrics on wandb
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
@@ -535,7 +537,7 @@ class ArtiosAllAtomFlowTrainer(object):
             if self.configs.run_training_time_inference:
                 # TODO: adapt inference runner. Need to keep inference runner this time
                 # to do handle full diffusion. Will need to taken in flow and decoder model.
-                runner = InferenceRunner(self.configs, model=self.model)
+                runner = InferenceRunner(self.configs, model=self.flow_model)
                 infer_predict(runner, self.configs)
 
                 if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
@@ -587,7 +589,7 @@ class ArtiosAllAtomFlowTrainer(object):
         # Clip the gradient
         if self.configs.grad_clip_norm != 0.0:
             torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.configs.grad_clip_norm
+                self.flow_model.parameters(), self.configs.grad_clip_norm
             )
 
     def train_step(self, batch: dict):

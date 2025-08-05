@@ -211,12 +211,12 @@ model_configs = {
             "c_z": GlobalConfigValue("c_z"),
             "sigma_coord": GlobalConfigValue("sigma_coord"),
             "encoder": {
-                "n_blocks": 3,  # TODO: this is a lot, we should consider shrinking
-                "n_heads": 16,
+                "n_blocks": 6,  # TODO: this is a lot, we should consider shrinking
+                "n_heads": 4,
             },
             "decoder": {
-                "n_blocks": 3,
-                "n_heads": 4,
+                "n_blocks": 6,
+                "n_heads": 12,
             },
         },
     },

@@ -40,11 +40,12 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
+from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
-from protenix.utils.monitoring import grad_norm, visualize_loss_histogram
+from protenix.utils.monitoring import grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.structure_io import cif_to_pdb
@@ -458,6 +459,21 @@ class ArtiosAllAtomFlowTrainer(object):
         return simple_metrics
 
     @torch.no_grad()
+    def get_latents(self, batch: dict) -> dict:
+        """Get the latents from the batch."""
+        num_sample = self.configs.monitor.latents.num_sample
+
+        # Get num_sample latents and flatten
+        latents = batch["pred_dict"]["latents"][..., :num_sample, :, :]
+
+        num_token = latents.shape[-2]
+        c_latent = latents.shape[-1]
+
+        latents = latents.reshape(-1, num_sample * num_token, c_latent)
+
+        return latents.detach().cpu().float().numpy()
+
+    @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
         all_eval_metrics = {}
         if not self.configs.eval_ema_only:
@@ -518,8 +534,11 @@ class ArtiosAllAtomFlowTrainer(object):
 
         self.flow_model.eval()
 
-        # Initialize master monitor dict to collect all metrics
-        master_monitor_dict = defaultdict(lambda: defaultdict(list))
+        self.latents = (
+            {"latents": [], "restype": []}
+            if self.configs.monitor.latents.track_latents
+            else None
+        )
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
@@ -554,22 +573,6 @@ class ArtiosAllAtomFlowTrainer(object):
                     )  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)
 
-                    # Collect monitor metrics in master dict
-                    if self.configs.monitor.loss_distribution:
-                        for loss_name, monitor_metric_dict in monitor_data.items():
-                            raw_loss = (
-                                monitor_metric_dict["raw_loss"].cpu().numpy()
-                            )  # [..., N_sample]
-                            timestep = (
-                                monitor_metric_dict["timestep"].cpu().numpy()
-                            )  # [..., N_sample]
-                            master_monitor_dict[loss_name]["raw_loss"].extend(
-                                raw_loss.flatten()
-                            )
-                            master_monitor_dict[loss_name]["timestep"].extend(
-                                timestep.flatten()
-                            )
-
                 # Metrics
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(key, value, namespace="val")
@@ -592,19 +595,24 @@ class ArtiosAllAtomFlowTrainer(object):
                         entity_poly_type=None,
                     )
 
-                    # Log structure files to Neptune Scale
-                    if self.configs.use_wandb and saved_files:
-                        files_dict = {}
-                        for file_path in saved_files:
-                            # Create a relative key for Neptune using test_name/pdb_id/filename
-                            filename = os.path.basename(file_path)
-                            neptune_key = f"structures/{test_name}/{pid}/{filename}"
-                            files_dict[neptune_key] = file_path
+                    if self.latents is not None:
+                        self.latents["latents"].append(self.get_latents(batch))
 
-                        self.neptune_run.log_files(
-                            files=files_dict,
-                            step=self.step,
-                        )
+                    # Log structure files to Neptune Scale
+                    if self.configs.use_wandb:
+                        if saved_files:
+                            files_dict = {}
+                            for file_path in saved_files:
+                                # Create a relative key for Neptune using test_name/pdb_id/filename
+                                filename = os.path.basename(file_path)
+                                neptune_key = f"structures/{test_name}/{pid}/{filename}"
+                                files_dict[neptune_key] = file_path
+
+                            self.neptune_run.log_files(
+                                files=files_dict,
+                                step=self.step,
+                            )
+                        if self.latents is not None:
 
                 del batch, simple_metrics, saved_files
                 if index % 5 == 0:
@@ -640,25 +648,6 @@ class ArtiosAllAtomFlowTrainer(object):
                     # # Delete the CIF files
                     # for cif_file in cif_files:
                     #     os.remove(cif_file)
-
-            # Log the distribution of loss values over timesteps
-            if self.configs.monitor.loss_distribution:
-                if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                    for loss_name, monitor_data_dict in master_monitor_dict.items():
-                        # Create loss distribution plot using accumulated data
-                        fig = visualize_loss_histogram(
-                            timesteps=np.array(monitor_data_dict["timestep"]),
-                            losses=np.array(monitor_data_dict["raw_loss"]),
-                            title=f"{loss_name} Distribution {ema_suffix}",
-                        )
-                        # Log to wandb
-                        wandb.log(
-                            {
-                                f"loss_dist/{ema_suffix}_{loss_name}": wandb.Image(fig),
-                            },
-                            step=self.step,
-                        )
-                        plt.close(fig)  # Clean up matplotlib figure
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")

@@ -595,7 +595,6 @@ class DiffusionModule(nn.Module):
 
     def c_out(self, timestep: torch.Tensor) -> torch.Tensor:
         return 1 - timestep  # velocity parametrization
-        # TODO: these are wrong
 
     def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
         return 1.0
@@ -638,6 +637,5 @@ class DiffusionModule(nn.Module):
         latent_pred = noisy_latent * self.c_skip(
             latent_timestep_
         ) + r_latent * self.sigma_latent * self.c_out(latent_timestep_)
-        # TODO: return velocity for training?
 
         return coord_pred, latent_pred

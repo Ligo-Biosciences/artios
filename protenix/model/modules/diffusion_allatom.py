@@ -349,7 +349,7 @@ class DiffusionConditioning(nn.Module):
         )  # [..., N_sample, N_token, N_token, c_z]
 
         # Add noisy distance features to pair embedding
-        z = add(z.unsqueeze(-4), z_noisy, inplace_safe=inplace_safe)
+        z = add(z.unsqueeze(-4), z_noisy, inplace_safe=False)
 
         ### Initialize single embedding
         # 1. Fourier embed the timestep
@@ -375,7 +375,7 @@ class DiffusionConditioning(nn.Module):
                 dim=-2,
                 n=n_token,
             ),
-            inplace_safe=inplace_safe,
+            inplace_safe=False,
         )  # [..., N_sample, N_token, c_s]
 
         # Target features

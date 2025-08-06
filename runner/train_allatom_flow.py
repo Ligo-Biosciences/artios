@@ -533,11 +533,11 @@ class ArtiosAllAtomFlowTrainer(object):
 
         self.flow_model.eval()
 
-        self.latents = (
-            {"latents": [], "restype": []}
-            if self.configs.monitor.latents.track_latents
-            else None
-        )
+        # self.latents = (
+        #    {"latents": [], "restype": []}
+        #    if self.configs.monitor.latents.track_latents
+        #    else None
+        # )
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
@@ -597,9 +597,9 @@ class ArtiosAllAtomFlowTrainer(object):
                         batch=batch,
                     )
 
-                    if self.latents is not None:
-                        self.latents["latents"].append(self.get_latents(batch))
-                        # self.latents["restype"].append(something_or_other)
+                    # if self.latents is not None:
+                    #    self.latents["latents"].append(self.get_latents(batch))
+                    #    # self.latents["restype"].append(something_or_other)
 
                     # Log structure files to Neptune Scale
                     if self.configs.use_wandb:
@@ -615,8 +615,6 @@ class ArtiosAllAtomFlowTrainer(object):
                                 files=files_dict,
                                 step=self.step,
                             )
-                        if self.latents is not None:
-                            pass
 
                 del batch, simple_metrics, saved_files
                 if index % 5 == 0:
@@ -795,12 +793,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
     def save_outputs(self, pred_dict: dict, batch: dict):
         """
-        Saves outputs to CIFs. Will be using pred_dict["coordinate"] which is
-        shape [..., N_sample, N_token, NUM_DENSE_ATOMS, 3]
-
-        Tokenwise chain information can be gotten from the batch["cropped_atom_array"] and then
-        filtering the cropped atom array for the centre atoms and extracting their chain_ids, then
-        these can be passed to the flattened coordinates
+        Saves outputs to CIFs.
         """
         # Get data
         cropped_atom_array = batch["cropped_atom_array"]

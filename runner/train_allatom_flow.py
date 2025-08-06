@@ -799,8 +799,6 @@ class ArtiosAllAtomFlowTrainer(object):
         filtering the cropped atom array for the centre atoms and extracting their chain_ids, then
         these can be passed to the flattened coordinates
         """
-        idx_to_resname = {idx: res for res, idx in STD_RESIDUES_AND_GAP.items()}
-
         # Get data
         cropped_atom_array = batch["cropped_atom_array"]
         pdb_id = batch["basic"]["pdb_id"]

@@ -807,7 +807,7 @@ class ArtiosAllAtomFlowTrainer(object):
             try:
                 save_structure_cif(
                     atom_array=predicted_atom_array,
-                    pred_coordinate=predicted_atom_array.coord,
+                    pred_coordinate=torch.Tensor(predicted_atom_array.coord),
                     output_fpath=output_path,
                     entity_poly_type=None,
                     pdb_id=pdb_id,

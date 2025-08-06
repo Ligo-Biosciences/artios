@@ -774,6 +774,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
         chain_ids = centre_atoms.chain_id  # [N_token]
         res_ids = centre_atoms.res_id  # [N_token]
+        label_entity_ids = centre_atoms.label_entity_id
 
         # Save each sample
         saved_files = []
@@ -795,6 +796,7 @@ class ArtiosAllAtomFlowTrainer(object):
                 chain_ids=chain_ids,
                 res_ids=res_ids,
                 is_ligand_token=is_ligand_token,
+                label_entity_ids=label_entity_ids,
             )
 
             # Determine output file path

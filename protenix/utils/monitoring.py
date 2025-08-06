@@ -251,7 +251,7 @@ def analyse_flow_latents(latents: dict):
     if not latents["mean"]:
         return {}
 
-    # Reshape data across batch dimension
+    # Flatten everything
     latents["latents"] = [a.reshape(-1, a.shape[-1]) for a in latents["latents"]]
 
     figs = {}
@@ -259,7 +259,7 @@ def analyse_flow_latents(latents: dict):
         suffix = f"_batch_{batch_idx}"
 
         # Plots figs
-        figs[f"tsne{suffix}"] = plot_tsne(latents_sample, latents_restype, suffix)
+        #figs[f"tsne{suffix}"] = plot_tsne(latents_sample, latents_restype, suffix)
         figs[f"hist{suffix}"] = plot_histograms(latents_sample, suffix)
         figs[f"qq{suffix}"] = plot_qq_plots(latents_sample, suffix)
         figs[f"cov_heatmap{suffix}"] = plot_covariance_heatmap(latents_sample, suffix)

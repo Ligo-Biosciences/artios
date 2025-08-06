@@ -22,6 +22,7 @@ from glob import glob
 from pathlib import Path
 from typing import Optional
 
+from biotite.structure import AtomArray
 import matplotlib.pyplot as plt
 import numpy as np
 import rootutils
@@ -34,10 +35,13 @@ from tqdm import tqdm
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
-from protenix.common.atom_utils import dense_atoms_to_flat_atoms
+from protenix.common.atom_types import DENSE_ATOM
+from protenix.common.atom_utils import dense_atoms_to_flat_atoms, create_atom_array_from_predictions
+from protenix.common.constants import STD_RESIDUES_AND_GAP
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
+from protenix.data.utils import save_structure_cif
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
@@ -461,15 +465,13 @@ class ArtiosAllAtomFlowTrainer(object):
     @torch.no_grad()
     def get_latents(self, batch: dict) -> dict:
         """Get the latents from the batch."""
-        num_sample = self.configs.monitor.latents.num_sample
-
         # Get num_sample latents and flatten
-        latents = batch["pred_dict"]["latents"][..., :num_sample, :, :]
+        latents = batch["pred_dict"]["latents"]  # [..., N_sample, N_token, c_latent]
 
-        num_token = latents.shape[-2]
-        c_latent = latents.shape[-1]
+        batch_dims = latents.shape[:-3]
 
-        latents = latents.reshape(-1, num_sample * num_token, c_latent)
+        # Collapse N_sample and N_token dimensions together
+        latents = latents.reshape(batch_dims, -1, latents.shape[-1])  # [..., N_sample*N_token, c_latent]
 
         return latents.detach().cpu().float().numpy()
 
@@ -587,25 +589,14 @@ class ArtiosAllAtomFlowTrainer(object):
                         mode="inference"
                     )
 
-                    # TODO: saving logic
                     saved_files = self.save_outputs(
                         pred_dict=pred_dict,
                         batch=batch,
                     )
 
-    
-                    #saved_files = self.dumper.dump(
-                    #    dataset_name=test_name,
-                    #    pdb_id=pid,
-                    #    seed=0,
-                    #    pred_dict=pred_dict,
-                    #    atom_array=batch["cropped_atom_array"],
-                    #    entity_poly_type=None,
-                    #    convert_to_flat=True,
-                    #)
-
                     if self.latents is not None:
                         self.latents["latents"].append(self.get_latents(batch))
+                        #self.latents["restype"].append(something_or_other)
 
                     # Log structure files to Neptune Scale
                     if self.configs.use_wandb:
@@ -628,36 +619,6 @@ class ArtiosAllAtomFlowTrainer(object):
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()
-
-
-            if self.configs.run_training_time_inference:
-                pass
-
-                # TODO: adapt inference runner. Need to keep inference runner this time
-                # to do handle full diffusion. Will need to taken in flow and decoder model.
-                #runner = InferenceRunner(self.configs, model=self.model)
-                #infer_predict(runner, self.configs)
-
-                #if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                    # Find all .cif files recursively in structure_dir and subdirectories
-                #    cif_files = glob(
-                #        os.path.join(self.prediction_dir, "**/*.cif"), recursive=True
-                #    )
-                #    cif_files = [Path(cif_file) for cif_file in cif_files]
-                #    try:
-                #        # Log each structure file to wandb
-                #        self.log_structure_files_to_wandb(
-                #            cif_files, ema_suffix=ema_suffix
-                #        )
-                #
-                    #     # Run evaluation tests
-                    #     self.run_evaluation_tests(cif_files, ema_suffix=ema_suffix)
-                    # except Exception as e:
-                    #     self.print(f"Failed evaluation / logging: {e}")
-
-                    # # Delete the CIF files
-                    # for cif_file in cif_files:
-                    #     os.remove(cif_file)
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
@@ -838,91 +799,63 @@ class ArtiosAllAtomFlowTrainer(object):
         filtering the cropped atom array for the centre atoms and extracting their chain_ids, then
         these can be passed to the flattened coordinates
         """
-        import copy
-        import os
-        import numpy as np
-        from biotite.structure import AtomArray
-        from protenix.data.utils import save_structure_cif
-        
-        # Get necessary data from batch
+        idx_to_resname = {idx: res for res, idx in STD_RESIDUES_AND_GAP.items()}
+
+        # Get data
         cropped_atom_array = batch["cropped_atom_array"]
         pdb_id = batch["basic"]["pdb_id"]
+        is_ligand_token = batch["input_feature_dict"]["is_ligand_token"].cpu().numpy()
         
-        # Extract coordinates: [..., N_sample, N_token, NUM_DENSE_ATOMS, 3]
-        dense_coordinates = pred_dict["coordinate"]
+        # Get predictions
+        coordinate = pred_dict["coordinate"].detach().cpu().numpy()
+        seq_logits = pred_dict["seq_logits"].detach().cpu().numpy()
 
-        # Get one hot encoded sequence logits: [..., N_sample, N_token, NUM_RESIDUES]
-        restype_onehot = torch.nn.functional.one_hot(
-            torch.argmax(pred_dict["seq_logits"], dim=-1), 
-            num_classes=pred_dict["seq_logits"].shape[-1]
-        ).to(torch.float32)  # [..., N_sample, N_token, NUM_RESIDUES]
+        restype_onehot = np.eye(seq_logits.shape[-1])[
+            np.argmax(seq_logits, axis=-1)
+        ].astype(np.float32)  # [..., N_sample, N_token, NUM_RESIDUES]
 
-        # Extract centre atom indices from token array 
+        # Get chain, res_id's
         centre_atom_indices = batch["cropped_token_array"].get_annotation("centre_atom_index")
         centre_atoms = cropped_atom_array[centre_atom_indices]
 
-        # Extract chain and residue information from centre atoms
         chain_ids = centre_atoms.chain_id  # [N_token]
         res_ids = centre_atoms.res_id  # [N_token]
         
+        # Save each sample
         saved_files = []
-        
-        for idx in range(dense_coordinates.shape[-4]):
-            sample_dense_coords = dense_coordinates[idx]
+        for idx in range(coordinate.shape[-4]):
+            sample_dense_coords = coordinate[idx]
             sample_restype_onehot = restype_onehot[idx]
 
             # Calculate flattened coordinates
             flattened_coords, atoms_per_token = dense_atoms_to_flat_atoms(
                 restype_onehot=sample_restype_onehot,
                 dense_atom_coords=sample_dense_coords,
-                is_ligand_token=batch["input_feature_dict"]["is_ligand_token"],
+                is_ligand_token=is_ligand_token,
             ) # [..., N_atom_flat, 3], [..., N_token]
 
-            # Create biotite atom array with coord, chain_id, res_id only
-            total_atoms = int(atoms_per_token.sum())
-            predicted_atom_array = AtomArray(total_atoms)
-            
-            # Set coordinates
-            predicted_atom_array.coord = flattened_coords.detach().cpu().numpy()
-            
-            # Build atom-level chain_id and res_id from token-level information
-            atom_chain_ids = []
-            atom_res_ids = []
-            
-            for token_idx, atom_count in enumerate(atoms_per_token):
-                atom_count = int(atom_count)
-                if atom_count == 0:
-                    continue
-                
-                # Assign the same chain_id and res_id to all atoms in this token
-                atom_chain_ids.extend([chain_ids[token_idx]] * atom_count)
-                atom_res_ids.extend([res_ids[token_idx]] * atom_count)
-            
-            # Set the chain_id and res_id for the predicted atom array
-            predicted_atom_array.chain_id = np.array(atom_chain_ids)
-            predicted_atom_array.res_id = np.array(atom_res_ids)
+            predicted_atom_array = create_atom_array_from_predictions(
+                flattened_coords=flattened_coords,
+                atoms_per_token=atoms_per_token,
+                restype_onehot=sample_restype_onehot,
+                chain_ids=chain_ids,
+                res_ids=res_ids,
+                is_ligand_token=is_ligand_token,
+            )
             
             # Determine output file path
-            if idx == 0:
-                output_path = os.path.join(self.structure_dir, f"{pdb_id}.cif")
-            else:
-                output_path = os.path.join(self.structure_dir, f"{pdb_id}_sample_{idx}.cif")
+            output_path = os.path.join(self.structure_dir, f"{pdb_id}_sample_{idx}.cif")
             
             # Ensure directory exists
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
-            # Get entity_poly_type from basic info if available
-            entity_poly_type = {}
-            if "entity_poly_type" in batch["basic"]:
-                entity_poly_type = batch["basic"]["entity_poly_type"]
-            
             # Call save_to_cif function
             try:
                 save_structure_cif(
-                    atom_array=cropped_atom_array,  # Template for structure metadata
-                    pred_coordinate=torch.from_numpy(predicted_atom_array.coord),
+                    atom_array=predicted_atom_array,
+                    pred_coordinate=predicted_atom_array.coord,
                     output_fpath=output_path,
-                    entity_poly_type=entity_poly_type,
+                    entity_poly_type=None,
                     pdb_id=pdb_id,
                 )
                 saved_files.append(output_path)

@@ -478,7 +478,8 @@ class ArtiosAllAtomFlowTrainer(object):
         }[self.configs.dtype]
         enable_amp = (
             torch.autocast(
-                device_type="cuda", dtype=eval_precision, cache_enabled=False
+                device_type="cuda",
+                dtype=eval_precision,
             )
             if torch.cuda.is_available()
             else nullcontext()
@@ -570,9 +571,9 @@ class ArtiosAllAtomFlowTrainer(object):
                             )
                     del saved_files
                 del batch, simple_metrics
-                if index % 5 == 0:
-                    # Release some memory periodically
-                    torch.cuda.empty_cache()
+                # if index % 5 == 0:
+                # Release some memory periodically
+                torch.cuda.empty_cache()
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")

@@ -5,7 +5,8 @@ import torch
 import torch.nn as nn
 
 from protenix.model.generator import (
-    LaProteinaScheduler,
+    LaProteinaCoordScheduler,
+    LaProteinaLatentScheduler,
     TrainingTimestepSampler,
     sample_latent_diffusion,
     sample_noising,
@@ -33,12 +34,10 @@ class ArtiosAllatom(nn.Module):
         self.latent_timestep_sampler = TrainingTimestepSampler(
             **configs.train_timestep_sampler.latent
         )
-        self.coord_inference_timestep_scheduler = LaProteinaScheduler(
+        self.coord_inference_timestep_scheduler = LaProteinaCoordScheduler(
             **configs.inference_timestep_scheduler.la_proteina.coord
         )
-        self.latent_inference_timestep_scheduler = LaProteinaScheduler(
-            **configs.inference_timestep_scheduler.la_proteina.latent
-        )
+        self.latent_inference_timestep_scheduler = LaProteinaLatentScheduler()
 
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 

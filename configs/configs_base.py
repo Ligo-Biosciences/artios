@@ -154,7 +154,6 @@ model_configs = {
         "variable_linear_quadratic": {"m": 0.35, "n": 0.7},
         "la_proteina": {
             "coord": {"scale": 10.0},
-            "latent": {"scale": 10.0},
         },
     },
     "sample_diffusion": {

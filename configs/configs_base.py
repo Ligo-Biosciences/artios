@@ -139,7 +139,7 @@ model_configs = {
     },
     "train_timestep_sampler": {
         "coord": {
-            "alpha": 2.2,
+            "alpha": 1.9,
             "beta": 1.0,
             "uniform_weight": 0.02,
         },

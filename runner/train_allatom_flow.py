@@ -432,9 +432,7 @@ class ArtiosAllAtomFlowTrainer(object):
         # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:
             # Perform post hoc ema calculation
-            post_hoc_checkpoints = (
-                self.calc_post_hoc_ema()
-            )  # TODO: this leads to NoneType
+            post_hoc_checkpoints = self.calc_post_hoc_ema()
 
             # Store current model state
             current_state = {
@@ -479,7 +477,9 @@ class ArtiosAllAtomFlowTrainer(object):
             "fp16": torch.float16,
         }[self.configs.dtype]
         enable_amp = (
-            torch.autocast(device_type="cuda", dtype=eval_precision)
+            torch.autocast(
+                device_type="cuda", dtype=eval_precision, cache_enabled=False
+            )
             if torch.cuda.is_available()
             else nullcontext()
         )

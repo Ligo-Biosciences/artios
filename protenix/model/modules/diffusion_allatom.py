@@ -388,14 +388,13 @@ class DiffusionConditioning(nn.Module):
         z = add(z, z_target, inplace_safe=inplace_safe)
 
         ### Transition for both single and pair embeddings
-        checkpoint_fn = get_checkpoint_fn()  # TODO: ugly solution
 
         # Send single embedding through two transitions
-        s = add(s, checkpoint_fn(self.transition_s1, s), inplace_safe=inplace_safe)
-        s = add(s, checkpoint_fn(self.transition_s2, s), inplace_safe=inplace_safe)
+        s = add(s, self.transition_s1(s), inplace_safe=inplace_safe)
+        s = add(s, self.transition_s2(s), inplace_safe=inplace_safe)
 
         # Send pair embedding through one transition
-        z = add(z, checkpoint_fn(self.transition_z, z), inplace_safe=inplace_safe)
+        z = add(z, self.transition_z(z), inplace_safe=inplace_safe)
 
         return s, z
 

@@ -62,6 +62,7 @@ class DataDumper:
         pred_dict: dict,
         atom_array: AtomArray,
         entity_poly_type: dict[str, str],
+        convert_to_flat: bool = False,
     ) -> list[str]:
         """
         Dump the predictions and related data to the specified directory.
@@ -73,6 +74,7 @@ class DataDumper:
             pred_dict (dict): The dictionary containing the predictions.
             atom_array (AtomArray): The AtomArray object containing the structure data.
             entity_poly_type (dict[str, str]): The entity poly type information.
+            convert_to_flat(bool): Whether to convert the dense atoms to flat atoms.
 
         Returns:
             list[str]: List of file paths of saved structure files.
@@ -87,6 +89,7 @@ class DataDumper:
             atom_array=atom_array,
             entity_poly_type=entity_poly_type,
             seed=seed,
+            convert_to_flat=convert_to_flat,
         )
 
         return saved_files
@@ -108,6 +111,7 @@ class DataDumper:
         atom_array: AtomArray,
         entity_poly_type: dict[str, str],
         seed: int,
+        convert_to_flat: bool,
     ) -> list[str]:
         """
         Dump raw predictions from the model:
@@ -145,6 +149,7 @@ class DataDumper:
             seed=seed,
             sorted_indices=sorted_indices,
             b_factor=b_factor,
+            convert_to_flat=convert_to_flat,
         )
         # Dump confidence
         # self._save_confidence(
@@ -193,6 +198,8 @@ class DataDumper:
                 atom_array.set_annotation(
                     "b_factor", np.zeros(N_atom)
                 )  # NOTE: have assigned dummy b-factors to appease mmCIF parsing downstream
+
+            # TODO: convert idx sample to flat atom structure
 
             save_structure_cif(
                 atom_array=atom_array,

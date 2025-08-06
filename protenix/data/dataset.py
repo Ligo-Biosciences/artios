@@ -101,6 +101,7 @@ class BaseSingleDataset(Dataset):
 
         # Binding target configs
         self.train_with_binding_target = kwargs.get("train_with_binding_target", False)
+        self.binding_target_train_rate = kwargs.get("binding_target_train_rate", 0.75)
 
         self.error_dir = kwargs.get("error_dir", None)
         if self.error_dir is not None:
@@ -414,7 +415,11 @@ class BaseSingleDataset(Dataset):
         return atom_array
 
     @staticmethod
-    def _assign_binding_target(atom_array: AtomArray, train_with_binding_target: bool):
+    def _assign_binding_target(
+        atom_array: AtomArray,
+        train_with_binding_target: bool,
+        binding_target_train_rate: float,
+    ):
         """
         Assign a random asymmetric unit as the target if train_with_binding_target is True.
         Otherwise, assign all False.
@@ -423,8 +428,7 @@ class BaseSingleDataset(Dataset):
         unique_asym_ids = np.unique(atom_array.asym_id_int)
         target_asym_id = np.random.choice(unique_asym_ids)
 
-        # TODO: with some probability, we should not have a target (e.g. 30% of training examples).
-        if train_with_binding_target:
+        if train_with_binding_target and np.random.rand() < binding_target_train_rate:
             # Add target annotation to atom array
             atom_array.set_annotation(
                 "is_target", atom_array.asym_id_int == target_asym_id
@@ -532,6 +536,7 @@ class BaseSingleDataset(Dataset):
         cropped_atom_array = self._assign_binding_target(
             atom_array=cropped_atom_array,
             train_with_binding_target=self.train_with_binding_target,
+            binding_target_train_rate=self.binding_target_train_rate,
         )
 
         feat, label, label_full = self.get_feature_and_label(

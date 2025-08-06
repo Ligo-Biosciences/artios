@@ -34,6 +34,7 @@ from tqdm import tqdm
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
+from protenix.common.atom_utils import dense_atoms_to_flat_atoms
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
@@ -381,7 +382,6 @@ class ArtiosAllAtomFlowTrainer(object):
         if DIST_WRAPPER.rank == 0:
             logging.info(msg)
 
-    # TODO: model forward accepts the encoder and the decoder
     def model_forward(
         self, 
         batch: dict, 
@@ -586,14 +586,23 @@ class ArtiosAllAtomFlowTrainer(object):
                         decoder=self.vae.decoder, 
                         mode="inference"
                     )
-                    saved_files = self.dumper.dump(
-                        dataset_name=test_name,
-                        pdb_id=pid,
-                        seed=0,
+
+                    # TODO: saving logic
+                    saved_files = self.save_outputs(
                         pred_dict=pred_dict,
-                        atom_array=batch["cropped_atom_array"],
-                        entity_poly_type=None,
+                        batch=batch,
                     )
+
+    
+                    #saved_files = self.dumper.dump(
+                    #    dataset_name=test_name,
+                    #    pdb_id=pid,
+                    #    seed=0,
+                    #    pred_dict=pred_dict,
+                    #    atom_array=batch["cropped_atom_array"],
+                    #    entity_poly_type=None,
+                    #    convert_to_flat=True,
+                    #)
 
                     if self.latents is not None:
                         self.latents["latents"].append(self.get_latents(batch))
@@ -613,6 +622,7 @@ class ArtiosAllAtomFlowTrainer(object):
                                 step=self.step,
                             )
                         if self.latents is not None:
+                            pass
 
                 del batch, simple_metrics, saved_files
                 if index % 5 == 0:
@@ -818,6 +828,111 @@ class ArtiosAllAtomFlowTrainer(object):
             # Log to wandb
             if DIST_WRAPPER.rank == 0:
                 wandb.log({"grad_norm": total_norm}, step=self.step)
+
+    def save_outputs(self, pred_dict: dict, batch: dict):
+        """
+        Saves outputs to CIFs. Will be using pred_dict["coordinate"] which is 
+        shape [..., N_sample, N_token, NUM_DENSE_ATOMS, 3]
+
+        Tokenwise chain information can be gotten from the batch["cropped_atom_array"] and then
+        filtering the cropped atom array for the centre atoms and extracting their chain_ids, then
+        these can be passed to the flattened coordinates
+        """
+        import copy
+        import os
+        import numpy as np
+        from biotite.structure import AtomArray
+        from protenix.data.utils import save_structure_cif
+        
+        # Get necessary data from batch
+        cropped_atom_array = batch["cropped_atom_array"]
+        pdb_id = batch["basic"]["pdb_id"]
+        
+        # Extract coordinates: [..., N_sample, N_token, NUM_DENSE_ATOMS, 3]
+        dense_coordinates = pred_dict["coordinate"]
+
+        # Get one hot encoded sequence logits: [..., N_sample, N_token, NUM_RESIDUES]
+        restype_onehot = torch.nn.functional.one_hot(
+            torch.argmax(pred_dict["seq_logits"], dim=-1), 
+            num_classes=pred_dict["seq_logits"].shape[-1]
+        ).to(torch.float32)  # [..., N_sample, N_token, NUM_RESIDUES]
+
+        # Extract centre atom indices from token array 
+        centre_atom_indices = batch["cropped_token_array"].get_annotation("centre_atom_index")
+        centre_atoms = cropped_atom_array[centre_atom_indices]
+
+        # Extract chain and residue information from centre atoms
+        chain_ids = centre_atoms.chain_id  # [N_token]
+        res_ids = centre_atoms.res_id  # [N_token]
+        
+        saved_files = []
+        
+        for idx in range(dense_coordinates.shape[-4]):
+            sample_dense_coords = dense_coordinates[idx]
+            sample_restype_onehot = restype_onehot[idx]
+
+            # Calculate flattened coordinates
+            flattened_coords, atoms_per_token = dense_atoms_to_flat_atoms(
+                restype_onehot=sample_restype_onehot,
+                dense_atom_coords=sample_dense_coords,
+                is_ligand_token=batch["input_feature_dict"]["is_ligand_token"],
+            ) # [..., N_atom_flat, 3], [..., N_token]
+
+            # Create biotite atom array with coord, chain_id, res_id only
+            total_atoms = int(atoms_per_token.sum())
+            predicted_atom_array = AtomArray(total_atoms)
+            
+            # Set coordinates
+            predicted_atom_array.coord = flattened_coords.detach().cpu().numpy()
+            
+            # Build atom-level chain_id and res_id from token-level information
+            atom_chain_ids = []
+            atom_res_ids = []
+            
+            for token_idx, atom_count in enumerate(atoms_per_token):
+                atom_count = int(atom_count)
+                if atom_count == 0:
+                    continue
+                
+                # Assign the same chain_id and res_id to all atoms in this token
+                atom_chain_ids.extend([chain_ids[token_idx]] * atom_count)
+                atom_res_ids.extend([res_ids[token_idx]] * atom_count)
+            
+            # Set the chain_id and res_id for the predicted atom array
+            predicted_atom_array.chain_id = np.array(atom_chain_ids)
+            predicted_atom_array.res_id = np.array(atom_res_ids)
+            
+            # Determine output file path
+            if idx == 0:
+                output_path = os.path.join(self.structure_dir, f"{pdb_id}.cif")
+            else:
+                output_path = os.path.join(self.structure_dir, f"{pdb_id}_sample_{idx}.cif")
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Get entity_poly_type from basic info if available
+            entity_poly_type = {}
+            if "entity_poly_type" in batch["basic"]:
+                entity_poly_type = batch["basic"]["entity_poly_type"]
+            
+            # Call save_to_cif function
+            try:
+                save_structure_cif(
+                    atom_array=cropped_atom_array,  # Template for structure metadata
+                    pred_coordinate=torch.from_numpy(predicted_atom_array.coord),
+                    output_fpath=output_path,
+                    entity_poly_type=entity_poly_type,
+                    pdb_id=pdb_id,
+                )
+                saved_files.append(output_path)
+                self.print(f"Saved sample {idx} to {output_path}")
+                
+            except Exception as e:
+                self.print(f"Error saving sample {idx}: {e}")
+                continue
+        
+        return saved_files
 
     def log_structure_files_to_wandb(self, cif_files: list[Path], ema_suffix: str = ""):
         if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:

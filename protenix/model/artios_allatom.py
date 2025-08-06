@@ -12,9 +12,7 @@ from protenix.model.generator import (
 )
 from protenix.model.loss import FlowLoss
 from protenix.model.modules.diffusion_allatom import DiffusionModule
-from protenix.model.utils import (
-    simple_merge_dict_list, 
-)
+from protenix.common.atom_utils import dense_atoms_to_flat_atoms
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.torch_utils import autocasting_disable_decorator
 
@@ -37,7 +35,6 @@ class ArtiosAllatom(nn.Module):
         self.latent_timestep_sampler = TrainingTimestepSampler(
             **configs.train_timestep_sampler.latent
         )
-        # TODO: separate timestep schedulers for the sidechain and backbone coordinates
         self.coord_inference_timestep_scheduler = LaProteinaScheduler(
             **configs.inference_timestep_scheduler.la_proteina.coord
         )
@@ -176,7 +173,23 @@ class ArtiosAllatom(nn.Module):
                 centre_atom_augment_coords=pred_dict["centre_coordinate"],
                 input_feature_dict=input_feature_dict,
                 inplace_safe=inplace_safe,
-            )
+            ) # [..., N_sample, N_token, NUM_DENSE_ATOMS, 3], [..., N_sample, N_token, NUM_RESIDUES]
+
+            #TODO: the below conversion to flat atoms cannot be batched as we have variable length
+            # arrays. we can zero pad but that would be horrible. instead we can just iterate throuhg N_sample
+            # (which be too large at this scale yet)
+
+            # Dense to flat atoms
+            #restype_onehot = torch.nn.functional.one_hot(
+            #    torch.argmax(pred_dict["seq_logits"], dim=-1), 
+            #    num_classes=pred_dict["seq_logits"].shape[-1]
+            #).to(torch.float32)  # [..., N_sample, N_token, NUM_RESIDUES]
+
+            #pred_dict["coordinate"] = dense_atoms_to_flat_atoms(
+            #    restype_onehot=restype_onehot,
+            #    dense_atom_coords=pred_dict["dense_coordinate"],
+            #    is_ligand_token=input_feature_dict["is_ligand_token"].unsqueeze(-2),
+            #) # [..., N_sample, N_atom_flat, 3]
 
         return pred_dict, log_dict, time_tracker
 

@@ -143,7 +143,7 @@ class VariableLinQuadScheduler:
         return t
 
 
-class LaProteinaScheduler:
+class LaProteinaCoordScheduler:
     """
     This shceduler is the same as the shceduler in the La-Proteina paper.
     """
@@ -159,6 +159,22 @@ class LaProteinaScheduler:
     ) -> torch.Tensor:
         steps = torch.arange(N_step + 1, dtype=dtype, device=device) / N_step
         t = (1 - self.scale ** (-2 * steps)) / (1 - self.scale ** (-2))
+        return t
+
+
+class LaProteinaLatentScheduler:
+    """
+    The latent timestep scheduler from the LaProteina Paper
+    """
+
+    def __call__(
+        self,
+        N_step: int = 50,
+        device: torch.device = torch.device("cpu"),
+        dtype: torch.dtype = torch.float32,
+    ) -> torch.Tensor:
+        steps = torch.arange(N_step + 1, dtype=dtype, device=device) / N_step
+        t = steps**2
         return t
 
 

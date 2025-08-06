@@ -547,8 +547,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     )
 
                     saved_files = self.save_outputs(
-                        pred_dict=pred_dict,
-                        batch=batch,
+                        pred_dict=pred_dict, batch=batch, ema_suffix=ema_suffix
                     )
 
                     # if self.latents is not None:
@@ -749,7 +748,7 @@ class ArtiosAllAtomFlowTrainer(object):
             if DIST_WRAPPER.rank == 0:
                 self.neptune_run.log_metrics({"grad_norm": total_norm}, step=self.step)
 
-    def save_outputs(self, pred_dict: dict, batch: dict):
+    def save_outputs(self, pred_dict: dict, batch: dict, ema_suffix: str):
         """
         Saves outputs to CIFs.
         """
@@ -800,7 +799,9 @@ class ArtiosAllAtomFlowTrainer(object):
             )
 
             # Determine output file path
-            output_path = os.path.join(self.structure_dir, f"{pdb_id}_sample_{idx}.cif")
+            output_path = os.path.join(
+                self.structure_dir, f"{pdb_id}_sample_{idx}_{ema_suffix}.cif"
+            )
 
             # Ensure directory exists
             os.makedirs(os.path.dirname(output_path), exist_ok=True)

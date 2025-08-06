@@ -470,7 +470,7 @@ class ArtiosAllAtomFlowTrainer(object):
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):
         # Init Metric Aggregator
-        simple_metric_wrapper = SimpleMetricAggregator(["avg"])
+        simple_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
         eval_precision = {
             "fp32": torch.float32,
             "bf16": torch.bfloat16,

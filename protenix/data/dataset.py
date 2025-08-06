@@ -1167,6 +1167,9 @@ def get_datasets(
             config_dict, dataset_name=test_name, stage="test"
         )
         dataset_param["ref_pos_augment"] = data_config.get("test_ref_pos_augment", True)
+        dataset_param["train_with_binding_target"] = data_config.get(
+            "train_with_binding_target", False
+        )
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

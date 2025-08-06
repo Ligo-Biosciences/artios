@@ -340,7 +340,7 @@ class DiffusionConditioning(nn.Module):
         noisy_pair_dist_onehot = one_hot(
             noisy_pair_dists,
             self.lower_bins,
-            self.upper_bins,  # TODO: watch for dtype errors
+            self.upper_bins,
         )  # [..., N_sample, N_token, N_token, n_bins]
 
         # Embed one-hot distances
@@ -505,6 +505,7 @@ class DiffusionModule(nn.Module):
         latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         inplace_safe: bool = False,
+        use_fine_grained_checkpoint: bool = False,  # TODO: temporary
         chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
         """The raw network to be trained.
@@ -539,9 +540,9 @@ class DiffusionModule(nn.Module):
         # Conditioning, shared across difference samples
         # Diffusion_conditioning consumes 7-8G when token num is 768,
         # use checkpoint here if blocks_per_ckpt is not None.
-        if blocks_per_ckpt:
+        if blocks_per_ckpt and use_fine_grained_checkpoint:
             checkpoint_fn = get_checkpoint_fn()
-            s, z = checkpoint_fn(
+            s, z = checkpoint_fn(  # TODO: this currently kills the grads
                 self.diffusion_conditioning,
                 r_noisy_coord,
                 coord_timestep,

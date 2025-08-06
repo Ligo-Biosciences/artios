@@ -95,7 +95,6 @@ class ArtiosAllAtomFlowTrainer(object):
 
         # Add dump dir for training time inference
         self.configs.dump_dir = self.prediction_dir
-        self.dumper = DataDumper(self.configs.dump_dir)
 
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)

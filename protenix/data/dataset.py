@@ -415,7 +415,11 @@ class BaseSingleDataset(Dataset):
         return atom_array
 
     @staticmethod
-    def _assign_binding_target(atom_array: AtomArray, train_with_binding_target: bool, binding_target_train_rate: float):
+    def _assign_binding_target(
+        atom_array: AtomArray,
+        train_with_binding_target: bool,
+        binding_target_train_rate: float,
+    ):
         """
         Assign a random asymmetric unit as the target if train_with_binding_target is True.
         Otherwise, assign all False.
@@ -424,7 +428,6 @@ class BaseSingleDataset(Dataset):
         unique_asym_ids = np.unique(atom_array.asym_id_int)
         target_asym_id = np.random.choice(unique_asym_ids)
 
-        # TODO: with some probability, we should not have a target (e.g. 30% of training examples).
         if train_with_binding_target and np.random.rand() < binding_target_train_rate:
             # Add target annotation to atom array
             atom_array.set_annotation(

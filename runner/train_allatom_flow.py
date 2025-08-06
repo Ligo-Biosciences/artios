@@ -541,7 +541,7 @@ class ArtiosAllAtomFlowTrainer(object):
                         input_feature_dict=batch["input_feature_dict"],
                         label_full_dict=batch["label_full_dict"],
                         label_dict=batch["label_dict"],
-                        decoder=self.vae.decoder,
+                        decoder=self.vae_shell.vae.decoder,
                         mode="inference",
                     )
 
@@ -568,8 +568,8 @@ class ArtiosAllAtomFlowTrainer(object):
                                 files=files_dict,
                                 step=self.step,
                             )
-
-                del batch, simple_metrics, saved_files
+                    del saved_files
+                del batch, simple_metrics
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()

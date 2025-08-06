@@ -16,13 +16,10 @@ import datetime
 import logging
 import os
 import time
-from collections import defaultdict
 from contextlib import nullcontext
-from glob import glob
 from pathlib import Path
 from typing import Optional
 
-import matplotlib.pyplot as plt
 import numpy as np
 import rootutils
 import torch
@@ -34,9 +31,14 @@ from tqdm import tqdm
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
+from protenix.common.atom_utils import (
+    create_atom_array_from_predictions,
+    dense_atoms_to_flat_atoms,
+)
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
+from protenix.data.utils import save_structure_cif
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
@@ -45,13 +47,12 @@ from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
-from protenix.utils.monitoring import grad_norm, visualize_loss_histogram
+from protenix.utils.monitoring import grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
-from runner.inference import InferenceRunner, infer_predict
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -94,6 +95,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
         # Add dump dir for training time inference
         self.configs.dump_dir = self.prediction_dir
+        self.dumper = DataDumper(self.configs.dump_dir)
 
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)
@@ -329,7 +331,6 @@ class ArtiosAllAtomFlowTrainer(object):
         if DIST_WRAPPER.rank == 0:
             logging.info(msg)
 
-    # TODO: model forward accepts the encoder and the decoder
     def model_forward(
         self,
         batch: dict,
@@ -407,6 +408,21 @@ class ArtiosAllAtomFlowTrainer(object):
         return simple_metrics
 
     @torch.no_grad()
+    def get_latents(self, batch: dict) -> dict:
+        """Get the latents from the batch."""
+        # Get num_sample latents and flatten
+        latents = batch["pred_dict"]["latents"]  # [..., N_sample, N_token, c_latent]
+
+        batch_dims = latents.shape[:-3]
+
+        # Collapse N_sample and N_token dimensions together
+        latents = latents.reshape(
+            batch_dims, -1, latents.shape[-1]
+        )  # [..., N_sample*N_token, c_latent]
+
+        return latents.detach().cpu().float().numpy()
+
+    @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
         all_eval_metrics = {}
         if not self.configs.eval_ema_only:
@@ -471,8 +487,11 @@ class ArtiosAllAtomFlowTrainer(object):
 
         self.flow_model.eval()
 
-        # Initialize master monitor dict to collect all metrics
-        master_monitor_dict = defaultdict(lambda: defaultdict(list))
+        # self.latents = (
+        #    {"latents": [], "restype": []}
+        #    if self.configs.monitor.latents.track_latents
+        #    else None
+        # )
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
@@ -509,76 +528,52 @@ class ArtiosAllAtomFlowTrainer(object):
                     )  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)
 
-                    # Collect monitor metrics in master dict
-                    if self.configs.monitor.loss_distribution:
-                        for loss_name, monitor_metric_dict in monitor_data.items():
-                            raw_loss = (
-                                monitor_metric_dict["raw_loss"].cpu().numpy()
-                            )  # [..., N_sample]
-                            timestep = (
-                                monitor_metric_dict["timestep"].cpu().numpy()
-                            )  # [..., N_sample]
-                            master_monitor_dict[loss_name]["raw_loss"].extend(
-                                raw_loss.flatten()
-                            )
-                            master_monitor_dict[loss_name]["timestep"].extend(
-                                timestep.flatten()
-                            )
-
                 # Metrics
                 for key, value in simple_metrics.items():
                     simple_metric_wrapper.add(key, value, namespace="val")
 
-                del batch, simple_metrics
+                # Inference
+                if (
+                    self.configs.run_training_time_inference
+                    and index < 20
+                    and DIST_WRAPPER.rank == 0
+                ):
+                    pred_dict, _, _ = self.flow_model(
+                        input_feature_dict=batch["input_feature_dict"],
+                        label_full_dict=batch["label_full_dict"],
+                        label_dict=batch["label_dict"],
+                        decoder=self.vae.decoder,
+                        mode="inference",
+                    )
+
+                    saved_files = self.save_outputs(
+                        pred_dict=pred_dict,
+                        batch=batch,
+                    )
+
+                    # if self.latents is not None:
+                    #    self.latents["latents"].append(self.get_latents(batch))
+                    #    # self.latents["restype"].append(something_or_other)
+
+                    # Log structure files to Neptune Scale
+                    if self.configs.use_wandb:
+                        if saved_files:
+                            files_dict = {}
+                            for file_path in saved_files:
+                                # Create a relative key for Neptune using test_name/pdb_id/filename
+                                filename = os.path.basename(file_path)
+                                neptune_key = f"structures/{test_name}/{pid}/{filename}"
+                                files_dict[neptune_key] = file_path
+
+                            self.neptune_run.log_files(
+                                files=files_dict,
+                                step=self.step,
+                            )
+
+                del batch, simple_metrics, saved_files
                 if index % 5 == 0:
                     # Release some memory periodically
                     torch.cuda.empty_cache()
-
-            if self.configs.run_training_time_inference:
-                # TODO: adapt inference runner. Need to keep inference runner this time
-                # to do handle full diffusion. Will need to taken in flow and decoder model.
-                runner = InferenceRunner(self.configs, model=self.flow_model)
-                infer_predict(runner, self.configs)
-
-                if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                    # Find all .cif files recursively in structure_dir and subdirectories
-                    cif_files = glob(
-                        os.path.join(self.prediction_dir, "**/*.cif"), recursive=True
-                    )
-                    cif_files = [Path(cif_file) for cif_file in cif_files]
-                    try:
-                        # Log each structure file to Neptune
-                        self.log_structure_files_to_neptune(
-                            cif_files, ema_suffix=ema_suffix
-                        )
-                    except Exception as e:
-                        self.print(f"Failed evaluation / logging: {e}")
-
-                    # Delete the CIF files
-                    for cif_file in cif_files:
-                        os.remove(cif_file)
-
-            # Log the distribution of loss values over timesteps
-            if self.configs.monitor.loss_distribution:
-                if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                    for loss_name, monitor_data_dict in master_monitor_dict.items():
-                        # Create loss distribution plot using accumulated data
-                        fig = visualize_loss_histogram(
-                            timesteps=np.array(monitor_data_dict["timestep"]),
-                            losses=np.array(monitor_data_dict["raw_loss"]),
-                            title=f"{loss_name} Distribution {ema_suffix}",
-                        )
-                        # Log to Neptune
-                        # Save figure to file and log to neptune
-                        fig_path = f"{self.run_dir}/figures/loss_dist_{ema_suffix}_{loss_name}.png"
-                        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-                        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
-
-                        self.neptune_run.log_files(
-                            files={f"loss_dist/{ema_suffix}_{loss_name}": fig_path},
-                            step=self.step,
-                        )
-                        plt.close(fig)  # Clean up matplotlib figure
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
@@ -754,9 +749,79 @@ class ArtiosAllAtomFlowTrainer(object):
             if DIST_WRAPPER.rank == 0:
                 self.neptune_run.log_metrics({"grad_norm": total_norm}, step=self.step)
 
-    def log_structure_files_to_neptune(
-        self, cif_files: list[Path], ema_suffix: str = ""
-    ):
+    def save_outputs(self, pred_dict: dict, batch: dict):
+        """
+        Saves outputs to CIFs.
+        """
+        # Get data
+        cropped_atom_array = batch["cropped_atom_array"]
+        pdb_id = batch["basic"]["pdb_id"]
+        is_ligand_token = batch["input_feature_dict"]["is_ligand_token"].cpu().numpy()
+
+        # Get predictions
+        coordinate = pred_dict["coordinate"].detach().cpu().numpy()
+        seq_logits = pred_dict["seq_logits"].detach().cpu().numpy()
+
+        restype_onehot = np.eye(seq_logits.shape[-1])[
+            np.argmax(seq_logits, axis=-1)
+        ].astype(np.float32)  # [..., N_sample, N_token, NUM_RESIDUES]
+
+        # Get chain, res_id's
+        centre_atom_indices = batch["cropped_token_array"].get_annotation(
+            "centre_atom_index"
+        )
+        centre_atoms = cropped_atom_array[centre_atom_indices]
+
+        chain_ids = centre_atoms.chain_id  # [N_token]
+        res_ids = centre_atoms.res_id  # [N_token]
+
+        # Save each sample
+        saved_files = []
+        for idx in range(coordinate.shape[-4]):
+            sample_dense_coords = coordinate[idx]
+            sample_restype_onehot = restype_onehot[idx]
+
+            # Calculate flattened coordinates
+            flattened_coords, atoms_per_token = dense_atoms_to_flat_atoms(
+                restype_onehot=sample_restype_onehot,
+                dense_atom_coords=sample_dense_coords,
+                is_ligand_token=is_ligand_token,
+            )  # [..., N_atom_flat, 3], [..., N_token]
+
+            predicted_atom_array = create_atom_array_from_predictions(
+                flattened_coords=flattened_coords,
+                atoms_per_token=atoms_per_token,
+                restype_onehot=sample_restype_onehot,
+                chain_ids=chain_ids,
+                res_ids=res_ids,
+                is_ligand_token=is_ligand_token,
+            )
+
+            # Determine output file path
+            output_path = os.path.join(self.structure_dir, f"{pdb_id}_sample_{idx}.cif")
+
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+            # Call save_to_cif function
+            try:
+                save_structure_cif(
+                    atom_array=predicted_atom_array,
+                    pred_coordinate=predicted_atom_array.coord,
+                    output_fpath=output_path,
+                    entity_poly_type=None,
+                    pdb_id=pdb_id,
+                )
+                saved_files.append(output_path)
+                self.print(f"Saved sample {idx} to {output_path}")
+
+            except Exception as e:
+                self.print(f"Error saving sample {idx}: {e}")
+                continue
+
+        return saved_files
+
+    def log_structure_files_to_wandb(self, cif_files: list[Path], ema_suffix: str = ""):
         if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
             return
 

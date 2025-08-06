@@ -16,28 +16,25 @@ import datetime
 import logging
 import os
 import time
-from collections import defaultdict
 from contextlib import nullcontext
-from glob import glob
 from pathlib import Path
 from typing import Optional
 
-from biotite.structure import AtomArray
-import matplotlib.pyplot as plt
 import numpy as np
 import rootutils
 import torch
 import torch.distributed as dist
-import wandb
 import torch.nn as nn
+import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
-from protenix.common.atom_types import DENSE_ATOM
-from protenix.common.atom_utils import dense_atoms_to_flat_atoms, create_atom_array_from_predictions
-from protenix.common.constants import STD_RESIDUES_AND_GAP
+from protenix.common.atom_utils import (
+    create_atom_array_from_predictions,
+    dense_atoms_to_flat_atoms,
+)
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
@@ -45,7 +42,6 @@ from protenix.data.utils import save_structure_cif
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
-from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
@@ -56,10 +52,9 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.structure_io import cif_to_pdb
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import get_optimizer, is_loss_nan_check
-from runner.ema import PowerLawEMAWrapper
 from runner.dumper import DataDumper
+from runner.ema import PowerLawEMAWrapper
 from runner.evaluate import Evaluator
-from runner.inference import InferenceRunner, infer_predict
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -185,9 +180,9 @@ class ArtiosAllAtomFlowTrainer(object):
         self.lddt_metrics = LDDTMetrics(self.configs)
 
     def init_model(self):
-        #self.raw_model = ArtiosLigand(self.configs).to(
+        # self.raw_model = ArtiosLigand(self.configs).to(
         #    self.device
-        #) 
+        # )
         self.raw_flow_model = ArtiosAllatom(self.configs).to(self.device)
         self.vae = ArtiosAllAtomVAE(self.configs).to(self.device)
         # DDP not required for VAE loading since model is frozen - no need for gradient aggregation
@@ -289,8 +284,8 @@ class ArtiosAllAtomFlowTrainer(object):
                 }
 
             model.load_state_dict(
-                    checkpoint["model"],
-                    strict=self.configs.load_strict,
+                checkpoint["model"],
+                strict=self.configs.load_strict,
             )
 
             if not load_params_only:
@@ -387,12 +382,12 @@ class ArtiosAllAtomFlowTrainer(object):
             logging.info(msg)
 
     def model_forward(
-        self, 
-        batch: dict, 
-        mode: str = "train", 
-        encoder: Optional[nn.Module] = None, 
+        self,
+        batch: dict,
+        mode: str = "train",
+        encoder: Optional[nn.Module] = None,
         decoder: Optional[nn.Module] = None,
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
     ) -> tuple[dict, dict]:
         """Forward pass of the model.
 
@@ -471,7 +466,9 @@ class ArtiosAllAtomFlowTrainer(object):
         batch_dims = latents.shape[:-3]
 
         # Collapse N_sample and N_token dimensions together
-        latents = latents.reshape(batch_dims, -1, latents.shape[-1])  # [..., N_sample*N_token, c_latent]
+        latents = latents.reshape(
+            batch_dims, -1, latents.shape[-1]
+        )  # [..., N_sample*N_token, c_latent]
 
         return latents.detach().cpu().float().numpy()
 
@@ -565,9 +562,11 @@ class ArtiosAllAtomFlowTrainer(object):
                 simple_metrics = {}
                 with enable_amp:
                     # Model forward - adds the pred_dict and label_dict to batch
-                    #batch, _ = self.model_forward(batch, mode=mode, seed=index)
+                    # batch, _ = self.model_forward(batch, mode=mode, seed=index)
 
-                    batch, _ = self.model_forward(batch, encoder=self.vae.encoder, mode=mode, seed=index)
+                    batch, _ = self.model_forward(
+                        batch, encoder=self.vae.encoder, mode=mode, seed=index
+                    )
 
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict, monitor_data = self.get_loss(
@@ -580,13 +579,17 @@ class ArtiosAllAtomFlowTrainer(object):
                     simple_metric_wrapper.add(key, value, namespace="val")
 
                 # Inference
-                if self.configs.run_training_time_inference and index < 20 and DIST_WRAPPER.rank == 0:
+                if (
+                    self.configs.run_training_time_inference
+                    and index < 20
+                    and DIST_WRAPPER.rank == 0
+                ):
                     pred_dict, _, _ = self.flow_model(
-                        input_feature_dict=batch["input_feature_dict"], 
+                        input_feature_dict=batch["input_feature_dict"],
                         label_full_dict=batch["label_full_dict"],
                         label_dict=batch["label_dict"],
-                        decoder=self.vae.decoder, 
-                        mode="inference"
+                        decoder=self.vae.decoder,
+                        mode="inference",
                     )
 
                     saved_files = self.save_outputs(
@@ -596,7 +599,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
                     if self.latents is not None:
                         self.latents["latents"].append(self.get_latents(batch))
-                        #self.latents["restype"].append(something_or_other)
+                        # self.latents["restype"].append(something_or_other)
 
                     # Log structure files to Neptune Scale
                     if self.configs.use_wandb:
@@ -654,7 +657,7 @@ class ArtiosAllAtomFlowTrainer(object):
         )
 
         with enable_amp:
-            #batch, _ = self.model_forward(batch, mode="train")
+            # batch, _ = self.model_forward(batch, mode="train")
 
             # TODO: pass in encoder to forward pass
             batch, _ = self.model_forward(batch, encoder=self.vae.encoder, mode="train")
@@ -792,7 +795,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
     def save_outputs(self, pred_dict: dict, batch: dict):
         """
-        Saves outputs to CIFs. Will be using pred_dict["coordinate"] which is 
+        Saves outputs to CIFs. Will be using pred_dict["coordinate"] which is
         shape [..., N_sample, N_token, NUM_DENSE_ATOMS, 3]
 
         Tokenwise chain information can be gotten from the batch["cropped_atom_array"] and then
@@ -803,7 +806,7 @@ class ArtiosAllAtomFlowTrainer(object):
         cropped_atom_array = batch["cropped_atom_array"]
         pdb_id = batch["basic"]["pdb_id"]
         is_ligand_token = batch["input_feature_dict"]["is_ligand_token"].cpu().numpy()
-        
+
         # Get predictions
         coordinate = pred_dict["coordinate"].detach().cpu().numpy()
         seq_logits = pred_dict["seq_logits"].detach().cpu().numpy()
@@ -813,12 +816,14 @@ class ArtiosAllAtomFlowTrainer(object):
         ].astype(np.float32)  # [..., N_sample, N_token, NUM_RESIDUES]
 
         # Get chain, res_id's
-        centre_atom_indices = batch["cropped_token_array"].get_annotation("centre_atom_index")
+        centre_atom_indices = batch["cropped_token_array"].get_annotation(
+            "centre_atom_index"
+        )
         centre_atoms = cropped_atom_array[centre_atom_indices]
 
         chain_ids = centre_atoms.chain_id  # [N_token]
         res_ids = centre_atoms.res_id  # [N_token]
-        
+
         # Save each sample
         saved_files = []
         for idx in range(coordinate.shape[-4]):
@@ -830,7 +835,7 @@ class ArtiosAllAtomFlowTrainer(object):
                 restype_onehot=sample_restype_onehot,
                 dense_atom_coords=sample_dense_coords,
                 is_ligand_token=is_ligand_token,
-            ) # [..., N_atom_flat, 3], [..., N_token]
+            )  # [..., N_atom_flat, 3], [..., N_token]
 
             predicted_atom_array = create_atom_array_from_predictions(
                 flattened_coords=flattened_coords,
@@ -840,13 +845,13 @@ class ArtiosAllAtomFlowTrainer(object):
                 res_ids=res_ids,
                 is_ligand_token=is_ligand_token,
             )
-            
+
             # Determine output file path
             output_path = os.path.join(self.structure_dir, f"{pdb_id}_sample_{idx}.cif")
-            
+
             # Ensure directory exists
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            
+
             # Call save_to_cif function
             try:
                 save_structure_cif(
@@ -858,11 +863,11 @@ class ArtiosAllAtomFlowTrainer(object):
                 )
                 saved_files.append(output_path)
                 self.print(f"Saved sample {idx} to {output_path}")
-                
+
             except Exception as e:
                 self.print(f"Error saving sample {idx}: {e}")
                 continue
-        
+
         return saved_files
 
     def log_structure_files_to_wandb(self, cif_files: list[Path], ema_suffix: str = ""):

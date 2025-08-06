@@ -163,7 +163,7 @@ def grad_norm(
     return norms, total_norm
 
 
-def analyse_latents(latents: dict, plot_per_batch: bool = False):
+def analyse_vae_latents(latents: dict, plot_per_batch: bool = False):
     """
     Analyse the latents. These are the plots we will make:
     1. T-SNE
@@ -224,6 +224,46 @@ def analyse_latents(latents: dict, plot_per_batch: bool = False):
         # Additional histograms for mean and logvar
         figs[f"hist_mean{suffix}"] = plot_histograms(latents_mean, suffix)
         figs[f"hist_logvar{suffix}"] = plot_histograms(latents_logvar, suffix)
+
+    return figs
+
+
+def analyse_flow_latents(latents: dict):
+    """
+    Analyse the latents. These are the plots we will make:
+    1. T-SNE
+    2. Per dimension histogram
+    3. Per dimensions QQ plot
+    4. Covariance heatmap
+    5. Eigenvalues of covariance matrix
+
+    Args:
+        latents (dict): A dictionary containing the latents.
+          Keys: "latents"
+            latents (list[np.array]): List of latents tensors. Each array
+                is of shape [N_sample*N_token, c_latent]
+
+    Returns:
+        figs (dict): A dictionary containing the figures.
+            Keys: "tsne", "hist", "qq", "cov_heatmap", "eigs"
+            Values: plt.Figure
+    """
+    if not latents["mean"]:
+        return {}
+
+    # Flatten everything
+    latents["latents"] = [a.reshape(-1, a.shape[-1]) for a in latents["latents"]]
+
+    figs = {}
+    for batch_idx, latents_sample in enumerate(latents["latents"]):
+        suffix = f"_batch_{batch_idx}"
+
+        # Plots figs
+        #figs[f"tsne{suffix}"] = plot_tsne(latents_sample, latents_restype, suffix)
+        figs[f"hist{suffix}"] = plot_histograms(latents_sample, suffix)
+        figs[f"qq{suffix}"] = plot_qq_plots(latents_sample, suffix)
+        figs[f"cov_heatmap{suffix}"] = plot_covariance_heatmap(latents_sample, suffix)
+        figs[f"eigs{suffix}"] = plot_eigenvalues(latents_sample, suffix)
 
     return figs
 

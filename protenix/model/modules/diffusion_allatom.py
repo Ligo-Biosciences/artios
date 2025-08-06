@@ -623,8 +623,6 @@ class DiffusionModule(nn.Module):
         r_noisy_latent = (noisy_latent / self.sigma_latent) * self.c_in(
             latent_timestep_
         )
-        print(f"r_noisy_coord shape: {r_noisy_coord.shape}")
-        print(f"r_noisy_latent shape: {r_noisy_latent.shape}")
 
         # Predict velocities using separate heads for coordinates and latents
         r_coord, r_latent = self.f_forward(

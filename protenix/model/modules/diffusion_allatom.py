@@ -339,8 +339,8 @@ class DiffusionConditioning(nn.Module):
         # One-hot encode distances
         noisy_pair_dist_onehot = one_hot(
             noisy_pair_dists,
-            self.lower_bins,
-            self.upper_bins,
+            self.lower_bins / self.sigma_coord,
+            self.upper_bins / self.sigma_coord,
         )  # [..., N_sample, N_token, N_token, n_bins]
 
         # Embed one-hot distances
@@ -460,7 +460,7 @@ class DiffusionModule(nn.Module):
         self.linear_no_bias_r = LinearNoBias(3, c_token)
 
         # Latent embedding layer
-        self.layernorm_latent = LayerNorm(c_latent)
+        # self.layernorm_latent = LayerNorm(c_latent)
         self.linear_no_bias_latent = LinearNoBias(c_latent, c_token)
 
         # Alg20: line4
@@ -560,15 +560,11 @@ class DiffusionModule(nn.Module):
                 inplace_safe=inplace_safe,
             )  # [..., N_sample, N_token, c_s], [..., N_sample, N_token, N_token, c_z]
 
-        # Embed noisy coordinates into token space
-        a_token = self.linear_no_bias_r(r_noisy_coord)
+        # Embed noisy coordinates and latents into token space
+        a_coord = self.linear_no_bias_r(r_noisy_coord)
+        a_latent = self.linear_no_bias_latent(r_noisy_latent)
 
-        # Embed noisy latents
-        a_token = add(
-            a_token,
-            self.linear_no_bias_latent(self.layernorm_latent(r_noisy_latent)),
-            inplace_safe=inplace_safe,
-        )
+        a_token = add(a_coord, a_latent, inplace_safe=inplace_safe)
 
         # Mix single conditioning into token representation
         a_token = add(
@@ -587,8 +583,8 @@ class DiffusionModule(nn.Module):
         )
 
         # Apply separate velocity prediction heads for coordinates and latents
-        latent_velocity = self.latent_head(a_token)
-        coord_velocity = self.coord_head(a_token)
+        latent_velocity = self.latent_head(a_token + a_latent)
+        coord_velocity = self.coord_head(a_token + a_coord)
 
         return coord_velocity, latent_velocity
 

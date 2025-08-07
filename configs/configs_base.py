@@ -31,9 +31,10 @@ basic_configs = {
     "eval_first": False,  # run evaluate() before training steps
     "iters_to_accumulate": 1,
     "eval_only": False,
-    "load_checkpoint_path": "",
-    "load_ema_checkpoint_path": "",
-    "load_ema_checkpoint_paths_directory": "",
+    "load_flow_checkpoint_path": "",
+    "load_vae_checkpoint_path": "",
+    "load_ema_flow_checkpoint_path": "",
+    "load_ema_vae_checkpoint_path": "",  # TODO: no need?
     "load_strict": True,
     "load_params_only": True,
     "guiding_net_path": ValueMaybeNone(""),
@@ -50,7 +51,7 @@ basic_configs = {
     "ema_vae_decay": 0.999,
     "power_law_ema_sigma": ListValue([0.08, 0.12]),
     "post_hoc_ema_sigma": ListValue([0.06, 0.08, 0.10]),
-    "calc_post_hoc_ema_during_training": True,
+    "calc_post_hoc_ema_during_training": False,
     "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],
 }
@@ -103,9 +104,9 @@ model_configs = {
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
-    "sigma_data": 12.0,
+    "sigma_coord": 12.0,
+    "sigma_latent": 1.0,
     "diffusion_batch_size": 16,
-    "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
         1
@@ -138,25 +139,36 @@ model_configs = {
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
     "train_timestep_sampler": {
-        "alpha": 2.2,
-        "uniform_weight": 0.02,
+        "coord": {
+            "alpha": 1.9,
+            "beta": 1.0,
+            "uniform_weight": 0.02,
+        },
+        "latent": {
+            "alpha": 1.0,
+            "beta": 1.5,
+            "uniform_weight": 0.02,
+        },
     },
     "inference_timestep_scheduler": {
         "ligo": {"p": -0.7},
         "variable_linear_quadratic": {"m": 0.35, "n": 0.7},
-        "la_proteina": {"scale": 10.0},
+        "la_proteina": {
+            "coord": {"scale": 10.0},
+        },
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
         "N_sample": 1,  # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
-        "stoch_type": "proteina",
+        "stoch_type_coord": "proteina",
+        "stoch_type_latent": "proteina",
         "alpha": 0.8,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
-        "sigma_data": GlobalConfigValue("sigma_data"),
-        "second_order_train": False,
-        "second_order_inference": False,
+        "sigma_coord": GlobalConfigValue("sigma_coord"),
+        "sigma_latent": GlobalConfigValue("sigma_latent"),
+        "second_order": False,
         "guidance_weight": 1.2,
         "beta_mean": 0.5,
         "beta_std": 0.233,
@@ -171,25 +183,26 @@ model_configs = {
         },
         "diffusion_module": {
             "use_fine_grained_checkpoint": False,
-            "sigma_data": GlobalConfigValue("sigma_data"),
+            "sigma_coord": GlobalConfigValue("sigma_coord"),
+            "sigma_latent": GlobalConfigValue("sigma_latent"),
             "c_token": GlobalConfigValue("c_token"),
-            "c_atom": GlobalConfigValue("c_atom"),
-            "c_atompair": GlobalConfigValue("c_atompair"),
+            # "c_atom": GlobalConfigValue("c_atom"),
+            # "c_atompair": GlobalConfigValue("c_atompair"),
             "c_z": GlobalConfigValue("c_z"),
             "c_s": GlobalConfigValue("c_s"),
             "c_s_inputs": GlobalConfigValue("c_s_inputs"),
-            "atom_encoder": {
-                "n_blocks": 3,
-                "n_heads": 4,
-            },
+            # "atom_encoder": {
+            #    "n_blocks": 3,
+            #    "n_heads": 4,
+            # },
             "transformer": {
                 "n_blocks": 24,
                 "n_heads": 16,
             },
-            "atom_decoder": {
-                "n_blocks": 3,
-                "n_heads": 4,
-            },
+            # "atom_decoder": {
+            #    "n_blocks": 3,
+            #    "n_heads": 4,
+            # },
             "dropout": 0.0,
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
@@ -197,9 +210,9 @@ model_configs = {
             "c_latent": GlobalConfigValue("c_latent"),
             "c_token": GlobalConfigValue("c_token"),
             "c_z": GlobalConfigValue("c_z"),
-            "sigma_data": GlobalConfigValue("sigma_data"),
+            "sigma_coord": GlobalConfigValue("sigma_coord"),
             "encoder": {
-                "n_blocks": 6,
+                "n_blocks": 6,  # TODO: this is a lot, we should consider shrinking
                 "n_heads": 4,
             },
             "decoder": {
@@ -325,6 +338,17 @@ loss_configs = {
                 "reduction": "mean",
             },
         },
+        "flow": {
+            "centre_atom": {
+                "weight_mse": 1.0,
+                "weight_dna": 5.0,
+                "weight_rna": 5.0,
+                "weight_ligand": 10.0,
+                "eps": 1e-6,
+            },
+            "sigma_coord": GlobalConfigValue("sigma_coord"),
+            "sigma_latent": GlobalConfigValue("sigma_latent"),
+        },
     },
     "metrics": {
         "lddt": {
@@ -349,7 +373,7 @@ monitor_configs = {
             "eval_tests": ListValue(["ss_distribution", "posebusters"]),
         },
         "latents": {
-            "track_latents": True,
+            "track_latents": False,
             "num_batch": 25,
             "num_sample": 1,
             "plot_per_batch": False,

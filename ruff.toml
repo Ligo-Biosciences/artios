@@ -6,4 +6,8 @@ cache-dir = "/tmp/.ruff_chai_cache"
 extend-select = ["I"]
 # jaxtyping requires disabling two following errors
 # https://docs.kidger.site/jaxtyping/faq/#flake8-or-ruff-are-throwing-an-error
-ignore = ["F821", "F722"]
+ignore = ["F821", "F722", "E741"]
+
+[lint.per-file-ignores]
+# Disable E731 (lambda assignment) for ema_utils.py
+"protenix/utils/ema_utils.py" = ["E731"]

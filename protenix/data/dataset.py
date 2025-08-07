@@ -99,6 +99,10 @@ class BaseSingleDataset(Dataset):
             "limits", -1
         )  # Limit number of indices rows, mainly for test
 
+        # Binding target configs
+        self.train_with_binding_target = kwargs.get("train_with_binding_target", False)
+        self.binding_target_train_rate = kwargs.get("binding_target_train_rate", 0.75)
+
         self.error_dir = kwargs.get("error_dir", None)
         if self.error_dir is not None:
             os.makedirs(self.error_dir, exist_ok=True)
@@ -410,6 +414,32 @@ class BaseSingleDataset(Dataset):
             atom_array.sym_id_int[mask] = _shuffle(atom_array.sym_id_int[mask])
         return atom_array
 
+    @staticmethod
+    def _assign_binding_target(
+        atom_array: AtomArray,
+        train_with_binding_target: bool,
+        binding_target_train_rate: float,
+    ):
+        """
+        Assign a random asymmetric unit as the target if train_with_binding_target is True.
+        Otherwise, assign all False.
+        """
+        # Pick target chain
+        unique_asym_ids = np.unique(atom_array.asym_id_int)
+        target_asym_id = np.random.choice(unique_asym_ids)
+
+        if train_with_binding_target and np.random.rand() < binding_target_train_rate:
+            # Add target annotation to atom array
+            atom_array.set_annotation(
+                "is_target", atom_array.asym_id_int == target_asym_id
+            )
+        else:
+            atom_array.set_annotation(
+                "is_target", np.zeros_like(atom_array.asym_id_int, dtype=bool)
+            )
+
+        return atom_array
+
     def process_one(
         self, idx: int, return_atom_token_array: bool = False
     ) -> dict[str, dict]:
@@ -501,6 +531,12 @@ class BaseSingleDataset(Dataset):
             sample_indice=sample_indice,
             bioassembly_dict=bioassembly_dict,
             **self.cropping_configs,
+        )
+
+        cropped_atom_array = self._assign_binding_target(
+            atom_array=cropped_atom_array,
+            train_with_binding_target=self.train_with_binding_target,
+            binding_target_train_rate=self.binding_target_train_rate,
         )
 
         feat, label, label_full = self.get_feature_and_label(
@@ -1104,6 +1140,9 @@ def get_datasets(
         dataset_param["ref_pos_augment"] = data_config.get(
             "train_ref_pos_augment", True
         )
+        dataset_param["train_with_binding_target"] = data_config.get(
+            "train_with_binding_target", False
+        )
         dataset_param["limits"] = data_config.get("limits", -1)
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
@@ -1128,6 +1167,9 @@ def get_datasets(
             config_dict, dataset_name=test_name, stage="test"
         )
         dataset_param["ref_pos_augment"] = data_config.get("test_ref_pos_augment", True)
+        dataset_param["train_with_binding_target"] = data_config.get(
+            "train_with_binding_target", False
+        )
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

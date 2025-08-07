@@ -42,7 +42,7 @@ from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
-from protenix.utils.monitoring import analyse_latents, grad_norm
+from protenix.utils.monitoring import analyse_vae_latents, grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
@@ -545,7 +545,7 @@ class ArtiosAllAtomTrainer(object):
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 self.neptune_run.log_metrics(metrics, step=self.step)
 
-                for name, fig in analyse_latents(
+                for name, fig in analyse_vae_latents(
                     self.latents,
                     plot_per_batch=self.configs.monitor.latents.plot_per_batch,
                 ).items():

@@ -318,7 +318,6 @@ class Featurizer(object):
         token_features["entity_id"] = torch.Tensor(centre_atoms.entity_id_int).long()
         token_features["sym_id"] = torch.Tensor(centre_atoms.sym_id_int).long()
         token_features["restype"] = restype_onehot
-        token_features["centre_atom_coords"] = torch.Tensor(centre_atoms.coord)
 
         return token_features
 
@@ -484,7 +483,6 @@ class Featurizer(object):
     def get_extra_features(self) -> dict[str, torch.Tensor]:
         """
         Get other features not listed in AlphaFold3 SI Chapter 2.8 Table 5.
-        The size of these features is [N_atom].
 
         Returns:
             Dict[str, torch.Tensor]: a dict of extra features.
@@ -503,19 +501,24 @@ class Featurizer(object):
         ).long()
 
         extra_features = {}
-        extra_features["atom_to_token_idx"] = atom_to_token_idx
+        extra_features["atom_to_token_idx"] = atom_to_token_idx  # [N_atom]
         extra_features["atom_to_tokatom_idx"] = torch.Tensor(
             self.cropped_atom_array.tokatom_idx
-        ).long()
+        ).long()  # [N_atom]
 
         extra_features["is_protein"] = torch.Tensor(
             self.cropped_atom_array.is_protein
-        ).long()
+        ).long()  # [N_atom]
         extra_features["is_ligand"] = torch.Tensor(
             self.cropped_atom_array.is_ligand
-        ).long()
-        extra_features["is_dna"] = torch.Tensor(self.cropped_atom_array.is_dna).long()
-        extra_features["is_rna"] = torch.Tensor(self.cropped_atom_array.is_rna).long()
+        ).long()  # [N_atom]
+        extra_features["is_dna"] = torch.Tensor(
+            self.cropped_atom_array.is_dna
+        ).long()  # [N_atom]
+        extra_features["is_rna"] = torch.Tensor(
+            self.cropped_atom_array.is_rna
+        ).long()  # [N_atom]
+
         if "resolution" in self.cropped_atom_array._annot:
             extra_features["resolution"] = torch.Tensor(
                 [self.cropped_atom_array.resolution[0]]
@@ -529,7 +532,7 @@ class Featurizer(object):
             ).to(dtype=torch.bool)
             is_x_token = torch.zeros(len(self.cropped_token_array), dtype=torch.bool)
             is_x_token.scatter_(dim=-1, index=atom_to_token_idx, src=is_x_atom)
-            extra_features[f"is_{mol_type}_token"] = is_x_token
+            extra_features[f"is_{mol_type}_token"] = is_x_token  # [N_token]
 
         return extra_features
 
@@ -653,6 +656,48 @@ class Featurizer(object):
         ).long()  # [N_atom, N_atom]
         return mask_features
 
+    def get_target_features(self) -> dict[str, torch.Tensor]:
+        """
+        Get target-specific features for training. 
+        Adds the target_centre_coordinate, target_restype, and is_target_token features.
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary containing target features.
+        """
+        target_features = {}
+
+        centre_atom_indices = self.cropped_token_array.get_annotation(
+            "centre_atom_index"
+        )
+        centre_atoms = self.cropped_atom_array[centre_atom_indices]
+        is_target_token = self.cropped_atom_array.is_target[
+            centre_atom_indices
+        ]  # [N_token]
+
+        # Centre atom coordinates of the target
+        target_features["target_centre_coordinate"] = torch.Tensor(
+            centre_atoms.coord * is_target_token.reshape(-1, 1)
+        )  # [N_token, 3]
+
+        # Restypes of the target
+        # [N_token, 32] one-hot encoded residue types
+        restype = centre_atoms.cano_seq_resname
+        restype_onehot = self.restype_onehot_encoded(restype)
+        target_features["target_restype"] = restype_onehot * torch.Tensor(
+            is_target_token
+        ).unsqueeze(-1)
+
+        # Target is_hotspot feature
+        # [N_token] binary indicator for hotspot residues
+        # TODO: iteration number 2 will have this, but not yet.
+
+        # Binary indicator for target tokens
+        target_features["is_target_token"] = torch.Tensor(
+            is_target_token
+        ).long()  # [N_token]
+
+        return target_features
+
     def get_all_input_features(self):
         """
         Get input features from cropped data.
@@ -678,6 +723,10 @@ class Featurizer(object):
 
         mask_features = self.get_mask_features()
         features.update(mask_features)
+
+        target_features = self.get_target_features()
+        features.update(target_features)
+
         return features
 
     def get_dense_atoms_to_flat_atoms_mask(self) -> torch.Tensor:
@@ -725,7 +774,12 @@ class Featurizer(object):
         # Does centre atom exist?
         labels["has_centre_atom"] = torch.Tensor(
             self.cropped_atom_array.is_resolved[centre_atoms_indices].astype(int)
-        ).long()
+        ).long()  # [N_token]
+
+        # Get centre coordinates
+        labels["centre_coordinate"] = torch.Tensor(
+            self.cropped_atom_array.coord[centre_atoms_indices]
+        )  # [N_token, 3]
 
         # Dense to flat atom mask
         num_tokens = len(self.cropped_token_array)

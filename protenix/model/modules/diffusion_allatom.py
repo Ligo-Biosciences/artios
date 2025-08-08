@@ -583,8 +583,8 @@ class DiffusionModule(nn.Module):
         )
 
         # Apply separate velocity prediction heads for coordinates and latents
-        latent_velocity = self.latent_head(a_token + a_latent)
-        coord_velocity = self.coord_head(a_token + a_coord)
+        latent_velocity = self.latent_head(a_token)
+        coord_velocity = self.coord_head(a_token)
 
         return coord_velocity, latent_velocity
 

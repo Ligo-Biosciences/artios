@@ -62,6 +62,13 @@ class DiffusionConditioning(nn.Module):
         self.c_z = c_z
         self.c_s = c_s
 
+        self.input_feature = {
+            "ref_pos": 3,
+            "ref_charge": 1,
+            "ref_mask": 1,
+            "ref_element": 128,
+            "ref_atom_name_chars": 4 * 64,
+        }
         # Target distance binning parameters
         self.target_dist_min = target_dist_min
         self.target_dist_max = target_dist_max
@@ -83,6 +90,11 @@ class DiffusionConditioning(nn.Module):
         self.linear_no_bias_d = LinearNoBias(in_features=3, out_features=self.c_z)
         self.linear_no_bias_invd = LinearNoBias(
             in_features=1, out_features=self.c_z, init="zeros"
+        )
+
+        # Ligand condition embeddings
+        self.linear_no_bias_ligand_condition_embed = LinearNoBias(
+            in_features=sum(self.input_feature.values()), out_features=self.c_z
         )
 
         # Token bonds
@@ -155,6 +167,8 @@ class DiffusionConditioning(nn.Module):
         """
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
         n_token = input_feature_dict["residue_index"].shape[-1]
+        n_atom = input_feature_dict["ref_pos"].shape[-2]
+        batch_shape = input_feature_dict["ref_pos"].shape[:-2]
 
         # 1. Get token-wise ligand reference positions
         # [..., N_atom, 3]
@@ -195,6 +209,26 @@ class DiffusionConditioning(nn.Module):
             * v_lm
         )
         z = add(z, invd_emb, inplace_safe=inplace_safe)
+
+        # 5. Embed ligand element, add to pair embedding
+        c_l = self.linear_no_bias_ligand_condition_embed(
+            torch.cat(
+                [
+                    input_feature_dict[name].reshape(
+                        *batch_shape, n_atom, self.input_feature[name]
+                    )
+                    for name in self.input_feature
+                ],
+                dim=-1,
+            )
+        )  # [N_atom, c_z]
+        c_s = aggregate_atom_to_token(
+            x_atom=c_l,
+            atom_to_token_idx=atom_to_token_idx,
+            n_token=n_token,
+            reduce="mean",
+        ).unsqueeze(-3)  # [..., 1, N_token, c_z]
+        z = add(z, c_s, inplace_safe=inplace_safe)
 
         return z
 

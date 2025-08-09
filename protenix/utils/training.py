@@ -19,6 +19,7 @@ import torch
 import torch.distributed as dist
 
 from protenix.model.utils import expand_at_dim
+from protenix.utils.muon import MuonWithAuxAdam
 
 
 def get_adamw(
@@ -73,23 +74,99 @@ def get_adamw(
     return optimizer
 
 
+def get_muon(
+    model: torch.nn.Module,
+    weight_decay: float,
+    learning_rate: float,
+    muon_momentum: float,
+    betas: tuple[float, float],  # TODO: adamw momentum, betas
+    device_type: str,
+) -> torch.optim.AdamW:
+    """
+    Create a Muon optimizer for the given model with specified parameters.
+
+    Args:
+        model (torch.nn.Module): The model for which the optimizer is created.
+        weight_decay (float): The weight decay (L2 penalty) for the optimizer.
+        learning_rate (float): The learning rate for the optimizer.
+        betas (tuple): Coefficients used for computing running averages of gradient and its square.
+        device_type (str): The device type ('cuda' or 'cpu') on which the optimizer will operate.
+
+    Returns:
+        MuonWithAuxAdam (torch.optim.Optimizer): The Muon optimizer with AdamW for applied to embedding and 1D params.
+    """
+    # start with all of the candidate parameters
+    param_dict = {pn: p for pn, p in model.named_parameters()}
+    # filter out those that do not require grad
+    param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+
+    # create optim groups. Any parameters that is 2D, is non-embedding, and not final will have Muon, otherwise no.
+    # i.e. all weight tensors in matmuls use Muon, all biases, layernorms, and input / output projections don't.
+    muon_params = [
+        p
+        for n, p in param_dict.items()
+        if p.dim() >= 2 and "final" not in n and "embed" not in n
+    ]  # TODO: change all projections to include "embed" in name
+    adamw_params = [
+        p for n, p in param_dict.items() if p.dim() < 2 or "final" in n or "embed" in n
+    ]
+    optim_groups = [
+        {
+            "params": muon_params,
+            "use_muon": True,
+            "momentum": muon_momentum,
+            "weight_decay": weight_decay,
+            "lr": learning_rate,
+        },
+        {
+            "params": adamw_params,
+            "use_muon": False,
+            "betas": betas,
+            "weight_decay": weight_decay,
+            "lr": learning_rate,
+        },
+    ]
+    num_muon_params = sum(p.numel() for p in muon_params)
+    num_adamw_params = sum(p.numel() for p in adamw_params)
+    print(
+        f"num muon parameter tensors: {len(muon_params)}, with {num_muon_params:,} parameters"
+    )
+    print(
+        f"num adamw parameter tensors: {len(adamw_params)}, with {num_adamw_params:,} parameters"
+    )
+    # Create AdamW optimizer and use the fused version if it is available
+    optimizer = MuonWithAuxAdam(optim_groups)
+
+    return optimizer
+
+
 def get_optimizer(configs, model: torch.nn.Module) -> torch.optim.Optimizer:
-    if configs.adam.use_adamw:
+    assert not (configs.use_adamw and configs.use_muon), "pick either AdamW or Muon"
+    if configs.use_adamw:
         if configs.adam.only_2d_decay:
             optimizer = get_adamw(
                 model=model,
-                weight_decay=configs.adam.weight_decay,
-                learning_rate=configs.adam.lr,
+                weight_decay=configs.weight_decay,
+                learning_rate=configs.lr,
                 betas=(configs.adam.beta1, configs.adam.beta2),
                 device_type="cuda" if torch.cuda.is_available() else "cpu",
             )
         else:
             optimizer = torch.optim.AdamW(
                 model.parameters(),
-                lr=configs.adam.lr,
+                lr=configs.lr,
                 weight_decay=configs.adam.weight_decay,
                 betas=(configs.adam.beta1, configs.adam.beta2),
             )
+    elif configs.use_muon:
+        optimizer = get_muon(
+            model=model,
+            weight_decay=configs.weight_decay,
+            learning_rate=configs.lr,
+            muon_momentum=configs.muon.momentum,
+            betas=(configs.adam.beta1, configs.adam.beta2),
+            device_type="cuda" if torch.cuda.is_available() else "cpu",
+        )
     else:
         optimizer = torch.optim.Adam(
             model.parameters(),

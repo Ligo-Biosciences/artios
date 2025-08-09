@@ -75,14 +75,21 @@ optim_configs = {
     "min_lr_ratio": 0.1,
     "decay_every_n_steps": 25000,  # 50000
     "grad_clip_norm": 3,
+    "use_adamw": False,  # TODO: it should only be adamw or muon
+    "use_muon": True,
+    "weight_decay": 1e-2,
     # Optim - Adam
     "adam": {
         "beta1": 0.9,
         "beta2": 0.95,
-        "weight_decay": 1e-2,
-        "lr": GlobalConfigValue("lr"),
-        "use_adamw": True,
+        # "weight_decay": GlobalConfigValue("weight_decay"),
+        # "lr": GlobalConfigValue("lr"),
         "only_2d_decay": False,
+    },
+    "muon": {
+        "momentum": 0.95,
+        # "lr": GlobalConfigValue("lr"),
+        # "weight_decay": GlobalConfigValue("weight_decay")
     },
     # Optim - LRScheduler
     "af3_lr_scheduler": {

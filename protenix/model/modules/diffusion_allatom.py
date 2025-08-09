@@ -105,11 +105,11 @@ class DiffusionConditioning(nn.Module):
 
         # Latent and coordinate timestep embeddings
         self.layernorm_latent_t = LayerNorm(c_timestep_embedding)
-        self.linear_no_bias_latent_t = LinearNoBias(
+        self.linear_no_bias_latent_t_embed = LinearNoBias(
             in_features=c_timestep_embedding, out_features=self.c_s
         )
         self.layernorm_coord_t = LayerNorm(c_timestep_embedding)
-        self.linear_no_bias_coord_t = LinearNoBias(
+        self.linear_no_bias_coord_t_embed = LinearNoBias(
             in_features=c_timestep_embedding, out_features=self.c_s
         )
 
@@ -118,18 +118,18 @@ class DiffusionConditioning(nn.Module):
         self.transition_s2 = Transition(c_in=self.c_s, n=2)
 
         # Target feature embeddings
-        self.linear_target_restype = LinearNoBias(
+        self.linear_target_restype_embed = LinearNoBias(
             in_features=32, out_features=self.c_s
         )  # Target restype one-hot -> single embedding
-        self.linear_target_coord = LinearNoBias(
+        self.linear_target_coord_embed = LinearNoBias(
             in_features=3, out_features=self.c_s
         )  # Target center coords -> single embedding
-        self.linear_target_pair_dist = LinearNoBias(
+        self.linear_target_pair_dist_embed = LinearNoBias(
             in_features=self.n_target_dist_bins, out_features=self.c_z
         )  # Target pair distances -> pair embedding
 
         # Noisy coordinate feature embeddings
-        self.linear_noisy_pair_dist = LinearNoBias(
+        self.linear_noisy_pair_dist_embed = LinearNoBias(
             in_features=self.n_target_dist_bins, out_features=self.c_z
         )  # Noisy pair distances -> pair embedding
 
@@ -223,12 +223,12 @@ class DiffusionConditioning(nn.Module):
         )
 
         # 1. Target restype embedding (single embedding)
-        s_target_restype = self.linear_target_restype(
+        s_target_restype = self.linear_target_restype_embed(
             target_restype
         )  # [..., N_token, c_s]
 
         # 2. Target center coordinate embedding (single embedding)
-        s_target_coord = self.linear_target_coord(
+        s_target_coord = self.linear_target_coord_embed(
             centre_random_augmentation(
                 target_coord, mask=is_target_token, N_sample=N_sample, s_trans=1.0
             )
@@ -260,7 +260,7 @@ class DiffusionConditioning(nn.Module):
         )  # [..., N_token, N_token, n_bins]
 
         # Embed one-hot distances
-        z_target = self.linear_target_pair_dist(
+        z_target = self.linear_target_pair_dist_embed(
             pair_dist_onehot
         )  # [..., N_token, N_token, c_z]
 
@@ -344,7 +344,7 @@ class DiffusionConditioning(nn.Module):
         )  # [..., N_sample, N_token, N_token, n_bins]
 
         # Embed one-hot distances
-        z_noisy = self.linear_noisy_pair_dist(
+        z_noisy = self.linear_noisy_pair_dist_embed(
             noisy_pair_dist_onehot
         )  # [..., N_sample, N_token, N_token, c_z]
 
@@ -364,14 +364,18 @@ class DiffusionConditioning(nn.Module):
 
         # 2. Normalise and embed both timesteps
         s = expand_at_dim(
-            self.linear_no_bias_latent_t(self.layernorm_latent_t(timestep_latent)),
+            self.linear_no_bias_latent_t_embed(
+                self.layernorm_latent_t(timestep_latent)
+            ),
             dim=-2,
             n=n_token,
         )  # [..., N_sample, N_tokens, c_s]
         s = add(
             s,
             expand_at_dim(
-                self.linear_no_bias_coord_t(self.layernorm_coord_t(timestep_coord)),
+                self.linear_no_bias_coord_t_embed(
+                    self.layernorm_coord_t(timestep_coord)
+                ),
                 dim=-2,
                 n=n_token,
             ),
@@ -457,11 +461,11 @@ class DiffusionModule(nn.Module):
             c_s=c_s,
         )
         # Coordinate embedding layer
-        self.linear_no_bias_r = LinearNoBias(3, c_token)
+        self.linear_no_bias_r_embed = LinearNoBias(3, c_token)
 
         # Latent embedding layer
         # self.layernorm_latent = LayerNorm(c_latent)
-        self.linear_no_bias_latent = LinearNoBias(c_latent, c_token)
+        self.linear_no_bias_latent_embed = LinearNoBias(c_latent, c_token)
 
         # Alg20: line4
         self.layernorm_s = LayerNorm(c_s)
@@ -561,8 +565,8 @@ class DiffusionModule(nn.Module):
             )  # [..., N_sample, N_token, c_s], [..., N_sample, N_token, N_token, c_z]
 
         # Embed noisy coordinates and latents into token space
-        a_coord = self.linear_no_bias_r(r_noisy_coord)
-        a_latent = self.linear_no_bias_latent(r_noisy_latent)
+        a_coord = self.linear_no_bias_r_embed(r_noisy_coord)
+        a_latent = self.linear_no_bias_latent_embed(r_noisy_latent)
 
         a_token = add(a_coord, a_latent, inplace_safe=inplace_safe)
 

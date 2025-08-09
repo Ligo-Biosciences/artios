@@ -113,6 +113,11 @@ class DiffusionConditioning(nn.Module):
             in_features=c_timestep_embedding, out_features=self.c_s
         )
 
+        # Entity type embedding
+        self.linear_no_bias_entity_type_embed = LinearNoBias(
+            in_features=5, out_features=self.c_s
+        )
+
         # Line 10-12
         self.transition_s1 = Transition(c_in=self.c_s, n=2)
         self.transition_s2 = Transition(c_in=self.c_s, n=2)
@@ -386,6 +391,21 @@ class DiffusionConditioning(nn.Module):
         s_target, z_target = self.get_target_condition(
             input_feature_dict, N_sample=N_sample, inplace_safe=inplace_safe
         )
+
+        # Embed entity type and target using the is_X_token features
+        s_entity_type = self.linear_no_bias_entity_type_embed(
+            torch.stack(
+                [
+                    input_feature_dict["is_protein_token"],
+                    input_feature_dict["is_ligand_token"],
+                    input_feature_dict["is_dna_token"],
+                    input_feature_dict["is_rna_token"],
+                    input_feature_dict["is_target_token"],
+                ],
+                dim=-1,
+            )
+        )  # [..., N_token, c_s]
+        s = add(s, s_entity_type, inplace_safe=inplace_safe)
 
         # Add target embeedings
         s = add(s, s_target, inplace_safe=inplace_safe)

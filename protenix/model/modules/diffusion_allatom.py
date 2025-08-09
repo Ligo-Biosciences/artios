@@ -340,6 +340,7 @@ class DiffusionConditioning(nn.Module):
         TODO: this will be quite memory intensive conditioning.
         """
         N_sample = coord_timestep.shape[-1]
+        dtype = r_noisy_coord.dtype
 
         # Grab data on inputs
         n_token = input_feature_dict["residue_index"].shape[-1]
@@ -430,11 +431,11 @@ class DiffusionConditioning(nn.Module):
         s_entity_type = self.linear_no_bias_entity_type_embed(
             torch.stack(
                 [
-                    input_feature_dict["is_protein_token"],
-                    input_feature_dict["is_ligand_token"],
-                    input_feature_dict["is_dna_token"],
-                    input_feature_dict["is_rna_token"],
-                    input_feature_dict["is_target_token"],
+                    input_feature_dict["is_protein_token"].to(dtype),
+                    input_feature_dict["is_ligand_token"].to(dtype),
+                    input_feature_dict["is_dna_token"].to(dtype),
+                    input_feature_dict["is_rna_token"].to(dtype),
+                    input_feature_dict["is_target_token"].to(dtype),
                 ],
                 dim=-1,
             )

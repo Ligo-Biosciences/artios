@@ -350,6 +350,11 @@ def sample_latent_diffusion(
             * (alpha**2)
             * beta_function(t, beta_mean, beta_std, device=device, dtype=dtype),
         ),
+        "laproteina": lambda t: torch.where(
+            t > 0.95,
+            torch.zeros_like(t),
+            0.5 * torch.pi / 2 * (alpha**2) * torch.tan(torch.pi / 2 * (1 - t) - 0.01),
+        ),
     }
     if stoch_type_coord not in stoch_schedules:
         raise ValueError(f"Invalid stochasticity type: {stoch_type_coord}")

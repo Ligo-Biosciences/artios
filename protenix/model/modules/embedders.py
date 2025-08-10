@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -77,7 +77,7 @@ class InputFeatureEmbedder(nn.Module):
             chunk_size=chunk_size,
         )  # [..., N_token, c_token]
         # Concatenate the per-token features.
-        batch_shape = input_feature_dict["restype"].shape[:-1]
+        # batch_shape = input_feature_dict["restype"].shape[:-1]
         # s_inputs = torch.cat(
         #    [a]
         #    + [
@@ -170,7 +170,7 @@ class RelativePositionEncoding(nn.Module):
         )  # [..., N_token, N_token]
         a_rel_chain = F.one_hot(d_chain, 2 * (self.s_max + 1))
 
-        p = self.linear_no_bias(
+        p = self.linear_no_bias(  # TODO: include embed in the name of this!
             torch.cat(
                 [a_rel_pos, a_rel_token, b_same_entity[..., None], a_rel_chain],
                 dim=-1,
@@ -209,4 +209,6 @@ class FourierEmbedding(nn.Module):
             torch.Tensor: the output fourier embedding
                 [..., N_sample, c]
         """
-        return torch.cos(input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w + self.b))
+        return torch.cos(
+            input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w + self.b)
+        )

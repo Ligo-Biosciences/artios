@@ -220,16 +220,19 @@ class DiffusionConditioning(nn.Module):
         z = add(z, invd_emb, inplace_safe=inplace_safe)
 
         # 5. Embed ligand element, add to pair embedding
-        c_l = self.linear_no_bias_ligand_condition_embed(
-            torch.cat(
-                [
-                    input_feature_dict[name].reshape(
-                        *batch_shape, n_atom, self.ligand_input_feature[name]
-                    )
-                    for name in self.ligand_input_feature
-                ],
-                dim=-1,
+        c_l = (
+            self.linear_no_bias_ligand_condition_embed(
+                torch.cat(
+                    [
+                        input_feature_dict[name].reshape(
+                            *batch_shape, n_atom, self.ligand_input_feature[name]
+                        )
+                        for name in self.ligand_input_feature
+                    ],
+                    dim=-1,
+                )
             )
+            * is_ligand
         )  # [N_atom, c_z]
         c_s = aggregate_atom_to_token(
             x_atom=c_l,

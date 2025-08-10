@@ -62,7 +62,7 @@ class DiffusionConditioning(nn.Module):
         self.c_z = c_z
         self.c_s = c_s
 
-        self.input_feature = {
+        self.ligand_input_feature = {
             "ref_pos": 3,
             "ref_charge": 1,
             "ref_mask": 1,
@@ -87,18 +87,18 @@ class DiffusionConditioning(nn.Module):
         self.num_bins = len(lower_bins)
 
         ### Ligand reference position embeddings
-        self.linear_no_bias_d = LinearNoBias(in_features=3, out_features=self.c_z)
-        self.linear_no_bias_invd = LinearNoBias(
+        self.linear_no_bias_d_embed = LinearNoBias(in_features=3, out_features=self.c_z)
+        self.linear_no_bias_invd_embed = LinearNoBias(
             in_features=1, out_features=self.c_z, init="zeros"
         )
 
         # Ligand condition embeddings
         self.linear_no_bias_ligand_condition_embed = LinearNoBias(
-            in_features=sum(self.input_feature.values()), out_features=self.c_z
+            in_features=sum(self.ligand_input_feature.values()), out_features=self.c_z
         )
 
         # Token bonds
-        self.linear_no_bias_token_bonds = LinearNoBias(
+        self.linear_no_bias_token_bonds_embed = LinearNoBias(
             in_features=1, out_features=self.c_z, init="zeros"
         )
 
@@ -126,8 +126,15 @@ class DiffusionConditioning(nn.Module):
         )
 
         # Entity type embedding
+        self.entity_features = {
+            "is_protein_token": 1,
+            "is_ligand_token": 1,
+            "is_dna_token": 1,
+            "is_rna_token": 1,
+            "is_target_token": 1,
+        }
         self.linear_no_bias_entity_type_embed = LinearNoBias(
-            in_features=5, out_features=self.c_s
+            in_features=sum(self.entity_features.values()), out_features=self.c_s
         )
 
         # Line 10-12
@@ -201,11 +208,13 @@ class DiffusionConditioning(nn.Module):
         d_lm = (
             ligand_ref_pos[..., None, :] - ligand_ref_pos[..., None, :, :]
         )  # [..., n_token, n_token, 3]
-        z = self.linear_no_bias_d(d_lm) * v_lm  # [..., n_token, n_token, c_z]
+        z = self.linear_no_bias_d_embed(d_lm) * v_lm  # [..., n_token, n_token, c_z]
 
         # 4. Embed pairwise inverse squared distances
         invd_emb = (
-            self.linear_no_bias_invd(1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True)))
+            self.linear_no_bias_invd_embed(
+                1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))
+            )
             * v_lm
         )
         z = add(z, invd_emb, inplace_safe=inplace_safe)
@@ -215,9 +224,9 @@ class DiffusionConditioning(nn.Module):
             torch.cat(
                 [
                     input_feature_dict[name].reshape(
-                        *batch_shape, n_atom, self.input_feature[name]
+                        *batch_shape, n_atom, self.ligand_input_feature[name]
                     )
-                    for name in self.input_feature
+                    for name in self.ligand_input_feature
                 ],
                 dim=-1,
             )
@@ -351,7 +360,7 @@ class DiffusionConditioning(nn.Module):
         # Add token bonds to pair embedding
         z = add(
             z,
-            self.linear_no_bias_token_bonds(
+            self.linear_no_bias_token_bonds_embed(
                 input_feature_dict["token_bonds"].unsqueeze(-1)
             ),
             inplace_safe=inplace_safe,
@@ -430,13 +439,7 @@ class DiffusionConditioning(nn.Module):
         # Embed entity type and target using the is_X_token features
         s_entity_type = self.linear_no_bias_entity_type_embed(
             torch.stack(
-                [
-                    input_feature_dict["is_protein_token"].to(dtype),
-                    input_feature_dict["is_ligand_token"].to(dtype),
-                    input_feature_dict["is_dna_token"].to(dtype),
-                    input_feature_dict["is_rna_token"].to(dtype),
-                    input_feature_dict["is_target_token"].to(dtype),
-                ],
+                [input_feature_dict[name].to(dtype) for name in self.entity_features],
                 dim=-1,
             )
         )  # [..., N_token, c_s]

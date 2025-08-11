@@ -149,7 +149,7 @@ class DataDumper:
             seed=seed,
             sorted_indices=sorted_indices,
             b_factor=b_factor,
-            convert_to_flat=convert_to_flat,
+            # convert_to_flat=convert_to_flat,
         )
         # Dump confidence
         # self._save_confidence(

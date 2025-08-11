@@ -307,9 +307,9 @@ class ArtiosAllAtomTrainer(object):
             self.ema_wrapper.register()
 
         # Load model parameters (With no EMA) from checkpoint
-        if self.configs.load_checkpoint_path:
+        if self.configs.load_vae_checkpoint_path:
             _load_checkpoint(
-                self.configs.load_checkpoint_path,
+                self.configs.load_vae_checkpoint_path,
                 self.configs.load_params_only,
                 skip_load_optimizer=self.configs.skip_load_optimizer,
                 skip_load_scheduler=self.configs.skip_load_scheduler,

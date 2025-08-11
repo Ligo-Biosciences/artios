@@ -29,7 +29,11 @@ from biotite.structure import AtomArray
 from biotite.structure.io import pdbx
 from biotite.structure.io.pdb import PDBFile
 
-from protenix.common.constants import DNA_STD_RESIDUES, PRO_STD_RESIDUES, RNA_STD_RESIDUES
+from protenix.common.constants import (
+    DNA_STD_RESIDUES,
+    PRO_STD_RESIDUES,
+    RNA_STD_RESIDUES,
+)
 
 
 def remove_numbers(s: str) -> str:
@@ -83,7 +87,9 @@ def get_inter_residue_bonds(atom_array: AtomArray) -> np.ndarray:
     return inter_residue_bonds
 
 
-def get_starts_by(atom_array: AtomArray, by_annot: str, add_exclusive_stop=False) -> np.ndarray:
+def get_starts_by(
+    atom_array: AtomArray, by_annot: str, add_exclusive_stop=False
+) -> np.ndarray:
     """get start indices by given annotation in an AtomArray
 
     Args:
@@ -130,7 +136,9 @@ def atom_select(atom_array: AtomArray, select_dict: dict, as_mask=False) -> np.n
         return np.where(mask)[0]
 
 
-def get_ligand_polymer_bond_mask(atom_array: AtomArray, lig_include_ions=False) -> np.ndarray:
+def get_ligand_polymer_bond_mask(
+    atom_array: AtomArray, lig_include_ions=False
+) -> np.ndarray:
     """
     Ref AlphaFold3 SI Chapter 3.7.1.
     Get bonds between the bonded ligand and its parent chain.
@@ -145,7 +153,9 @@ def get_ligand_polymer_bond_mask(atom_array: AtomArray, lig_include_ions=False) 
     """
     if not lig_include_ions:
         # bonded ligand exclude ions
-        unique_chain_id, counts = np.unique(atom_array.label_asym_id, return_counts=True)
+        unique_chain_id, counts = np.unique(
+            atom_array.label_asym_id, return_counts=True
+        )
         chain_id_to_count_map = dict(zip(unique_chain_id, counts))
         ions_mask = np.array(
             [
@@ -165,7 +175,8 @@ def get_ligand_polymer_bond_mask(atom_array: AtomArray, lig_include_ions=False) 
     idx_j = atom_array.bonds._bonds[:, 1]
 
     lig_polymer_bond_indices = np.where(
-        (lig_mask[idx_i] & polymer_mask[idx_j]) | (lig_mask[idx_j] & polymer_mask[idx_i])
+        (lig_mask[idx_i] & polymer_mask[idx_j])
+        | (lig_mask[idx_j] & polymer_mask[idx_i])
     )[0]
     if lig_polymer_bond_indices.size == 0:
         # no ligand-polymer bonds
@@ -265,7 +276,7 @@ def save_structure_cif(
         pdb_id (str): The PDB ID for the entry.
     """
     pred_atom_array = copy.deepcopy(atom_array)
-    pred_pose = pred_coordinate.cpu().numpy()
+    pred_pose = pred_coordinate.float().cpu().numpy()
     pred_atom_array.coord = pred_pose
     save_atoms_to_cif(
         output_fpath,
@@ -303,7 +314,9 @@ class CIFWriter:
         entity_poly = defaultdict(list)
         for entity_id, entity_type in self.entity_poly_type.items():
             label_asym_ids = np.unique(
-                self.atom_array.label_asym_id[self.atom_array.label_entity_id == entity_id]
+                self.atom_array.label_asym_id[
+                    self.atom_array.label_entity_id == entity_id
+                ]
             )
             label_asym_ids_str = ",".join(label_asym_ids)
 
@@ -320,15 +333,21 @@ class CIFWriter:
             entity_poly["entity_id"], entity_poly["pdbx_strand_id"]
         ):
             first_label_asym_id = label_asym_ids_str.split(",")[0]
-            first_asym_chain = self.atom_array[self.atom_array.label_asym_id == first_label_asym_id]
-            chain_starts = struc.get_chain_starts(first_asym_chain, add_exclusive_stop=True)
+            first_asym_chain = self.atom_array[
+                self.atom_array.label_asym_id == first_label_asym_id
+            ]
+            chain_starts = struc.get_chain_starts(
+                first_asym_chain, add_exclusive_stop=True
+            )
             asym_chain = first_asym_chain[
                 chain_starts[0] : chain_starts[1]
             ]  # ensure the asym chain is a single chain
 
             res_starts = struc.get_residue_starts(asym_chain, add_exclusive_stop=False)
             asym_chain_entity_id = asym_chain[res_starts].label_entity_id.tolist()
-            asym_chain_hetero = ["n" if not i else "y" for i in asym_chain[res_starts].hetero]
+            asym_chain_hetero = [
+                "n" if not i else "y" for i in asym_chain[res_starts].hetero
+            ]
             asym_chain_res_name = asym_chain[res_starts].res_name.tolist()
             asym_chain_res_id = asym_chain[res_starts].res_id.tolist()
 
@@ -343,7 +362,9 @@ class CIFWriter:
         }
         return block_dict
 
-    def save_to_cif(self, output_path: str, entry_id: str = None, include_bonds: bool = False):
+    def save_to_cif(
+        self, output_path: str, entry_id: str = None, include_bonds: bool = False
+    ):
         """
         Save AtomArray to cif.
 
@@ -368,7 +389,10 @@ class CIFWriter:
 
         block = pdbx.CIFBlock(block_dict)
         cif = pdbx.CIFFile(
-            {os.path.basename(output_path).replace(".cif", "") + "_predicted_by_protenix": block}
+            {
+                os.path.basename(output_path).replace(".cif", "")
+                + "_predicted_by_protenix": block
+            }
         )
         pdbx.set_structure(cif, self.atom_array, include_bonds=include_bonds)
         block = cif.block
@@ -404,7 +428,9 @@ def make_dummy_feature(
             features_dict[feat_name] = torch.zeros(cur_feat_shape)
     if "msa" in dummy_feats:
         # features_dict["msa"] = features_dict["restype"].unsqueeze(0)
-        features_dict["msa"] = torch.nonzero(features_dict["restype"])[:, 1].unsqueeze(0)
+        features_dict["msa"] = torch.nonzero(features_dict["restype"])[:, 1].unsqueeze(
+            0
+        )
         assert features_dict["msa"].shape == feat_shape["msa"]
         features_dict["has_deletion"] = torch.zeros(feat_shape["has_deletion"])
         features_dict["deletion_value"] = torch.zeros(feat_shape["deletion_value"])
@@ -420,8 +446,12 @@ def make_dummy_feature(
             features_dict[key] = torch.tensor(0, dtype=torch.int32)
 
     if "template" in dummy_feats:
-        features_dict["template_restype"] = torch.ones(feat_shape["template_restype"]) * 31  # gap
-        features_dict["template_all_atom_mask"] = torch.zeros(feat_shape["template_all_atom_mask"])
+        features_dict["template_restype"] = (
+            torch.ones(feat_shape["template_restype"]) * 31
+        )  # gap
+        features_dict["template_all_atom_mask"] = torch.zeros(
+            feat_shape["template_all_atom_mask"]
+        )
         features_dict["template_all_atom_positions"] = torch.zeros(
             feat_shape["template_all_atom_positions"]
         )
@@ -556,7 +586,9 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
     return all_feat, label
 
 
-def get_lig_lig_bonds(atom_array: AtomArray, lig_include_ions: bool = False) -> np.ndarray:
+def get_lig_lig_bonds(
+    atom_array: AtomArray, lig_include_ions: bool = False
+) -> np.ndarray:
     """
     Get all inter-ligand bonds in order to create "token_bonds".
 
@@ -569,7 +601,9 @@ def get_lig_lig_bonds(atom_array: AtomArray, lig_include_ions: bool = False) -> 
     """
     if not lig_include_ions:
         # bonded ligand exclude ions
-        unique_chain_id, counts = np.unique(atom_array.label_asym_id, return_counts=True)
+        unique_chain_id, counts = np.unique(
+            atom_array.label_asym_id, return_counts=True
+        )
         chain_id_to_count_map = dict(zip(unique_chain_id, counts))
         ions_mask = np.array(
             [
@@ -638,7 +672,10 @@ def pdb_to_cif(input_fname: str, output_fname: str, entry_id: str = None):
             for res_start_atom_idx in uncont_res_starts[0]:
                 new_chain_start = c_start + res_start_atom_idx + 1
                 # atom_array.hetero is True if "HETATM"
-                if atom_array.hetero[new_chain_start] and atom_array.hetero[new_chain_start - 1]:
+                if (
+                    atom_array.hetero[new_chain_start]
+                    and atom_array.hetero[new_chain_start - 1]
+                ):
                     new_chain_starts2.append(new_chain_start)
 
     chain_starts = new_chain_starts2 + [chain_starts[-1]]
@@ -776,7 +813,9 @@ def get_atom_name(input_feature_dict):
     """
     Convert one-hot encoded atom names from ref_atom_name_chars to actual atom names and add to label_dict.
     """
-    char_indices = input_feature_dict["ref_atom_name_chars"].argmax(dim=-1)  # [N_atom, 4]
+    char_indices = input_feature_dict["ref_atom_name_chars"].argmax(
+        dim=-1
+    )  # [N_atom, 4]
     atom_names = []
     for atom_chars in char_indices:
         name = "".join(
@@ -874,7 +913,11 @@ def to_mmcif(pred_dict, input_feature_dict, output_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pdb_file", type=str, required=True, help="The pdb file to parse")
-    parser.add_argument("--cif_file", type=str, required=True, help="The cif file path to generate")
+    parser.add_argument(
+        "--pdb_file", type=str, required=True, help="The pdb file to parse"
+    )
+    parser.add_argument(
+        "--cif_file", type=str, required=True, help="The cif file path to generate"
+    )
     args = parser.parse_args()
     pdb_to_cif(args.pdb_file, args.cif_file)

@@ -299,9 +299,9 @@ class ArtiosAllAtomTrainer(object):
             self.print(f"Finish loading checkpoint, current step: {self.step}")
 
         # Load EMA model parameters
-        if self.configs.load_ema_checkpoint_path:
+        if self.configs.load_ema_vae_checkpoint_path:
             _load_checkpoint(
-                self.configs.load_ema_checkpoint_path,
+                self.configs.load_ema_vae_checkpoint_path,
                 load_params_only=True,
             )
             self.ema_wrapper.register()

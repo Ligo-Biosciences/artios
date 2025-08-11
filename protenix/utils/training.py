@@ -155,7 +155,7 @@ def get_optimizer(configs, model: torch.nn.Module) -> torch.optim.Optimizer:
             optimizer = torch.optim.AdamW(
                 model.parameters(),
                 lr=configs.lr,
-                weight_decay=configs.adam.weight_decay,
+                weight_decay=configs.weight_decay,
                 betas=(configs.adam.beta1, configs.adam.beta2),
             )
     elif configs.use_muon:
@@ -171,7 +171,6 @@ def get_optimizer(configs, model: torch.nn.Module) -> torch.optim.Optimizer:
         optimizer = torch.optim.Adam(
             model.parameters(),
             lr=configs.adam.lr,
-            weight_decay=configs.adam.weight_decay,
             betas=(configs.adam.beta1, configs.adam.beta2),
         )
     return optimizer

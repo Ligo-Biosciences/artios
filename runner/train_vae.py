@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import datetime
+import hashlib
 import logging
 import os
 import time
@@ -148,7 +149,9 @@ class ArtiosAllAtomTrainer(object):
             )
 
         if not self.configs.deterministic_seed:
-            rank_seed = hash(self.configs.seed, DIST_WRAPPER.rank, "init_seed")
+            # use rank-specific seed
+            hash_string = f"({self.configs.seed},{DIST_WRAPPER.rank},init_seed)"
+            rank_seed = int(hashlib.sha256(hash_string.encode("utf8")).hexdigest(), 16)
             rank_seed = rank_seed % (2**32)
         else:
             rank_seed = self.configs.seed

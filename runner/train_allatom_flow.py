@@ -182,6 +182,7 @@ class ArtiosAllAtomFlowTrainer(object):
         # )
         self.raw_flow_model = ArtiosAllatom(self.configs).to(self.device)
         self.vae_shell = ArtiosAllAtomVAE(self.configs).to(self.device)
+        self.vae_shell.eval()
         # DDP not required for VAE loading since model is frozen - no need for gradient aggregation
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:

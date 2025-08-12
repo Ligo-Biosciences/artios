@@ -234,7 +234,7 @@ def analyse_vae_latents(latents: dict, plot_per_batch: bool = False):
     return figs
 
 
-def analyse_flow_latents(latents: dict):
+def analyse_flow_latents(data: dict):
     """
     Analyse the latents. These are the plots we will make:
     1. T-SNE
@@ -248,28 +248,44 @@ def analyse_flow_latents(latents: dict):
           Keys: "latents"
             latents (list[np.array]): List of latents tensors. Each array
                 is of shape [N_sample*N_token, c_latent]
+          Keys: "seq_logits"
+            seq_logits (list[np.array]): List of seq logits tensors. Each array
+                is of shape [N_sample*N_token, NUM_RESIDUES]
 
     Returns:
         figs (dict): A dictionary containing the figures.
             Keys: "tsne", "hist", "qq", "cov_heatmap", "eigs"
             Values: plt.Figure
     """
-    if not latents["mean"]:
+    if not data["latents"]:
         return {}
 
     # Flatten everything
-    latents["latents"] = [a.reshape(-1, a.shape[-1]) for a in latents["latents"]]
+    data["latents"] = [a.reshape(-1, a.shape[-1]) for a in data["latents"]]
+    data["seq_logits"] = [a.reshape(-1, a.shape[-1]) for a in data["seq_logits"]]
+
+    # Combine batches
+    data = {
+        "latents": [np.concatenate(data["latents"], axis=-2)],
+        "seq_logits": [np.concatenate(data["seq_logits"], axis=-2)],
+    }
 
     figs = {}
-    for batch_idx, latents_sample in enumerate(latents["latents"]):
+    for batch_idx, (latents, seq_logits) in enumerate(
+        zip(data["latents"], data["seq_logits"])
+    ):
         suffix = f"_batch_{batch_idx}"
 
-        # Plots figs
-        # figs[f"tsne{suffix}"] = plot_tsne(latents_sample, latents_restype, suffix)
-        figs[f"hist{suffix}"] = plot_histograms(latents_sample, suffix)
-        figs[f"qq{suffix}"] = plot_qq_plots(latents_sample, suffix)
-        figs[f"cov_heatmap{suffix}"] = plot_covariance_heatmap(latents_sample, suffix)
-        figs[f"eigs{suffix}"] = plot_eigenvalues(latents_sample, suffix)
+        # Plots figs for latents
+        figs[f"hist_latents{suffix}"] = plot_histograms(latents, suffix, mode="latents")
+        figs[f"qq_latents{suffix}"] = plot_qq_plots(latents, suffix)
+        figs[f"cov_heatmap_latents{suffix}"] = plot_covariance_heatmap(latents, suffix)
+        figs[f"eigs_latents{suffix}"] = plot_eigenvalues(latents, suffix)
+
+        # Plot seq logits
+        figs[f"hist_seq_logits{suffix}"] = plot_histograms(
+            seq_logits, suffix, mode="seq_logits"
+        )
 
     return figs
 
@@ -323,8 +339,16 @@ def plot_tsne(
     return fig
 
 
-def plot_histograms(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
-    """Create histograms for each latent dimension and return the figure."""
+def plot_histograms(
+    data: np.ndarray, batch_suffix: str = "", mode: str = "latents"
+) -> plt.Figure:
+    """Create histograms for each latent dimension and return the figure.
+
+    Args:
+        data: The data to plot.
+        batch_suffix: The suffix to add to the batch.
+        mode: The mode to plot. Can be "latents" or "seq_logits".
+    """
     n_dims = data.shape[-1]
     n_cols = min(4, n_dims)
     n_rows = (n_dims + n_cols - 1) // n_cols
@@ -342,7 +366,7 @@ def plot_histograms(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
         row, col = divmod(i, n_cols)
         ax = axes[row, col]
         ax.hist(data[:, i], bins=50, alpha=0.7, edgecolor="black")
-        ax.set_title(f"Latent dim {i}")
+        ax.set_title(f"{mode} dim {i}")
         ax.set_xlabel("Value")
         ax.set_ylabel("Frequency")
         ax.grid(True, alpha=0.3)
@@ -352,12 +376,14 @@ def plot_histograms(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
         row, col = divmod(i, n_cols)
         axes[row, col].set_visible(False)
 
-    fig.suptitle(f"Histograms of latent dimensions{batch_suffix}")
+    fig.suptitle(f"Histograms of {mode} dimensions{batch_suffix}")
     fig.tight_layout()
     return fig
 
 
-def plot_qq_plots(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
+def plot_qq_plots(
+    data: np.ndarray, batch_suffix: str = "", mode: str = "latents"
+) -> plt.Figure:
     """Create QQ plots comparing each dimension to a normal distribution and return the figure."""
     n_dims = data.shape[-1]
     n_cols = min(4, n_dims)

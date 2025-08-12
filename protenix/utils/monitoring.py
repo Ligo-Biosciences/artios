@@ -171,6 +171,7 @@ def analyse_vae_latents(latents: dict, plot_per_batch: bool = False):
     3. Per dimensions QQ plot
     4. Covariance heatmap
     5. Eigenvalues of covariance matrix
+    6. Mean and std per latent dim for each restype
 
     Args:
         latents (dict): A dictionary containing the latents.
@@ -186,7 +187,7 @@ def analyse_vae_latents(latents: dict, plot_per_batch: bool = False):
 
     Returns:
         figs (dict): A dictionary containing the figures.
-            Keys: "tsne", "hist", "qq", "cov_heatmap", "eigs"
+            Keys: "tsne", "hist", "qq", "cov_heatmap", "eigs", "restype_stats"
             Values: plt.Figure
     """
     if not latents["mean"]:
@@ -225,6 +226,11 @@ def analyse_vae_latents(latents: dict, plot_per_batch: bool = False):
         figs[f"hist_mean{suffix}"] = plot_histograms(latents_mean, suffix)
         figs[f"hist_logvar{suffix}"] = plot_histograms(latents_logvar, suffix)
 
+        # New plot: mean and std per latent dim for each restype
+        figs[f"restype_stats{suffix}"] = plot_restype_latent_stats(
+            latents_mean, latents_restype, suffix
+        )
+
     return figs
 
 
@@ -259,7 +265,7 @@ def analyse_flow_latents(latents: dict):
         suffix = f"_batch_{batch_idx}"
 
         # Plots figs
-        #figs[f"tsne{suffix}"] = plot_tsne(latents_sample, latents_restype, suffix)
+        # figs[f"tsne{suffix}"] = plot_tsne(latents_sample, latents_restype, suffix)
         figs[f"hist{suffix}"] = plot_histograms(latents_sample, suffix)
         figs[f"qq{suffix}"] = plot_qq_plots(latents_sample, suffix)
         figs[f"cov_heatmap{suffix}"] = plot_covariance_heatmap(latents_sample, suffix)
@@ -442,6 +448,103 @@ def plot_eigenvalues(data: np.ndarray, batch_suffix: str = "") -> plt.Figure:
     ax2.legend(lines + lines2, labels + labels2, loc="best")
 
     fig.tight_layout()
+    return fig
+
+
+def plot_restype_latent_stats(
+    latents_mean: np.ndarray, restype_labels: np.ndarray, batch_suffix: str = ""
+) -> plt.Figure:
+    """
+    Plot mean and standard deviations per latent dimension for each restype.
+
+    Args:
+        latents_mean: Latent mean values of shape [N_samples, c_latent]
+        restype_labels: Restype labels of shape [N_samples]
+        batch_suffix: Suffix for the batch (used in title)
+
+    Returns:
+        fig: Matplotlib figure object
+    """
+    n_dims = latents_mean.shape[-1]
+    unique_restypes = np.unique(restype_labels)
+    unique_restypes.sort()
+
+    # Create reverse mapping from index to residue name
+    index_to_residue = {v: k for k, v in STD_RESIDUES_AND_GAP.items()}
+
+    # Compute statistics for each restype
+    stats = {}
+    for restype_idx in unique_restypes:
+        mask = restype_labels == restype_idx
+        if mask.sum() > 0:
+            restype_data = latents_mean[mask]
+            restype_name = index_to_residue.get(restype_idx, f"Unknown({restype_idx})")
+            stats[restype_name] = {
+                "mean": np.mean(restype_data, axis=0),
+                "std": np.std(restype_data, axis=0),
+                "count": mask.sum(),
+            }
+
+    # Create figure with subplots
+    n_restypes = len(stats)
+    n_cols = min(4, n_restypes)
+    n_rows = (n_restypes + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
+
+    # Normalize axes array
+    if n_rows == 1 and n_cols == 1:
+        axes = np.array([[axes]])
+    elif n_rows == 1:
+        axes = axes.reshape(1, -1)
+    elif n_cols == 1:
+        axes = axes.reshape(-1, 1)
+
+    # Plot for each restype
+    for idx, (restype_name, restype_stats) in enumerate(sorted(stats.items())):
+        row, col = divmod(idx, n_cols)
+        ax = axes[row, col]
+
+        x = np.arange(n_dims)
+        means = restype_stats["mean"]
+        stds = restype_stats["std"]
+
+        # Plot mean with error bars
+        ax.errorbar(
+            x,
+            means,
+            yerr=stds,
+            fmt="o-",
+            markersize=4,
+            capsize=3,
+            capthick=1,
+            alpha=0.8,
+            linewidth=1,
+        )
+
+        # Add zero line for reference
+        ax.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
+
+        ax.set_title(f"{restype_name} (n={restype_stats['count']})", fontsize=10)
+        ax.set_xlabel("Latent Dimension")
+        ax.set_ylabel("Mean ± Std")
+        ax.grid(True, alpha=0.3)
+
+        # Set x-axis ticks
+        if n_dims <= 16:
+            ax.set_xticks(x)
+        else:
+            # Show fewer ticks for high dimensional latents
+            ax.set_xticks(x[:: max(1, n_dims // 8)])
+
+    # Hide unused subplots
+    for idx in range(len(stats), n_rows * n_cols):
+        row, col = divmod(idx, n_cols)
+        axes[row, col].set_visible(False)
+
+    fig.suptitle(f"Latent Statistics per Residue Type{batch_suffix}", fontsize=12)
+    fig.tight_layout()
+
     return fig
 
 

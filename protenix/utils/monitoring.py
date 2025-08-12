@@ -260,7 +260,7 @@ def analyse_flow_latents(data: dict):
     if not data["latents"]:
         return {}
 
-    # Flatten everything
+    # Flatten
     data["latents"] = [a.reshape(-1, a.shape[-1]) for a in data["latents"]]
     data["seq_logits"] = [a.reshape(-1, a.shape[-1]) for a in data["seq_logits"]]
 

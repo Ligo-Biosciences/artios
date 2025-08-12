@@ -20,6 +20,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 
+import matplotlib.pyplot as plt
 import numpy as np
 import rootutils
 import torch
@@ -47,7 +48,7 @@ from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
-from protenix.utils.monitoring import grad_norm
+from protenix.utils.monitoring import analyse_flow_latents, grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
@@ -408,10 +409,12 @@ class ArtiosAllAtomFlowTrainer(object):
 
     @torch.no_grad()
     def get_latents(self, batch: dict) -> dict:
-        """Get the latents from the batch."""
+        """Get the latents from the batch. Also retrieves the seq_logits"""
         # Get num_sample latents and flatten
         latents = batch["pred_dict"]["latents"]  # [..., N_sample, N_token, c_latent]
-
+        seq_logits = batch["pred_dict"][
+            "seq_logits"
+        ]  # [..., N_sample, N_token, NUM_RESIDUES]
         batch_dims = latents.shape[:-3]
 
         # Collapse N_sample and N_token dimensions together
@@ -419,7 +422,15 @@ class ArtiosAllAtomFlowTrainer(object):
             batch_dims, -1, latents.shape[-1]
         )  # [..., N_sample*N_token, c_latent]
 
-        return latents.detach().cpu().float().numpy()
+        # Collapse N_sample and N_token dimensions together
+        seq_logits = seq_logits.reshape(
+            batch_dims, -1, seq_logits.shape[-1]
+        )  # [..., N_sample*N_token, NUM_RESIDUES]
+
+        return (
+            latents.detach().cpu().float().numpy(),
+            seq_logits.detach().cpu().float().numpy(),
+        )
 
     @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
@@ -487,11 +498,11 @@ class ArtiosAllAtomFlowTrainer(object):
 
         self.flow_model.eval()
 
-        # self.latents = (
-        #    {"latents": [], "restype": []}
-        #    if self.configs.monitor.latents.track_latents
-        #    else None
-        # )
+        self.latents = (
+            {"latents": [], "seq_logits": []}
+            if self.configs.monitor.latents.track_latents
+            else None
+        )
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
@@ -550,9 +561,10 @@ class ArtiosAllAtomFlowTrainer(object):
                         pred_dict=pred_dict, batch=batch, ema_suffix=ema_suffix
                     )
 
-                    # if self.latents is not None:
-                    #    self.latents["latents"].append(self.get_latents(batch))
-                    #    # self.latents["restype"].append(something_or_other)
+                    if self.latents is not None:
+                        latents, seq_logits = self.get_latents(batch)
+                        self.latents["latents"].append(latents)
+                        self.latents["seq_logits"].append(seq_logits)
 
                     # Log structure files to Neptune Scale
                     if self.configs.use_wandb:
@@ -577,6 +589,21 @@ class ArtiosAllAtomFlowTrainer(object):
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
+            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                for name, fig in analyse_flow_latents(
+                    self.latents,
+                ).items():
+                    # Save figure to file and log to neptune
+                    fig_path = f"{self.run_dir}/figures/{name}.png"
+                    os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+                    fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+
+                    self.neptune_run.log_files(
+                        files={f"figures/{name}": fig_path},
+                        step=self.step,
+                    )
+                    plt.close(fig)
+                    # os.remove(fig_path)
         return metrics
 
     def update(self):

@@ -715,7 +715,7 @@ class ELBOLoss(nn.Module):
             "mse_dna_loss": mse_config.weight_dna,
             "mse_protein_loss": 0.0,
             "mse_loss": mse_config.weight_mse,
-            "sequence_loss": 5.0,
+            "sequence_loss": 1.0,
             "kl_divergence_loss": self.beta,
         }
 

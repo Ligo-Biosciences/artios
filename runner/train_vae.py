@@ -39,9 +39,7 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import ELBOLoss
-from protenix.model.utils import (
-    expand_at_dim,
-)
+from protenix.model.utils import expand_at_dim, noise_w_flow_matching
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
@@ -496,7 +494,7 @@ class ArtiosAllAtomTrainer(object):
                     simple_metrics.update(loss_dict)
 
                     # TODO: refactor this, measuring latent perturbation.
-                    """
+
                     if self.latents:
                         # Perturb the latents with flow matching interpolation at specific timesteps
                         mu = batch["pred_dict"]["latents_mean"]
@@ -533,22 +531,15 @@ class ArtiosAllAtomTrainer(object):
                                 )
 
                             # Compute loss over the noised latents and log
-                            #batch["pred_dict"]["coordinate"] = coords
-                            #loss, loss_dict, monitor_data = self.get_loss(
-                            #    batch, mode="train"
-                            #)  # eval, loss evaluated in the same way as train
+                            batch["pred_dict"]["coordinate"] = coords
+                            loss, loss_dict, monitor_data = self.get_loss(
+                                batch, mode="train"
+                            )  # eval, loss evaluated in the same way as train
 
-                            # Log directly to Neptune
-                            #if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                            #    self.neptune_run.log_metrics(
-                            #        {
-                            #            f"noised_latent_mse_loss_t={t}": loss_dict[
-                            #                "mse_loss"
-                            #            ]
-                            #        },
-                            #        step=self.step,
-                            #    )
-                    """
+                            simple_metrics.update(
+                                {f"noised_latent_mse_loss_t={t}": loss_dict["mse_loss"]}
+                            )
+
                     # Additional metrics
                     metrics_dict = self.get_metrics(batch)
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
@@ -604,7 +595,7 @@ class ArtiosAllAtomTrainer(object):
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                self.neptune_run.log_metrics(metrics, step=self.step)
+                self.neptune_run.log_metrics(metrics, step=self.step + 1)
 
                 for name, fig in analyse_vae_latents(
                     self.latents,

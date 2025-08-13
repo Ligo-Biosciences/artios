@@ -580,7 +580,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     simple_metrics.update(loss_dict)
 
                 # Track latents
-                if self.latents_evaluation is not None:
+                if self.latents_evaluation is not None and index < 20:
                     for name, tensor in self.get_latents_data(batch).items():
                         self.latents_evaluation[name].append(tensor)
 

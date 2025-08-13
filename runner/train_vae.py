@@ -39,7 +39,7 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import ELBOLoss
-from protenix.model.utils import expand_at_dim, noise_w_flow_matching
+from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
@@ -503,18 +503,20 @@ class ArtiosAllAtomTrainer(object):
                         noise = torch.randn_like(mu) * self.configs.sigma_latent
 
                         # Evaluate at specific timesteps
-                        specific_timesteps = [0.05, 0.1, 0.3, 0.5]
+                        noise_scales = [1e-4, 1e-3, 1e-2, 0.1, 0.5]
 
-                        for t in specific_timesteps:
+                        for t in noise_scales:
                             # Create timestep tensor with the specific value
-                            timestep = torch.ones_like(mu) * t
+                            # timestep = torch.ones_like(mu) * t
 
                             # Noise latents to this specific timestep
-                            noised_latents = noise_w_flow_matching(
-                                data=mu,
-                                noise=noise,
-                                timestep=timestep,
-                            )
+                            noised_latents = mu + t * noise
+
+                            # noise_w_flow_matching(
+                            #    data=mu,
+                            #    noise=noise,
+                            #    timestep=timestep,
+                            # )
 
                             with enable_amp:
                                 # Decode noised latents
@@ -537,7 +539,7 @@ class ArtiosAllAtomTrainer(object):
                             )  # eval, loss evaluated in the same way as train
 
                             simple_metrics.update(
-                                {f"noised_latent_mse_loss_t={t}": loss_dict["mse_loss"]}
+                                {f"noised_latent_mse_loss_σ={t}": loss_dict["mse_loss"]}
                             )
 
                     # Additional metrics

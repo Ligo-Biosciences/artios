@@ -39,7 +39,11 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import ELBOLoss
-from protenix.model.utils import expand_at_dim
+from protenix.model.utils import (
+    centre_random_augmentation,
+    expand_at_dim,
+    noise_w_flow_matching,
+)
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
@@ -490,10 +494,60 @@ class ArtiosAllAtomTrainer(object):
                     loss, loss_dict, monitor_data = self.get_loss(
                         batch, mode="train"
                     )  # eval, loss evaluated in the same way as train
+
                     simple_metrics.update(loss_dict)
                     # Additional metrics
                     metrics_dict = self.get_metrics(batch)
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
+
+                if self.latents:
+                    # Augment the coords
+                    N_sample = 1
+                    centre_atom_augment = centre_random_augmentation(
+                        x_input_coords=batch["label_dict"]["centre_coordinate"],
+                        N_sample=N_sample,
+                        mask=batch["label_dict"]["has_centre_atom"],
+                    ).to(torch.float32)  # [..., N_sample, N_token, 3]
+
+                    # Perturb the latents with flow matching interpolation at specific timesteps
+                    mu = batch["pred_dict"]["latents_mean"]
+                    # logvar = batch["pred_dict"]["latents_logvar"]
+
+                    # Generate noise once
+                    noise = torch.randn_like(mu) * self.configs.sigma_latent
+
+                    # Evaluate at specific timesteps
+                    specific_timesteps = [0.05, 0.1, 0.3, 0.5]
+
+                    for t in specific_timesteps:
+                        # Create timestep tensor with the specific value
+                        timestep = torch.ones_like(mu[..., 0, 0]) * t
+
+                        # Noise latents to this specific timestep
+                        noised_latents = noise_w_flow_matching(
+                            data=mu,
+                            noise=noise,
+                            timestep=timestep,
+                        )
+
+                        with enable_amp:
+                            # Decode noised latents
+                            coords, seq_logits = self.model.vae.decode(
+                                noised_latents,
+                                centre_atom_augment,
+                                batch["input_feature_dict"],
+                            )
+
+                        # Compute loss over the noised latents and log
+                        batch["pred_dict"]["coordinate"] = coords
+                        loss, loss_dict, monitor_data = self.get_loss(
+                            batch, mode="train"
+                        )  # eval, loss evaluated in the same way as train
+
+                        # Log loss for this specific timestep
+                        simple_metrics.update(
+                            {f"noised_latent_mse_loss_t={t}": loss_dict["mse_loss"]}
+                        )
 
                 # TODO: do model inference, save the structures with dumper and log to neptune
                 if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
@@ -563,6 +617,15 @@ class ArtiosAllAtomTrainer(object):
                     )
                     plt.close(fig)
                     # os.remove(fig_path)
+
+                # Perturb the latents
+
+                ### Run the decoder
+
+                # TODO: log curve metrics
+
+            metrics = simple_metric_wrapper.calc()
+            self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
     def update(self):
         # Clip the gradient

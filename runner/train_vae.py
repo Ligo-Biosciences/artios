@@ -502,7 +502,7 @@ class ArtiosAllAtomTrainer(object):
 
                 if self.latents:
                     # Augment the coords
-                    N_sample = 1
+                    N_sample = batch["pred_dict"]["latents_mean"].shape[-3]
                     centre_atom_augment = centre_random_augmentation(
                         x_input_coords=batch["label_dict"]["centre_coordinate"],
                         N_sample=N_sample,

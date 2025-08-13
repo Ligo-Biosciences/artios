@@ -458,7 +458,7 @@ class ArtiosAllAtomTrainer(object):
 
         self.latents = (
             {"mean": [], "logvar": [], "restype": []}
-            if self.configs.monitor.latents.track_latents
+            if self.configs.monitor.latents.track_during_vae_training
             else None
         )
 

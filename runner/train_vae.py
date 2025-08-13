@@ -495,56 +495,57 @@ class ArtiosAllAtomTrainer(object):
                     )  # eval, loss evaluated in the same way as train
 
                     simple_metrics.update(loss_dict)
+
+                    # TODO: refactor this, measuring latent perturbation.
+                    if self.latents:
+                        # Perturb the latents with flow matching interpolation at specific timesteps
+                        mu = batch["pred_dict"]["latents_mean"]
+                        # logvar = batch["pred_dict"]["latents_logvar"]
+
+                        # Generate noise once
+                        noise = torch.randn_like(mu) * self.configs.sigma_latent
+
+                        # Evaluate at specific timesteps
+                        specific_timesteps = [0.05, 0.1, 0.3, 0.5]
+
+                        for t in specific_timesteps:
+                            # Create timestep tensor with the specific value
+                            timestep = torch.ones_like(mu) * t
+
+                            # Noise latents to this specific timestep
+                            noised_latents = noise_w_flow_matching(
+                                data=mu,
+                                noise=noise,
+                                timestep=timestep,
+                            )
+
+                            with enable_amp:
+                                # Decode noised latents
+                                coords, seq_logits = self.model.module.decode(
+                                    latents=noised_latents,
+                                    centre_coordinates=batch["label_dict"][
+                                        "centre_coordinate"
+                                    ],
+                                    centre_mask=batch["label_dict"]["has_centre_atom"],
+                                    input_feature_dict=batch["input_feature_dict"],
+                                    dense_to_flat_mask=batch["label_dict"][
+                                        "dense_to_flat_atom_mask"
+                                    ],
+                                )
+
+                            # Compute loss over the noised latents and log
+                            batch["pred_dict"]["coordinate"] = coords
+                            loss, loss_dict, monitor_data = self.get_loss(
+                                batch, mode="train"
+                            )  # eval, loss evaluated in the same way as train
+
+                            # Log loss for this specific timestep
+                            simple_metrics.update(
+                                {f"noised_latent_mse_loss_t={t}": loss_dict["mse_loss"]}
+                            )
                     # Additional metrics
                     metrics_dict = self.get_metrics(batch)
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
-
-                if self.latents:
-                    # Perturb the latents with flow matching interpolation at specific timesteps
-                    mu = batch["pred_dict"]["latents_mean"]
-                    # logvar = batch["pred_dict"]["latents_logvar"]
-
-                    # Generate noise once
-                    noise = torch.randn_like(mu) * self.configs.sigma_latent
-
-                    # Evaluate at specific timesteps
-                    specific_timesteps = [0.05, 0.1, 0.3, 0.5]
-
-                    for t in specific_timesteps:
-                        # Create timestep tensor with the specific value
-                        timestep = torch.ones_like(mu) * t
-
-                        # Noise latents to this specific timestep
-                        noised_latents = noise_w_flow_matching(
-                            data=mu,
-                            noise=noise,
-                            timestep=timestep,
-                        )
-
-                        with enable_amp:
-                            # Decode noised latents
-                            coords, seq_logits = self.model.module.decode(
-                                latents=noised_latents,
-                                centre_coordinates=batch["label_dict"][
-                                    "centre_coordinate"
-                                ],
-                                centre_mask=batch["label_dict"]["has_centre_atom"],
-                                input_feature_dict=batch["input_feature_dict"],
-                                dense_to_flat_mask=batch["label_dict"][
-                                    "dense_to_flat_atom_mask"
-                                ],
-                            )
-
-                        # Compute loss over the noised latents and log
-                        batch["pred_dict"]["coordinate"] = coords
-                        loss, loss_dict, monitor_data = self.get_loss(
-                            batch, mode="train"
-                        )  # eval, loss evaluated in the same way as train
-
-                        # Log loss for this specific timestep
-                        simple_metrics.update(
-                            {f"noised_latent_mse_loss_t={t}": loss_dict["mse_loss"]}
-                        )
 
                 # TODO: do model inference, save the structures with dumper and log to neptune
                 if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
@@ -703,6 +704,9 @@ class ArtiosAllAtomTrainer(object):
             f"[step {self.step}: {step}/{self.iters_to_accumulate * self.configs.eval_interval}] {desc}"
         )
         return
+
+    def perturb_latents_and_decode(self, batch: dict):
+        pass
 
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""

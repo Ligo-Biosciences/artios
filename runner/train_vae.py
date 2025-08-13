@@ -500,7 +500,6 @@ class ArtiosAllAtomTrainer(object):
                     if self.latents:
                         # Perturb the latents with flow matching interpolation at specific timesteps
                         mu = batch["pred_dict"]["latents_mean"]
-                        # logvar = batch["pred_dict"]["latents_logvar"]
 
                         # Generate noise once
                         noise = torch.randn_like(mu) * self.configs.sigma_latent
@@ -615,15 +614,6 @@ class ArtiosAllAtomTrainer(object):
                     )
                     plt.close(fig)
                     # os.remove(fig_path)
-
-                # Perturb the latents
-
-                ### Run the decoder
-
-                # TODO: log curve metrics
-
-            metrics = simple_metric_wrapper.calc()
-            self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
     def update(self):
         # Clip the gradient

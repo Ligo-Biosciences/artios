@@ -521,7 +521,7 @@ class ArtiosAllAtomTrainer(object):
 
                     for t in specific_timesteps:
                         # Create timestep tensor with the specific value
-                        timestep = torch.ones_like(mu[..., 0, 0]) * t
+                        timestep = torch.ones_like(mu) * t
 
                         # Noise latents to this specific timestep
                         noised_latents = noise_w_flow_matching(

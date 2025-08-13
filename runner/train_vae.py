@@ -500,7 +500,7 @@ class ArtiosAllAtomTrainer(object):
                         mu = batch["pred_dict"]["latents_mean"]
 
                         # Generate noise once
-                        noise = torch.randn_like(mu) * self.configs.sigma_latent
+                        noise = torch.randn_like(mu)  # * self.configs.sigma_latent
 
                         # Evaluate at specific timesteps
                         noise_scales = [1e-4, 1e-3, 1e-2, 0.1, 0.5]

@@ -44,11 +44,16 @@ from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import FlowLoss
+from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
-from protenix.utils.monitoring import analyse_flow_latents, grad_norm
+from protenix.utils.monitoring import (
+    analyse_evaluation_latents,
+    analyse_inference_latents,
+    grad_norm,
+)
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
@@ -409,29 +414,60 @@ class ArtiosAllAtomFlowTrainer(object):
         return simple_metrics
 
     @torch.no_grad()
-    def get_latents(self, batch: dict) -> dict:
-        """Get the latents from the batch. Also retrieves the seq_logits"""
-        # Get num_sample latents and flatten
+    def get_latents_data(self, batch: dict) -> dict:
+        """Get the latents, seq_logits, timesteps, restype, and is_X_token from a batch.
+
+        Returns:
+            data (dict): A dictionary containing the data.
+                Keys: "latents", "seq_logits", "latent_timestep", "restype", "is_X_token"
+                where X is [protein, rna, dna, ligand]
+                Values: np.ndarray, each of shape [..., N_sample*N_token, *]
+        """
+        data = {}
+
+        # Latents
         latents = batch["pred_dict"]["latents"]  # [..., N_sample, N_token, c_latent]
+        data["latents"] = latents
+
+        # Seq logits
         seq_logits = batch["pred_dict"][
             "seq_logits"
         ]  # [..., N_sample, N_token, NUM_RESIDUES]
+        data["seq_logits"] = seq_logits
+
+        # Latent timestep
+        latent_timestep = expand_at_dim(
+            batch["pred_dict"]["latent_timestep"], -1, latents.shape[-2]
+        ).unsqueeze(-1)  # [..., N_sample, N_token, 1]
+        data["latent_timestep"] = latent_timestep
+
+        # Restype
+        restype = expand_at_dim(
+            batch["input_feature_dict"]["restype"], -3, latents.shape[-3]
+        )  # [..., N_sample, N_token, NUM_RESIDUES]
+        data["restype"] = restype
+
+        # is_X_token
+        for mol_type in ["protein", "rna", "dna", "ligand"]:
+            is_x_token = batch["input_feature_dict"][f"is_{mol_type}_token"]
+            is_x_token = expand_at_dim(
+                is_x_token, -3, latents.shape[-3]
+            )  # [..., N_sample, N_token, 1]
+            is_x_token = is_x_token.unsqueeze(-1)  # [..., N_sample, N_token, 1]
+            data[f"is_{mol_type}_token"] = is_x_token
+
+        # Reshape, move to numpy
         batch_dims = latents.shape[:-3]
+        for name, tensor in data.items():
+            data[name] = (
+                tensor.reshape(*batch_dims, -1, tensor.shape[-1])
+                .detach()
+                .cpu()
+                .float()
+                .numpy()
+            )
 
-        # Collapse N_sample and N_token dimensions together
-        latents = latents.reshape(
-            batch_dims, -1, latents.shape[-1]
-        )  # [..., N_sample*N_token, c_latent]
-
-        # Collapse N_sample and N_token dimensions together
-        seq_logits = seq_logits.reshape(
-            batch_dims, -1, seq_logits.shape[-1]
-        )  # [..., N_sample*N_token, NUM_RESIDUES]
-
-        return (
-            latents.detach().cpu().float().numpy(),
-            seq_logits.detach().cpu().float().numpy(),
-        )
+        return data
 
     @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
@@ -499,9 +535,15 @@ class ArtiosAllAtomFlowTrainer(object):
 
         self.flow_model.eval()
 
-        self.latents = (
-            {"latents": [], "seq_logits": []}
-            if self.configs.monitor.latents.track_latents
+        self.latents_evaluation = (
+            {"latents": [], "seq_logits": [], "latent_timestep": [], "restype": []}
+            if self.configs.monitor.latents.track_evaluation_latents
+            else None
+        )
+
+        self.latents_inference = (
+            {"latents": [], "seq_logits": [], "latent_timestep": [], "restype": []}
+            if self.configs.monitor.latents.track_inference_latents
             else None
         )
 
@@ -527,9 +569,6 @@ class ArtiosAllAtomFlowTrainer(object):
 
                 simple_metrics = {}
                 with enable_amp:
-                    # Model forward - adds the pred_dict and label_dict to batch
-                    # batch, _ = self.model_forward(batch, mode=mode, seed=index)
-
                     batch, _ = self.model_forward(
                         batch, encoder=self.vae_shell.vae.encoder, mode=mode, seed=index
                     )
@@ -539,6 +578,11 @@ class ArtiosAllAtomFlowTrainer(object):
                         batch, mode="train"
                     )  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)
+
+                # Track latents
+                if self.latents_evaluation is not None:
+                    for name, tensor in self.get_latents_data(batch).items():
+                        self.latents_evaluation[name].append(tensor)
 
                 # Metrics
                 for key, value in simple_metrics.items():
@@ -562,10 +606,9 @@ class ArtiosAllAtomFlowTrainer(object):
                         pred_dict=pred_dict, batch=batch, ema_suffix=ema_suffix
                     )
 
-                    if self.latents is not None:
-                        latents, seq_logits = self.get_latents(batch)
-                        self.latents["latents"].append(latents)
-                        self.latents["seq_logits"].append(seq_logits)
+                    if self.latents_inference is not None:
+                        for name, tensor in self.get_latents_data(batch).items():
+                            self.latents_inference[name].append(tensor)
 
                     # Log structure files to Neptune Scale
                     if self.configs.use_wandb:
@@ -590,21 +633,41 @@ class ArtiosAllAtomFlowTrainer(object):
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
+            ### Plots
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                for name, fig in analyse_flow_latents(
-                    self.latents,
-                ).items():
-                    # Save figure to file and log to neptune
-                    fig_path = f"{self.run_dir}/figures/{name}.png"
-                    os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-                    fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+                ### Evaluation latent plots
+                if self.latents_evaluation is not None:
+                    for name, fig in analyse_evaluation_latents(
+                        self.latents_evaluation,
+                    ).items():
+                        # Save figure to file and log to neptune
+                        fig_path = f"{self.run_dir}/figures/{name}.png"
+                        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+                        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
 
-                    self.neptune_run.log_files(
-                        files={f"figures/{name}": fig_path},
-                        step=self.step,
-                    )
-                    plt.close(fig)
+                        self.neptune_run.log_files(
+                            files={f"figures/{name}": fig_path},
+                            step=self.step,
+                        )
+                        plt.close(fig)
                     # os.remove(fig_path)
+
+                ### Inference latent plots
+                if self.latents_inference is not None:
+                    for name, fig in analyse_inference_latents(
+                        self.latents_inference,
+                    ).items():
+                        # Save figure to file and log to neptune
+                        fig_path = f"{self.run_dir}/figures/{name}.png"
+                        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+                        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+
+                        self.neptune_run.log_files(
+                            files={f"figures/{name}": fig_path},
+                            step=self.step,
+                        )
+                        plt.close(fig)
+                        # os.remove(fig_path)
         return metrics
 
     def update(self):
@@ -638,7 +701,6 @@ class ArtiosAllAtomFlowTrainer(object):
         with enable_amp:
             # batch, _ = self.model_forward(batch, mode="train")
 
-            # TODO: pass in encoder to forward pass
             batch, _ = self.model_forward(
                 batch, encoder=self.vae_shell.vae.encoder, mode="train"
             )

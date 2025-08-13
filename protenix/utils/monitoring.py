@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
+from scipy.special import softmax
 from scipy.stats import gaussian_kde, probplot
 from sklearn.manifold import TSNE
 from torch.nn import Module
@@ -234,7 +235,7 @@ def analyse_vae_latents(latents: dict, plot_per_batch: bool = False):
     return figs
 
 
-def analyse_flow_latents(data: dict):
+def analyse_inference_latents(data: dict):
     """
     Analyse the latents. These are the plots we will make:
     1. T-SNE
@@ -260,11 +261,11 @@ def analyse_flow_latents(data: dict):
     if not data["latents"]:
         return {}
 
-    # Flatten
+    # Reshape data across batch dimension
     data["latents"] = [a.reshape(-1, a.shape[-1]) for a in data["latents"]]
     data["seq_logits"] = [a.reshape(-1, a.shape[-1]) for a in data["seq_logits"]]
 
-    # Combine batches
+    # Combine batches as not plotting per batch
     data = {
         "latents": [np.concatenate(data["latents"], axis=-2)],
         "seq_logits": [np.concatenate(data["seq_logits"], axis=-2)],
@@ -288,6 +289,293 @@ def analyse_flow_latents(data: dict):
         )
 
     return figs
+
+
+def analyse_evaluation_latents(data: dict):
+    """
+    This governs all the classification analysis
+    These are the following plots:
+    1. Accuracy vs timestep
+    We plot a histogram of accuracy (i.e top1 score) with timestep. This will involve calculating the
+    inferred restype from the seq_logits using argmax and then compare to actual restype. I would like to see this per modality
+    as it would be interesting to see which entity the model is messing up. So this will be 4 different figures.
+
+    2. CE reliability plot per entity type
+    Per entity type, we are going to bin the timesteps into say 10 bins. This will mean on each graph we have 10 plots (for now).
+    Then, we are going to bin the tokens by their confidence scores. This will involve creating a set of bins between 0 and 1.
+    We can make this a linear binning for now but we should change this down the line so a non linear binning where each bin has
+    roughly the same number of tokens. Per bin, we are then going to calculate the mean confidence and accuracy. We then have two
+    data points per bin. We then form our plot by plotting for each of the bins the confidence (x-axis) against accuracy (y-axis).
+    On each entity's plot, we have the plot for each timestep bin.
+
+    Args:
+        data (dict): A dictionary containing the data.
+            Keys: "latents", "seq_logits", "latent_timestep", "restype", "is_X_token"
+                where X is [protein, rna, dna, ligand]
+            Values: np.ndarray, each of shape [..., N_sample*N_token, *]
+
+    Returns:
+        figs (dict): A dictionary containing the figures.
+            Keys: "accuracy_vs_timestep_protein", "accuracy_vs_timestep_rna", "accuracy_vs_timestep_dna",
+                  "accuracy_vs_timestep_ligand", "reliability_protein", "reliability_rna", "reliability_dna",
+                  "reliability_ligand"
+            Values: plt.Figure
+    """
+    if not data["seq_logits"] or not data["restype"]:
+        return {}
+
+    entity_types = ["protein", "rna", "dna", "ligand"]
+    entity_masks = {}
+
+    # Reshape data across batch dimension
+    seq_logits = [a.reshape(-1, a.shape[-1]) for a in data["seq_logits"]]
+    restype = [a.reshape(-1) for a in data["restype"]]
+    latent_timestep = [a.reshape(-1) for a in data["latent_timestep"]]
+    is_protein_token = [a.reshape(-1) for a in data["is_protein_token"]]
+    is_rna_token = [a.reshape(-1) for a in data["is_rna_token"]]
+    is_dna_token = [a.reshape(-1) for a in data["is_dna_token"]]
+    is_ligand_token = [a.reshape(-1) for a in data["is_ligand_token"]]
+
+    # Combine batches as not plotting per batch
+    # TODO: this looks weird, but opens up the possibility to plot per batch in future.
+    seq_logits = np.concatenate(seq_logits, axis=0)  # [N_total_tokens, NUM_RESIDUES]
+    restype = np.concatenate(restype, axis=0)  # [N_total_tokens]
+    latent_timestep = np.concatenate(latent_timestep, axis=0)  # [N_total_tokens]
+    is_protein_token = np.concatenate(is_protein_token, axis=0).astype(
+        bool
+    )  # [N_total_tokens]
+    is_rna_token = np.concatenate(is_rna_token, axis=0).astype(bool)  # [N_total_tokens]
+    is_dna_token = np.concatenate(is_dna_token, axis=0).astype(bool)  # [N_total_tokens]
+    is_ligand_token = np.concatenate(is_ligand_token, axis=0).astype(
+        bool
+    )  # [N_total_tokens]
+
+    entity_masks = {
+        "protein": is_protein_token,
+        "rna": is_rna_token,
+        "dna": is_dna_token,
+        "ligand": is_ligand_token,
+    }
+
+    # Calculate predicted restype and accuracy
+    predicted_restype = np.argmax(seq_logits, axis=-1)  # [N_total_tokens]
+    accuracy = (predicted_restype == restype).astype(np.float32)  # [N_total_tokens]
+
+    # Calculate confidence scores (max probability after softmax)
+    probabilities = softmax(seq_logits, axis=-1)  # [N_total_tokens, NUM_RESIDUES]
+    confidence = np.max(probabilities, axis=-1)  # [N_total_tokens]
+
+    figs = {}
+
+    # 1. Accuracy vs timestep plots per entity type
+    for entity_type in entity_types:
+        entity_mask = entity_masks[entity_type]
+        if not np.any(entity_mask):
+            continue
+
+        entity_timesteps = latent_timestep[entity_mask]
+        entity_accuracy = accuracy[entity_mask]
+
+        if len(entity_timesteps) == 0:
+            continue
+
+        figs[f"accuracy_vs_timestep_{entity_type}"] = plot_accuracy_vs_timestep(
+            entity_timesteps, entity_accuracy, entity_type
+        )
+
+    # 2. CE reliability plots per entity type
+    n_timestep_bins = 10
+    n_confidence_bins = 10
+
+    for entity_type in entity_types:
+        entity_mask = entity_masks[entity_type]
+        if not np.any(entity_mask):
+            continue
+
+        entity_timesteps = latent_timestep[entity_mask]
+        entity_confidence = confidence[entity_mask]
+        entity_accuracy = accuracy[entity_mask]
+
+        if len(entity_timesteps) == 0:
+            continue
+
+        figs[f"reliability_{entity_type}"] = plot_reliability_diagram(
+            entity_timesteps,
+            entity_confidence,
+            entity_accuracy,
+            entity_type,
+            n_timestep_bins,
+            n_confidence_bins,
+        )
+
+    return figs
+
+
+def plot_accuracy_vs_timestep(
+    timesteps: np.ndarray, accuracy: np.ndarray, entity_type: str, n_time_bins: int = 50
+) -> plt.Figure:
+    """
+    Plot accuracy vs timestep for a specific entity type.
+
+    Args:
+        timesteps (np.ndarray): Timestep values [N_tokens]
+        accuracy (np.ndarray): Accuracy values [N_tokens]
+        entity_type (str): Entity type name for the title
+        n_time_bins (int): Number of timestep bins
+
+    Returns:
+        plt.Figure: The matplotlib figure
+    """
+    # Create time bins and compute statistics
+    bins = np.linspace(timesteps.min(), timesteps.max(), n_time_bins + 1)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+
+    means = []
+    stds = []
+    counts = []
+
+    for i in range(len(bins) - 1):
+        mask = (timesteps >= bins[i]) & (timesteps < bins[i + 1])
+        bin_accuracy = accuracy[mask]
+        means.append(np.mean(bin_accuracy) if len(bin_accuracy) > 0 else 0)
+        stds.append(np.std(bin_accuracy) if len(bin_accuracy) > 0 else 0)
+        counts.append(len(bin_accuracy))
+
+    means = np.array(means)
+    stds = np.array(stds)
+    counts = np.array(counts)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
+
+    # Plot raw data points with low alpha
+    ax.scatter(timesteps, accuracy, alpha=0.1, color="gray", s=2, label="Raw samples")
+
+    # Plot mean accuracy as a line
+    valid_mask = counts > 0
+    ax.plot(
+        bin_centers[valid_mask],
+        means[valid_mask],
+        "b-",
+        label="Mean accuracy",
+        linewidth=2,
+    )
+
+    # Add confidence bands (±1 standard deviation)
+    ax.fill_between(
+        bin_centers[valid_mask],
+        np.maximum(0, means[valid_mask] - stds[valid_mask]),
+        np.minimum(1, means[valid_mask] + stds[valid_mask]),
+        alpha=0.2,
+        color="blue",
+        label="±1 std dev",
+    )
+
+    ax.set_xlabel("Timestep")
+    ax.set_ylabel("Accuracy")
+    ax.set_title(f"Accuracy vs Timestep - {entity_type.capitalize()}")
+    ax.set_ylim(0, 1)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_reliability_diagram(
+    timesteps: np.ndarray,
+    confidence: np.ndarray,
+    accuracy: np.ndarray,
+    entity_type: str,
+    n_timestep_bins: int = 10,
+    n_confidence_bins: int = 10,
+) -> plt.Figure:
+    """
+    Plot reliability diagram (confidence vs accuracy) per timestep bin for a specific entity type.
+
+    Args:
+        timesteps (np.ndarray): Timestep values [N_tokens]
+        confidence (np.ndarray): Confidence scores [N_tokens]
+        accuracy (np.ndarray): Accuracy values [N_tokens]
+        entity_type (str): Entity type name for the title
+        n_timestep_bins (int): Number of timestep bins
+        n_confidence_bins (int): Number of confidence bins
+
+    Returns:
+        plt.Figure: The matplotlib figure
+    """
+    # Create timestep bins
+    timestep_bins = np.linspace(0, 1, n_timestep_bins + 1)
+    # timestep_centers = (timestep_bins[:-1] + timestep_bins[1:]) / 2
+
+    # Create confidence bins
+    confidence_bins = np.linspace(
+        confidence.min(), confidence.max(), n_confidence_bins + 1
+    )
+    # confidence_centers = (confidence_bins[:-1] + confidence_bins[1:]) / 2
+
+    fig, ax = plt.subplots(figsize=(10, 8), dpi=300)
+
+    # Use distinct colors for different timestep bins
+    colors = plt.cm.viridis(np.linspace(0, 1, n_timestep_bins))
+
+    for i, (t_idx, t_next) in enumerate(zip(timestep_bins[:-1], timestep_bins[1:])):
+        # Get tokens in this timestep bin
+        timestep_mask = (timesteps >= t_idx) & (timesteps < t_next)
+        if not np.any(timestep_mask):
+            continue
+
+        bin_confidence = confidence[timestep_mask]
+        bin_accuracy = accuracy[timestep_mask]
+
+        if len(bin_confidence) == 0:
+            continue
+
+        # For each confidence bin, calculate mean confidence and accuracy
+        bin_mean_confidence = []
+        bin_mean_accuracy = []
+        bin_counts = []
+
+        for c_idx in range(n_confidence_bins):
+            conf_mask = (bin_confidence >= confidence_bins[c_idx]) & (
+                bin_confidence < confidence_bins[c_idx + 1]
+            )
+            if not np.any(conf_mask):
+                continue
+
+            conf_bin_confidence = bin_confidence[conf_mask]
+            conf_bin_accuracy = bin_accuracy[conf_mask]
+
+            if len(conf_bin_confidence) > 0:
+                bin_mean_confidence.append(np.mean(conf_bin_confidence))
+                bin_mean_accuracy.append(np.mean(conf_bin_accuracy))
+                bin_counts.append(len(conf_bin_confidence))
+
+        if len(bin_mean_confidence) > 0:
+            # Plot this timestep bin's reliability curve
+            ax.plot(
+                bin_mean_confidence,
+                bin_mean_accuracy,
+                "o-",
+                color=colors[i],
+                label=f"{t_idx:.2f} < t < {t_next:.2f}",
+                markersize=4,
+                alpha=0.8,
+            )
+
+    # Plot perfect calibration line
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Perfect calibration")
+
+    ax.set_xlabel("Confidence")
+    ax.set_ylabel("Accuracy")
+    ax.set_title(f"Reliability Diagram - {entity_type.capitalize()}")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize="small")
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    return fig
 
 
 def plot_tsne(

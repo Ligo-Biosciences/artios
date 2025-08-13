@@ -380,7 +380,8 @@ monitor_configs = {
             "eval_tests": ListValue(["ss_distribution", "posebusters"]),
         },
         "latents": {
-            "track_latents": False,
+            "track_evaluation_latents": False,
+            "track_inference_latents": False,
             "num_batch": 25,
             "num_sample": 1,
             "plot_per_batch": False,

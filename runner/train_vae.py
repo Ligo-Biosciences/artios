@@ -532,7 +532,7 @@ class ArtiosAllAtomTrainer(object):
 
                         with enable_amp:
                             # Decode noised latents
-                            coords, seq_logits = self.model.vae.decode(
+                            coords, seq_logits = self.model.module.vae.decode(
                                 noised_latents,
                                 centre_atom_augment,
                                 batch["input_feature_dict"],

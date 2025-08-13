@@ -538,10 +538,16 @@ class ArtiosAllAtomTrainer(object):
                                 batch, mode="train"
                             )  # eval, loss evaluated in the same way as train
 
-                            # Log loss for this specific timestep
-                            simple_metrics.update(
-                                {f"noised_latent_mse_loss_t={t}": loss_dict["mse_loss"]}
-                            )
+                            # Log directly to Neptune
+                            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                                self.neptune_run.log_metrics(
+                                    {
+                                        f"noised_latent_mse_loss_t={t}": loss_dict[
+                                            "mse_loss"
+                                        ]
+                                    },
+                                    step=self.step,
+                                )
                     # Additional metrics
                     metrics_dict = self.get_metrics(batch)
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))

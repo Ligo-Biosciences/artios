@@ -40,7 +40,6 @@ from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import ELBOLoss
 from protenix.model.utils import (
-    centre_random_augmentation,
     expand_at_dim,
     noise_w_flow_matching,
 )
@@ -501,14 +500,6 @@ class ArtiosAllAtomTrainer(object):
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
                 if self.latents:
-                    # Augment the coords
-                    N_sample = batch["pred_dict"]["latents_mean"].shape[-3]
-                    centre_atom_augment = centre_random_augmentation(
-                        x_input_coords=batch["label_dict"]["centre_coordinate"],
-                        N_sample=N_sample,
-                        mask=batch["label_dict"]["has_centre_atom"],
-                    ).to(torch.float32)  # [..., N_sample, N_token, 3]
-
                     # Perturb the latents with flow matching interpolation at specific timesteps
                     mu = batch["pred_dict"]["latents_mean"]
                     # logvar = batch["pred_dict"]["latents_logvar"]
@@ -532,10 +523,15 @@ class ArtiosAllAtomTrainer(object):
 
                         with enable_amp:
                             # Decode noised latents
-                            coords, seq_logits = self.model.module.vae.decode(
-                                noised_latents,
-                                centre_atom_augment,
-                                batch["input_feature_dict"],
+                            coords, seq_logits = self.model.module.decode(
+                                latents=noised_latents,
+                                centre_coordinates=batch["label_dict"][
+                                    "centre_coordinate"
+                                ],
+                                input_feature_dict=batch["input_feature_dict"],
+                                dense_to_flat_mask=batch["label_dict"][
+                                    "dense_to_flat_atom_mask"
+                                ],
                             )
 
                         # Compute loss over the noised latents and log

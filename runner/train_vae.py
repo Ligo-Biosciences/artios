@@ -528,6 +528,7 @@ class ArtiosAllAtomTrainer(object):
                                 centre_coordinates=batch["label_dict"][
                                     "centre_coordinate"
                                 ],
+                                centre_mask=batch["label_dict"]["has_centre_atom"],
                                 input_feature_dict=batch["input_feature_dict"],
                                 dense_to_flat_mask=batch["label_dict"][
                                     "dense_to_flat_atom_mask"

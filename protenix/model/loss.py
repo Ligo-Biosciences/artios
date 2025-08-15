@@ -657,7 +657,13 @@ class KLDivergenceLoss(nn.Module):
     KL divergence loss term in the ELBO.
     """
 
-    def __init__(self, reduction: str = "mean") -> None:
+    def __init__(self, reduction: str = "mean", q: float = 1.0) -> None:
+        """
+        Args:
+            reduction (str): the reduction for all elements except the last dimension.
+            q (float): the skew that makes the gradient of logvar proportional to itself if q > 1.0.
+                       Defaults to 1.0 which recovers the original KL divergence loss.
+        """
         super(KLDivergenceLoss, self).__init__()
         self.reduction = reduction
 
@@ -679,7 +685,9 @@ class KLDivergenceLoss(nn.Module):
             torch.Tensor: the KL divergence loss.
               []
         """
-        per_token_kl = 1 / 2 * (mean**2 + logvar.exp() - logvar - 1).sum(dim=-1)
+        per_token_kl = (
+            1 / 2 * (mean**2 + (logvar.exp() - logvar) ** self.q - 1).sum(dim=-1)
+        )
         return loss_reduction(per_token_kl, method=self.reduction)
 
 

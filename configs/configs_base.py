@@ -341,9 +341,7 @@ loss_configs = {
                 },
                 "sequence": {},  # TODO: link with loss
             },
-            "kl_divergence": {
-                "reduction": "mean",
-            },
+            "kl_divergence": {"reduction": "mean", "q": 1.5},
         },
         "flow": {
             "centre_atom": {

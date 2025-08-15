@@ -666,6 +666,7 @@ class KLDivergenceLoss(nn.Module):
         """
         super(KLDivergenceLoss, self).__init__()
         self.reduction = reduction
+        self.q = q
 
     def forward(
         self,

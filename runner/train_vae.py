@@ -671,7 +671,6 @@ class ArtiosAllAtomTrainer(object):
             if "loss" not in key:
                 continue
             self.train_metric_wrapper.add(key, value, namespace="train")
-        torch.cuda.empty_cache()
 
     def progress_bar(self, desc: str = ""):
         if DIST_WRAPPER.rank != 0:

@@ -89,7 +89,7 @@ class AttentionPairBias(nn.Module):
             local_attention_method=self.local_attention_method,
             attn_weight_dropout_p=attn_weight_dropout_p,
         )
-        self.layernorm_z = LayerNorm(c_z)
+        self.layernorm_z = LayerNorm(c_z)  # TODO: remove the LN here.
         # Alg24. Line8 is scalar, but this is different for different heads
         self.linear_nobias_z = LinearNoBias(
             in_features=c_z, out_features=n_heads, init="zeros"
@@ -130,7 +130,7 @@ class AttentionPairBias(nn.Module):
 
         # Multi-head attention bias
         bias = self.linear_nobias_z(
-            self.layernorm_z(z)
+            self.layernorm_z(z)  # TODO: remove the LN here
         )  # [..., n_blocks, n_queries, n_keys, n_heads]
         bias = permute_final_dims(
             bias, [3, 0, 1, 2]
@@ -172,7 +172,7 @@ class AttentionPairBias(nn.Module):
         """
 
         # Multi-head attention bias
-        bias = self.linear_nobias_z(self.layernorm_z(z))
+        bias = self.linear_nobias_z(self.layernorm_z(z))  # TODO: remove the LN
         bias = permute_final_dims(bias, [2, 0, 1])  # [..., n_heads, N_token, N_token]
 
         # Line 11: Multi-head attention with attention bias & gating (and optionally local attention)

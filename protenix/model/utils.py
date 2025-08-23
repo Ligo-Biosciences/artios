@@ -91,6 +91,8 @@ def centre_random_augmentation(
     x_input_coords = expand_at_dim(x_input_coords, dim=-3, n=N_sample)
 
     if centre_only:
+        if mask is not None:
+            x_input_coords = x_input_coords * mask[..., None, :, None]
         return x_input_coords
 
     # N_augment = batch_size * N_sample

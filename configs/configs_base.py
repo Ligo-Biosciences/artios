@@ -341,9 +341,7 @@ loss_configs = {
                 },
                 "sequence": {},  # TODO: link with loss
             },
-            "kl_divergence": {
-                "reduction": "mean",
-            },
+            "kl_divergence": {"reduction": "mean", "q": 1.5},
         },
         "flow": {
             "centre_atom": {
@@ -380,7 +378,9 @@ monitor_configs = {
             "eval_tests": ListValue(["ss_distribution", "posebusters"]),
         },
         "latents": {
-            "track_latents": False,
+            "track_during_vae_training": True,
+            "track_evaluation_latents": False,
+            "track_inference_latents": False,
             "num_batch": 25,
             "num_sample": 1,
             "plot_per_batch": False,

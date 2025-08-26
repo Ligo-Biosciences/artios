@@ -78,15 +78,21 @@ def centre_random_augmentation(
 
     # Move to origin [..., N_atom, 3]
     if mask is None:
-        x_input_coords = x_input_coords - torch.mean(input=x_input_coords, dim=-2, keepdim=True)
+        x_input_coords = x_input_coords - torch.mean(
+            input=x_input_coords, dim=-2, keepdim=True
+        )
     else:
-        center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (mask.sum(dim=-1) + eps)
+        center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (
+            mask.sum(dim=-1) + eps
+        )
         x_input_coords = x_input_coords - center.unsqueeze(dim=-2)
 
     # Expand to [..., N_sample, N_atom, 3]
     x_input_coords = expand_at_dim(x_input_coords, dim=-3, n=N_sample)
 
     if centre_only:
+        if mask is not None:
+            x_input_coords = x_input_coords * mask[..., None, :, None]
         return x_input_coords
 
     # N_augment = batch_size * N_sample
@@ -103,9 +109,15 @@ def centre_random_augmentation(
         device
     )  # [..., N_sample, 3]
     x_augment_coords = (
-        rot_vec_mul(r=expand_at_dim(rot_matrix_random, dim=-3, n=N_atom), t=x_input_coords)
+        rot_vec_mul(
+            r=expand_at_dim(rot_matrix_random, dim=-3, n=N_atom), t=x_input_coords
+        )
         + trans_random[..., None, :]
     )  # [..., N_sample, N_atom, 3]
+
+    # Apply the mask
+    if mask is not None:
+        x_augment_coords = x_augment_coords * mask[..., None, :, None]
     return x_augment_coords
 
 
@@ -183,7 +195,9 @@ def flatten_final_dims(t: torch.Tensor, num_dims: int) -> torch.Tensor:
     return t.reshape(shape=t.shape[:-num_dims] + (-1,))
 
 
-def one_hot(x: torch.Tensor, lower_bins: torch.Tensor, upper_bins: torch.Tensor) -> torch.Tensor:
+def one_hot(
+    x: torch.Tensor, lower_bins: torch.Tensor, upper_bins: torch.Tensor
+) -> torch.Tensor:
     """Get one hot embedding of x from lower_bins and upper_bins
     Args:
         x (torch.Tensor): the input x
@@ -235,7 +249,9 @@ def batched_gather(
     return data[ranges]
 
 
-def broadcast_token_to_atom(x_token: torch.Tensor, atom_to_token_idx: torch.Tensor) -> torch.Tensor:
+def broadcast_token_to_atom(
+    x_token: torch.Tensor, atom_to_token_idx: torch.Tensor
+) -> torch.Tensor:
     """Broadcast token-level embeddings to atom-level embeddings
 
     Args:
@@ -285,7 +301,9 @@ def aggregate_atom_to_token(
     """
 
     # Broadcasting in the given dim.
-    out = scatter(src=x_atom, index=atom_to_token_idx, dim=-2, dim_size=n_token, reduce=reduce)
+    out = scatter(
+        src=x_atom, index=atom_to_token_idx, dim=-2, dim_size=n_token, reduce=reduce
+    )
 
     return out
 
@@ -344,7 +362,9 @@ def sample_msa_feature_dict_random_without_replacement(
         indices = indices[:cutoff]
 
     msa_feat_dict = {
-        feat_name: torch.index_select(input=feat_dict[feat_name], dim=dim, index=indices)
+        feat_name: torch.index_select(
+            input=feat_dict[feat_name], dim=dim, index=indices
+        )
         for feat_name, dim in dim_dict.items()
     }
     return msa_feat_dict
@@ -485,9 +505,13 @@ def simple_merge_dict_list(dict_list: list[dict]) -> dict:
     return merged_dict
 
 
-def sample_logit_normal(size, device, dtype=torch.float32, loc=0, scale=1, generator=None):
+def sample_logit_normal(
+    size, device, dtype=torch.float32, loc=0, scale=1, generator=None
+):
     """Sample from a logit-normal distribution. Used to generate timesteps for flow matching."""
-    normal_samples = torch.normal(loc, scale, size, device=device, dtype=dtype, generator=generator)
+    normal_samples = torch.normal(
+        loc, scale, size, device=device, dtype=dtype, generator=generator
+    )
     return torch.sigmoid(normal_samples)
 
 
@@ -499,18 +523,18 @@ def noise_w_flow_matching(data, noise, timestep, sigma_min=1e-5):
 
 
 def beta_function(
-        t: torch.Tensor, 
-        mean: Optional[float] = None, 
-        std: Optional[float] = None,
-        alpha: Optional[float] = None,
-        beta: Optional[float] = None,
-        device: Optional[torch.device] = None, 
-        dtype: Optional[torch.dtype] = None
-    ) -> torch.Tensor:
+    t: torch.Tensor,
+    mean: Optional[float] = None,
+    std: Optional[float] = None,
+    alpha: Optional[float] = None,
+    beta: Optional[float] = None,
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+) -> torch.Tensor:
     """
     Evaluate the Beta probability density function at specified timestep values,
     with the distribution parameterized by either mean/std or alpha/beta.
-    
+
     Args:
         t (torch.Tensor): Timestep values between 0 and 1
         mean (float, optional): Mean of the Beta distribution (between 0 and 1)
@@ -519,49 +543,55 @@ def beta_function(
         beta (float, optional): Beta parameter of the Beta distribution (> 0)
         device (torch.device, optional): Device for the computation
         dtype (torch.dtype, optional): Data type for the computation
-        
+
     Returns:
         torch.Tensor: Normalised Beta function values evaluated at the specified timesteps
     """
     if device is not None and dtype is not None:
         t = t.to(device=device, dtype=dtype)
-    
+
     # Check parameter combinations
     mean_std_provided = mean is not None and std is not None
     alpha_beta_provided = alpha is not None and beta is not None
-    
+
     if mean_std_provided and alpha_beta_provided:
-        raise ValueError("Cannot specify both (mean, std) and (alpha, beta). Choose one parameterization.")
+        raise ValueError(
+            "Cannot specify both (mean, std) and (alpha, beta). Choose one parameterization."
+        )
     elif not mean_std_provided and not alpha_beta_provided:
         raise ValueError("Must specify either (mean, std) or (alpha, beta) parameters.")
-    
+
     if mean_std_provided:
         # Convert mean and std to alpha and beta parameters
         if device is not None and dtype is not None:
             mean = torch.tensor(mean, device=device, dtype=dtype)
             std = torch.tensor(std, device=device, dtype=dtype)
-        
-        var = std ** 2
-        
+
+        var = std**2
+
         # Ensure the parameters are valid
         if mean * (1 - mean) <= var:
-            raise ValueError(f"Invalid parameters: mean={mean}, std={std}. Requires mean*(1-mean) > std^2")
-            
+            raise ValueError(
+                f"Invalid parameters: mean={mean}, std={std}. Requires mean*(1-mean) > std^2"
+            )
+
         common_term = (mean * (1 - mean) / var) - 1
         alpha = mean * common_term
         beta = (1 - mean) * common_term
     else:
         # Use alpha and beta directly
         if alpha <= 0 or beta <= 0:
-            raise ValueError(f"Alpha and beta must be positive. Got alpha={alpha}, beta={beta}")
-        
+            raise ValueError(
+                f"Alpha and beta must be positive. Got alpha={alpha}, beta={beta}"
+            )
+
         if device is not None and dtype is not None:
             alpha = torch.tensor(alpha, device=device, dtype=dtype)
             beta = torch.tensor(beta, device=device, dtype=dtype)
-    
+
     # Calculate Beta function normalization constant using log-gamma
     # B(alpha, beta) = Γ(alpha)Γ(beta)/Γ(alpha+beta)
     log_norm = torch.lgamma(alpha) + torch.lgamma(beta) - torch.lgamma(alpha + beta)
     normalization = torch.exp(log_norm)
-    
-    return t**(alpha-1) * (1-t)**(beta-1) / normalization
+
+    return t ** (alpha - 1) * (1 - t) ** (beta - 1) / normalization

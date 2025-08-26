@@ -21,6 +21,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy.stats import truncnorm
+from torch import Tensor
 
 from protenix.model.utils import (
     add,
@@ -79,7 +80,7 @@ def trunc_normal_init_(weight, bias=None, scale=1.0, fan="fan_in"):
 
     # Initialize weight and bias
     with torch.no_grad():
-        weight.copy_(torch.tensor(samples, device=weight.device))
+        weight.copy_(Tensor(samples, device=weight.device))
         init_bias_to_zero_(bias)
 
 
@@ -122,9 +123,7 @@ def normal_init_(weight, bias=None):
     init_bias_to_zero_(bias)
 
 
-def bias_init_fn(
-    weight: torch.Tensor, bias: Optional[torch.Tensor], biasinit: float = 0.0
-) -> None:
+def bias_init_fn(weight: Tensor, bias: Optional[Tensor], biasinit: float = 0.0) -> None:
     """Helper function to initialize BiasInitLinear weights and bias"""
     with torch.no_grad():
         nn.init.zeros_(weight)
@@ -135,7 +134,7 @@ def bias_init_fn(
 class Linear(nn.Linear):
     """
     Linear layer with non-standard initialisations.
-
+    # TODO: add precision unit test
     """
 
     def __init__(
@@ -144,8 +143,8 @@ class Linear(nn.Linear):
         out_features: int,
         bias: bool = True,
         init: str = "default",
-        init_fn: Optional[Callable[[torch.Tensor, torch.Tensor], None]] = None,
-        precision: Optional[torch.dtype] = None,
+        init_fn: Optional[Callable[[Tensor, Tensor], None]] = None,
+        high_precision: bool = False,
     ) -> None:
         """
         Args:
@@ -168,6 +167,8 @@ class Linear(nn.Linear):
                 Overridden by init_fn if the latter is not None.
             init_fn (Callable): A custom initializer taking weight and bias as inputs.
                 Overrides init if not None.
+            cast_to_high_precision (bool, optional): Cast inputs and weights to high precision when performing operation.
+                Defaults to False.
         """
         super(Linear, self).__init__(in_features, out_features, bias)
 
@@ -188,14 +189,40 @@ class Linear(nn.Linear):
                 raise ValueError(f"Invalid init method: {init}")
             init_methods[init](self.weight, self.bias if bias else None)
 
-        self.precision = precision
+        self.high_precision = high_precision
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # TODO: put the precision in here.
-        return F.linear(x, self.weight, self.bias)
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass with precision support.
+
+        Args:
+            input (torch.Tensor): Input tensor
+                [..., in_features]
+
+        Returns:
+            torch.Tensor: Output tensor
+                [..., out_features]
+        """
+        if self.high_precision:
+            input_dtype = input.dtype
+            with torch.amp.autocast("cuda", enabled=False):
+                bias = (
+                    self.bias.to(dtype=torch.float32) if self.bias is not None else None
+                )
+                return F.linear(
+                    input.to(dtype=torch.float32),
+                    self.weight.to(dtype=torch.float32),
+                    bias,
+                ).to(dtype=input_dtype)
+        else:
+            return F.linear(input, self.weight, self.bias)
 
 
-LinearNoBias = partial(Linear, bias=False)
+class LinearNoBias(Linear):
+    """Linear layer with bias=False."""
+
+    def __init__(self, *args, **kwargs):
+        super(LinearNoBias, self).__init__(*args, bias=False, **kwargs)
 
 
 class BiasInitLinear(Linear):
@@ -205,20 +232,19 @@ class BiasInitLinear(Linear):
         self,
         in_features: int,
         out_features: int,
-        bias: bool = True,
-        biasinit: float = 0.0,
+        *,
+        biasinit: float,
     ) -> None:
         """
         Args:
             in_features (int): in_features
             out_features (int): out_features
-            bias (bool, optional): whether add bias. Defaults to True.
-            biasinit (float, optional): the initial bias value. Defaults to 0.0.
+            biasinit (float): the initial bias value.
         """
         super(BiasInitLinear, self).__init__(
             in_features=in_features,
             out_features=out_features,
-            bias=bias,
+            bias=True,
             init_fn=lambda w, b: bias_init_fn(w, b, biasinit),
         )
 
@@ -263,14 +289,14 @@ class LayerNorm(nn.Module):
                 "bias", torch.zeros(normalized_shape, device=device, dtype=dtype)
             )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         """Forward pass using optimized kernel on GPU, regular layernorm on CPU.
 
         Args:
-            x (torch.Tensor): Input tensor
+            x (Tensor): Input tensor
 
         Returns:
-            torch.Tensor: Normalized tensor
+            Tensor: Normalized tensor
         """
 
         if (
@@ -294,171 +320,39 @@ class LayerNorm(nn.Module):
             )
 
 
-class SwiGLU(nn.Module):
-    """SwiGLU layer that computes swish(Linear(a)) * Linear(b)"""
-
-    def __init__(self, c_in: int, c_out: int) -> None:
-        """
-        Args:
-            c_in (int): Input channels
-            c_out (int): Output channels
-        """
-        super(SwiGLU, self).__init__()
-        self.c_in = c_in
-        self.c_out = c_out
-        self.linear = LinearNoBias(c_in, c_out * 2)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """SwiGLU layer."""
-        a, b = self.linear(x).chunk(2, dim=-1)
-        output = F.silu(a) * b
-        return output
-
-
-class AdaptiveLayerNorm(nn.Module):
-    """
-    Implements Algorithm 26 in AF3
-    """
-
-    def __init__(self, c_a: int = 768, c_s: int = 384) -> None:
-        """
-        Args:
-            c_a (int, optional): the embedding dim of a(single feature aggregated atom info). Defaults to 768.
-            c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
-        """
-        super(AdaptiveLayerNorm, self).__init__()
-        self.layernorm_a = LayerNorm(c_a, elementwise_affine=False)
-        # The pytorch version should be newer than 2.1
-        self.layernorm_s = LayerNorm(c_s)
-        self.linear_s = BiasInitLinear(
-            in_features=c_s, out_features=c_a, biasinit=1.0
-        )  # gate values 0.73 @ init
-        self.linear_nobias_s = LinearNoBias(
-            in_features=c_s, out_features=c_a, init="zeros"
-        )
-
-    def forward(self, a: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            a (torch.Tensor): the single feature aggregate per-atom representation
-                [..., N_token, c_a]
-            s (torch.Tensor): single embedding
-                [..., N_token, c_s]
-
-        Returns:
-            torch.Tensor: the updated a from AdaLN
-                [..., N_token, c_a]
-        """
-        a = self.layernorm_a(a)
-        s = self.layernorm_s(s)
-        a = torch.sigmoid(self.linear_s(s)) * a + self.linear_nobias_s(s)
-        return a
-
-
-class Transition(nn.Module):
-    """
-    Implements Algorithm 11 in AF3
-    """
-
-    def __init__(self, c_in: int, n: int) -> None:
-        """
-        Args:
-            c_in (int, optional): the input dimension.
-            n (int, optional): factor by which c_in is multiplied to obtain hidden dimension.
-        """
-        super(Transition, self).__init__()
-        self.n = n
-        self.c_in = c_in
-        self.layernorm = LayerNorm(c_in)
-        self.swiglu = SwiGLU(c_in=c_in, c_out=n * c_in)
-        self.linear_no_bias = LinearNoBias(
-            in_features=n * c_in, out_features=c_in, init="zeros"
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x (torch.Tensor): the input tensor
-                [..., c]
-
-        Returns:
-            torch.Tensor: the output tensor as the same shape of x
-                [..., c]
-        """
-        x = self.layernorm(x)
-        x = self.linear_no_bias(self.swiglu(x))
-        return x
-
-
-class MLP(nn.Module):
-    """
-    Implements Algorithm 11 in AF3
-    """
-
-    def __init__(self, c_in: int, c_out: int, n: int) -> None:
-        """
-        Args:
-            c_in (int, optional): the input dimension.
-            n (int, optional): factor by which c_in is multiplied to obtain hidden dimension.
-        """
-        super(MLP, self).__init__()
-        self.n = n
-        self.c_in = c_in
-        self.c_out = c_out
-        self.layernorm = LayerNorm(c_in)
-        self.swiglu = SwiGLU(c_in=c_in, c_out=n * c_in)
-        self.linear_no_bias = LinearNoBias(
-            in_features=n * c_in, out_features=c_out, init="zeros"
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x (torch.Tensor): the input tensor
-                [..., c]
-
-        Returns:
-            torch.Tensor: the output tensor as the same shape of x
-                [..., c]
-        """
-        x = self.layernorm(x)
-        x = self.linear_no_bias(self.swiglu(x))
-        return x
-
-
 def _attention(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    attn_bias: Optional[torch.Tensor] = None,
-    use_efficient_implementation: bool = False,
-    attn_weight_dropout_p: float = 0.0,
-    inplace_safe: bool = False,
-) -> torch.Tensor:
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    pair_mask: Tensor,
+    attn_bias: Optional[Tensor] = None,
+) -> Tensor:
     """Attention.
+    # TODO: needs unit tests
 
     Args:
-        q (torch.Tensor): query tensor of shape [..., n_q, d]
-        k (torch.Tensor): key tensor of shape [..., n_kv, d]
-        v (torch.Tensor): value tensor of shape[..., n_kv, d]
-        attn_bias (torch.Tensor, optional): attention bias tensor of shape [..., n_q, n_kv]. Defaults to None.
-        use_efficient_implementation (bool): whether to use the torch.nn.functional.scaled_dot_product_attention, Defaults to False.
-        attn_weight_dropout_p (float): Dropout probability; if greater than 0.0, dropout is applied, Defaults to 0.0.
+        q (Tensor): query tensor
+            [..., n_q, d]
+        k (Tensor): key tensor
+            [..., n_kv, d]
+        v (Tensor): value tensor
+            [..., n_kv, d]
+        pair_mask (Tensor): pair mask tensor
+            [..., n_q, n_kv]
+        attn_bias (Tensor, optional): attention bias tensor
+            None | [..., n_q, n_kv]
 
     Returns:
-        torch.Tensor: output of tensor [..., n_q, d]
+        Tensor: attention output
+            [..., n_q, d]
     """
     assert k.shape == v.shape
-    if use_efficient_implementation:
-        attn_output = F.scaled_dot_product_attention(
-            query=q,
-            key=k,
-            value=v,
-            attn_mask=attn_bias,
-            dropout_p=attn_weight_dropout_p,
-            scale=1.0,  # q and k scaled in prep_qkv
-        )
-        return attn_output
+    assert q.shape[-1] == k.shape[-1]
+
+    if attn_bias is not None:
+        assert attn_bias.shape[-2] == q.shape[-2]
+        assert attn_bias.shape[-1] == k.shape[-2]
+
     # [..., n_kv, d] -> [..., d, n_kv]
     k = k.transpose(-1, -2)
 
@@ -466,7 +360,12 @@ def _attention(
     attn_weights = q @ k
 
     if attn_bias is not None:
-        attn_weights = add(attn_weights, attn_bias, inplace_safe=inplace_safe)
+        attn_weights = add(attn_weights, attn_bias)
+
+    # fill out of mask with -inf (based on dtype)
+    attn_weights = torch.masked_fill(
+        attn_weights, ~pair_mask, torch.finfo(attn_weights.dtype).min
+    )
 
     # [..., n_q, n_kv]
     attn_weights = F.softmax(attn_weights, dim=-1)
@@ -478,20 +377,20 @@ def _attention(
 
 
 def rearrange_qk_to_dense_trunk(
-    q: Union[torch.Tensor, list[torch.Tensor]],
-    k: Union[torch.Tensor, list[torch.Tensor]],
+    q: Union[Tensor, list[Tensor]],
+    k: Union[Tensor, list[Tensor]],
     dim_q: Union[int, list[int]],
     dim_k: Union[int, list[int]],
     n_queries: int = 32,
     n_keys: int = 128,
     compute_mask: bool = True,
-) -> tuple[Union[torch.Tensor, list[torch.Tensor]]]:
+) -> tuple[Union[Tensor, list[Tensor]]]:
     """Rearrange q/k into blocked tensors for local operations.
 
     Args:
-        q (torch.Tensor): query tensor. Could be a tensor or a list of tensors.
+        q (Tensor): query tensor. Could be a tensor or a list of tensors.
             [..., n_q, ...] (n_q is at dimension dim_q)
-        k (torch.Tensor | List[torch.Tensor]): key tensor. Could be a tensor or a list of tensors.
+        k (Tensor | List[Tensor]): key tensor. Could be a tensor or a list of tensors.
             [..., n_k, ...] (n_k is at dimension dim_k)
         dim_q (int): along which dimension to build the trunks. Could be an int or a list of int.
         dim_k (int): along which dimension to build the trunks. Could be an int or a list of int.
@@ -499,13 +398,13 @@ def rearrange_qk_to_dense_trunk(
         n_keys (int, optional): local window size of key/value tensor.
 
     Returns:
-        tuple[Union[torch.Tensor, list[torch.Tensor]]]:
-            q_trunked: torch.Tensor or list of tensors. Same as the input type.
+        tuple[Union[Tensor, list[Tensor]]]:
+            q_trunked: Tensor or list of tensors. Same as the input type.
                 [..., n_trunks, n_queries, ...]
-            k_trunked: torch.Tensor or list of tensors. Same as the input type.
+            k_trunked: Tensor or list of tensors. Same as the input type.
                 [..., n_trunks, n_keys, ...]
             padding_info (dict):
-                mask_trunked: torch.Tensor
+                mask_trunked: Tensor
                     [n_trunks, n_queries, n_keys]
                 q_pad: query padded dimension
     """
@@ -594,16 +493,16 @@ def rearrange_qk_to_dense_trunk(
     return q_trunked, k_trunked, padding_info
 
 
-def optimized_concat_split(attn_bias: torch.Tensor, n_queries: int) -> torch.Tensor:
+def optimized_concat_split(attn_bias: Tensor, n_queries: int) -> Tensor:
     """Optimized concatenation and splitting of attention bias tensor.
 
     Args:
-        attn_bias (torch.Tensor): The attention bias tensor.
+        attn_bias (Tensor): The attention bias tensor.
             Shape: [..., D, E]
         n_queries (int): The number of queries in each split.
 
     Returns:
-        torch.Tensor: The reshaped and permuted attention bias tensor.
+        Tensor: The reshaped and permuted attention bias tensor.
             Shape: [..., n_queries, D // n_queries * E]
     """
     D = attn_bias.size(-2)
@@ -617,31 +516,31 @@ def optimized_concat_split(attn_bias: torch.Tensor, n_queries: int) -> torch.Ten
 
 
 def rearrange_to_dense_trunk(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
     n_queries: int,
     n_keys: int,
-    attn_bias: Optional[torch.Tensor] = None,
+    attn_bias: Optional[Tensor] = None,
     inf: float = 1e10,
-) -> tuple[Union[torch.Tensor, int]]:
+) -> tuple[Union[Tensor, int]]:
     """Rearrange q/k/v/bias into blocked tensors for local attention.
 
     Args:
-        q (torch.Tensor): query tensor
+        q (Tensor): query tensor
             [..., n_q, d]
-        k (torch.Tensor): key tensor
+        k (Tensor): key tensor
             [..., n_kv, d]
-        v (torch.Tensor): value tensor
+        v (Tensor): value tensor
             [..., n_kv, d]
-        attn_bias (torch.Tensor, optional): attention bias
+        attn_bias (Tensor, optional): attention bias
             [..., n_q, n_kv] or None
         n_queries (int, optional): local window size of query tensor.
         n_keys (int, optional): local window size of key/value tensor.
         inf (float, optional): used for attention masking. Defaults to 1e10.
 
     Returns:
-        tuple[Union[torch.Tensor, int]]:
+        tuple[Union[Tensor, int]]:
             q_trunked
                 [..., n_trunks, n_queries, d]
             k_trunked / v_trunked
@@ -690,39 +589,39 @@ def rearrange_to_dense_trunk(
 
 
 def _local_attention(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
     n_queries: int,
     n_keys: int,
-    attn_bias: Optional[torch.Tensor] = None,
-    trunked_attn_bias: Optional[torch.Tensor] = None,
+    attn_bias: Optional[Tensor] = None,
+    trunked_attn_bias: Optional[Tensor] = None,
     inf: float = 1e10,
     use_efficient_implementation: bool = False,
     attn_weight_dropout_p: float = 0.0,
     inplace_safe: bool = False,
     chunk_size: Optional[int] = None,
-) -> torch.Tensor:
+) -> Tensor:
     """Local attention
 
     Args:
-        q (torch.Tensor): query tensor
+        q (Tensor): query tensor
             [..., Q, d]
-        k (torch.Tensor): key tensor
+        k (Tensor): key tensor
             [..., K, d]
-        v (torch.Tensor): value tensor
+        v (Tensor): value tensor
             [..., K, d]
         n_queries (int): local window size of query.
         n_keys (int): local window size of key/value.
-        attn_bias (torch.Tensor, optional): the input biases for attention. Defaults to None.
+        attn_bias (Tensor, optional): the input biases for attention. Defaults to None.
             [..., Q, K]
-        trunked_attn_bias (torch.Tensor, optional): the input biases where shape has been rearranged to dense trunks. Defaults to None.
+        trunked_attn_bias (Tensor, optional): the input biases where shape has been rearranged to dense trunks. Defaults to None.
             [..., n_trunks, n_queries, n_keys]
         inf (float): inf number used for attention bias. Defaults to 1e10.
         use_efficient_implementation (bool): whether to use the torch.nn.functional.scaled_dot_product_attention, Defaults to False.
         attn_weight_dropout_p (float): Dropout probability; if greater than 0.0, dropout is applied, Defaults to 0.0.
     Returns:
-        torch.Tensor: standard attention output
+        Tensor: standard attention output
             [..., Q, d]
     """
     assert q.shape == k.shape == v.shape  # local attention doesn't make sense if Q != K
@@ -794,7 +693,7 @@ def _local_attention(
 
 def create_local_attn_bias(
     n: int, n_queries: int, n_keys: int, inf: float = 1e10, device: torch.device = None
-) -> torch.Tensor:
+) -> Tensor:
     """Create local attention bias based on query window n_queries and kv window n_keys.
 
     Args:
@@ -805,7 +704,7 @@ def create_local_attn_bias(
         device (torch.device, optional): cuda|cpu|None. Defaults to None.
 
     Returns:
-        torch.Tensor: the diagonal-like global attention bias
+        Tensor: the diagonal-like global attention bias
     """
     n_trunks = int(math.ceil(n / n_queries))
     padded_n = n_trunks * n_queries
@@ -902,27 +801,27 @@ class Attention(nn.Module):
             self.linear_g = LinearNoBias(self.c_q, self.c_hidden * self.num_heads)
             self.sigmoid = nn.Sigmoid()
 
-    def split_heads(self, x: torch.Tensor) -> torch.Tensor:
+    def split_heads(self, x: Tensor) -> Tensor:
         """Split heads of tensor along the last dimension."""
         return x.view(x.shape[:-1] + (self.num_heads, -1))
 
     def _prep_qkv(
         self,
-        q_x: torch.Tensor,
-        kv_x: torch.Tensor,
+        q_x: Tensor,
+        kv_x: Tensor,
         apply_scale: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor]:
         """Prepare qkv
 
         Args:
-            q_x (torch.Tensor): the input x for q
+            q_x (Tensor): the input x for q
                 [..., c_q]
-            kv_x (torch.Tensor): the input x for kv
+            kv_x (Tensor): the input x for kv
                 [..., c_k]
                 [..., c_v]
             apply_scale (bool, optional): apply scale to dot product qk. Defaults to True.
         Returns:
-            tuple[torch.Tensor, torch.Tensor, torch.Tensor]: the return q/k/v
+            tuple[Tensor, Tensor, Tensor]: the return q/k/v
                 # [..., H, Q/K/V, C_hidden]
         """
         # [*, Q/K/V, H * C_hidden]
@@ -945,17 +844,17 @@ class Attention(nn.Module):
 
         return q, k, v
 
-    def _wrap_up(self, o: torch.Tensor, q_x: torch.Tensor) -> torch.Tensor:
+    def _wrap_up(self, o: Tensor, q_x: Tensor) -> Tensor:
         """
 
         Args:
-            o (torch.Tensor): the output of attention
+            o (Tensor): the output of attention
                 [..., G/Q, H, C_hidden]
-            q_x (torch.Tensor): the input for gated g
+            q_x (Tensor): the input for gated g
                 [..., Q, c_q]
 
         Returns:
-            torch.Tensor: the output of attention
+            Tensor: the output of attention
         """
         if self.linear_g is not None:
             g = self.sigmoid(self.linear_g(q_x))
@@ -974,32 +873,32 @@ class Attention(nn.Module):
 
     def forward(
         self,
-        q_x: torch.Tensor,
-        kv_x: torch.Tensor,
-        attn_bias: Optional[torch.Tensor] = None,
-        trunked_attn_bias: Optional[torch.Tensor] = None,
+        q_x: Tensor,
+        kv_x: Tensor,
+        attn_bias: Optional[Tensor] = None,
+        trunked_attn_bias: Optional[Tensor] = None,
         n_queries: Optional[int] = None,
         n_keys: Optional[int] = None,
         inf: Optional[float] = 1e10,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
-    ) -> torch.Tensor:
+    ) -> Tensor:
         """
 
         Args:
-            q_x (torch.Tensor): the input x for q
+            q_x (Tensor): the input x for q
                 [..., Q, C_q]
-            kv_x (torch.Tensor): the input x for k/v
+            kv_x (Tensor): the input x for k/v
                 [..., K, C_k]
-            attn_bias (torch.Tensor, optional): the input biases for attention. Defaults to None.
+            attn_bias (Tensor, optional): the input biases for attention. Defaults to None.
                 [..., H, Q, K] or [..., Q, K]
-            trunked_attn_bias (torch.Tensor, optional): the input biases where shape has been rearranged to dense trunks. Defaults to None.
+            trunked_attn_bias (Tensor, optional): the input biases where shape has been rearranged to dense trunks. Defaults to None.
                 [..., H, n_trunks, n_queries, n_keys] or [..., n_trunks, n_queries, n_keys]
             n_queries (int, optional): local window size of query tensor. If not None, will perform local attention. Defaults to None.
             n_keys (int, optional): local window size of key tensor. Defaults to None.
 
         Returns:
-            torch.Tensor: attention update
+            Tensor: attention update
                 [*, Q, C_q]
         """
 
@@ -1083,9 +982,7 @@ class Attention(nn.Module):
         return o
 
 
-def gather_pair_embedding_in_dense_trunk(
-    x: torch.Tensor, idx_q: torch.Tensor, idx_k: torch.Tensor
-):
+def gather_pair_embedding_in_dense_trunk(x: Tensor, idx_q: Tensor, idx_k: Tensor):
     """
     Selectively gather elements from a tensor using two sets of indices.
 
@@ -1116,24 +1013,24 @@ def gather_pair_embedding_in_dense_trunk(
 
 
 def broadcast_token_to_local_atom_pair(
-    z_token: torch.Tensor,
-    atom_to_token_idx: torch.Tensor,
+    z_token: Tensor,
+    atom_to_token_idx: Tensor,
     n_queries: int,
     n_keys: int,
     compute_mask: bool = True,
-) -> torch.Tensor:
+) -> Tensor:
     """Broadcast token pair embedding to atom pair embedding
 
     Args:
-        z_token (torch.Tensor): token pair embedding
+        z_token (Tensor): token pair embedding
             [..., N_token, N_token, d]
-        atom_to_token_idx (torch.Tensor): map atom idx to token idx
+        atom_to_token_idx (Tensor): map atom idx to token idx
             [N_atom]
 
     Returns:
-        z_gathered_blocked (torch.Tensor): atom pair embedding, with local blocked shape
+        z_gathered_blocked (Tensor): atom pair embedding, with local blocked shape
             [..., n_trunks, n_queries, n_keys, d]
-        pad_mask (torch.Tensor):
+        pad_mask (Tensor):
             [n_trunks, n_queries, n_keys]
         q_pad_length (int)
     """

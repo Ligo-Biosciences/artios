@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+
+TODO: Create a loss base class that handles the logging, loss calculation, reduction etc.
+Then, all the rest of the losses should subclass that.
+
+"""
+
 import logging
 from typing import Any, Optional
 

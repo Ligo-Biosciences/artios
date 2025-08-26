@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import datetime
+import hashlib
 import logging
 import os
 import time
@@ -148,7 +149,9 @@ class ArtiosAllAtomTrainer(object):
             )
 
         if not self.configs.deterministic_seed:
-            rank_seed = hash(self.configs.seed, DIST_WRAPPER.rank, "init_seed")
+            # use rank-specific seed
+            hash_string = f"({self.configs.seed},{DIST_WRAPPER.rank},init_seed)"
+            rank_seed = int(hashlib.sha256(hash_string.encode("utf8")).hexdigest(), 16)
             rank_seed = rank_seed % (2**32)
         else:
             rank_seed = self.configs.seed
@@ -296,17 +299,17 @@ class ArtiosAllAtomTrainer(object):
             self.print(f"Finish loading checkpoint, current step: {self.step}")
 
         # Load EMA model parameters
-        if self.configs.load_ema_checkpoint_path:
+        if self.configs.load_ema_vae_checkpoint_path:
             _load_checkpoint(
-                self.configs.load_ema_checkpoint_path,
+                self.configs.load_ema_vae_checkpoint_path,
                 load_params_only=True,
             )
             self.ema_wrapper.register()
 
         # Load model parameters (With no EMA) from checkpoint
-        if self.configs.load_checkpoint_path:
+        if self.configs.load_vae_checkpoint_path:
             _load_checkpoint(
-                self.configs.load_checkpoint_path,
+                self.configs.load_vae_checkpoint_path,
                 self.configs.load_params_only,
                 skip_load_optimizer=self.configs.skip_load_optimizer,
                 skip_load_scheduler=self.configs.skip_load_scheduler,
@@ -455,7 +458,7 @@ class ArtiosAllAtomTrainer(object):
 
         self.latents = (
             {"mean": [], "logvar": [], "restype": []}
-            if self.configs.monitor.latents.track_latents
+            if self.configs.monitor.latents.track_during_vae_training
             else None
         )
 
@@ -487,7 +490,58 @@ class ArtiosAllAtomTrainer(object):
                     loss, loss_dict, monitor_data = self.get_loss(
                         batch, mode="train"
                     )  # eval, loss evaluated in the same way as train
+
                     simple_metrics.update(loss_dict)
+
+                    # TODO: refactor this, measuring latent perturbation.
+
+                    if self.latents:
+                        # Perturb the latents with flow matching interpolation at specific timesteps
+                        mu = batch["pred_dict"]["latents_mean"]
+
+                        # Generate noise once
+                        noise = torch.randn_like(mu)  # * self.configs.sigma_latent
+
+                        # Evaluate at specific timesteps
+                        noise_scales = [1e-4, 1e-3, 1e-2, 0.1, 0.5]
+
+                        for t in noise_scales:
+                            # Create timestep tensor with the specific value
+                            # timestep = torch.ones_like(mu) * t
+
+                            # Noise latents to this specific timestep
+                            noised_latents = mu + t * noise
+
+                            # noise_w_flow_matching(
+                            #    data=mu,
+                            #    noise=noise,
+                            #    timestep=timestep,
+                            # )
+
+                            with enable_amp:
+                                # Decode noised latents
+                                coords, seq_logits = self.model.module.decode(
+                                    latents=noised_latents,
+                                    centre_coordinates=batch["label_dict"][
+                                        "centre_coordinate"
+                                    ],
+                                    centre_mask=batch["label_dict"]["has_centre_atom"],
+                                    input_feature_dict=batch["input_feature_dict"],
+                                    dense_to_flat_mask=batch["label_dict"][
+                                        "dense_to_flat_atom_mask"
+                                    ],
+                                )
+
+                            # Compute loss over the noised latents and log
+                            batch["pred_dict"]["coordinate"] = coords
+                            loss, loss_dict, monitor_data = self.get_loss(
+                                batch, mode="train"
+                            )  # eval, loss evaluated in the same way as train
+
+                            simple_metrics.update(
+                                {f"noised_latent_mse_loss_σ={t}": loss_dict["mse_loss"]}
+                            )
+
                     # Additional metrics
                     metrics_dict = self.get_metrics(batch)
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
@@ -543,7 +597,7 @@ class ArtiosAllAtomTrainer(object):
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                self.neptune_run.log_metrics(metrics, step=self.step)
+                self.neptune_run.log_metrics(metrics, step=self.step + 1)
 
                 for name, fig in analyse_vae_latents(
                     self.latents,
@@ -617,7 +671,6 @@ class ArtiosAllAtomTrainer(object):
             if "loss" not in key:
                 continue
             self.train_metric_wrapper.add(key, value, namespace="train")
-        torch.cuda.empty_cache()
 
     def progress_bar(self, desc: str = ""):
         if DIST_WRAPPER.rank != 0:
@@ -640,6 +693,9 @@ class ArtiosAllAtomTrainer(object):
             f"[step {self.step}: {step}/{self.iters_to_accumulate * self.configs.eval_interval}] {desc}"
         )
         return
+
+    def perturb_latents_and_decode(self, batch: dict):
+        pass
 
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""

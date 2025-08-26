@@ -657,9 +657,16 @@ class KLDivergenceLoss(nn.Module):
     KL divergence loss term in the ELBO.
     """
 
-    def __init__(self, reduction: str = "mean") -> None:
+    def __init__(self, reduction: str = "mean", q: float = 1.0) -> None:
+        """
+        Args:
+            reduction (str): the reduction for all elements except the last dimension.
+            q (float): the skew that makes the gradient of logvar proportional to itself if q > 1.0.
+                       Defaults to 1.0 which recovers the original KL divergence loss.
+        """
         super(KLDivergenceLoss, self).__init__()
         self.reduction = reduction
+        self.q = q
 
     def forward(
         self,
@@ -679,7 +686,9 @@ class KLDivergenceLoss(nn.Module):
             torch.Tensor: the KL divergence loss.
               []
         """
-        per_token_kl = 1 / 2 * (mean**2 + logvar.exp() - logvar - 1).sum(dim=-1)
+        per_token_kl = (
+            1 / 2 * (mean**2 + (logvar.exp() - logvar) ** self.q - 1).sum(dim=-1)
+        )
         return loss_reduction(per_token_kl, method=self.reduction)
 
 
@@ -715,7 +724,7 @@ class ELBOLoss(nn.Module):
             "mse_dna_loss": mse_config.weight_dna,
             "mse_protein_loss": 0.0,
             "mse_loss": mse_config.weight_mse,
-            "sequence_loss": 5.0,
+            "sequence_loss": 1.0,
             "kl_divergence_loss": self.beta,
         }
 
@@ -826,20 +835,16 @@ class ELBOLoss(nn.Module):
             }
         )
 
-        is_protein = torch.ones_like(feat_dict["is_dna"]) - torch.clamp(
-            (feat_dict["is_dna"] + feat_dict["is_rna"] + feat_dict["is_ligand"]),
-            max=1.0,
-        )
         loss_fns.update(
             {
                 "mse_protein_loss": lambda: self.mse_loss(
                     pred_coordinate=pred_dict["coordinate"],
                     true_coordinate=label_dict["coordinate"],
-                    coordinate_mask=label_dict["coordinate_mask"],
+                    coordinate_mask=loss_mask,
                     is_rna=feat_dict["is_rna"],
                     is_dna=feat_dict["is_dna"],
                     is_ligand=feat_dict["is_ligand"],
-                    extra_filter_mask=is_protein,  # only proteins
+                    extra_filter_mask=feat_dict["is_protein"],  # only proteins
                 )
             }
         )

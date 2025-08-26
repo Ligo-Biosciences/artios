@@ -191,6 +191,7 @@ class Linear(nn.Linear):
         self.precision = precision
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO: put the precision in here.
         return F.linear(x, self.weight, self.bias)
 
 

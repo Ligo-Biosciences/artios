@@ -329,7 +329,7 @@ def attention(
     v: Tensor,
     pair_mask: Tensor,
     attn_bias: Optional[Tensor] = None,
-    inf: float = None,
+    inf: float = 1e10,
 ) -> Tensor:
     """Attention.
     # TODO: needs unit tests
@@ -368,7 +368,7 @@ def attention(
         attn_weights = add(attn_weights, attn_bias)
 
     # fill out of mask with -inf (based on dtype)
-    attn_weights = torch.masked_fill(attn_weights, ~pair_mask, -inf)
+    attn_weights = torch.masked_fill(attn_weights, ~pair_mask.bool(), -inf)
 
     # [..., n_q, n_kv]
     attn_weights = F.softmax(attn_weights, dim=-1)

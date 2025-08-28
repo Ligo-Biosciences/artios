@@ -25,7 +25,18 @@ class DiTBlock(nn.Module):
     """Diffusion Transformer Block."""
 
     def __init__(self, c_token: int, num_heads: int):
+        """
+        Args:
+            c_token: (int) token embedding dimension
+            num_heads: (int) number of attention heads
+        """
+        super().__init__()
+
         assert c_token % num_heads == 0, "Input dim should be divisible by num heads."
+
+        self.c_token = c_token
+        self.num_heads = num_heads
+
         self.attn_layernorm = LayerNorm(c_token, elementwise_affine=False)
         # Attention
         self.attention = Attention(
@@ -58,24 +69,47 @@ class DiTBlock(nn.Module):
 
         Args:
             a (Tensor): Input token representations.
-                [..., c_token]
+                [..., N, c_token]
             scale_attn (Tensor): attention scaling.
-                [..., c_token]
+                [..., N, c_token]
             shift_attn (Tensor): attention shift.
-                [..., c_token]
+                [..., N, c_token]
             gate_attn (Tensor): attention gating.
-                [..., c_token]
+                [..., N, c_token]
             scale_mlp (Tensor): MLP scaling.
-                [..., c_token]
+                [..., N, c_token]
             shift_mlp (Tensor): MLP shift.
-                [..., c_token]
+                [..., N, c_token]
             gate_mlp (Tensor): MLP gating.
-                [..., c_token]
+                [..., N, c_token]
             pair_bias (Tensor): Pairwise attention bias.
                 [..., num_heads, N, N]
             pair_mask (Tensor): Pairwise attention mask.
                 [..., N, N]
         """
+
+        assert (
+            pair_bias.shape[-2:] == pair_mask.shape[-2:] == (a.shape[-2], a.shape[-2])
+        ), "Pair bias and mask dimension mismatch. Expected [N, N], got {} and {}".format(
+            pair_bias.shape[-2:], pair_mask.shape[-2:]
+        )
+
+        assert (
+            pair_bias.shape[-3] == self.num_heads
+        ), "Pair bias dimension mismatch. Expected {}, got {}".format(
+            self.num_heads, pair_bias.shape[-3]
+        )
+
+        assert (
+            a.shape[-2:]
+            == scale_attn.shape[-2:]
+            == shift_attn.shape[-2:]
+            == gate_attn.shape[-2:]
+            == scale_mlp.shape[-2:]
+            == shift_mlp.shape[-2:]
+            == gate_mlp.shape[-2:]
+        ), "Shape mismatch between input and modulation parameters."
+
         # Adaln + Attention
         attn_input = scale_attn * self.attn_layernorm(a) + shift_attn
         attn_output = self.attention(
@@ -91,8 +125,6 @@ class DiTBlock(nn.Module):
 
 
 class DiffusionTransformer(nn.Module):
-    """"""
-
     def __init__(
         self,
         num_blocks: int,
@@ -101,6 +133,18 @@ class DiffusionTransformer(nn.Module):
         c_z: int,
         num_heads: int,
     ):
+        """
+        Args:
+            num_blocks: (int) number of diffusion transformer blocks
+            c_token: (int) token embedding dimension
+            c_s: (int) condition embedding dimension
+            c_z: (int) pair bias embedding dimension
+            num_heads: (int) number of attention heads
+        """
+        super().__init__()
+
+        assert num_blocks > 0, "Number of blocks must be greater than 0."
+
         self.num_blocks = num_blocks
         self.c_token = c_token
         self.c_s = c_s
@@ -141,14 +185,14 @@ class DiffusionTransformer(nn.Module):
 
         Returns:
             Tuple containing:
-                - mlp_params: MLP parameters split across blocks
                 - attn_params: Attention parameters split across blocks
+                - mlp_params: MLP parameters split across blocks
         """
-        mlp_fused, attn_fused = fused_params.chunk(2, dim=-1)
-        mlp_params = mlp_fused.chunk(self.num_blocks, dim=-1)
+        attn_fused, mlp_fused = fused_params.chunk(2, dim=-1)
         attn_params = attn_fused.chunk(self.num_blocks, dim=-1)
+        mlp_params = mlp_fused.chunk(self.num_blocks, dim=-1)
 
-        return mlp_params, attn_params
+        return attn_params, mlp_params
 
     def _prep_blocks(
         self,
@@ -180,23 +224,71 @@ class DiffusionTransformer(nn.Module):
 
         return blocks
 
+    def _verify_inputs(self, a: Tensor, s: Tensor, z: Tensor, pair_mask: Tensor):
+        """Verify the inputs to the transformer."""
+
+        n_token = a.shape[-2]
+        c_token = a.shape[-1]
+        c_s = s.shape[-1]
+        c_z = z.shape[-1]
+
+        # check feature dims
+        assert (
+            c_token == self.c_token
+        ), "Input token dimension mismatch. Expected {}, got {}".format(
+            self.c_token, c_token
+        )
+        assert (
+            c_s == self.c_s
+        ), "Input condition dimension mismatch. Expected {}, got {}".format(
+            self.c_s, c_s
+        )
+        assert (
+            c_z == self.c_z
+        ), "Input pair bias dimension mismatch. Expected {}, got {}".format(
+            self.c_z, c_z
+        )
+
+        # check shared dims
+        assert s.shape[-2] == n_token, "Input condition dimension mismatch."
+        assert z.shape[-3:-1] == (
+            n_token,
+            n_token,
+        ), "Input pair bias dimension mismatch. Expected [N, N], got {}".format(
+            z.shape[-3:-1]
+        )
+        assert pair_mask.shape[-2:] == (
+            n_token,
+            n_token,
+        ), "Input pair mask dimension mismatch. Expected [N, N], got {}".format(
+            pair_mask.shape[-2:]
+        )
+
+        # check batch dims
+        assert (
+            len(a.shape[:-2])
+            == len(s.shape[:-2])
+            == len(z.shape[:-3])
+            == len(pair_mask.shape[:-2])
+        ), "Batch dimension mismatch."
+
     def forward(self, a: Tensor, s: Tensor, z: Tensor, pair_mask: Tensor):
         """
         Args:
             a: [..., N, c_token]
-            s: [..., c_s]
+            s: [..., N, c_s]
             z: [..., N, N, c_z]
             pair_mask: [..., N, N]
-        TODO: add units tests
-        TODO: add asserts
         """
+        self._verify_inputs(a, s, z, pair_mask)
+
         # Conditioning
         s = self.condition_layernorm(s)
 
         # Chunk block parameters
-        scale_mlps, scale_attns = self._chunk_block_params(self.scale_linear(s))
-        shift_mlps, shift_attns = self._chunk_block_params(self.shift_linear(s))
-        gate_mlps, gate_attns = self._chunk_block_params(self.gate_linear(s))
+        scale_attns, scale_mlps = self._chunk_block_params(self.scale_proj(s))
+        shift_attns, shift_mlps = self._chunk_block_params(self.shift_proj(s))
+        gate_attns, gate_mlps = self._chunk_block_params(self.gate_proj(s))
 
         # Embed and chunk pair bias
         z = self.z_layernorm(z)

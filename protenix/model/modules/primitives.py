@@ -332,7 +332,6 @@ def attention(
     inf: float = 1e10,
 ) -> Tensor:
     """Attention.
-    # TODO: needs unit tests
 
     Args:
         q (Tensor): query tensor
@@ -353,6 +352,7 @@ def attention(
     """
     assert k.shape == v.shape
     assert q.shape[-1] == k.shape[-1]
+    assert pair_mask.dtype == torch.bool
 
     if attn_bias is not None:
         assert attn_bias.shape[-2] == q.shape[-2]
@@ -368,7 +368,7 @@ def attention(
         attn_weights = add(attn_weights, attn_bias)
 
     # fill out of mask with -inf (based on dtype)
-    attn_weights = torch.masked_fill(attn_weights, ~pair_mask.bool(), -inf)
+    attn_weights = torch.masked_fill(attn_weights, ~pair_mask, -inf)
 
     # [..., n_q, n_kv]
     attn_weights = F.softmax(attn_weights, dim=-1)

@@ -180,6 +180,8 @@ class Attention(nn.Module):
         pair_mask: Tensor,
     ):
         """
+        Forward pass of Attention module.
+
         Args:
             q_x: input from which the queries will be derived from
                 [..., N_q, q_dim]

@@ -133,6 +133,8 @@ class Attention(nn.Module):
             num_heads (int): Number of attention heads
             gating (bool, optional): Whether to use gating. Defaults to True.
             final_linear_init (str, optional): Init scheme of final linear. Defaults to zeros.
+
+        TODO: needs unit tests
         """
         super().__init__()
 
@@ -164,14 +166,22 @@ class Attention(nn.Module):
         self,
         q_x: Tensor,
         kv_x: Tensor,
-        q_mask: Tensor,
-        k_mask: Tensor,
         pair_bias: Tensor,
         pair_mask: Tensor,
     ):
+        """
+        Args:
+            q_x: input from which the queries will be derived from
+                [..., N_q, q_dim]
+            kv_x: input from which the key and values will be derived from
+                [..., N_kv, kv_dim]
+            pair_bias: per-head pair biases
+                [..., num_heads, N_q, N_kv]
+            pair_mask: pairwise attention mask
+                [..., N_q, N_kv]
+        """
         assert pair_bias.shape[-2:] == (q_x.shape[-2], kv_x.shape[-2])
-        assert q_mask.shape[-1] == q_x.shape[-2]
-        assert k_mask.shape[-1] == kv_x.shape[-2]
+        # TODO: pair bias assert
 
         # Project QKV
         q = reshape_at_dim(
@@ -189,7 +199,7 @@ class Attention(nn.Module):
         v = v.transpose(-2, -3)  # [..., n_heads, n_kv, c]
 
         # Add head dim
-        pair_bias = pair_bias.unsqueeze(dim=-3)  # [..., n_heads = 1, n_q, n_kv]
+        pair_mask = pair_mask.unsqueeze(dim=-3)  # [..., n_heads = 1, n_q, n_kv]
 
         attn_out = attention(
             q=q, k=k, v=v, pair_mask=pair_mask, attn_bias=pair_bias, inf=1e9

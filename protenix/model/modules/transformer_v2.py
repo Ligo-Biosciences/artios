@@ -13,17 +13,28 @@ Cross attention and self attention are separated.
 
 from torch import Tensor, nn
 
-from protenix.model.modules.components import Transition
+from protenix.model.modules.components import Attention, Transition
+from protenix.model.modules.primitives import LayerNorm
 
 
 class DiTBlock(nn.Module):
     """Diffusion Transformer Block."""
 
-    def __init__(self, c_token: int, n_heads: int):
+    def __init__(self, c_token: int, num_heads: int):
+        assert c_token % num_heads == 0, "Input dim should be divisible by num heads."
+        self.attn_layernorm = LayerNorm(c_token, elementwise_affine=False)
         # Attention
+        self.attention = Attention(
+            q_dim=c_token,
+            kv_dim=c_token,
+            head_dim=c_token // num_heads,
+            num_heads=num_heads,
+            gating=True,
+            final_linear_init="default",
+        )
+        self.mlp_layernorm = LayerNorm(c_token, elementwise_affine=False)
         # Transition
-        self.transition = Transition(c_in=c_token, n=2, output_linear_init="zeros")
-        pass
+        self.transition = Transition(c_in=c_token, n=2, output_linear_init="default")
 
     def forward(
         self,
@@ -57,14 +68,22 @@ class DiTBlock(nn.Module):
             gate_mlp (Tensor): MLP gating.
                 [..., c_token]
             pair_bias (Tensor): Pairwise attention bias.
-                [..., N, N, no_heads]
+                [..., num_heads, N, N]
             pair_mask (Tensor): Pairwise attention mask.
                 [..., N, N]
         """
-        # Attention + adaln
-        # MLP + adaln
-        # scaling and shift for both
-        pass
+        # Adaln + Attention
+        attn_input = scale_attn * self.attn_layernorm(a) + shift_attn
+        attn_output = self.attention(
+            q_x=attn_input, kv_x=attn_input, pair_bias=pair_bias, pair_mask=pair_mask
+        )
+        a = a + (gate_attn * attn_output)
+
+        # Adaln + MLP
+        mlp_input = scale_mlp * self.mlp_layernorm(a) + shift_mlp
+        mlp_output = self.transition(mlp_input)
+        a = a + (gate_mlp * mlp_output)
+        return a
 
 
 class DiffusionTransformer(nn.Module):

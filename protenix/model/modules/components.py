@@ -194,6 +194,7 @@ class Attention(nn.Module):
             torch.Tensor: Output tensor
                 [..., N_q, q_dim]
         """
+        assert pair_bias.shape[-3] == self.num_heads
         assert pair_bias.shape[-2:] == (q_x.shape[-2], kv_x.shape[-2])
         assert pair_mask.shape[-2:] == (q_x.shape[-2], kv_x.shape[-2])
 

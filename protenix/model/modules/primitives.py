@@ -329,10 +329,9 @@ def attention(
     v: Tensor,
     pair_mask: Tensor,
     attn_bias: Optional[Tensor] = None,
-    inf: float = None,
+    inf: float = 1e10,
 ) -> Tensor:
     """Attention.
-    # TODO: needs unit tests
 
     Args:
         q (Tensor): query tensor
@@ -353,6 +352,7 @@ def attention(
     """
     assert k.shape == v.shape
     assert q.shape[-1] == k.shape[-1]
+    assert pair_mask.dtype == torch.bool
 
     if attn_bias is not None:
         assert attn_bias.shape[-2] == q.shape[-2]

@@ -51,6 +51,41 @@ class DiTBlock(nn.Module):
         # Transition
         self.transition = Transition(c_in=c_token, n=2, output_linear_init="default")
 
+    def _verify_inputs(
+        self,
+        a: Tensor,
+        scale_attn: Tensor,
+        shift_attn: Tensor,
+        gate_attn: Tensor,
+        scale_mlp: Tensor,
+        shift_mlp: Tensor,
+        gate_mlp: Tensor,
+        pair_bias: Tensor,
+        pair_mask: Tensor,
+    ) -> None:
+        """Verify the inputs to the transformer block."""
+        assert (
+            pair_bias.shape[-2:] == pair_mask.shape[-2:] == (a.shape[-2], a.shape[-2])
+        ), "Pair bias and mask dimension mismatch. Expected [N, N], got {} and {}".format(
+            pair_bias.shape[-2:], pair_mask.shape[-2:]
+        )
+
+        assert (
+            pair_bias.shape[-3] == self.num_heads
+        ), "Pair bias dimension mismatch. Expected {}, got {}".format(
+            self.num_heads, pair_bias.shape[-3]
+        )
+
+        assert (
+            a.shape[-2:]
+            == scale_attn.shape[-2:]
+            == shift_attn.shape[-2:]
+            == gate_attn.shape[-2:]
+            == scale_mlp.shape[-2:]
+            == shift_mlp.shape[-2:]
+            == gate_mlp.shape[-2:]
+        ), "Shape mismatch between input and modulation parameters."
+
     def forward(
         self,
         *,
@@ -87,28 +122,17 @@ class DiTBlock(nn.Module):
             pair_mask (Tensor): Pairwise attention mask.
                 [..., N, N]
         """
-
-        assert (
-            pair_bias.shape[-2:] == pair_mask.shape[-2:] == (a.shape[-2], a.shape[-2])
-        ), "Pair bias and mask dimension mismatch. Expected [N, N], got {} and {}".format(
-            pair_bias.shape[-2:], pair_mask.shape[-2:]
+        self._verify_inputs(
+            a,
+            scale_attn,
+            shift_attn,
+            gate_attn,
+            scale_mlp,
+            shift_mlp,
+            gate_mlp,
+            pair_bias,
+            pair_mask,
         )
-
-        assert (
-            pair_bias.shape[-3] == self.num_heads
-        ), "Pair bias dimension mismatch. Expected {}, got {}".format(
-            self.num_heads, pair_bias.shape[-3]
-        )
-
-        assert (
-            a.shape[-2:]
-            == scale_attn.shape[-2:]
-            == shift_attn.shape[-2:]
-            == gate_attn.shape[-2:]
-            == scale_mlp.shape[-2:]
-            == shift_mlp.shape[-2:]
-            == gate_mlp.shape[-2:]
-        ), "Shape mismatch between input and modulation parameters."
 
         # Adaln + Attention
         attn_input = scale_attn * self.attn_layernorm(a) + shift_attn
@@ -305,18 +329,76 @@ class DiffusionTransformer(nn.Module):
 
         # DiT Tower
         for block in blocks:
+            # TODO: grad checkpointing logic
             a = block(a=a)
 
         return a
 
 
 class LocalAttnTransformerBlock(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self, c_atom: int, num_heads: int, num_queries: int = 32, num_keys: int = 128
+    ):
+        """
+        Args:
+            c_atom: (int) atom embedding dimension
+            num_heads: (int) number of attention heads
+            num_queries: (int) number of queries
+            num_keys: (int) number of keys
+        """
+        super().__init__()
 
-    def forward(self):
+        assert c_atom % num_heads == 0, "Input dim should be divisible by num heads."
+
+        self.c_atom = c_atom
+        self.num_heads = num_heads
+        self.num_queries = num_queries
+        self.num_keys = num_keys
+
+        self.attn_layernorm = LayerNorm(c_atom, elementwise_affine=False)
         # Attention
+        self.attention = Attention(
+            q_dim=c_atom,
+            kv_dim=c_atom,
+            head_dim=c_atom // num_heads,
+            num_heads=num_heads,
+            gating=True,
+            final_linear_init="default",
+        )
+        self.mlp_layernorm = LayerNorm(c_atom, elementwise_affine=False)
+        # Transition
+        self.transition = Transition(c_in=c_atom, n=2, output_linear_init="default")
+
+    def forward(
+        self,
+        q_l: Tensor,
+        *,
+        scale_attn: Tensor,
+        shift_attn: Tensor,
+        gate_attn: Tensor,
+        scale_mlp: Tensor,
+        shift_mlp: Tensor,
+        gate_mlp: Tensor,
+        trunked_pair_biases: Tensor,
+        trunked_pair_mask: Tensor,
+    ):
+        # AdaLN on q_l first
+        # attn_input = scale_attn * self.attn_layernorm(q_l) + shift_attn
+
+        # NOTE: if we write a local attention class, we might have better performance due to not
+        # replicating the key tensor with the rearrangement. We have 4x more keys and values than we need to.
+
+        # Rearrange q_l and do attention with trunked
+
+        # Rearrange back to atom [..., N_atom, c_atom]
+
+        # Gate the attention output and add as residual
+
+        # AdaLN on MLP inputs
+
         # MLP
+        # Gate the MLP output and add as residual
+
         pass
 
 
@@ -325,5 +407,9 @@ class LocalAttnTransformer(nn.Module):
         super().__init__(*args, **kwargs)
 
     def forward(self):
+        """
+        Keep a similar interface as AtomTransformer, modify the guts to make rearrange calls far more shallow
+        in the code than knee deep in primitives Attention class.
+        """
         # Put the rearranges in here within the for loop.
         pass

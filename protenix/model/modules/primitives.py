@@ -320,12 +320,13 @@ class LayerNorm(nn.Module):
             )
 
 
-def _attention(
+def attention(
     q: Tensor,
     k: Tensor,
     v: Tensor,
     pair_mask: Tensor,
     attn_bias: Optional[Tensor] = None,
+    inf: float = None,
 ) -> Tensor:
     """Attention.
     # TODO: needs unit tests
@@ -341,6 +342,7 @@ def _attention(
             [..., n_q, n_kv]
         attn_bias (Tensor, optional): attention bias tensor
             None | [..., n_q, n_kv]
+        inf (float, optional): large number for attention masking
 
     Returns:
         Tensor: attention output
@@ -357,15 +359,13 @@ def _attention(
     k = k.transpose(-1, -2)
 
     # [..., n_q, d], [..., d, n_kv] -> [..., n_q, n_kv]
-    attn_weights = q @ k
+    attn_weights = q @ k / (q.shape[-1] ** 0.5)
 
     if attn_bias is not None:
         attn_weights = add(attn_weights, attn_bias)
 
     # fill out of mask with -inf (based on dtype)
-    attn_weights = torch.masked_fill(
-        attn_weights, ~pair_mask, torch.finfo(attn_weights.dtype).min
-    )
+    attn_weights = torch.masked_fill(attn_weights, ~pair_mask, -inf)
 
     # [..., n_q, n_kv]
     attn_weights = F.softmax(attn_weights, dim=-1)
@@ -662,7 +662,7 @@ def _local_attention(
         }
         out = chunk_layer(
             partial(
-                _attention,
+                attention,
                 use_efficient_implementation=use_efficient_implementation,
                 attn_weight_dropout_p=attn_weight_dropout_p,
                 inplace_safe=inplace_safe,
@@ -673,7 +673,7 @@ def _local_attention(
             _out=None,
         )
     else:
-        out = _attention(
+        out = attention(
             q=q_trunked,
             k=k_trunked,
             v=v_trunked,
@@ -937,7 +937,7 @@ class Attention(nn.Module):
                     local_attn_bias = add(
                         local_attn_bias, attn_bias, inplace_safe=inplace_safe
                     )
-                o = _attention(
+                o = attention(
                     q=q,
                     k=k,
                     v=v,
@@ -967,7 +967,7 @@ class Attention(nn.Module):
                     f"Invalid local attention method: {self.local_attention_method}"
                 )
         else:
-            o = _attention(
+            o = attention(
                 q=q,
                 k=k,
                 v=v,

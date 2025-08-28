@@ -260,7 +260,7 @@ class TestAttention:
         q_x = torch.randn(batch_size, seq_len, q_dim, device=device)
         kv_x = torch.randn(batch_size, seq_len, kv_dim, device=device)
         pair_bias = torch.randn(batch_size, num_heads, seq_len, seq_len, device=device)
-        pair_mask = torch.ones(batch_size, seq_len, seq_len, device=device)
+        pair_mask = torch.ones(batch_size, seq_len, seq_len, device=device).bool()
 
         output = layer(q_x, kv_x, pair_bias, pair_mask)
 
@@ -305,7 +305,7 @@ class TestAttention:
         q_x = torch.randn(batch_size, seq_len, q_dim, device=device)
         kv_x = torch.randn(batch_size, seq_len, kv_dim, device=device)
         pair_bias = torch.randn(batch_size, num_heads, seq_len, seq_len, device=device)
-        pair_mask = torch.ones(batch_size, seq_len, seq_len, device=device)
+        pair_mask = torch.ones(batch_size, seq_len, seq_len, device=device).bool()
 
         output = layer(q_x, kv_x, pair_bias, pair_mask)
 
@@ -324,7 +324,7 @@ class TestAttention:
         q_x = torch.randn(batch_size, q_len, q_dim, device=device)
         kv_x = torch.randn(batch_size, kv_len, kv_dim, device=device)
         pair_bias = torch.randn(batch_size, num_heads, q_len, kv_len, device=device)
-        pair_mask = torch.ones(batch_size, q_len, kv_len, device=device)
+        pair_mask = torch.ones(batch_size, q_len, kv_len, device=device).bool()
 
         output = layer(q_x, kv_x, pair_bias, pair_mask)
 
@@ -346,14 +346,14 @@ class TestAttention:
         # Test causal mask
         causal_mask = torch.tril(
             torch.ones(batch_size, seq_len, seq_len, device=device)
-        )
+        ).bool()
         output_causal = layer(q_x, kv_x, pair_bias, causal_mask)
         assert output_causal.shape == (batch_size, seq_len, q_dim)
 
         # Test random mask
         random_mask = torch.randint(
             0, 2, (batch_size, seq_len, seq_len), device=device
-        ).float()
+        ).bool()
         output_random = layer(q_x, kv_x, pair_bias, random_mask)
         assert output_random.shape == (batch_size, seq_len, q_dim)
 
@@ -368,7 +368,7 @@ class TestAttention:
 
         q_x = torch.randn(batch_size, q_len, q_dim, device=device)
         kv_x = torch.randn(batch_size, kv_len, kv_dim, device=device)
-        pair_mask = torch.ones(batch_size, q_len, kv_len, device=device)
+        pair_mask = torch.ones(batch_size, q_len, kv_len, device=device).bool()
 
         # Correct pair_bias shape
         pair_bias_correct = torch.randn(

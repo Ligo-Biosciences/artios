@@ -28,7 +28,17 @@ class SwiGLU(nn.Module):
         self.linear = LinearNoBias(c_in, c_out * 2)
 
     def forward(self, x: Tensor) -> Tensor:
-        """SwiGLU layer."""
+        """
+        SwiGLU layer.
+
+        Args:
+            x (torch.Tensor): Input tensor
+                [..., c_in]
+
+        Returns:
+            torch.Tensor: Output tensor
+                [..., c_out]
+        """
         a, b = self.linear(x).chunk(2, dim=-1)
         output = F.silu(a) * b
         return output
@@ -39,8 +49,6 @@ class AdaptiveLayerNorm(nn.Module):
     Implements the Adaptive Layer Normlization introduced in arXiv:1911.07013
     Layers are initialized such that the conditioning has no impact at init
     i.e. the output values are 0.73 * LN(a) at init.
-
-    # TODO: needs unit tests, adjust where its invoked i.e. need to move LN of s
     """
 
     def __init__(self, *, c_a: int, c_s: int) -> None:
@@ -133,8 +141,6 @@ class Attention(nn.Module):
             num_heads (int): Number of attention heads
             gating (bool, optional): Whether to use gating. Defaults to True.
             final_linear_init (str, optional): Init scheme of final linear. Defaults to zeros.
-
-        TODO: needs unit tests
         """
         super().__init__()
 
@@ -179,9 +185,13 @@ class Attention(nn.Module):
                 [..., num_heads, N_q, N_kv]
             pair_mask: pairwise attention mask
                 [..., N_q, N_kv]
+
+        Returns:
+            torch.Tensor: Output tensor
+                [..., N_q, q_dim]
         """
         assert pair_bias.shape[-2:] == (q_x.shape[-2], kv_x.shape[-2])
-        # TODO: pair bias assert
+        assert pair_mask.shape[-2:] == (q_x.shape[-2], kv_x.shape[-2])
 
         # Project QKV
         q = reshape_at_dim(

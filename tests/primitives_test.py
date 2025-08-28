@@ -1,4 +1,3 @@
-import numpy as np
 import pytest
 import torch
 
@@ -11,8 +10,8 @@ from protenix.model.modules.primitives import (
     LinearNoBias,
     SwiGLU,
     Transition,
-    _attention,
     _calculate_fan,
+    attention,
     bias_init_fn,
     create_local_attn_bias,
     final_init_,
@@ -241,7 +240,7 @@ class TestAttentionHelpers:
         k = torch.randn(batch_size, seq_len, hidden_dim).to(device)
         v = torch.randn(batch_size, seq_len, hidden_dim).to(device)
 
-        out = _attention(q, k, v)
+        out = attention(q, k, v)
         assert out.shape == (batch_size, seq_len, hidden_dim)
         assert not torch.isnan(out).any()
 
@@ -264,7 +263,8 @@ class TestAttentionHelpers:
         assert k_trunked.shape == (batch_size, n_trunks, n_keys, hidden_dim)
 
         assert all(
-            k in padding_info for k in ["mask_trunked", "q_pad", "k_pad_left", "k_pad_right"]
+            k in padding_info
+            for k in ["mask_trunked", "q_pad", "k_pad_left", "k_pad_right"]
         )
 
     def test_optimized_concat_split(self):
@@ -365,7 +365,9 @@ class TestAttentionHelpers:
                     for b_idx in range(n_b):
                         for i in range(n_q):
                             for j in range(n_k):
-                                expected = x_extra[d0, d1, b, idx_q[b_idx, i], idx_k[b_idx, j]]
+                                expected = x_extra[
+                                    d0, d1, b, idx_q[b_idx, i], idx_k[b_idx, j]
+                                ]
                                 actual = out_extra[d0, d1, b, b_idx, i, j]
                                 assert torch.allclose(
                                     expected, actual

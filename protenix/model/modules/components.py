@@ -1,8 +1,16 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 
-from protenix.model.modules.primitives import BiasInitLinear, LayerNorm, LinearNoBias
+from protenix.model.modules.primitives import (
+    BiasInitLinear,
+    LayerNorm,
+    Linear,
+    LinearNoBias,
+    attention,
+)
+from protenix.model.utils import flatten_final_dims, reshape_at_dim
 
 
 class SwiGLU(nn.Module):
@@ -19,7 +27,7 @@ class SwiGLU(nn.Module):
         self.c_out = c_out
         self.linear = LinearNoBias(c_in, c_out * 2)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         """SwiGLU layer."""
         a, b = self.linear(x).chunk(2, dim=-1)
         output = F.silu(a) * b
@@ -50,7 +58,7 @@ class AdaptiveLayerNorm(nn.Module):
             in_features=c_s, out_features=c_a, init="zeros"
         )
 
-    def forward(self, a: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+    def forward(self, a: Tensor, s: Tensor) -> Tensor:
         """
         Args:
             a (torch.Tensor): the single feature aggregate per-atom representation
@@ -91,7 +99,7 @@ class Transition(nn.Module):
             in_features=n * c_in, out_features=c_in, init=self.output_linear_init
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         """
         Args:
             x (torch.Tensor): the input tensor
@@ -104,3 +112,97 @@ class Transition(nn.Module):
         x = self.layernorm(x)
         x = self.linear_no_bias(self.swiglu(x))
         return x
+
+
+class Attention(nn.Module):
+    def __init__(
+        self,
+        q_dim: int,
+        kv_dim: int,
+        head_dim: int,
+        num_heads: int,
+        gating: bool = True,
+        final_linear_init: str = "zeros",
+    ) -> None:
+        """Initialize attention module.
+
+        Args:
+            q_dim (int): Query input dimension
+            kv_dim (int): Key/value input dimension
+            head_dim (int): Dimension of each attention head
+            num_heads (int): Number of attention heads
+            gating (bool, optional): Whether to use gating. Defaults to True.
+            final_linear_init (str, optional): Init scheme of final linear. Defaults to zeros.
+        """
+        super().__init__()
+
+        self.q_dim = q_dim
+        self.kv_dim = kv_dim
+        self.head_dim = head_dim
+        self.num_heads = num_heads
+        self.gating = gating
+        self.hidden_dim = num_heads * head_dim
+        self.final_linear_init = final_linear_init
+
+        # QKV initializations
+        self.linear_q = Linear(q_dim, self.hidden_dim, bias=True)
+        self.linear_k = LinearNoBias(kv_dim, self.hidden_dim)
+        self.linear_v = LinearNoBias(kv_dim, self.hidden_dim)
+
+        # Gating
+        if self.gating:
+            self.gate_linear = nn.Sequential(
+                Linear(q_dim, self.hidden_dim, init="gating"), nn.Sigmoid()
+            )
+
+        # Output linear
+        self.linear_output = LinearNoBias(
+            self.hidden_dim, q_dim, init=final_linear_init
+        )
+
+    def forward(
+        self,
+        q_x: Tensor,
+        kv_x: Tensor,
+        q_mask: Tensor,
+        k_mask: Tensor,
+        pair_bias: Tensor,
+        pair_mask: Tensor,
+    ):
+        assert pair_bias.shape[-2:] == (q_x.shape[-2], kv_x.shape[-2])
+        assert q_mask.shape[-1] == q_x.shape[-2]
+        assert k_mask.shape[-1] == kv_x.shape[-2]
+
+        # Project QKV
+        q = reshape_at_dim(
+            self.linear_q(q_x), dim=-1, target_shape=(self.num_heads, self.head_dim)
+        )  # [..., n_q, n_heads, c]
+        k = reshape_at_dim(
+            self.linear_k(kv_x), dim=-1, target_shape=(self.num_heads, self.head_dim)
+        )  # [..., n_kv, n_heads, c]
+        v = reshape_at_dim(
+            self.linear_v(kv_x), dim=-1, target_shape=(self.num_heads, self.head_dim)
+        )  # [..., n_kv, n_heads, c]
+
+        q = q.transpose(-2, -3)  # [..., n_heads, n_q, c]
+        k = k.transpose(-2, -3)  # [..., n_heads, n_kv, c]
+        v = v.transpose(-2, -3)  # [..., n_heads, n_kv, c]
+
+        # Add head dim
+        pair_bias = pair_bias.unsqueeze(dim=-3)  # [..., n_heads = 1, n_q, n_kv]
+
+        attn_out = attention(
+            q=q, k=k, v=v, pair_mask=pair_mask, attn_bias=pair_bias, inf=1e9
+        )  # [..., n_heads, n_q, c]
+
+        attn_out = attn_out.transpose(-2, -3)  # [..., n_q, n_heads, c]
+        attn_out = flatten_final_dims(attn_out, num_dims=2)  # [..., n_q, n_heads * c]
+
+        # Gating
+        if self.gating:
+            gate = self.gate_linear(q_x)  # [..., n_q, n_heads * c]
+            attn_out = gate * attn_out  # [..., n_q, n_heads * c]
+
+        # Final projection
+        attn_out = self.linear_output(attn_out)  # [..., n_q, q_dim]
+        return attn_out

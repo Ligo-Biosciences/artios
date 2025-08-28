@@ -123,6 +123,10 @@ class Transition(nn.Module):
 
 
 class Attention(nn.Module):
+    """
+    Attention module. Handles QKV projections, gating and readout.
+    """
+
     def __init__(
         self,
         q_dim: int,

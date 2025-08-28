@@ -226,7 +226,10 @@ class LinearNoBias(Linear):
 
 
 class BiasInitLinear(Linear):
-    """Support biasinit for nn.Linear Called just like torch.nn.Linear."""
+    """
+    Support biasinit for nn.Linear Called just like torch.nn.Linear.
+    Weights are initialised to 0, bias is initialised to biasinit.
+    """
 
     def __init__(
         self,

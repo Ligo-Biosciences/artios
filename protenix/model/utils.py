@@ -443,6 +443,16 @@ def reshape_at_dim(
     return x.reshape(target_shape)
 
 
+def index_at_dim(x: torch.Tensor, dim: int, idx: torch.Tensor) -> torch.Tensor:
+    """Return x indexed by idx along `dim`, preserving all other dims.
+    If idx is [T, K], the result inserts those two dims at `dim`."""
+    if dim < 0:
+        dim += x.ndim
+    index = [slice(None)] * x.ndim
+    index[dim] = idx
+    return x[tuple(index)]
+
+
 def move_final_dim_to_dim(x: torch.Tensor, dim: int) -> torch.Tensor:
     """
     Move the final dimension of a tensor to a specified dimension.

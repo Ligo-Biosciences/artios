@@ -168,7 +168,7 @@ class DiffusionTransformer(nn.Module):
 
         # Pair biases
         self.z_layernorm = LayerNorm(c_z)
-        self.z_linear = LinearNoBias(c_z, num_heads * num_blocks)
+        self.z_proj = LinearNoBias(c_z, num_heads * num_blocks)
 
         # DiT blocks
         self.blocks = nn.ModuleList(
@@ -235,34 +235,27 @@ class DiffusionTransformer(nn.Module):
         # check feature dims
         assert (
             c_token == self.c_token
-        ), "Input token dimension mismatch. Expected {}, got {}".format(
-            self.c_token, c_token
-        )
+        ), f"Input token dimension mismatch. Expected {self.c_token}, got {c_token}"
         assert (
             c_s == self.c_s
-        ), "Input condition dimension mismatch. Expected {}, got {}".format(
-            self.c_s, c_s
-        )
+        ), f"Input condition dimension mismatch. Expected {self.c_s}, got {c_s}"
         assert (
             c_z == self.c_z
-        ), "Input pair bias dimension mismatch. Expected {}, got {}".format(
-            self.c_z, c_z
-        )
+        ), f"Input pair bias dimension mismatch. Expected {self.c_z}, got {c_z}"
 
         # check shared dims
         assert s.shape[-2] == n_token, "Input condition dimension mismatch."
         assert z.shape[-3:-1] == (
             n_token,
             n_token,
-        ), "Input pair bias dimension mismatch. Expected [N, N], got {}".format(
-            z.shape[-3:-1]
-        )
-        assert pair_mask.shape[-2:] == (
-            n_token,
-            n_token,
-        ), "Input pair mask dimension mismatch. Expected [N, N], got {}".format(
+        ), f"Input pair bias dimension mismatch. Expected [N, N], got {z.shape[-3:-1]}"
+        assert (
             pair_mask.shape[-2:]
-        )
+            == (
+                n_token,
+                n_token,
+            )
+        ), f"Input pair mask dimension mismatch. Expected [N, N], got {pair_mask.shape[-2:]}"
 
         # check batch dims
         assert (
@@ -292,10 +285,10 @@ class DiffusionTransformer(nn.Module):
 
         # Embed and chunk pair bias
         z = self.z_layernorm(z)
-        pair_bias_fused = self.z_linear(z)
+        pair_bias_fused = self.z_proj(z)
         pair_bias_fused = permute_final_dims(
             pair_bias_fused, [2, 0, 1]
-        )  # [..., num_heads*num_blocks, N, N]
+        )  # [..., num_heads * num_blocks, N, N]
         pair_biases = pair_bias_fused.chunk(self.num_blocks, dim=-3)
 
         # Prepare blocks
@@ -307,7 +300,7 @@ class DiffusionTransformer(nn.Module):
             shift_mlps=shift_mlps,
             gate_mlps=gate_mlps,
             pair_biases=pair_biases,
-            pair_mask=pair_mask,
+            pair_mask=pair_mask.bool(),
         )
 
         # DiT Tower

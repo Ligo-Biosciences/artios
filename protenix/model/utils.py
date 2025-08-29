@@ -18,6 +18,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from scipy.spatial.transform import Rotation
+from torch import Tensor
 
 from protenix.utils.scatter_utils import scatter
 
@@ -50,26 +51,26 @@ def mul(a, b, inplace_safe: bool = False):
 
 
 def centre_random_augmentation(
-    x_input_coords: torch.Tensor,
+    x_input_coords: Tensor,
     N_sample: int = 1,
     s_trans: float = 1.0,
     centre_only: bool = False,
-    mask: torch.Tensor = None,
+    mask: Tensor = None,
     eps: float = 1e-12,
-) -> torch.Tensor:
+) -> Tensor:
     """Implements Algorithm 19 in AF3
 
     Args:
-        x_input_coords (torch.Tensor): input coords
+        x_input_coords (Tensor): input coords
             [..., N_atom, 3]
         N_sample (int, optional): the total number of augmentation. Defaults to 1.
         s_trans (float, optional): scale factor of trans. Defaults to 1.0.
         centre_only (bool, optional): if set true, will only perform centering without applying random translation and rotation.
-        mask (torch.Tensor, optional): masking for the coords
+        mask (Tensor, optional): masking for the coords
             [..., N_atom]
         eps (float, optional): small number used for masked mean
     Returns:
-        torch.Tensor:  the Augmentation version of input coords
+        Tensor:  the Augmentation version of input coords
             [..., N_sample, N_atom, 3]
     """
 
@@ -122,14 +123,14 @@ def centre_random_augmentation(
 
 
 # Comment: Rotation.random is not supported by torch.compile()
-def uniform_random_rotation(N_sample: int = 1) -> torch.Tensor:
+def uniform_random_rotation(N_sample: int = 1) -> Tensor:
     """Generate random rotation matrices with scipy.spatial.transform.Rotation
 
     Args:
         N_sample (int, optional): the total number of augmentation. Defaults to 1.
 
     Returns:
-        torch.Tensor: N_sample rot matrics
+        Tensor: N_sample rot matrics
             [N_sample, 3, 3]
     """
     rotation = Rotation.random(num=N_sample)
@@ -138,19 +139,19 @@ def uniform_random_rotation(N_sample: int = 1) -> torch.Tensor:
 
 
 # this is from openfold.utils.rigid_utils import rot_vec_mul
-def rot_vec_mul(r: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+def rot_vec_mul(r: Tensor, t: Tensor) -> Tensor:
     """Apply rot matrix to vector
     Applies a rotation to a vector. Written out by hand to avoid transfer
     to avoid AMP downcasting.
 
     Args:
-        r (torch.Tensor): the rotation matrices
+        r (Tensor): the rotation matrices
             [..., 3, 3]
-        t (torch.Tensor): the coordinate tensors
+        t (Tensor): the coordinate tensors
             [..., 3]
 
     Returns:
-        torch.Tensor: the rotated coordinates
+        Tensor: the rotated coordinates
     """
     x, y, z = torch.unbind(input=t, dim=-1)
     return torch.stack(
@@ -165,49 +166,47 @@ def rot_vec_mul(r: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
 
 # from openfold.utils.tensor_utils.permute_final_dims
 # from openfold.utils.tensor_utils.flatten_final_dims
-def permute_final_dims(tensor: torch.Tensor, inds: list[int]) -> torch.Tensor:
+def permute_final_dims(tensor: Tensor, inds: list[int]) -> Tensor:
     """Permute final dims of tensor
 
     Args:
-        tensor (torch.Tensor): the input tensor
+        tensor (Tensor): the input tensor
             [...]
         inds (List[int]): the dim to permute
 
     Returns:
-        torch.Tensor: the permuted tensor
+        Tensor: the permuted tensor
     """
     zero_index = -1 * len(inds)
     first_inds = list(range(len(tensor.shape[:zero_index])))
     return tensor.permute(first_inds + [zero_index + i for i in inds])
 
 
-def flatten_final_dims(t: torch.Tensor, num_dims: int) -> torch.Tensor:
+def flatten_final_dims(t: Tensor, num_dims: int) -> Tensor:
     """Flatten final dims of tensor
 
     Args:
-        t (torch.Tensor): the input tensor
+        t (Tensor): the input tensor
             [...]
         num_dims (int): the number of final dims to flatten
 
     Returns:
-        torch.Tensor: the flattened tensor
+        Tensor: the flattened tensor
     """
     return t.reshape(shape=t.shape[:-num_dims] + (-1,))
 
 
-def one_hot(
-    x: torch.Tensor, lower_bins: torch.Tensor, upper_bins: torch.Tensor
-) -> torch.Tensor:
+def one_hot(x: Tensor, lower_bins: Tensor, upper_bins: Tensor) -> Tensor:
     """Get one hot embedding of x from lower_bins and upper_bins
     Args:
-        x (torch.Tensor): the input x
+        x (Tensor): the input x
             [...]
-        lower_bins (torch.Tensor): the lower bounds of bins
+        lower_bins (Tensor): the lower bounds of bins
             [bins]
-        upper_bins (torch.Tensor): the upper bounds of bins
+        upper_bins (Tensor): the upper bounds of bins
             [bins]
     Returns:
-        torch.Tensor: the one hot embedding of x from v_bins
+        Tensor: the one hot embedding of x from v_bins
             [..., bins]
     """
     dgram = (x[..., None] > lower_bins) * (x[..., None] < upper_bins).float()
@@ -216,20 +215,20 @@ def one_hot(
 
 # this is mostly from openfold.utils.torch_utils import batched_gather
 def batched_gather(
-    data: torch.Tensor, inds: torch.Tensor, dim: int = 0, no_batch_dims: int = 0
-) -> torch.Tensor:
+    data: Tensor, inds: Tensor, dim: int = 0, no_batch_dims: int = 0
+) -> Tensor:
     """Gather data according to indices specify by inds
 
     Args:
-        data (torch.Tensor): the input data
+        data (Tensor): the input data
             [..., K, ...]
-        inds (torch.Tensor): the indices for gathering data
+        inds (Tensor): the indices for gathering data
             [..., N]
         dim (int, optional): along which dimension to gather data by inds (the dim of "K" "N"). Defaults to 0.
         no_batch_dims (int, optional): length of dimensions before the "dim" dimension. Defaults to 0.
 
     Returns:
-        torch.Tensor: gathered data
+        Tensor: gathered data
             [..., N, ...]
     """
 
@@ -249,19 +248,17 @@ def batched_gather(
     return data[ranges]
 
 
-def broadcast_token_to_atom(
-    x_token: torch.Tensor, atom_to_token_idx: torch.Tensor
-) -> torch.Tensor:
+def broadcast_token_to_atom(x_token: Tensor, atom_to_token_idx: Tensor) -> Tensor:
     """Broadcast token-level embeddings to atom-level embeddings
 
     Args:
-        x_token (torch.Tensor): token embedding
+        x_token (Tensor): token embedding
             [..., N_token, d]
-        atom_to_token_idx (torch.Tensor): map atom idx to token idx
+        atom_to_token_idx (Tensor): map atom idx to token idx
             [..., N_atom] or [N_atom]
 
     Returns:
-        torch.Tensor: atom embedding
+        Tensor: atom embedding
             [..., N_atom, d]
     """
 
@@ -280,23 +277,23 @@ def broadcast_token_to_atom(
 
 
 def aggregate_atom_to_token(
-    x_atom: torch.Tensor,
-    atom_to_token_idx: torch.Tensor,
+    x_atom: Tensor,
+    atom_to_token_idx: Tensor,
     n_token: Optional[int] = None,
     reduce: str = "mean",
-) -> torch.Tensor:
+) -> Tensor:
     """Aggregate atom embedding to obtain token embedding
 
     Args:
-        x_atom (torch.Tensor): atom-level embedding
+        x_atom (Tensor): atom-level embedding
             [..., N_atom, d]
-        atom_to_token_idx (torch.Tensor): map atom to token idx
+        atom_to_token_idx (Tensor): map atom to token idx
             [..., N_atom] or [N_atom]
         n_token (int, optional): number of tokens in total. Defaults to None.
         reduce (str, optional): aggregation method. Defaults to "mean".
 
     Returns:
-        torch.Tensor: token-level embedding
+        Tensor: token-level embedding
             [..., N_token, d]
     """
 
@@ -313,7 +310,7 @@ def sample_indices(
     device: torch.device = torch.device("cpu"),
     lower_bound=1,
     strategy: str = "random",
-) -> torch.Tensor:
+) -> Tensor:
     """Sample msa indices k from uniform[1,n]
 
     Args:
@@ -321,7 +318,7 @@ def sample_indices(
         strategy (str): the strategy to sample msa index, random or topk
 
     Returns:
-        torch.Tensor: the sampled indices k
+        Tensor: the sampled indices k
     """
     assert strategy in ["random", "topk"]
     sample_size = torch.randint(low=min(lower_bound, n), high=n + 1, size=(1,)).item()
@@ -333,23 +330,23 @@ def sample_indices(
 
 
 def sample_msa_feature_dict_random_without_replacement(
-    feat_dict: dict[str, torch.Tensor],
+    feat_dict: dict[str, Tensor],
     dim_dict: dict[str, int],
     cutoff: int = 512,
     lower_bound: int = 1,
     strategy: str = "random",
-) -> dict[str, torch.Tensor]:
+) -> dict[str, Tensor]:
     """Sample a dict of MSA features randomly without replacement.
 
     Args:
-        feat_dict (dict[str, torch.Tensor]): A dict containing the MSA features.
+        feat_dict (dict[str, Tensor]): A dict containing the MSA features.
         dim_dict (dict[str, int]): A dict containing the dimensions of the MSA features.
         cutoff (int): The maximum number of features to sample.
         lower_bound (int): The minimum number of features to sample.
         strategy (str): The sampling strategy to use. Can be either "random" or "sequential".
 
     Returns:
-        dict[str, torch.Tensor]: A dict containing the sampled MSA features.
+        dict[str, Tensor]: A dict containing the sampled MSA features.
     """
     msa_len = feat_dict["msa"].size(dim=dim_dict["msa"])
     indices = sample_indices(
@@ -370,16 +367,16 @@ def sample_msa_feature_dict_random_without_replacement(
     return msa_feat_dict
 
 
-def expand_at_dim(x: torch.Tensor, dim: int, n: int) -> torch.Tensor:
+def expand_at_dim(x: Tensor, dim: int, n: int) -> Tensor:
     """expand a tensor at specific dim by n times
 
     Args:
-        x (torch.Tensor): input
+        x (Tensor): input
         dim (int): dimension to expand
         n (int): expand size
 
     Returns:
-        torch.Tensor: expanded tensor of shape [..., n, ...]
+        Tensor: expanded tensor of shape [..., n, ...]
     """
     x = x.unsqueeze(dim=dim)
     if dim < 0:
@@ -390,20 +387,20 @@ def expand_at_dim(x: torch.Tensor, dim: int, n: int) -> torch.Tensor:
 
 
 def pad_at_dim(
-    x: torch.Tensor,
+    x: Tensor,
     dim: int,
     pad_length: Union[tuple[int], list[int]],
     value: float = 0,
-) -> torch.Tensor:
+) -> Tensor:
     """pad to input x at dimension dim with length pad_length[0] to the left and and pad_length[1] to the right.
 
     Args:
-        x (torch.Tensor): input
+        x (Tensor): input
         dim (int): padding dimension
         pad_length (Union[Tuple[int], List[int]]): length to pad to the beginning and end.
 
     Returns:
-        torch.Tensor: padded tensor
+        Tensor: padded tensor
     """
     n_dim = len(x.shape)
     if dim < 0:
@@ -420,17 +417,17 @@ def pad_at_dim(
 
 
 def reshape_at_dim(
-    x: torch.Tensor, dim: int, target_shape: Union[tuple[int], list[int]]
-) -> torch.Tensor:
+    x: Tensor, dim: int, target_shape: Union[tuple[int], list[int]]
+) -> Tensor:
     """reshape dimension dim of x to target_shape
 
     Args:
-        x (torch.Tensor): input
+        x (Tensor): input
         dim (int): dimension to reshape
         target_shape (Union[Tuple[int], List[int]]): target_shape of dim
 
     Returns:
-        torch.Tensor: reshaped tensor
+        Tensor: reshaped tensor
     """
     n_dim = len(x.shape)
     if dim < 0:
@@ -443,7 +440,7 @@ def reshape_at_dim(
     return x.reshape(target_shape)
 
 
-def index_at_dim(x: torch.Tensor, dim: int, idx: torch.Tensor) -> torch.Tensor:
+def index_at_dim(x: Tensor, dim: int, idx: Tensor) -> Tensor:
     """Return x indexed by idx along `dim`, preserving all other dims.
     If idx is [T, K], the result inserts those two dims at `dim`."""
     if dim < 0:
@@ -453,16 +450,16 @@ def index_at_dim(x: torch.Tensor, dim: int, idx: torch.Tensor) -> torch.Tensor:
     return x[tuple(index)]
 
 
-def move_final_dim_to_dim(x: torch.Tensor, dim: int) -> torch.Tensor:
+def move_final_dim_to_dim(x: Tensor, dim: int) -> Tensor:
     """
     Move the final dimension of a tensor to a specified dimension.
 
     Args:
-        x (torch.Tensor): Input tensor.
+        x (Tensor): Input tensor.
         dim (int): Target dimension to move the final dimension to.
 
     Returns:
-        torch.Tensor: Tensor with the final dimension moved to the specified dimension.
+        Tensor: Tensor with the final dimension moved to the specified dimension.
     """
     # permute_final_dims
     n_dim = len(x.shape)
@@ -496,7 +493,7 @@ def simple_merge_dict_list(dict_list: list[dict]) -> dict:
         merged_dict.setdefault(key, [])
         if isinstance(value, (float, int)):
             value = np.array([value])
-        elif isinstance(value, torch.Tensor):
+        elif isinstance(value, Tensor):
             if value.dim() == 0:
                 value = np.array([value.item()])
             else:
@@ -533,20 +530,20 @@ def noise_w_flow_matching(data, noise, timestep, sigma_min=1e-5):
 
 
 def beta_function(
-    t: torch.Tensor,
+    t: Tensor,
     mean: Optional[float] = None,
     std: Optional[float] = None,
     alpha: Optional[float] = None,
     beta: Optional[float] = None,
     device: Optional[torch.device] = None,
     dtype: Optional[torch.dtype] = None,
-) -> torch.Tensor:
+) -> Tensor:
     """
     Evaluate the Beta probability density function at specified timestep values,
     with the distribution parameterized by either mean/std or alpha/beta.
 
     Args:
-        t (torch.Tensor): Timestep values between 0 and 1
+        t (Tensor): Timestep values between 0 and 1
         mean (float, optional): Mean of the Beta distribution (between 0 and 1)
         std (float, optional): Standard deviation of the Beta distribution
         alpha (float, optional): Alpha parameter of the Beta distribution (> 0)
@@ -555,7 +552,7 @@ def beta_function(
         dtype (torch.dtype, optional): Data type for the computation
 
     Returns:
-        torch.Tensor: Normalised Beta function values evaluated at the specified timesteps
+        Tensor: Normalised Beta function values evaluated at the specified timesteps
     """
     if device is not None and dtype is not None:
         t = t.to(device=device, dtype=dtype)
@@ -574,8 +571,8 @@ def beta_function(
     if mean_std_provided:
         # Convert mean and std to alpha and beta parameters
         if device is not None and dtype is not None:
-            mean = torch.tensor(mean, device=device, dtype=dtype)
-            std = torch.tensor(std, device=device, dtype=dtype)
+            mean = Tensor(mean, device=device, dtype=dtype)
+            std = Tensor(std, device=device, dtype=dtype)
 
         var = std**2
 
@@ -596,8 +593,8 @@ def beta_function(
             )
 
         if device is not None and dtype is not None:
-            alpha = torch.tensor(alpha, device=device, dtype=dtype)
-            beta = torch.tensor(beta, device=device, dtype=dtype)
+            alpha = Tensor(alpha, device=device, dtype=dtype)
+            beta = Tensor(beta, device=device, dtype=dtype)
 
     # Calculate Beta function normalization constant using log-gamma
     # B(alpha, beta) = Γ(alpha)Γ(beta)/Γ(alpha+beta)

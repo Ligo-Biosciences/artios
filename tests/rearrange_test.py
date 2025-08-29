@@ -118,10 +118,10 @@ class TestRearrangeQKToDenseTrunk:
         )
 
         q_trunked = rearrange_to_query_subset(
-            atoms, rearrange_dim=1, n_queries=n_queries
+            atoms, rearrange_dim=1, num_queries=n_queries
         )
         k_trunked = rearrange_to_key_subset(
-            atoms, rearrange_dim=1, n_keys=n_keys, n_queries=n_queries
+            atoms, rearrange_dim=1, num_keys=n_keys, num_queries=n_queries
         )
 
         n_trunks = seq_len // n_queries
@@ -142,10 +142,10 @@ class TestRearrangeQKToDenseTrunk:
         atoms = expand_at_dim(torch.arange(seq_len), 0, batch_size)
 
         q_trunked = rearrange_to_query_subset(
-            atoms, rearrange_dim=1, n_queries=n_queries
+            atoms, rearrange_dim=1, num_queries=n_queries
         )
         k_trunked = rearrange_to_key_subset(
-            atoms, rearrange_dim=1, n_keys=n_keys, n_queries=n_queries
+            atoms, rearrange_dim=1, num_keys=n_keys, num_queries=n_queries
         )
 
         n_trunks = seq_len // n_queries
@@ -168,9 +168,9 @@ class TestRearrangeQKToDenseTrunk:
         q = torch.randn(seq_len, batch_size, hidden_dim)
         k = torch.randn(seq_len, batch_size, hidden_dim)
 
-        q_trunked = rearrange_to_query_subset(q, rearrange_dim=0, n_queries=n_queries)
+        q_trunked = rearrange_to_query_subset(q, rearrange_dim=0, num_queries=n_queries)
         k_trunked = rearrange_to_key_subset(
-            k, rearrange_dim=0, n_keys=n_keys, n_queries=n_queries
+            k, rearrange_dim=0, num_keys=n_keys, num_queries=n_queries
         )
 
         n_trunks = seq_len // n_queries
@@ -190,9 +190,11 @@ class TestRearrangeQKToDenseTrunk:
         k = torch.randn(batch_size, seq_len, hidden_dim)
 
         # Use -2 to refer to sequence dimension
-        q_trunked = rearrange_to_query_subset(q, rearrange_dim=-2, n_queries=n_queries)
+        q_trunked = rearrange_to_query_subset(
+            q, rearrange_dim=-2, num_queries=n_queries
+        )
         k_trunked = rearrange_to_key_subset(
-            k, rearrange_dim=-2, n_keys=n_keys, n_queries=n_queries
+            k, rearrange_dim=-2, num_keys=n_keys, num_queries=n_queries
         )
 
         n_trunks = seq_len // n_queries
@@ -218,9 +220,9 @@ class TestRearrangeQKToDenseTrunk:
             * 2
         )
 
-        q_trunked = rearrange_to_query_subset(q, rearrange_dim=1, n_queries=n_queries)
+        q_trunked = rearrange_to_query_subset(q, rearrange_dim=1, num_queries=n_queries)
         k_trunked = rearrange_to_key_subset(
-            k, rearrange_dim=1, n_keys=n_keys, n_queries=n_queries
+            k, rearrange_dim=1, num_keys=n_keys, num_queries=n_queries
         )
 
         # Check that first trunk's first query matches original first n_queries elements

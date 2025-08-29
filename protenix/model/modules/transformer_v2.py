@@ -497,13 +497,166 @@ class LocalAttnTransformerBlock(nn.Module):
 
 
 class LocalAttnTransformer(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        num_blocks: int,
+        c_atom: int,
+        c_cond: int,
+        c_atompair: int,
+        num_heads: int,
+        num_queries: int = 32,
+        num_keys: int = 128,
+    ):
+        """
+        Args:
+            num_blocks: (int) number of diffusion transformer blocks
+            c_token: (int) token embedding dimension
+            c_s: (int) condition embedding dimension
+            c_atompair: (int) pair bias embedding dimension
+            num_heads: (int) number of attention heads
+            num_queries: (int) number of queries
+            num_keys: (int) number of keys
+        """
+        super().__init__()
 
-    def forward(self):
+        self.num_blocks = num_blocks
+        self.c_atom = c_atom
+        self.c_cond = c_cond
+        self.c_atompair = c_atompair
+        self.num_heads = num_heads
+
+        self.condition_layernorm = LayerNorm(c_cond)
+
+        # AdaLN parameters
+        self.scale_proj = nn.Sequential(
+            BiasInitLinear(c_cond, 2 * num_blocks * c_atom, biasinit=1.0),
+            nn.Sigmoid(),
+        )
+        self.shift_proj = LinearNoBias(c_cond, 2 * num_blocks * c_atom, init="zeros")
+
+        # Gate parameters
+        self.gate_proj = nn.Sequential(
+            BiasInitLinear(c_cond, 2 * num_blocks * c_atom, biasinit=-2.0),
+            nn.Sigmoid(),
+        )
+
+        # Pair biases
+        self.p_layernorm = LayerNorm(c_atompair)
+        self.p_proj = LinearNoBias(c_atompair, num_heads * num_blocks)
+
+        self.blocks = nn.ModuleList(
+            [
+                LocalAttnTransformerBlock(
+                    c_atom=c_atom,
+                    num_heads=num_heads,
+                    num_queries=num_queries,
+                    num_keys=num_keys,
+                )
+                for _ in range(num_blocks)
+            ]
+        )
+
+    def _chunk_block_params(
+        self, fused_params: Tensor
+    ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+        """Split fused parameters into MLP and attention components across blocks.
+
+        Args:
+            fused_params: Tensor with fused MLP and attention parameters [..., 2*num_blocks*c_token]
+
+        Returns:
+            Tuple containing:
+                - attn_params: Attention parameters split across blocks
+                - mlp_params: MLP parameters split across blocks
         """
-        Keep a similar interface as AtomTransformer, modify the guts to make rearrange calls far more shallow
-        in the code than knee deep in primitives Attention class.
+        attn_fused, mlp_fused = fused_params.chunk(2, dim=-1)
+        attn_params = attn_fused.chunk(self.num_blocks, dim=-1)
+        mlp_params = mlp_fused.chunk(self.num_blocks, dim=-1)
+
+        return attn_params, mlp_params
+
+    def _prep_blocks(
+        self,
+        *,
+        scale_attns: Tuple[Tensor, ...],
+        shift_attns: Tuple[Tensor, ...],
+        gate_attns: Tuple[Tensor, ...],
+        scale_mlps: Tuple[Tensor, ...],
+        shift_mlps: Tuple[Tensor, ...],
+        gate_mlps: Tuple[Tensor, ...],
+        trunked_pair_biases: Tuple[Tensor, ...],
+        trunked_pair_mask: Tensor,
+    ):
+        """Prepare the DiT blocks."""
+        blocks = [
+            partial(
+                block,
+                scale_attn=scale_attns[i],
+                shift_attn=shift_attns[i],
+                gate_attn=gate_attns[i],
+                scale_mlp=scale_mlps[i],
+                shift_mlp=shift_mlps[i],
+                gate_mlp=gate_mlps[i],
+                trunked_pair_bias=trunked_pair_biases[i],
+                trunked_pair_mask=trunked_pair_mask,
+            )
+            for i, block in enumerate(self.blocks)
+        ]
+
+        return blocks
+
+    def forward(
+        self,
+        *,
+        q: Tensor,
+        c: Tensor,
+        p: Tensor,
+        trunked_pair_mask: Tensor,
+    ):
         """
-        # Put the rearranges in here within the for loop.
-        pass
+        Args:
+            q: [..., N_atom, c_atom]
+            c: [..., N_atom, c_cond]
+            p: [..., N_subsets, N_queries, N_keys, c_atompair]
+            trunked_pair_mask: [..., N_subsets, N_queries, N_keys]
+
+        Returns:
+            [..., N_atom, c_atom]
+
+        TODO: needs unit test.
+        """
+
+        # Conditioning prep
+        c = self.condition_layernorm(c)
+        scale_attns, scale_mlps = self._chunk_block_params(self.scale_proj(c))
+        shift_attns, shift_mlps = self._chunk_block_params(self.shift_proj(c))
+        gate_attns, gate_mlps = self._chunk_block_params(self.gate_proj(c))
+
+        # Embed and chunk pair bias
+        p = self.p_layernorm(p)
+        pair_bias_fused = self.p_proj(
+            p
+        )  # [..., N_subsets, N_queries, N_keys, N_heads * num_blocks]
+        pair_bias_fused = permute_final_dims(pair_bias_fused, [2, 0, 1])
+        trunked_pair_biases = pair_bias_fused.chunk(
+            self.num_blocks, dim=-3
+        )  # list of [..., N_subsets, N_heads, N_queries, N_keys]
+
+        # Prepare blocks
+        blocks = self._prep_blocks(
+            scale_attns=scale_attns,
+            shift_attns=shift_attns,
+            gate_attns=gate_attns,
+            scale_mlps=scale_mlps,
+            shift_mlps=shift_mlps,
+            gate_mlps=gate_mlps,
+            trunked_pair_biases=trunked_pair_biases,
+            trunked_pair_mask=trunked_pair_mask.bool(),
+        )
+
+        # LocalAttn Tower
+        for block in blocks:
+            # TODO: grad checkpointing logic
+            q = block(q)
+
+        return q

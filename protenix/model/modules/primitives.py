@@ -22,7 +22,6 @@ import torch.nn.functional as F
 from scipy.stats import truncnorm
 from torch import Tensor
 
-from protenix.model.modules.rearrange import rearrange_qk_to_dense_trunk
 from protenix.model.utils import (
     add,
 )

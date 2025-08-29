@@ -239,7 +239,9 @@ def batched_gather(
     ranges = []
     for i, s in enumerate(data.shape[:no_batch_dims]):
         r = torch.arange(s)
-        r = r.view(*(*((1,) * i), -1, *((1,) * (len(inds.shape) - i - 1))))
+        pre_index_dims = (1,) * i
+        post_index_dims = (1,) * (len(inds.shape) - i - 1)
+        r = r.view(*pre_index_dims, -1, *post_index_dims)
         ranges.append(r)
 
     remaining_dims = [slice(None) for _ in range(len(data.shape) - no_batch_dims)]
@@ -276,33 +278,45 @@ def broadcast_token_to_atom(x_token: Tensor, atom_to_token_idx: Tensor) -> Tenso
     )
 
 
-def aggregate_atom_to_token(
+def average_atom_to_token(
     x_atom: Tensor,
+    atom_mask: Tensor,
     atom_to_token_idx: Tensor,
-    n_token: Optional[int] = None,
-    reduce: str = "mean",
+    n_token: int,
 ) -> Tensor:
     """Aggregate atom embedding to obtain token embedding
 
     Args:
         x_atom (Tensor): atom-level embedding
             [..., N_atom, d]
+        atom_mask (Tensor): atom mask indicating non-padding atoms
+            [..., N_atom]
         atom_to_token_idx (Tensor): map atom to token idx
             [..., N_atom] or [N_atom]
-        n_token (int, optional): number of tokens in total. Defaults to None.
-        reduce (str, optional): aggregation method. Defaults to "mean".
+        n_token (int): number of tokens in total.
 
     Returns:
         Tensor: token-level embedding
             [..., N_token, d]
     """
 
-    # Broadcasting in the given dim.
-    out = scatter(
-        src=x_atom, index=atom_to_token_idx, dim=-2, dim_size=n_token, reduce=reduce
-    )
+    # Mask out the padding atoms
+    x_atom = x_atom * atom_mask[..., None]
 
-    return out
+    # Sum the atoms
+    out_sum = scatter(
+        src=x_atom, index=atom_to_token_idx, dim=-2, dim_size=n_token, reduce="sum"
+    )
+    out_count = scatter(
+        src=atom_mask[..., None],
+        index=atom_to_token_idx,
+        dim=-2,
+        dim_size=n_token,
+        reduce="sum",
+    )
+    out_mean = out_sum / (out_count + 1e-4)
+
+    return out_mean
 
 
 def sample_indices(

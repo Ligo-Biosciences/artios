@@ -18,11 +18,15 @@ from torch import Tensor, nn
 
 from protenix.model.modules.components import Attention, Transition
 from protenix.model.modules.primitives import BiasInitLinear, LayerNorm, LinearNoBias
+from protenix.model.modules.rearrange import (
+    rearrange_to_key_subset,
+    rearrange_to_query_subset,
+)
 from protenix.model.utils import permute_final_dims
 
 
 class DiTBlock(nn.Module):
-    """Diffusion Transformer Block."""
+    """Diffusion Transformer Block, used for global attention within DiffusionTransformer."""
 
     def __init__(self, c_token: int, num_heads: int):
         """
@@ -336,6 +340,11 @@ class DiffusionTransformer(nn.Module):
 
 
 class LocalAttnTransformerBlock(nn.Module):
+    """Local Attention Transformer Block, used for local attention within LocalAttnTransformer.
+
+    TODO: needs a unit test.
+    """
+
     def __init__(
         self, c_atom: int, num_heads: int, num_queries: int = 32, num_keys: int = 128
     ):
@@ -345,6 +354,10 @@ class LocalAttnTransformerBlock(nn.Module):
             num_heads: (int) number of attention heads
             num_queries: (int) number of queries
             num_keys: (int) number of keys
+
+        Note:
+            if we write a local attention class, we might have better performance due to not replicating
+            the key tensor with the rearrangement. We have 4x more keys and values than we need to.
         """
         super().__init__()
 
@@ -369,6 +382,38 @@ class LocalAttnTransformerBlock(nn.Module):
         # Transition
         self.transition = Transition(c_in=c_atom, n=2, output_linear_init="default")
 
+    def _verify_inputs(
+        self,
+        q_l: Tensor,
+        scale_attn: Tensor,
+        shift_attn: Tensor,
+        gate_attn: Tensor,
+        scale_mlp: Tensor,
+        shift_mlp: Tensor,
+        gate_mlp: Tensor,
+        trunked_pair_bias: Tensor,
+        trunked_pair_mask: Tensor,
+    ):
+        """Verify the inputs to the transformer block."""
+        assert (
+            q_l.shape[-2::]
+            == scale_attn.shape[-2:]
+            == shift_attn.shape[-2:]
+            == gate_attn.shape[-2:]
+            == scale_mlp.shape[-2:]
+            == shift_mlp.shape[-2:]
+            == gate_mlp.shape[-2:]
+        ), "Shape mismatch between input and modulation parameters."
+        assert (
+            trunked_pair_bias.shape[-2:]
+            == trunked_pair_mask.shape[-2:]
+            == (self.num_queries, self.num_keys)
+        ), f"Pair bias and mask dimension mismatch. Expected [N_queries, N_keys], got {trunked_pair_bias.shape[-2:]} and {trunked_pair_mask.shape[-2:]}"
+
+        assert (
+            trunked_pair_bias.shape[-3] == self.num_heads
+        ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {trunked_pair_bias.shape[-3]}"
+
     def forward(
         self,
         q_l: Tensor,
@@ -379,27 +424,76 @@ class LocalAttnTransformerBlock(nn.Module):
         scale_mlp: Tensor,
         shift_mlp: Tensor,
         gate_mlp: Tensor,
-        trunked_pair_biases: Tensor,
+        trunked_pair_bias: Tensor,
         trunked_pair_mask: Tensor,
     ):
+        """
+        Args:
+            q_l: atom representation
+                [..., N_atom, c_atom]
+            scale_attn: attention scaling
+                [..., N_atom, c_atom]
+            shift_attn: attention shift
+                [..., N_atom, c_atom]
+            gate_attn: attention gating
+                [..., N_atom, c_atom]
+            scale_mlp: MLP scaling
+                [..., N_atom, c_atom]
+            shift_mlp: MLP shift
+                [..., N_atom, c_atom]
+            gate_mlp: MLP gating
+                [..., N_atom, c_atom]
+            trunked_pair_bias: trunked pair bias
+                [..., N_subset, N_heads, N_queries, N_keys]
+            trunked_pair_mask: trunked pair mask
+                [..., N_subset, N_queries, N_keys]
+        """
+        self._verify_inputs(
+            q_l,
+            scale_attn,
+            shift_attn,
+            gate_attn,
+            scale_mlp,
+            shift_mlp,
+            gate_mlp,
+            trunked_pair_bias,
+            trunked_pair_mask,
+        )
         # AdaLN on q_l first
-        # attn_input = scale_attn * self.attn_layernorm(q_l) + shift_attn
-
-        # NOTE: if we write a local attention class, we might have better performance due to not
-        # replicating the key tensor with the rearrangement. We have 4x more keys and values than we need to.
+        attn_input = scale_attn * self.attn_layernorm(q_l) + shift_attn
 
         # Rearrange q_l and do attention with trunked
+        q_x = rearrange_to_query_subset(
+            attn_input, rearrange_dim=-2, num_queries=self.num_queries
+        )  # [..., N_subset, N_query, c_atom]
+        kv_x = rearrange_to_key_subset(
+            attn_input,
+            rearrange_dim=-2,
+            num_keys=self.num_keys,
+            num_queries=self.num_queries,
+        )  # [..., N_subset, N_key, c_atom]
 
-        # Rearrange back to atom [..., N_atom, c_atom]
+        attn_out = self.attention(
+            q_x=q_x,
+            kv_x=kv_x,
+            pair_bias=trunked_pair_bias,
+            pair_mask=trunked_pair_mask,
+        )  # [..., N_subset, N_query, c_atom]
+
+        # Rearrange back to atom from query layout
+        attn_out = attn_out.flatten(start_dim=-3, end_dim=-2)  # [..., N_atom, c_atom]
 
         # Gate the attention output and add as residual
+        q_l = q_l + (gate_attn * attn_out)
 
         # AdaLN on MLP inputs
+        mlp_input = scale_mlp * self.mlp_layernorm(q_l) + shift_mlp
 
-        # MLP
-        # Gate the MLP output and add as residual
+        # MLP, Gate the MLP output and add as residual
+        mlp_output = self.transition(mlp_input)
+        q_l = q_l + (gate_mlp * mlp_output)
 
-        pass
+        return q_l
 
 
 class LocalAttnTransformer(nn.Module):

@@ -123,6 +123,7 @@ class RelativePositionEncoding(nn.Module):
             input_feature_dict (Dict[str, Any]): input meta feature dict.
             asym_id / residue_index / entity_id / sym_id / token_index
                 [..., N_tokens]
+        TODO: delete input feature dict here, instead pass in the variables directly.
         Returns:
             torch.Tensor: relative position encoding
                 [..., N_token, N_token, c_z]

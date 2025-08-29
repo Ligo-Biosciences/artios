@@ -17,11 +17,11 @@ from typing import Tuple
 from torch import Tensor, nn
 
 from protenix.model.modules.components import Attention, Transition
-from protenix.model.modules.primitives import BiasInitLinear, LayerNorm, LinearNoBias
-from protenix.model.modules.rearrange import (
+from protenix.model.modules.layout import (
     rearrange_to_key_subset,
     rearrange_to_query_subset,
 )
+from protenix.model.modules.primitives import BiasInitLinear, LayerNorm, LinearNoBias
 from protenix.model.utils import permute_final_dims
 
 

@@ -912,7 +912,7 @@ class AtomAttentionEncoder(nn.Module):
         if z is not None:
             assert self.has_z, "Received z input but has_z=False. Initialize with has_z=True to use pair embeddings."
             # Broadcast token pair vectors to local atom pairs
-            z_local_pairs, _ = broadcast_token_to_local_atom_pair(
+            z_local_pairs = broadcast_token_to_local_atom_pair(
                 z_token=z,
                 atom_to_token_idx=atom_to_token_idx,
                 n_queries=self.n_queries,

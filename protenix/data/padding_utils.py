@@ -13,7 +13,7 @@ from protenix.model.utils import pad_at_dim
 DEFAULT_PADDING_VALUES: Dict[str, Union[float, int]] = {
     "coordinate": 0,  # Pad coordinates with 0
     "ref_pos": 0,
-    "atom_to_token_idx": -1,  # Will be adjusted after padding
+    "atom_to_token_idx": 0,  # Will be adjusted after padding
     "atom_to_tokatom_idx": 0,
     "frame_atom_index": -1,
     "ref_space_uid": 0,
@@ -134,11 +134,5 @@ def pad_features_dict(
                 )
 
         padded_dict[key] = padded_tensor
-
-    # Padded atoms should point to last valid token
-    if "atom_to_token_idx" in padded_dict:
-        mask = padded_dict["atom_to_token_idx"] == -1
-        if mask.any():
-            padded_dict["atom_to_token_idx"][mask] = max_n_token - 1
 
     return padded_dict

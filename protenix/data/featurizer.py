@@ -654,11 +654,15 @@ class Featurizer(object):
         mask_features["bond_mask"] = torch.Tensor(
             bond_mask_mat
         ).long()  # [N_atom, N_atom]
+
+        # Add token and atom masks for padding
+        mask_features["token_mask"] = torch.ones(len(self.cropped_token_array)).long()
+        mask_features["atom_mask"] = torch.ones(len(self.cropped_atom_array)).long()
         return mask_features
 
     def get_target_features(self) -> dict[str, torch.Tensor]:
         """
-        Get target-specific features for training. 
+        Get target-specific features for training.
         Adds the target_centre_coordinate, target_restype, and is_target_token features.
 
         Returns:

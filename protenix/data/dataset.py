@@ -31,6 +31,7 @@ from protenix.common.constants import EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
 from protenix.data.msa_featurizer import MSAFeaturizer
+from protenix.data.padding_utils import pad_features_dict
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.data.utils import data_type_transform, make_dummy_feature
 from protenix.utils.cropping import CropData
@@ -98,6 +99,9 @@ class BaseSingleDataset(Dataset):
         self.limits = kwargs.get(
             "limits", -1
         )  # Limit number of indices rows, mainly for test
+
+        # Padding configs
+        self.padding = kwargs.get("padding", {})
 
         # Binding target configs
         self.train_with_binding_target = kwargs.get("train_with_binding_target", False)
@@ -585,6 +589,22 @@ class BaseSingleDataset(Dataset):
             for asymn_id_int in sorted(asymn_id_to_chain_id.keys())
         ]
         basic_info["chain_id"] = chain_id_list
+
+        # Pad features and labels
+        pad_args = {
+            "current_n_atom": feat["atom_to_token_idx"].shape[0],
+            "max_n_atom": self.padding["max_n_atom"],
+            "current_n_token": feat["token_index"].shape[0],
+            "max_n_token": self.padding["max_n_token"],
+            "current_n_msa": feat["msa"].shape[0],
+            "max_n_msa": self.padding["max_n_msa"],
+            "current_n_template": feat.get("template_restype", np.array([1])).shape[0],
+            "max_n_template": self.padding["max_n_template"],
+            "current_n_pocket": 1,
+            "max_n_pocket": self.padding["max_n_pocket"],
+        }
+        feat = pad_features_dict(feat, **pad_args)
+        label = pad_features_dict(label, **pad_args)
 
         data = {
             "input_feature_dict": feat,
@@ -1143,6 +1163,7 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
+        dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
@@ -1170,6 +1191,7 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
+        dataset_param["padding"] = data_config.get("padding", {})
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

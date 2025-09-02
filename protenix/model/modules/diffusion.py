@@ -27,6 +27,8 @@ from protenix.model.modules.transformer import (
 from protenix.model.utils import add, aggregate_atom_to_token, expand_at_dim
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 
+# TODO: switch completely to new components (maybe even delete this file completely).
+
 
 class DiffusionConditioning(nn.Module):
     """
@@ -101,7 +103,7 @@ class DiffusionConditioning(nn.Module):
                 - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
                 - z (torch.Tensor): [..., N_N_tokens, N_tokens, c_z]
 
-        TODO: Change all reference to lm indexing to ij indexing since now weare using tokenwise representations 
+        TODO: Change all reference to lm indexing to ij indexing since now weare using tokenwise representations
         """
         # Grab data on inputs
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
@@ -252,7 +254,7 @@ class DiffusionModule(nn.Module):
             c_atom=c_atom,
             c_atompair=c_atompair,
             c_token=c_token,
-            #has_noisy_coords=True,
+            # has_noisy_coords=True,
             c_s=c_s,
             c_z=c_z,
             blocks_per_ckpt=blocks_per_ckpt,
@@ -383,7 +385,7 @@ class DiffusionModule(nn.Module):
         return 1 / (self.sigma_data * (timestep**2 + (1 - timestep) ** 2).sqrt())
 
     def c_out(self, timestep: torch.Tensor) -> torch.Tensor:
-        #return 1 - timestep 
+        # return 1 - timestep
         return self.sigma_data * (1 - timestep)
 
     def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:

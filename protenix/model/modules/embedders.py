@@ -15,8 +15,8 @@
 from typing import Any, Optional
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor, nn
 
 from protenix.model.modules.primitives import LinearNoBias
 from protenix.model.modules.transformer import AtomAttentionEncoder
@@ -59,7 +59,7 @@ class InputFeatureEmbedder(nn.Module):
         input_feature_dict: dict[str, Any],
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
-    ) -> torch.Tensor:
+    ) -> Tensor:
         """
         Args:
             input_feature_dict (Dict[str, Any]): dict of input features
@@ -67,7 +67,7 @@ class InputFeatureEmbedder(nn.Module):
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 
         Returns:
-            torch.Tensor: token embedding
+            Tensor: token embedding
                 [..., N_token, 384 (c_token) + 32 (c_atompair) := 416]
         """
         # Embed per-atom features.
@@ -106,7 +106,7 @@ class RelativePositionEncoding(nn.Module):
         self.r_max = r_max
         self.s_max = s_max
         self.c_z = c_z
-        self.linear_no_bias = LinearNoBias(
+        self.embed_relpos_features = LinearNoBias(
             in_features=(4 * self.r_max + 2 * self.s_max + 7), out_features=self.c_z
         )
         self.input_feature = {
@@ -117,32 +117,39 @@ class RelativePositionEncoding(nn.Module):
             "token_index": 1,
         }
 
-    def forward(self, input_feature_dict: dict[str, Any]) -> torch.Tensor:
+    def forward(
+        self,
+        *,
+        asym_id: Tensor,
+        residue_index: Tensor,
+        entity_id: Tensor,
+        sym_id: Tensor,
+        token_index: Tensor,
+    ) -> Tensor:
         """
         Args:
-            input_feature_dict (Dict[str, Any]): input meta feature dict.
-            asym_id / residue_index / entity_id / sym_id / token_index
-                [..., N_tokens]
-        TODO: delete input feature dict here, instead pass in the variables directly.
+            asym_id (Tensor): asymmetric unit IDs [..., N_tokens]
+            residue_index (Tensor): residue indices [..., N_tokens]
+            entity_id (Tensor): entity IDs [..., N_tokens]
+            sym_id (Tensor): symmetry IDs [..., N_tokens]
+            token_index (Tensor): token indices [..., N_tokens]
+
         Returns:
-            torch.Tensor: relative position encoding
+            Tensor: relative position encoding
                 [..., N_token, N_token, c_z]
         """
         b_same_chain = (
-            input_feature_dict["asym_id"][..., :, None]
-            == input_feature_dict["asym_id"][..., None, :]
+            asym_id[..., :, None] == asym_id[..., None, :]
         ).long()  # [..., N_token, N_token]
         b_same_residue = (
-            input_feature_dict["residue_index"][..., :, None]
-            == input_feature_dict["residue_index"][..., None, :]
+            residue_index[..., :, None] == residue_index[..., None, :]
         ).long()  # [..., N_token, N_token]
         b_same_entity = (
-            input_feature_dict["entity_id"][..., :, None]
-            == input_feature_dict["entity_id"][..., None, :]
+            entity_id[..., :, None] == entity_id[..., None, :]
         ).long()  # [..., N_token, N_token]
         d_residue = torch.clip(
-            input=input_feature_dict["residue_index"][..., :, None]
-            - input_feature_dict["residue_index"][..., None, :]
+            input=residue_index[..., :, None]
+            - residue_index[..., None, :]
             + self.r_max,
             min=0,
             max=2 * self.r_max,
@@ -151,9 +158,7 @@ class RelativePositionEncoding(nn.Module):
         )  # [..., N_token, N_token]
         a_rel_pos = F.one_hot(d_residue, 2 * (self.r_max + 1))
         d_token = torch.clip(
-            input=input_feature_dict["token_index"][..., :, None]
-            - input_feature_dict["token_index"][..., None, :]
-            + self.r_max,
+            input=token_index[..., :, None] - token_index[..., None, :] + self.r_max,
             min=0,
             max=2 * self.r_max,
         ) * b_same_chain * b_same_residue + (1 - b_same_chain * b_same_residue) * (
@@ -161,9 +166,7 @@ class RelativePositionEncoding(nn.Module):
         )  # [..., N_token, N_token]
         a_rel_token = F.one_hot(d_token, 2 * (self.r_max + 1))
         d_chain = torch.clip(
-            input=input_feature_dict["sym_id"][..., :, None]
-            - input_feature_dict["sym_id"][..., None, :]
-            + self.s_max,
+            input=sym_id[..., :, None] - sym_id[..., None, :] + self.s_max,
             min=0,
             max=2 * self.s_max,
         ) * b_same_entity + (1 - b_same_entity) * (
@@ -171,7 +174,7 @@ class RelativePositionEncoding(nn.Module):
         )  # [..., N_token, N_token]
         a_rel_chain = F.one_hot(d_chain, 2 * (self.s_max + 1))
 
-        p = self.linear_no_bias(  # TODO: include embed in the name of this!
+        p = self.embed_relpos_features(
             torch.cat(
                 [a_rel_pos, a_rel_token, b_same_entity[..., None], a_rel_chain],
                 dim=-1,
@@ -200,14 +203,14 @@ class FourierEmbedding(nn.Module):
         self.register_buffer("w", torch.randn(c, generator=generator))
         self.register_buffer("b", torch.randn(c, generator=generator))
 
-    def forward(self, t_hat_timestep: torch.Tensor) -> torch.Tensor:
+    def forward(self, t_hat_timestep: Tensor) -> Tensor:
         """
         Args:
-            t_hat_timestep (torch.Tensor): the noise level
+            t_hat_timestep (Tensor): the noise level
                 [..., N_sample]
 
         Returns:
-            torch.Tensor: the output fourier embedding
+            Tensor: the output fourier embedding
                 [..., N_sample, c]
         """
         return torch.cos(

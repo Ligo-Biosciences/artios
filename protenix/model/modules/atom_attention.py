@@ -217,7 +217,6 @@ class AtomAttentionEncoder(nn.Module):
         p_lm = p_lm * v_lm  # mask inter-conformer nonsense
         return c_l, p_lm
 
-    # Featurize function for doing the featurization - allows iteration in the future.
     def forward(
         self,
         input_feature_dict: Dict[str, Tensor],

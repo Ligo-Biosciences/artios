@@ -62,14 +62,16 @@ class AtomAttentionEncoder(nn.Module):
         self.num_queries = num_queries
         self.num_keys = num_keys
 
-        # TODO: complete the precision and initialization to mimic DeepMind's.
+        # Atom single features
         self.embed_ref_pos = LinearNoBias(
             in_features=3, out_features=c_atom, high_precision=True
         )
-        self.embed_ref_charge = LinearNoBias(1, c_atom)
         self.embed_ref_mask = LinearNoBias(1, c_atom)
         self.embed_ref_element = LinearNoBias(128, c_atom)
+        self.embed_ref_charge = LinearNoBias(1, c_atom)
         self.embed_ref_atom_name = LinearNoBias(4 * 64, c_atom)
+
+        # Atom pair features
         self.embed_pair_offsets = LinearNoBias(
             in_features=3, out_features=self.c_atompair, high_precision=True
         )
@@ -326,8 +328,94 @@ class AtomAttentionEncoder(nn.Module):
 
 
 class AtomAttentionDecoder(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    """
+    Implements Algorithm 6 in AF3
+    """
 
-    def forward():
-        pass
+    def __init__(
+        self,
+        c_token: int = 384,
+        c_atom: int = 128,
+        c_atompair: int = 16,
+        num_blocks: int = 3,
+        num_heads: int = 4,
+        num_queries: int = 32,
+        num_keys: int = 128,
+    ) -> None:
+        """
+        Args:
+            c_token (int): feature channel of token (single a). Defaults to 384.
+            c_atom (int): embedding dim for atom embedding. Defaults to 128.
+            c_atompair (int): embedding dim for atom pair embedding.
+            c_s (int):
+            num_blocks (int): number of blocks for AtomTransformer. Defaults to 3.
+            num_heads (int): number of heads for AtomTransformer. Defaults to 4.
+            num_queries (int): Number of queries. Defaults to 32.
+            num_keys (int): Number of keys. Defaults to 128.
+        """
+        super(AtomAttentionDecoder, self).__init__()
+        self.c_token = c_token
+        self.c_atom = c_atom
+        self.c_atompair = c_atompair
+        self.num_queries = num_queries
+        self.num_keys = num_keys
+
+        self.broadcast_linear = LinearNoBias(c_token, c_atom)
+        # Local atom transformer
+        self.atom_transformer = LocalAttnTransformer(
+            num_blocks=num_blocks,
+            c_atom=c_atom,
+            c_cond=c_atom,
+            c_atompair=c_atompair,
+            num_heads=num_heads,
+            num_queries=num_queries,
+            num_keys=num_keys,
+        )
+        self.final_layernorm = LayerNorm(c_atom)
+        self.final_linear = LinearNoBias(c_atom, 3, init="zeros", high_precision=True)
+
+    def forward(
+        self,
+        a: Tensor,
+        q_skip: Tensor,
+        c_skip: Tensor,
+        p_skip: Tensor,
+        atom_to_token_idx: Tensor,
+        atom_mask: Tensor,
+        trunked_pair_mask: Tensor,
+    ) -> Tensor:
+        """
+        Args:
+            a (Tensor): the single feature aggregate per-atom representation
+                [..., N_token, c_token]
+            q_skip (Tensor): atom single embedding
+                [..., N_atom, c_atom]
+            c_skip (Tensor): atom single embedding
+                [..., N_atom, c_atom]
+            p_skip (Tensor): atompair single embedding
+                [..., n_blocks, n_queries, n_keys, c_atompair]
+            atom_to_token_idx (Tensor): atom to token index for broadcasting.
+                [..., N_atom]
+            atom_mask (Tensor): per-atom mask indicating valid atoms
+                [..., N_atom]
+            trunked_pair_mask (Tensor): local atom-atom pair mask for local attention transformer.
+                [..., n_blocks, n_queries, n_keys]
+        Returns:
+            Tensor: the updated noisy coordinates
+                [..., N_atom, 3]
+        """
+        # Broadcast per-token activiations to per-atom activations and add the skip connection
+        q = q_skip + broadcast_token_to_atom(
+            x_token=self.broadcast_linear(a), atom_to_token_idx=atom_to_token_idx
+        )
+        q = q * atom_mask[..., None]
+
+        # Cross attention transformer
+        q = self.atom_transformer(
+            q=q, c=c_skip, p=p_skip, trunked_pair_mask=trunked_pair_mask
+        )
+
+        # Map to positions update
+        r = self.final_linear(self.final_layernorm(q))
+        r = r * atom_mask[..., None]
+        return r

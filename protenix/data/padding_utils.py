@@ -60,8 +60,6 @@ def pad_features_dict(
     Returns:
         Dict[str, torch.Tensor]: Dictionary with padded features
     """
-    assert max_n_atom > current_n_atom, "Need at least 1 padding token."
-    assert max_n_token > current_n_token, "Need at least 1 padding token."
 
     # Get expected shapes for current and target dimensions
     current_shapes, current_label_shapes = get_data_shape_dict(

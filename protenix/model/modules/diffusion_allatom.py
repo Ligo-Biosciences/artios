@@ -32,6 +32,7 @@ from protenix.model.utils import (
 from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 
 
+# TODO: switch to new components.
 class DiffusionConditioning(nn.Module):
     """
     Implements Algorithm 21 in AF3
@@ -372,7 +373,8 @@ class DiffusionConditioning(nn.Module):
         ### Relative position encodings
         # Concatenate z_init with relative position encoding and embed (Line 1)
         z = torch.cat(
-            tensors=[z, self.relpe(input_feature_dict)], dim=-1
+            tensors=[z, self.relpe(input_feature_dict)],
+            dim=-1,  # TODO: transparent relpos
         )  # [..., N_sample, N_tokens, N_tokens, 2*c_z]
 
         # Normalise and embed pair embedding (Line 2)

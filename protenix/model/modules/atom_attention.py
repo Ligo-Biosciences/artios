@@ -2,6 +2,7 @@ from typing import Dict, Optional
 
 import torch
 from torch import Tensor, nn
+from torch.nn import functional as F
 
 from protenix.model.modules.layout import (
     broadcast_token_to_local_atom_pair,
@@ -28,10 +29,10 @@ class AtomAttentionEncoder(nn.Module):
         c_atompair: int = 16,
         c_s: int = 384,
         c_z: int = 128,
-        n_blocks: int = 3,
-        n_heads: int = 4,
-        n_queries: int = 32,
-        n_keys: int = 128,
+        num_blocks: int = 3,
+        num_heads: int = 4,
+        num_queries: int = 32,
+        num_keys: int = 128,
         blocks_per_ckpt: Optional[int] = None,
     ) -> None:
         """
@@ -44,8 +45,8 @@ class AtomAttentionEncoder(nn.Module):
             c_atompair (int, optional): atompair embedding dim. Defaults to 16.
             c_s (int, optional):  single embedding dim. Defaults to 384.
             c_z (int, optional): pair embedding dim. Defaults to 128.
-            n_blocks (int, optional): number of blocks in AtomTransformer. Defaults to 3.
-            n_heads (int, optionall): number of heads in AtomTransformer. Defaults to 4.
+            num_blocks (int, optional): number of blocks in AtomTransformer. Defaults to 3.
+            num_heads (int, optionall): number of heads in AtomTransformer. Defaults to 4.
             blocks_per_ckpt: number of AtomAttentionEncoder/AtomTransformer blocks in each activation checkpoint
         """
         super(AtomAttentionEncoder, self).__init__()
@@ -58,8 +59,8 @@ class AtomAttentionEncoder(nn.Module):
         self.c_token = c_token
         self.c_s = c_s
         self.c_z = c_z
-        self.n_queries = n_queries
-        self.n_keys = n_keys
+        self.num_queries = num_queries
+        self.num_keys = num_keys
 
         # TODO: complete the precision and initialization to mimic DeepMind's.
         self.embed_ref_pos = LinearNoBias(
@@ -79,12 +80,10 @@ class AtomAttentionEncoder(nn.Module):
         if self.has_s:
             self.layernorm_s = LayerNorm(self.c_s)
             self.linear_no_bias_s = LinearNoBias(
-                in_features=self.c_s, out_features=self.c_atom, init="zeros"
-            )
-
-        if self.has_coords:
-            self.embed_noisy_coords = LinearNoBias(
-                in_features=3, out_features=self.c_atom, init="default"
+                in_features=self.c_s,
+                out_features=self.c_atom,
+                init="zeros",
+                high_precision=True,
             )
 
         if self.has_z:
@@ -93,16 +92,18 @@ class AtomAttentionEncoder(nn.Module):
                 in_features=self.c_z,
                 out_features=self.c_atompair,
                 high_precision=True,
-                init="zeros",
+            )
+
+        if self.has_coords:
+            self.embed_noisy_coords = LinearNoBias(
+                in_features=3, out_features=self.c_atom, high_precision=True
             )
 
         self.linear_no_bias_cl = LinearNoBias(
-            in_features=self.c_atom,
-            out_features=self.c_atompair,
+            in_features=self.c_atom, out_features=self.c_atompair, init="relu"
         )
         self.linear_no_bias_cm = LinearNoBias(
-            in_features=self.c_atom,
-            out_features=self.c_atompair,
+            in_features=self.c_atom, out_features=self.c_atompair, init="relu"
         )
         self.small_mlp = nn.Sequential(
             nn.ReLU(),
@@ -119,16 +120,17 @@ class AtomAttentionEncoder(nn.Module):
             ),
         )
         self.atom_transformer = LocalAttnTransformer(
-            n_blocks=n_blocks,
-            n_heads=n_heads,
+            num_blocks=num_blocks,
+            num_heads=num_heads,
             c_atom=c_atom,
+            c_cond=c_atom,
             c_atompair=c_atompair,
-            n_queries=n_queries,
-            n_keys=n_keys,
-            blocks_per_ckpt=blocks_per_ckpt,
+            num_queries=num_queries,
+            num_keys=num_keys,
         )
-        self.linear_no_bias_q = LinearNoBias(
-            in_features=self.c_atom, out_features=self.c_token, init="relu"
+        self.final_linear = LinearNoBias(
+            in_features=self.c_atom,
+            out_features=self.c_token,
         )
 
     def _per_atom_conditioning(
@@ -155,16 +157,17 @@ class AtomAttentionEncoder(nn.Module):
         """
 
         # Extract features for special handling
+        # TODO: make this prettier
         ref_pos = input_feature_dict["ref_pos"]
         ref_atom_name_chars = flatten_final_dims(
             input_feature_dict["ref_atom_name_chars"], num_dims=2
-        )
-        ref_element = input_feature_dict["ref_element"]
-        ref_mask = input_feature_dict["ref_mask"].unsqueeze(-1)
+        ).to(ref_pos.dtype)
+        ref_element = input_feature_dict["ref_element"].to(ref_pos.dtype)
+        ref_mask = input_feature_dict["ref_mask"].unsqueeze(-1).to(ref_pos.dtype)
         ref_charge = input_feature_dict["ref_charge"].unsqueeze(-1)
         ref_space_uid = input_feature_dict["ref_space_uid"]
 
-        # Verify inputs with asserts
+        # TODO: Verify inputs with asserts
 
         # Create the atom single conditioning: Embed per-atom meta data
         # [..., N_atom, C_atom]
@@ -177,40 +180,39 @@ class AtomAttentionEncoder(nn.Module):
 
         # Pair conditioning
         queries_ref_pos = rearrange_to_query_subset(
-            ref_pos, rearrange_dim=-2, num_queries=self.n_queries
+            ref_pos, rearrange_dim=-2, num_queries=self.num_queries
         )  # [..., n_blocks, n_queries, 3]
         keys_ref_pos = rearrange_to_key_subset(
-            ref_pos, rearrange_dim=-2, num_keys=self.n_keys, num_queries=self.n_queries
+            ref_pos,
+            rearrange_dim=-2,
+            num_keys=self.num_keys,
+            num_queries=self.num_queries,
         )  # [..., n_blocks, n_keys, 3]
         queries_ref_uid = rearrange_to_query_subset(
-            ref_space_uid, rearrange_dim=-1, num_queries=self.n_queries
+            ref_space_uid, rearrange_dim=-1, num_queries=self.num_queries
         )  # [..., n_blocks, n_queries]
         keys_ref_uid = rearrange_to_key_subset(
             ref_space_uid,
             rearrange_dim=-1,
-            num_keys=self.n_keys,
-            num_queries=self.n_queries,
-        )  # # [..., n_blocks, n_keys]
+            num_keys=self.num_keys,
+            num_queries=self.num_queries,
+        )  # [..., n_blocks, n_keys]
         # Compute displacements
         d_lm = (
             queries_ref_pos[..., :, None, :] - keys_ref_pos[..., None, :, :]
         )  # [..., n_blocks, n_queries, n_keys, 3]
         v_lm = (
-            queries_ref_uid[..., None, :, :].int()
-            == keys_ref_uid[..., None, :, :].int()
+            queries_ref_uid[..., :, None].int() == keys_ref_uid[..., None, :].int()
         ).unsqueeze(dim=-1)  # [..., n_blocks, n_queries, n_keys, 1]
 
         # Create pair repr
         # [..., n_blocks, n_queries, n_keys, c_atompair]
-        p_lm = self.embed_pair_offsets(d_lm) * v_lm
-        p_lm = (
-            p_lm
-            + self.embed_inv_pair_distances(
-                1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))
-            )
-            * v_lm
+        p_lm = self.embed_pair_offsets(d_lm)
+        p_lm = p_lm + self.embed_inv_pair_distances(
+            1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))
         )
-        p_lm = p_lm + self.embed_pair_offsets_valid(v_lm.to(dtype=p_lm.dtype)) * v_lm
+        p_lm = p_lm + self.embed_pair_offsets_valid(v_lm.to(dtype=p_lm.dtype))
+        p_lm = p_lm * v_lm  # mask inter-conformer nonsense
         return c_l, p_lm
 
     # Featurize function for doing the featurization - allows iteration in the future.
@@ -225,7 +227,7 @@ class AtomAttentionEncoder(nn.Module):
         Args:
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
             r_l (Tensor, optional): noisy position. Used for diffusion module.
-                [..., N_sample | 1, N_atom, 3] if provided.
+                [..., N_sample, N_atom, 3] if provided.
             s (Tensor, optional): single embedding
                 [..., N_sample | 1, N_token, c_s]
             z (Tensor, optional): pair embedding
@@ -234,7 +236,7 @@ class AtomAttentionEncoder(nn.Module):
         Returns:
             tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: the output of AtomAttentionEncoder
             a:
-                [..., N_sample | 1, N_token, c_token]
+                [..., N_sample, N_token, c_token]
             q_l:
                 [..., N_sample | 1, N_atom, c_atom]
             c_l:
@@ -244,57 +246,83 @@ class AtomAttentionEncoder(nn.Module):
         """
         atom_mask = input_feature_dict["atom_mask"]
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
+        n_token = input_feature_dict["restype"].shape[-2]
+
+        # Per-atom conditioning
         c_l, p_lm = self._per_atom_conditioning(input_feature_dict)
 
-        # Compute and apply mask
+        # Compute the trunked pair mask
         # [..., N_atom]
         queries_mask = rearrange_to_query_subset(
-            atom_mask, rearrange_dim=-1, num_queries=self.n_queries
+            atom_mask, rearrange_dim=-1, num_queries=self.num_queries
         )  # [..., n_blocks, n_queries]
         keys_mask = rearrange_to_key_subset(
             atom_mask,
             rearrange_dim=-1,
-            num_keys=self.n_keys,
-            num_queries=self.n_queries,
+            num_keys=self.num_keys,
+            num_queries=self.num_queries,
         )  # [..., n_blocks, n_keys]
+        trunked_pair_mask = queries_mask[..., :, None] * keys_mask[..., None, :]
+
+        # Mask the representations
+        p_lm = p_lm * trunked_pair_mask[..., None]
         c_l = c_l * atom_mask[..., None]
 
-        # Mask the pair repr
-        pair_mask = queries_mask[..., :, None] * keys_mask[..., None, :]
-        p_lm = p_lm * pair_mask[..., None]
-
-        # If has s
         if self.has_s:
             c_l = c_l + broadcast_token_to_atom(
-                x_token=self.linear_no_bias_s(
-                    (self.layernorm_s(s)), atom_to_token_idx=atom_to_token_idx
-                )
+                x_token=self.linear_no_bias_s(self.layernorm_s(s)),
+                atom_to_token_idx=atom_to_token_idx,
             )  # [..., N_sample | 1, N_atom, c_atom], depending on s shape
+            c_l = c_l * atom_mask[..., None]
 
-        # If z
         if self.has_z:
             # Broadcast token pair vectors to local atom pairs
             z_local_pairs = broadcast_token_to_local_atom_pair(
                 z_token=self.linear_no_bias_z(self.layernorm_z(z)),
                 atom_to_token_idx=atom_to_token_idx,
-                n_queries=self.n_queries,
-                n_keys=self.n_keys,
+                num_queries=self.num_queries,
+                num_keys=self.num_keys,
             )  # [..., N_sample | 1, n_blocks, n_queries, n_keys, c_atompair]
             p_lm = p_lm + z_local_pairs
+            p_lm = p_lm * trunked_pair_mask[..., None]
 
-        # If r_l
-        # if self.has_coords:
-        #     q_l = c_l + self.embed_noisy_coords(r_l)
-        # else:
-        #     q_l = c_l.clone()
+        if self.has_coords:
+            q_l = c_l + self.embed_noisy_coords(r_l)
+            q_l = q_l * atom_mask[..., None]
+        else:
+            q_l = c_l.clone()
+
+        # Embed single features into the pair conditioning
+        queries_c_l = rearrange_to_query_subset(
+            q_x=self.linear_no_bias_cl(F.relu(c_l)),
+            rearrange_dim=-2,
+            num_queries=self.num_queries,
+        )
+        keys_c_m = rearrange_to_key_subset(
+            k_x=self.linear_no_bias_cm(F.relu(c_l)),
+            rearrange_dim=-2,
+            num_keys=self.num_keys,
+            num_queries=self.num_queries,
+        )
+        p_lm = p_lm + queries_c_l[..., :, None, :] + keys_c_m[..., None, :, :]
+        # [..., n_blocks, n_queries, n_keys, c_atompair]
+
+        # Small MLP on the pair activations
+        p_lm = p_lm + self.small_mlp(p_lm)
 
         # Local Attn Transformer
-        self.atom_transformer()
+        q_l = self.atom_transformer(
+            q=q_l, c=c_l, p=p_lm, trunked_pair_mask=trunked_pair_mask
+        )
 
         # Aggregate to token
-        average_atom_to_token()
-        # return a, q_skip, c_skip, p_lm
-        pass
+        a = average_atom_to_token(
+            x_atom=F.relu(self.final_linear(q_l)),
+            atom_mask=atom_mask,
+            atom_to_token_idx=atom_to_token_idx,
+            n_token=n_token,
+        )
+        return a, q_l, c_l, p_lm
 
 
 class AtomAttentionDecoder(nn.Module):

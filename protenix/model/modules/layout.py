@@ -115,8 +115,8 @@ def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
 def broadcast_token_to_local_atom_pair(
     z_token: Tensor,
     atom_to_token_idx: Tensor,
-    n_queries: int,
-    n_keys: int,
+    num_queries: int,
+    num_keys: int,
 ) -> Tensor:
     """Broadcast token pair embedding to atom pair embedding
 
@@ -135,10 +135,10 @@ def broadcast_token_to_local_atom_pair(
 
     # [..., N_atom] -> [..., n_trunks, n_queries] and [..., n_trunks, n_keys]
     atom_to_token_idx_q = rearrange_to_query_subset(
-        atom_to_token_idx, rearrange_dim=-1, num_queries=n_queries
+        atom_to_token_idx, rearrange_dim=-1, num_queries=num_queries
     )
     atom_to_token_idx_k = rearrange_to_key_subset(
-        atom_to_token_idx, rearrange_dim=-1, num_keys=n_keys, num_queries=n_queries
+        atom_to_token_idx, rearrange_dim=-1, num_keys=num_keys, num_queries=num_queries
     )
 
     z_gathered_blocked = gather_trunk_pair_embedding(

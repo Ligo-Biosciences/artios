@@ -109,7 +109,7 @@ def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
     ranges.extend(remaining_dims)
     ranges[dim_q] = idx_q[..., :, None]
     ranges[dim_k] = idx_k[..., None, :]
-    return x[ranges]
+    return x[tuple(ranges)]
 
 
 def broadcast_token_to_local_atom_pair(

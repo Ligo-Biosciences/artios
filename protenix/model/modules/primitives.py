@@ -15,8 +15,6 @@ from protenix.model.utils import (
 # Optimized layer norm
 
 try:
-    from protenix.model.layer_norm.layer_norm import FusedLayerNormAffineFunction
-
     CUDA_AVAILABLE = True
 except OSError:
     CUDA_AVAILABLE = False
@@ -272,7 +270,7 @@ class LayerNorm(nn.Module):
                 "bias", torch.zeros(normalized_shape, device=device, dtype=dtype)
             )
 
-    @torch.compiler.disable(recursive=True)
+    # @torch.compiler.disable(recursive=True)
     def forward(self, x: Tensor) -> Tensor:
         """Forward pass using optimized kernel on GPU, regular layernorm on CPU.
 
@@ -283,25 +281,25 @@ class LayerNorm(nn.Module):
             Tensor: Normalized tensor
         """
 
-        if (
-            CUDA_AVAILABLE
-            and x.is_cuda
-            and x.dtype in [torch.float32, torch.float16, torch.bfloat16]
-        ):
-            # Use optimized CUDA kernel implementation
-            return FusedLayerNormAffineFunction.apply(
-                x, self.weight, self.bias, self.normalized_shape, self.eps
-            )
+        # if (
+        #     CUDA_AVAILABLE
+        #     and x.is_cuda
+        #     and x.dtype in [torch.float32, torch.float16, torch.bfloat16]
+        # ):
+        #     # Use optimized CUDA kernel implementation
+        #     return FusedLayerNormAffineFunction.apply(
+        #         x, self.weight, self.bias, self.normalized_shape, self.eps
+        #     )
 
-        else:
-            # Manual implementation using torch.functional
-            return F.layer_norm(
-                x,
-                self.normalized_shape,
-                self.weight if self.elementwise_affine else None,
-                self.bias if self.elementwise_affine else None,
-                self.eps,
-            )
+        # else:
+        # Manual implementation using torch.functional
+        return F.layer_norm(
+            x,
+            self.normalized_shape,
+            self.weight if self.elementwise_affine else None,
+            self.bias if self.elementwise_affine else None,
+            self.eps,
+        )
 
 
 def attention(

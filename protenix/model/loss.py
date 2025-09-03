@@ -28,9 +28,6 @@ import torch.nn.functional as F
 
 from protenix.metrics.rmsd import weighted_rigid_align
 from protenix.model.modules.embedders import FourierEmbedding
-from protenix.model.modules.frames import (
-    expressCoordinatesInFrame,
-)
 from protenix.model.modules.primitives import MLP
 from protenix.model.utils import broadcast_token_to_atom, expand_at_dim
 
@@ -253,41 +250,6 @@ def softmax_cross_entropy(logits: torch.Tensor, labels: torch.Tensor) -> torch.T
         dim=-1,
     )
     return loss
-
-
-# Algorithm 30 Compute alignment error
-def compute_alignment_error_squared(
-    pred_coordinate: torch.Tensor,
-    true_coordinate: torch.Tensor,
-    pred_frames: torch.Tensor,
-    true_frames: torch.Tensor,
-) -> torch.Tensor:
-    """Implements Algorithm 30 Compute alignment error, but do not take the square root
-
-    Args:
-        pred_coordinate (torch.Tensor): the predict coords [frame center]
-            [..., N_sample, N_token, 3]
-        true_coordinate (torch.Tensor): the ground truth coords [frame center]
-            [..., N_token, 3]
-        pred_frames (torch.Tensor): the predict frame
-            [..., N_sample, N_frame, 3, 3]
-        true_frames (torch.Tensor): the ground truth frame
-            [..., N_frame, 3, 3]
-
-    Returns:
-        torch.Tensor: the computed alignment error
-            [..., N_sample, N_frame, N_token]
-    """
-    x_transformed_pred = expressCoordinatesInFrame(
-        coordinate=pred_coordinate, frames=pred_frames
-    )  # [..., N_sample, N_frame, N_token, 3]
-    x_transformed_true = expressCoordinatesInFrame(
-        coordinate=true_coordinate, frames=true_frames
-    )  # [..., N_frame, N_token, 3]
-    squared_pae = torch.sum(
-        (x_transformed_pred - x_transformed_true.unsqueeze(dim=-4)) ** 2, dim=-1
-    )  # [..., N_sample, N_frame, N_token]
-    return squared_pae
 
 
 class MSELoss(nn.Module):

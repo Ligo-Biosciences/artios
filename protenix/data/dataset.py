@@ -33,7 +33,11 @@ from protenix.data.featurizer import Featurizer
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.padding_utils import pad_features_dict
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
-from protenix.data.utils import data_type_transform, make_dummy_feature
+from protenix.data.utils import (
+    data_type_transform,
+    get_atom_padding_length,
+    make_dummy_feature,
+)
 from protenix.utils.cropping import CropData
 from protenix.utils.file_io import read_indices_csv
 from protenix.utils.logger import get_logger
@@ -101,6 +105,7 @@ class BaseSingleDataset(Dataset):
         )  # Limit number of indices rows, mainly for test
 
         # Padding configs
+        self.bin_ends = kwargs.get("bin_ends", {})
         self.padding = kwargs.get("padding", {})
 
         # Binding target configs
@@ -590,10 +595,16 @@ class BaseSingleDataset(Dataset):
         ]
         basic_info["chain_id"] = chain_id_list
 
+        # Get padding length
+        current_n_atom = feat["atom_to_token_idx"].shape[0]
+        max_n_atom = get_atom_padding_length(
+            current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
+        )
+
         # Pad features and labels
         pad_args = {
-            "current_n_atom": feat["atom_to_token_idx"].shape[0],
-            "max_n_atom": self.padding["max_n_atom"],
+            "current_n_atom": current_n_atom,
+            "max_n_atom": max_n_atom,
             "current_n_token": feat["token_index"].shape[0],
             "max_n_token": self.padding["max_n_token"],
             "current_n_msa": feat["msa"].shape[0],
@@ -1163,6 +1174,7 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
+        dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
         train_dataset = BaseSingleDataset(**dataset_param)

@@ -173,7 +173,7 @@ class ArtiosAllAtomTrainer(object):
         logging.info("Finished init ENV.")
 
         # Set torch compile cache limit
-        torch._dynamo.config.cache_size_limit = 8
+        torch._dynamo.config.cache_size_limit = 16
 
     def init_loss(self):
         self.loss = ELBOLoss(self.configs)

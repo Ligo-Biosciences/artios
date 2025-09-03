@@ -105,7 +105,7 @@ class BaseSingleDataset(Dataset):
         )  # Limit number of indices rows, mainly for test
 
         # Padding configs
-        self.bin_ends = kwargs.get("bin_ends", {})
+        self.bin_ends = kwargs.get("bin_ends", [])
         self.padding = kwargs.get("padding", {})
 
         # Binding target configs
@@ -1204,6 +1204,7 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
+        dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset

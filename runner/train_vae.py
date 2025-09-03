@@ -553,7 +553,7 @@ class ArtiosAllAtomTrainer(object):
                 if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
                     coordinate = batch["pred_dict"]["coordinate"]
                     n_atoms = len(batch["cropped_atom_array"])
-                    batch["pred_dict"]["coordinate"] = coordinate[:n_atoms]
+                    batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
                     saved_files = self.dumper.dump(
                         dataset_name=test_name,
                         pdb_id=pid,

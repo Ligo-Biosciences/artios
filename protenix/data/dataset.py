@@ -772,7 +772,8 @@ class BaseSingleDataset(Dataset):
         labels_dict = feat.get_labels()
 
         # Permutation list for atom permutation
-        features_dict["atom_perm_list"] = feat.get_atom_permutation_list()
+        # TODO: for symmetric permutation, this will be required.
+        # features_dict["atom_perm_list"] = feat.get_atom_permutation_list()
 
         # Labels for multi-chain permutation
         # Note: the returned full_atom_array may contain fewer atoms than the input

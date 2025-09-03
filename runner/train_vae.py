@@ -172,6 +172,9 @@ class ArtiosAllAtomTrainer(object):
         torch.set_float32_matmul_precision("high")
         logging.info("Finished init ENV.")
 
+        # Increase torch compile cache limit
+        torch._dynamo.config.cache_size_limit = 64
+
     def init_loss(self):
         self.loss = ELBOLoss(self.configs)
         self.symmetric_permutation = SymmetricPermutation(

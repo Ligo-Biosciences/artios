@@ -677,6 +677,7 @@ class Featurizer(object):
         is_target_token = self.cropped_atom_array.is_target[
             centre_atom_indices
         ]  # [N_token]
+        target_token_valid = self.cropped_atom_array.is_resolved[centre_atom_indices]
 
         # Centre atom coordinates of the target
         target_features["target_centre_coordinate"] = torch.Tensor(
@@ -688,7 +689,7 @@ class Featurizer(object):
         restype = centre_atoms.cano_seq_resname
         restype_onehot = self.restype_onehot_encoded(restype)
         target_features["target_restype"] = restype_onehot * torch.Tensor(
-            is_target_token
+            is_target_token * target_token_valid
         ).unsqueeze(-1)
 
         # Target is_hotspot feature
@@ -697,7 +698,7 @@ class Featurizer(object):
 
         # Binary indicator for target tokens
         target_features["is_target_token"] = torch.Tensor(
-            is_target_token
+            is_target_token * target_token_valid
         ).long()  # [N_token]
 
         return target_features

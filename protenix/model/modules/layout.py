@@ -24,6 +24,7 @@ def _get_key_trunk_indices(n, n_queries, n_keys):
     return key_indices
 
 
+@torch.compiler.disable
 def rearrange_to_query_subset(
     q_x: Tensor, rearrange_dim: int, num_queries: int
 ) -> Tensor:
@@ -46,6 +47,7 @@ def rearrange_to_query_subset(
     return reshape_at_dim(q_x, dim=rearrange_dim, target_shape=(n_trunks, num_queries))
 
 
+@torch.compiler.disable
 def rearrange_to_key_subset(
     k_x: Tensor, rearrange_dim: int, num_keys: int, num_queries: int
 ) -> Tensor:
@@ -72,6 +74,7 @@ def rearrange_to_key_subset(
     return index_at_dim(k_x, rearrange_dim, key_indices)
 
 
+@torch.compiler.disable
 def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
     """
     Selectively gather elements from a tensor using two sets of indices.
@@ -112,6 +115,7 @@ def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
     return x[tuple(ranges)]
 
 
+@torch.compiler.disable
 def broadcast_token_to_local_atom_pair(
     z_token: Tensor,
     atom_to_token_idx: Tensor,

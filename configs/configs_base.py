@@ -308,7 +308,6 @@ loss_configs = {
                 "weight_rna": 5.0,
                 "weight_ligand": 10.0,
                 "eps": 1e-6,
-                # "use_uncertainty": False,
             },
             "bond": {
                 "eps": 1e-6,
@@ -316,7 +315,6 @@ loss_configs = {
             "smooth_lddt": {
                 "eps": 1e-6,
                 "k": 300,
-                "use_uncertainty": False,
             },
             "neighbour_mse": {
                 "eps": 1e-6,

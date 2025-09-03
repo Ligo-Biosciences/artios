@@ -598,7 +598,7 @@ class BaseSingleDataset(Dataset):
         # Get padding length
         current_n_atom = feat["atom_to_token_idx"].shape[0]
         max_n_atom = get_atom_padding_length(
-            current_n_atom, self.bin_ends, self.cropping_configs.crop_size
+            current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
         )
 
         # Pad features and labels
@@ -606,7 +606,7 @@ class BaseSingleDataset(Dataset):
             "current_n_atom": current_n_atom,
             "max_n_atom": max_n_atom,
             "current_n_token": feat["token_index"].shape[0],
-            "max_n_token": self.cropping_configs.crop_size,
+            "max_n_token": self.cropping_configs["crop_size"],
             "current_n_msa": feat["msa"].shape[0],
             "max_n_msa": self.padding["max_n_msa"],
             "current_n_template": feat.get("template_restype", np.array([1])).shape[0],

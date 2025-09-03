@@ -272,6 +272,7 @@ class LayerNorm(nn.Module):
                 "bias", torch.zeros(normalized_shape, device=device, dtype=dtype)
             )
 
+    @torch.compiler.disable(recursive=True)
     def forward(self, x: Tensor) -> Tensor:
         """Forward pass using optimized kernel on GPU, regular layernorm on CPU.
 

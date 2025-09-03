@@ -8,13 +8,11 @@ from protenix.model.modules.embedders import FourierEmbedding, RelativePositionE
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.modules.transformer_v2 import DiffusionTransformer
 from protenix.model.utils import (
-    add,
     average_atom_to_token,
     centre_random_augmentation,
     expand_at_dim,
     one_hot,
 )
-from protenix.openfold_local.utils.checkpointing import get_checkpoint_fn
 
 
 class DiffusionConditioning(nn.Module):
@@ -171,7 +169,7 @@ class DiffusionConditioning(nn.Module):
         v_lm = (
             token_ref_space_uid[..., None, :, :].int()
             == token_ref_space_uid[..., :, None, :].int()
-        )  # [..., n_token, n_token, 1]
+        ).to(ligand_ref_pos.dtype)  # [..., n_token, n_token, 1]
 
         # 3. Compute ligand ref pos displacement
         d_lm = (
@@ -187,14 +185,14 @@ class DiffusionConditioning(nn.Module):
         z = z * v_lm  # mask out inter-conformers
 
         ### Create ligand single conditioning
-        # Embed ligand element
+        # Embed ligand atom-wise features
         c_s = (
             self.ligand_condition_embed(
                 torch.cat(
                     [
-                        input_feature_dict[name].reshape(
-                            *batch_shape, n_atom, self.ligand_input_feature[name]
-                        )
+                        input_feature_dict[name]
+                        .reshape(*batch_shape, n_atom, self.ligand_input_feature[name])
+                        .to(d_lm.dtype)
                         for name in self.ligand_input_feature
                     ],
                     dim=-1,
@@ -202,14 +200,15 @@ class DiffusionConditioning(nn.Module):
             )
             * is_ligand
         )  # [N_atom, c_s]
-        c_s = c_s + self.embed_ligand_ref_pos(ligand_ref_pos)
 
         c_s = average_atom_to_token(
             x_atom=c_s,
             atom_to_token_idx=atom_to_token_idx,
             atom_mask=atom_mask,
             n_token=n_token,
-        )  # [..., N_token, c_z]
+        )  # [..., N_token, c_s]
+
+        c_s = c_s + self.embed_ligand_ref_pos(ligand_ref_pos)
         return c_s, z
 
     def get_target_condition(
@@ -301,7 +300,7 @@ class DiffusionConditioning(nn.Module):
         Returns:
             tuple[torch.Tensor, torch.Tensor]: embeddings s and z
                 - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
-                - z (torch.Tensor): [..., N_sample, N_tokens, N_tokens, c_z]
+                - z (torch.Tensor): [..., N_tokens, N_tokens, c_z]
         """
         dtype = r_noisy_coord.dtype
 
@@ -309,14 +308,14 @@ class DiffusionConditioning(nn.Module):
         n_token = input_feature_dict["residue_index"].shape[-1]
 
         # Initialize pair embedding with ligand conformer features
-        s_ligand, z_ligand = self.get_ligand_condition(input_feature_dict, inplace_safe)
+        s_ligand, z_ligand = self.get_ligand_condition(input_feature_dict)
 
         # Target features
         s_target, z_target = self.get_target_condition(input_feature_dict)
 
         # Add target embeddings
-        s = s + s_target + s_ligand
-        z = z + z_target + z_ligand
+        s = s_target + s_ligand
+        z = z_target + z_ligand
 
         # Add token bonds to pair embedding
         z = z + self.token_bonds_embed(
@@ -357,14 +356,10 @@ class DiffusionConditioning(nn.Module):
             dim=-2,
             n=n_token,
         )  # [..., N_sample, N_tokens, c_s]
-        s = add(
-            s,
-            expand_at_dim(
-                self.coord_t_embed(self.layernorm_coord_t(timestep_coord)),
-                dim=-2,
-                n=n_token,
-            ),
-            inplace_safe=False,
+        s = s + expand_at_dim(
+            self.coord_t_embed(self.layernorm_coord_t(timestep_coord)),
+            dim=-2,
+            n=n_token,
         )  # [..., N_sample, N_token, c_s]
 
         # Embed entity type and target using the is_X_token features
@@ -372,17 +367,17 @@ class DiffusionConditioning(nn.Module):
             torch.stack(
                 [input_feature_dict[name].to(dtype) for name in self.entity_features],
                 dim=-1,
-            )  # TODO: how does this even work and not throw a shape conflict?
+            )
         )  # [..., N_token, c_s]
-        s = add(s, s_entity_type, inplace_safe=inplace_safe)
+        s = s + s_entity_type.unsqueeze(-3)
 
         ### Transition for both single and pair embeddings
         # Send single embedding through two transitions
-        s = add(s, self.transition_s1(s), inplace_safe=inplace_safe)
-        s = add(s, self.transition_s2(s), inplace_safe=inplace_safe)
+        s = s + self.transition_s1(s)
+        s = s + self.transition_s2(s)
 
         # Send pair embedding through one transition
-        z = add(z, self.transition_z(z), inplace_safe=inplace_safe)
+        z = z + self.transition_z(z)
 
         return s, z
 
@@ -402,7 +397,7 @@ class DiffusionModule(nn.Module):
         c_s: int = 384,
         c_s_inputs: int = 449,
         # atom_encoder: dict[str, int] = {"n_blocks": 3, "n_heads": 4},
-        transformer: dict[str, int] = {"n_blocks": 24, "n_heads": 16},
+        transformer: dict[str, int] = {"num_blocks": 24, "num_heads": 16},
         # atom_decoder: dict[str, int] = {"n_blocks": 3, "n_heads": 4},
         dropout: float = 0.0,
         blocks_per_ckpt: Optional[int] = None,
@@ -459,7 +454,7 @@ class DiffusionModule(nn.Module):
         self.diffusion_transformer = DiffusionTransformer(
             **transformer, c_token=c_token, c_s=c_s, c_z=c_z
         )
-        # self.layernorm_a = LayerNorm(c_token)
+        self.layernorm_a = LayerNorm(c_token)
 
         # Coordinate velocity head
         self.coord_head_transition = Transition(c_in=c_token, n=2)
@@ -524,51 +519,30 @@ class DiffusionModule(nn.Module):
         pair_mask = token_mask[..., :, None] * token_mask[..., None, :]
         # [..., 1, N_token, N_token]
 
-        blocks_per_ckpt = self.blocks_per_ckpt
-        if not torch.is_grad_enabled():
-            blocks_per_ckpt = None
-        # Conditioning, shared across difference samples
-        # Diffusion_conditioning consumes 7-8G when token num is 768,
-        # use checkpoint here if blocks_per_ckpt is not None.
-        if blocks_per_ckpt and use_fine_grained_checkpoint:
-            checkpoint_fn = get_checkpoint_fn()
-            s, z = checkpoint_fn(  # TODO: this currently kills the grads
-                self.diffusion_conditioning,
-                r_noisy_coord,
-                coord_timestep,
-                latent_timestep,
-                input_feature_dict,
-                inplace_safe,
-            )
-        else:
-            s, z = self.diffusion_conditioning(
-                r_noisy_coord=r_noisy_coord,
-                coord_timestep=coord_timestep,
-                latent_timestep=latent_timestep,
-                input_feature_dict=input_feature_dict,
-                inplace_safe=inplace_safe,
-            )  # [..., N_sample, N_token, c_s], [..., N_sample, N_token, N_token, c_z]
+        s, z = self.diffusion_conditioning(
+            r_noisy_coord=r_noisy_coord,
+            coord_timestep=coord_timestep,
+            latent_timestep=latent_timestep,
+            input_feature_dict=input_feature_dict,
+            inplace_safe=inplace_safe,
+        )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
 
         # Embed noisy coordinates and latents into token space
         a_coord = self.linear_no_bias_r_embed(r_noisy_coord)
         a_latent = self.linear_no_bias_latent_embed(r_noisy_latent)
 
-        a_token = add(a_coord, a_latent, inplace_safe=inplace_safe)
+        a_token = a_coord + a_latent
 
         # Mix single conditioning into token representation
-        a_token = add(
-            a_token,
-            self.linear_no_bias_s(self.layernorm_s(s)),
-            inplace_safe=inplace_safe,
-        )  # [..., N_sample, N_token, c_token]
+        a_token = a_token + self.linear_no_bias_s(self.layernorm_s(s))
+        # [..., N_sample, N_token, c_token]
 
         # Apply diffusion transformer on token representations
         a_token = a_token * token_mask[..., None]
         z = z * pair_mask[..., None]
-        a_token = self.diffusion_transformer(  # NOTE: this looks like it'll remain unchanged for now.
-            a=a_token, s=s, z=z, pair_mask=pair_mask
-        )
+        a_token = self.diffusion_transformer(a=a_token, s=s, z=z, pair_mask=pair_mask)
         a_token = a_token * token_mask[..., None]
+        a_token = self.layernorm_a(a_token)
 
         # Apply separate velocity prediction heads for coordinates and latents
         latent_velocity = self.latent_head(a_token)

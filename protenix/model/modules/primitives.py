@@ -296,8 +296,8 @@ class LayerNorm(nn.Module):
         return F.layer_norm(
             x,
             self.normalized_shape,
-            self.weight if self.elementwise_affine else None,
-            self.bias if self.elementwise_affine else None,
+            self.weight,
+            self.bias,
             self.eps,
         )
 

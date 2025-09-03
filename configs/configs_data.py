@@ -141,6 +141,7 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": True,
     "binding_target_train_rate": 0.75,
+    "bin_ends": ListValue([2100, 3000, 4000]),
     "padding": {
         "max_n_atom": 4096,
         "max_n_token": 256,

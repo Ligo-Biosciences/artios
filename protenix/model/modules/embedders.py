@@ -18,8 +18,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from protenix.model.modules.atom_attention import AtomAttentionEncoder
 from protenix.model.modules.primitives import LinearNoBias
-from protenix.model.modules.transformer import AtomAttentionEncoder
 
 
 class InputFeatureEmbedder(nn.Module):
@@ -48,8 +48,10 @@ class InputFeatureEmbedder(nn.Module):
             c_atom=c_atom,
             c_atompair=c_atompair,
             c_token=c_token,
-            n_blocks=n_blocks,
+            num_blocks=n_blocks,
             has_coords=False,
+            has_s=False,
+            has_z=False,
         )
         # Line2
         # self.input_feature = {"restype": 32} # {"restype": 32, "profile": 32, "deletion_mean": 1}
@@ -73,8 +75,6 @@ class InputFeatureEmbedder(nn.Module):
         # Embed per-atom features.
         a, _, _, _ = self.atom_attention_encoder(
             input_feature_dict=input_feature_dict,
-            inplace_safe=inplace_safe,
-            chunk_size=chunk_size,
         )  # [..., N_token, c_token]
         # Concatenate the per-token features.
         # batch_shape = input_feature_dict["restype"].shape[:-1]

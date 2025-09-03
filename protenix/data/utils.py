@@ -541,6 +541,13 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         "template_unit_vector": (num_templ, num_token, num_token, 3),
         # Bond features
         "token_bonds": (num_token, num_token),
+        # Target features
+        "target_centre_coordinate": (num_token, 3),
+        "target_restype": (num_token, 32),
+        "is_target_token": (num_token,),
+        # Masks
+        "token_mask": (num_token,),
+        "atom_mask": (num_atom,),
     }
 
     # Extra features needed
@@ -550,6 +557,10 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         "atom_to_tokatom_idx": (num_atom,),  # after crop
         "pae_rep_atom_mask": (num_atom,),  # same as "pae_rep_atom_mask" in label_dict
         "is_distillation": (1,),
+        "is_ligand_token": (num_token,),
+        "is_protein_token": (num_token,),
+        "is_rna_token": (num_token,),
+        "is_dna_token": (num_token,),
     }
 
     # Label
@@ -559,6 +570,9 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         # "centre_atom_mask": (num_atom,),
         # "centre_centre_distance": (num_token, num_token),
         # "centre_centre_distance_mask": (num_token, num_token),
+        "has_centre_atom": (num_token,),
+        "centre_coordinate": (num_token, 3),
+        "dense_to_flat_atom_mask": (num_token, 24),  # (num_token, DENSE_ATOM_NUM)
         "distogram_rep_atom_mask": (num_atom,),
         "pae_rep_atom_mask": (num_atom,),
         "plddt_m_rep_atom_mask": (num_atom,),

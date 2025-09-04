@@ -191,10 +191,6 @@ class AtomAttentionEncoder(nn.Module):
             num_keys=self.num_keys,
             num_queries=self.num_queries,
         )  # [..., n_blocks, n_keys, 3]
-
-        print(
-            f"ref_pos: {ref_pos.shape}, ref_space_uid: {ref_space_uid.shape}, ref_charge: {ref_charge.shape}, asym_id: {input_feature_dict["asym_id"]}"
-        )
         queries_ref_uid = rearrange_to_query_subset(
             ref_space_uid, rearrange_dim=-1, num_queries=self.num_queries
         )  # [..., n_blocks, n_queries]

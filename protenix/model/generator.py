@@ -528,9 +528,11 @@ def sample_noising(
     # (Optional) Encode
     if encoder is not None:
         with torch.no_grad():
-            mu, logvar = encoder(input_feature_dict, x_target_augment)
+            mu, _ = encoder(input_feature_dict, x_target_augment)
             eps = torch.randn_like(mu)  # reparameterized latents
-            x_target_augment = mu + torch.exp(0.5 * logvar) * eps
+            noise_level = torch.rand(mu.shape[:-2], device=eps.device, dtype=eps.dtype)
+            gamma = noise_level[..., None, None] * 0.5
+            x_target_augment = mu + gamma * eps  # noise the latents
 
     # Generate timestep
     timestep = timestep_sampler(

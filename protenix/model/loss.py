@@ -1,17 +1,3 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """
 
 TODO: Create a loss base class that handles the logging, loss calculation, reduction etc.
@@ -36,7 +22,7 @@ from protenix.model.modules.loss_components import (
 
 @dataclass
 class LossComponent:
-    """Configuration for a loss component in an aggregated loss."""
+    """Configures a loss component that is part of an aggregated loss."""
 
     name: str
     loss_class: type[BaseLoss]
@@ -49,7 +35,7 @@ class LossComponent:
         return self.loss_class(**kwargs)
 
 
-class ComposedLoss(BaseLoss):
+class AggregatedLoss(BaseLoss):
     """A loss composed of multiple weighted loss components."""
 
     def __init__(self, components: List[LossComponent], reduction: str = "mean"):
@@ -69,7 +55,6 @@ class ComposedLoss(BaseLoss):
         pred_dict: Dict[str, Tensor],
         label_dict: Dict[str, Any],
         feat_dict: Dict[str, Any],
-        **kwargs,
     ) -> Tuple[Tensor, Dict[str, Tensor], Dict[str, Tensor]]:
         """Compute weighted sum of all component losses."""
         total_loss = torch.tensor(0.0, device=pred_dict[next(iter(pred_dict))].device)
@@ -78,7 +63,7 @@ class ComposedLoss(BaseLoss):
 
         for name, loss_fn in self.losses.items():
             # Each loss gets all dicts and extracts what it needs
-            loss, metrics, monitor = loss_fn(pred_dict, label_dict, feat_dict, **kwargs)
+            loss, metrics, monitor = loss_fn(pred_dict, label_dict, feat_dict)
 
             # Weight and accumulate
             weight = self.weights[name]
@@ -94,7 +79,7 @@ class ComposedLoss(BaseLoss):
         return total_loss, all_metrics, all_monitor
 
 
-class FlowLoss(ComposedLoss):
+class FlowLoss(AggregatedLoss):
     """Flow matching loss."""
 
     def __init__(self, configs):
@@ -104,11 +89,24 @@ class FlowLoss(ComposedLoss):
                 loss_class=MSELoss,
                 weight=1 / 3,
                 kwargs={
-                    "weight_dna": configs.loss.flow.centre_atom.get("weight_dna", 0),
-                    "weight_rna": configs.loss.flow.centre_atom.get("weight_rna", 0),
-                    "weight_ligand": configs.loss.flow.centre_atom.get(
-                        "weight_ligand", 0
-                    ),
+                    # Tensor keys
+                    "pred_key": "centre_coordinate",
+                    "true_key": "centre_coordinate",
+                    "mask_key": "has_centre_atom",
+                    # Entity mask keys
+                    "dna_mask_key": "is_dna_token",
+                    "rna_mask_key": "is_rna_token",
+                    "ligand_mask_key": "is_ligand_token",
+                    # Weights
+                    "weight_dna": configs.loss.flow.centre_atom.weight_dna,
+                    "weight_rna": configs.loss.flow.centre_atom.weight_rna,
+                    "weight_ligand": configs.loss.flow.centre_atom.weight_ligand,
+                    # Behaviour
+                    "enable_alignment": True,
+                    "expand_ground_truth": True,
+                    # Per sample scale keys TODO: better name would be nice
+                    "timestep_key": "coord_timestep",
+                    "sigma_key": "sigma_coord",
                 },
             ),
             LossComponent(
@@ -116,18 +114,31 @@ class FlowLoss(ComposedLoss):
                 loss_class=MSELoss,
                 weight=1 / configs.c_latent,
                 kwargs={
-                    "weight_dna": configs.loss.flow.centre_atom.get("weight_dna", 0),
-                    "weight_rna": configs.loss.flow.centre_atom.get("weight_rna", 0),
-                    "weight_ligand": configs.loss.flow.centre_atom.get(
-                        "weight_ligand", 0
-                    ),
+                    # Tensor keys
+                    "pred_key": "latents_mean",
+                    "true_key": "latents",
+                    "mask_key": "has_centre_atom",
+                    # Entity mask keys
+                    "dna_mask_key": "is_dna_token",
+                    "rna_mask_key": "is_rna_token",
+                    "ligand_mask_key": "is_ligand_token",
+                    # Weights
+                    "weight_dna": configs.loss.flow.centre_atom.weight_dna,
+                    "weight_rna": configs.loss.flow.centre_atom.weight_rna,
+                    "weight_ligand": configs.loss.flow.centre_atom.weight_ligand,
+                    # Behaviour
+                    "enable_alignment": False,
+                    "expand_ground_truth": False,
+                    # Per sample scale keys
+                    "timestep_key": "latent_timestep",
+                    "sigma_key": "sigma_latent",
                 },
             ),
         ]
         super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
 
 
-class ELBOLoss(ComposedLoss):
+class ELBOLoss(AggregatedLoss):
     """ELBO loss."""
 
     def __init__(self, configs):
@@ -137,15 +148,9 @@ class ELBOLoss(ComposedLoss):
                 loss_class=MSELoss,
                 weight=1 / 3,
                 kwargs={
-                    "weight_dna": configs.loss.elbo.reconstruction.mse.get(
-                        "weight_dna", 0
-                    ),
-                    "weight_rna": configs.loss.elbo.reconstruction.mse.get(
-                        "weight_rna", 0
-                    ),
-                    "weight_ligand": configs.loss.elbo.reconstruction.mse.get(
-                        "weight_ligand", 0
-                    ),
+                    "weight_dna": configs.loss.elbo.reconstruction.mse.weight_dna,
+                    "weight_rna": configs.loss.elbo.reconstruction.mse.weight_rna,
+                    "weight_ligand": configs.loss.elbo.reconstruction.mse.weight_ligand,
                 },
             ),
             LossComponent(

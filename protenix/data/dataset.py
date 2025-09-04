@@ -600,6 +600,9 @@ class BaseSingleDataset(Dataset):
         max_n_atom = get_atom_padding_length(
             current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
         )
+        print(
+            f"current_n_atom: {current_n_atom}, max_n_atom: {max_n_atom}, f{basic_info["pdb_id"]}"
+        )
 
         # Pad features and labels
         pad_args = {

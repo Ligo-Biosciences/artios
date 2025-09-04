@@ -236,15 +236,15 @@ class TestAtomAttentionEncoder:
 
         # Check that outputs are still valid
         assert (
-            a.shape == (n_tokens, atom_attention_encoder.c_token)
+            a.shape == (1, n_tokens, atom_attention_encoder.c_token)
         ), f"Expected a shape (..., {n_tokens}, {atom_attention_encoder.c_token}), got {a.shape}"
 
         assert (
-            q_l.shape == (n_atoms, atom_attention_encoder.c_atom)
+            q_l.shape == (1, n_atoms, atom_attention_encoder.c_atom)
         ), f"Expected q_l shape (..., {n_atoms}, {atom_attention_encoder.c_atom}), got {q_l.shape}"
 
         assert (
-            c_l.shape == (n_atoms, atom_attention_encoder.c_atom)
+            c_l.shape == (1, n_atoms, atom_attention_encoder.c_atom)
         ), f"Expected c_l shape (..., {n_atoms}, {atom_attention_encoder.c_atom}), got {c_l.shape}"
 
         # Check for finite values
@@ -466,7 +466,7 @@ class TestAtomAttentionDecoder:
         )
 
         # Use encoder outputs as decoder inputs
-        atom_mask = input_feature_dict["atom_mask"]
+        atom_mask = input_feature_dict["atom_mask"].unsqueeze(-2)
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
 
         # Generate trunked_pair_mask using the same pattern

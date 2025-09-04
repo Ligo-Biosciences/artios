@@ -156,6 +156,12 @@ class AtomAttentionEncoder(nn.Module):
                     [..., N_atom]
                 * ref_space_uid: unique id for the ligand / residue
                     [..., N_atom]
+
+        Returns:
+            - Tensor of atom-wise single conditioning
+                [..., n_atoms, c_atom]
+            - Tensor of atom pair-wise conditioning
+                [..., n_blocks, n_queries, n_keys, c_atompair]
         """
 
         # Extract features for special handling
@@ -181,7 +187,6 @@ class AtomAttentionEncoder(nn.Module):
         c_l = c_l * ref_mask
 
         # Pair conditioning
-        # print(f"ref_pos shape: {ref_pos.shape}, queries_ref_pos shape: {ref_pos.shape} num_queries: {self.num_queries}")
         queries_ref_pos = rearrange_to_query_subset(
             ref_pos, rearrange_dim=-2, num_queries=self.num_queries
         )  # [..., n_blocks, n_queries, 3]
@@ -246,6 +251,8 @@ class AtomAttentionEncoder(nn.Module):
             p_lm:
                 [..., N_sample | 1, N_atom, N_atom, c_atompair]
         """
+        # TODO: add input asserts here
+
         atom_mask = input_feature_dict["atom_mask"]
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
         n_token = input_feature_dict["restype"].shape[-2]
@@ -270,6 +277,13 @@ class AtomAttentionEncoder(nn.Module):
         p_lm = p_lm * trunked_pair_mask[..., None]
         c_l = c_l * atom_mask[..., None]
 
+        # N_sample dimension gets added
+        c_l = c_l.unsqueeze(-3)
+        p_lm = p_lm.unsqueeze(-5)
+        atom_mask = atom_mask.unsqueeze(-2)
+        trunked_pair_mask = trunked_pair_mask.unsqueeze(-4)
+
+        # N_SAMPLE BEGINS
         if self.has_s:
             c_l = c_l + broadcast_token_to_atom(
                 x_token=self.linear_no_bias_s(self.layernorm_s(s)),
@@ -307,7 +321,7 @@ class AtomAttentionEncoder(nn.Module):
             num_queries=self.num_queries,
         )
         p_lm = p_lm + queries_c_l[..., :, None, :] + keys_c_m[..., None, :, :]
-        # [..., n_blocks, n_queries, n_keys, c_atompair]
+        # [..., N_sample | 1, n_blocks, n_queries, n_keys, c_atompair]
 
         # Small MLP on the pair activations
         p_lm = p_lm + self.small_mlp(p_lm)
@@ -408,7 +422,7 @@ class AtomAttentionDecoder(nn.Module):
         q = q_skip + broadcast_token_to_atom(
             x_token=self.broadcast_linear(a), atom_to_token_idx=atom_to_token_idx
         )
-        q = q * atom_mask[..., None]
+        q = q * atom_mask[..., None]  # TODO: PROBLEM!
 
         # Cross attention transformer
         q = self.atom_transformer(
@@ -417,5 +431,5 @@ class AtomAttentionDecoder(nn.Module):
 
         # Map to positions update
         r = self.final_linear(self.final_layernorm(q))
-        r = r * atom_mask[..., None]
+        r = r * atom_mask[..., None]  # TODO: PROBLEM!
         return r

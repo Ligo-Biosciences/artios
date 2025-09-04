@@ -611,6 +611,18 @@ class LocalAttnTransformerBlock(nn.Module):
             trunked_pair_bias.shape[-3] == self.num_heads
         ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {trunked_pair_bias.shape[-3]}"
 
+        assert (
+            len(q_l.shape[:-2])
+            == len(scale_attn.shape[:-2])
+            == len(shift_attn.shape[:-2])
+            == len(gate_attn.shape[:-2])
+            == len(scale_mlp.shape[:-2])
+            == len(shift_mlp.shape[:-2])
+            == len(gate_mlp.shape[:-2])
+            == len(trunked_pair_bias.shape[:-4])
+            == len(trunked_pair_mask.shape[:-3])
+        ), f"Number of batch dims should match. Expected {len(scale_attn.shape[:-2])}"
+
     def forward(
         self,
         q_l: Tensor,
@@ -771,6 +783,8 @@ class LocalAttnTransformer(nn.Module):
         mlp_params = mlp_fused.chunk(self.num_blocks, dim=-1)
 
         return attn_params, mlp_params
+
+    # TODO: add verify inputs here
 
     def _prep_blocks(
         self,

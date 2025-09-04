@@ -10,7 +10,7 @@ from protenix.model.modules.primitives import (
     LinearNoBias,
     attention,
 )
-from protenix.model.utils import flatten_final_dims, reshape_at_dim
+from protenix.model.utils import expand_at_dim, flatten_final_dims, reshape_at_dim
 
 
 class SwiGLU(nn.Module):
@@ -216,7 +216,9 @@ class Attention(nn.Module):
         v = v.transpose(-2, -3)  # [..., n_heads, n_kv, c]
 
         # Add head dim
-        pair_mask = pair_mask.unsqueeze(dim=-3)  # [..., n_heads = 1, n_q, n_kv]
+        pair_mask = expand_at_dim(
+            pair_mask, dim=-3, n=self.num_heads
+        )  # [..., n_heads, n_q, n_kv]
 
         attn_out = attention(
             q=q, k=k, v=v, pair_mask=pair_mask, attn_bias=pair_bias, inf=1e9

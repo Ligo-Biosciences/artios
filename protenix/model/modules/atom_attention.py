@@ -181,6 +181,9 @@ class AtomAttentionEncoder(nn.Module):
         c_l = c_l * ref_mask
 
         # Pair conditioning
+        print(f"ref_pos shape: {ref_pos.shape}")
+        print(f"queries_ref_pos shape: {ref_pos.shape}")
+        print(f"num_queries: {self.num_queries}")
         queries_ref_pos = rearrange_to_query_subset(
             ref_pos, rearrange_dim=-2, num_queries=self.num_queries
         )  # [..., n_blocks, n_queries, 3]
@@ -190,6 +193,8 @@ class AtomAttentionEncoder(nn.Module):
             num_keys=self.num_keys,
             num_queries=self.num_queries,
         )  # [..., n_blocks, n_keys, 3]
+
+        print(f"ref_space_uid shape: {ref_space_uid.shape}")
         queries_ref_uid = rearrange_to_query_subset(
             ref_space_uid, rearrange_dim=-1, num_queries=self.num_queries
         )  # [..., n_blocks, n_queries]

@@ -600,10 +600,8 @@ class BaseSingleDataset(Dataset):
         max_n_atom = get_atom_padding_length(
             current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
         )
-        print(
-            f"current_n_atom: {current_n_atom}, max_n_atom: {max_n_atom}, f{basic_info["pdb_id"]}"
-        )
 
+        assert current_n_atom > 1, "Crop has <= 1 atom."
         # Pad features and labels
         pad_args = {
             "current_n_atom": current_n_atom,
@@ -638,8 +636,8 @@ class BaseSingleDataset(Dataset):
         bioassembly_dict: dict[str, Any],
         crop_size: int,
         method_weights: list[float],
-        contiguous_crop_complete_lig: bool = True,
-        spatial_crop_complete_lig: bool = True,
+        contiguous_crop_complete_lig: bool = False,
+        spatial_crop_complete_lig: bool = False,
         drop_last: bool = True,
         remove_metal: bool = True,
     ) -> tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any]]:

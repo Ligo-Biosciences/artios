@@ -40,8 +40,8 @@ def rearrange_to_query_subset(
     """
     n_q = q_x.size(rearrange_dim)
 
-    assert n_q % num_queries == 0
-    assert num_queries % 2 == 0
+    assert n_q % num_queries == 0, f"n_q: {n_q}"
+    assert num_queries % 2 == 0, f"num_queries: {num_queries}"
 
     n_trunks = n_q // num_queries
     return reshape_at_dim(q_x, dim=rearrange_dim, target_shape=(n_trunks, num_queries))
@@ -64,10 +64,10 @@ def rearrange_to_key_subset(
     """
     n_atom = k_x.size(rearrange_dim)
 
-    assert num_keys > num_queries
-    assert num_keys % 2 == 0
-    assert num_queries % 2 == 0
-    assert n_atom % num_queries == 0
+    assert num_keys > num_queries, f"num_keys: {num_keys}, num_queries: {num_queries}"
+    assert num_keys % 2 == 0, f"num_keys: {num_keys}"
+    assert num_queries % 2 == 0, f"num_queries: {num_queries}"
+    assert n_atom % num_queries == 0, f"n_atom: {n_atom}"
 
     key_indices = _get_key_trunk_indices(n_atom, num_queries, num_keys)
     key_indices = key_indices.to(k_x.device)

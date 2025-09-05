@@ -347,9 +347,9 @@ loss_configs = {
                 "mse": {
                     "weight_protein": 1.0,
                     "weight_mse": 1.0,  # TODO: delete all of these weight_mse's
-                    "weight_dna": 5.0,
-                    "weight_rna": 5.0,
-                    "weight_ligand": 2.0,
+                    "weight_dna": 4.0 * 2 + 2.0,  # TODO: remove all of this
+                    "weight_rna": 4.0 * 2 + 2.0,
+                    "weight_ligand": 1.0 * 2 + 2.0,
                     "eps": 1e-6,
                 }
             }

@@ -847,13 +847,13 @@ class ArtiosAllAtomTrainer(object):
                                     {"train/lr": last_lr},
                                     step=self.step,
                                 )
-                                self.torchwatcher.watch(
-                                    step=self.step,
-                                    track_gradients=False,
-                                    track_activations=True,
-                                    track_parameters=False,
-                                    prefix="train",
-                                )
+                                # self.torchwatcher.watch(
+                                #     step=self.step,
+                                #     track_gradients=False,
+                                #     track_activations=True,
+                                #     track_parameters=False,
+                                #     prefix="train",
+                                # )
                             self.print(f"Step {self.step}, lr: {last_lr}")
                         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                             self.neptune_run.log_metrics(metrics, step=self.step)

@@ -59,11 +59,10 @@ class AggregatedLoss(BaseLoss):
         """Compute weighted sum of all component losses."""
         total_loss = torch.tensor(0.0, device=pred_dict[next(iter(pred_dict))].device)
         all_metrics = {}
-        all_monitor = {}
 
         for name, loss_fn in self.losses.items():
             # Each loss gets all dicts and extracts what it needs
-            loss, metrics, monitor = loss_fn(pred_dict, label_dict, feat_dict)
+            loss, metrics = loss_fn(pred_dict, label_dict, feat_dict)
 
             # Weight and accumulate
             weight = self.weights[name]
@@ -73,10 +72,9 @@ class AggregatedLoss(BaseLoss):
             all_metrics[name] = loss.detach()
             all_metrics[f"weighted_{name}"] = (weight * loss).detach()
             all_metrics.update({f"{name}/{k}": v for k, v in metrics.items()})
-            all_monitor[name] = monitor
 
         all_metrics["total"] = total_loss.detach()
-        return total_loss, all_metrics, all_monitor
+        return total_loss, all_metrics
 
 
 class FlowLoss(AggregatedLoss):

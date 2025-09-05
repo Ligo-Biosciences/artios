@@ -16,7 +16,7 @@ from typing import List, Tuple
 
 from torch import Tensor, nn
 
-from protenix.model.modules.components import Attention, Transition
+from protenix.model.modules.components import Attention, SwiGLU, Transition
 from protenix.model.modules.layout import (
     rearrange_to_key_subset,
     rearrange_to_query_subset,
@@ -61,8 +61,7 @@ class TransformerBlock(nn.Module):
             num_heads=num_heads,
             gating=False,
         )
-        # MLP
-        self.mlp_layernorm = LayerNorm(c_a)
+        # MLP (with built-in layernorm)
         self.transition = Transition(c_in=c_a, n=4)
 
     def _verify_inputs(self, a: Tensor, pair_bias: Tensor, pair_mask: Tensor):
@@ -102,7 +101,7 @@ class TransformerBlock(nn.Module):
         )
 
         # MLP
-        a = a + self.transition(self.mlp_layernorm(a))
+        a = a + self.transition(a)
         return a
 
 
@@ -250,7 +249,10 @@ class DiTBlock(nn.Module):
         )
         # Transition
         self.mlp_layernorm = LayerNorm(c_token, elementwise_affine=False)
-        self.transition = Transition(c_in=c_token, n=2, output_linear_init="default")
+        self.mlp = nn.Sequential(
+            SwiGLU(c_in=c_token, c_out=2 * c_token),
+            LinearNoBias(2 * c_token, c_token, init="default"),
+        )
 
     def _verify_inputs(
         self,
@@ -340,7 +342,7 @@ class DiTBlock(nn.Module):
 
         # Adaln + MLP
         mlp_input = scale_mlp * self.mlp_layernorm(a) + shift_mlp
-        mlp_output = self.transition(mlp_input)
+        mlp_output = self.mlp(mlp_input)
         a = a + (gate_mlp * mlp_output)
         return a
 
@@ -575,9 +577,12 @@ class LocalAttnTransformerBlock(nn.Module):
             gating=True,
             final_linear_init="default",
         )
+        # AdaLN MLP
         self.mlp_layernorm = LayerNorm(c_atom, elementwise_affine=False)
-        # Transition
-        self.transition = Transition(c_in=c_atom, n=2, output_linear_init="default")
+        self.mlp = nn.Sequential(
+            SwiGLU(c_in=c_atom, c_out=2 * c_atom),
+            LinearNoBias(2 * c_atom, c_atom, init="default"),
+        )
 
     def _verify_inputs(
         self,
@@ -699,7 +704,7 @@ class LocalAttnTransformerBlock(nn.Module):
         mlp_input = scale_mlp * self.mlp_layernorm(q_l) + shift_mlp
 
         # MLP, Gate the MLP output and add as residual
-        mlp_output = self.transition(mlp_input)
+        mlp_output = self.mlp(mlp_input)
         q_l = q_l + (gate_mlp * mlp_output)
 
         return q_l

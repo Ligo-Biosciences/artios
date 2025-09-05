@@ -570,6 +570,8 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         # "centre_atom_mask": (num_atom,),
         # "centre_centre_distance": (num_token, num_token),
         # "centre_centre_distance_mask": (num_token, num_token),
+        "atom_loss_mask": (num_atom,),
+        "token_loss_mask": (num_token,),
         "has_centre_atom": (num_token,),
         "centre_coordinate": (num_token, 3),
         "dense_to_flat_atom_mask": (num_token, 24),  # (num_token, DENSE_ATOM_NUM)

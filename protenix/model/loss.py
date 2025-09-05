@@ -138,6 +138,43 @@ class FlowLoss(AggregatedLoss):
         super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
 
 
+class VAELoss(AggregatedLoss):
+    """VAE loss."""
+
+    def __init__(self, configs):
+        components = [
+            LossComponent(
+                name="mse_coordinate_loss",
+                loss_class=MSELoss,
+                weight=1 / 3,
+                kwargs={
+                    # Tensor keys
+                    "pred_key": "coordinate",
+                    "true_key": "coordinate",
+                    "mask_key": "coordinate_mask",
+                    # Entity mask keys
+                    "dna_mask_key": "is_dna",
+                    "rna_mask_key": "is_rna",
+                    "ligand_mask_key": "is_ligand",
+                    # Weights
+                    "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
+                    "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
+                    "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
+                    # Behaviour
+                    "enable_alignment": True,
+                    "expand_ground_truth": True,
+                },
+            ),
+            LossComponent(
+                name="sequence_loss",
+                loss_class=SequenceLoss,
+                weight=1.0,
+                kwargs={},
+            ),
+        ]
+        super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
+
+
 class ELBOLoss(AggregatedLoss):
     """ELBO loss."""
 

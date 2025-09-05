@@ -788,7 +788,7 @@ class ArtiosAllAtomTrainer(object):
                 active=10,
                 skip_first=50,
                 skip_first_wait=1,
-                repeat=2,
+                repeat=1,
             ),
             on_trace_ready=trace_handler,
         ) as p:

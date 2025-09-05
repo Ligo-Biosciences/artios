@@ -71,7 +71,7 @@ class AggregatedLoss(BaseLoss):
             # Collect metrics
             all_metrics[name] = loss.detach()
             all_metrics[f"weighted_{name}"] = (weight * loss).detach()
-            all_metrics.update({f"{name}/{k}": v for k, v in metrics.items()})
+            all_metrics.update({k: v for k, v in metrics.items()})
 
         all_metrics["total"] = total_loss.detach()
         return total_loss, all_metrics
@@ -81,21 +81,26 @@ class FlowLoss(AggregatedLoss):
     """Flow matching loss."""
 
     def __init__(self, configs):
+        raise NotImplementedError(
+            "FlowLoss needs updating to work with new LossComponents"
+        )
         components = [
             LossComponent(
                 name="mse_centre_atom_loss",
                 loss_class=MSELoss,
-                weight=1 / 3,
+                weight=1 / 3,  # TODO: change this to 1.0
                 kwargs={
                     # Tensor keys
                     "pred_key": "centre_coordinate",
                     "true_key": "centre_coordinate",
-                    "mask_key": "has_centre_atom",
+                    "mask_key": "token_loss_mask",
                     # Entity mask keys
+                    "protein_mask_key": "is_protein_token",
                     "dna_mask_key": "is_dna_token",
                     "rna_mask_key": "is_rna_token",
                     "ligand_mask_key": "is_ligand_token",
                     # Weights
+                    "weight_protein": configs.loss.flow.centre_atom.weight_protein,
                     "weight_dna": configs.loss.flow.centre_atom.weight_dna,
                     "weight_rna": configs.loss.flow.centre_atom.weight_rna,
                     "weight_ligand": configs.loss.flow.centre_atom.weight_ligand,
@@ -115,12 +120,14 @@ class FlowLoss(AggregatedLoss):
                     # Tensor keys
                     "pred_key": "latents_mean",
                     "true_key": "latents",
-                    "mask_key": "has_centre_atom",
+                    "mask_key": "token_loss_mask",
                     # Entity mask keys
+                    "protein_mask_key": "is_protein_token",
                     "dna_mask_key": "is_dna_token",
                     "rna_mask_key": "is_rna_token",
                     "ligand_mask_key": "is_ligand_token",
                     # Weights
+                    "weight_protein": configs.loss.flow.centre_atom.weight_protein,
                     "weight_dna": configs.loss.flow.centre_atom.weight_dna,
                     "weight_rna": configs.loss.flow.centre_atom.weight_rna,
                     "weight_ligand": configs.loss.flow.centre_atom.weight_ligand,
@@ -144,119 +151,25 @@ class VAELoss(AggregatedLoss):
             LossComponent(
                 name="mse_loss",
                 loss_class=MSELoss,
-                weight=1.0,
+                weight=1.0,  # TODO: make this configurable
                 kwargs={
                     # Tensor keys
                     "pred_key": "coordinate",
                     "true_key": "coordinate",
-                    "mask_key": "coordinate_mask",
+                    "mask_key": "atom_loss_mask",
                     # Entity mask keys
+                    "protein_mask_key": "is_protein",
                     "dna_mask_key": "is_dna",
                     "rna_mask_key": "is_rna",
                     "ligand_mask_key": "is_ligand",
                     # Weights
-                    # "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
-                    # "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
-                    # "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
+                    "weight_protein": 1.0,  # configs.loss.vae.reconstruction.mse.weight_protein,
+                    "weight_dna": 2.0,  # configs.loss.vae.reconstruction.mse.weight_dna,
+                    "weight_rna": 2.0,  # configs.loss.vae.reconstruction.mse.weight_rna,
+                    "weight_ligand": 2.0,  # configs.loss.vae.reconstruction.mse.weight_ligand,
                     # Behaviour
                     "enable_alignment": True,
                     "expand_ground_truth": True,
-                },
-            ),
-            LossComponent(
-                name="mse_protein_loss",
-                loss_class=MSELoss,
-                weight=0.0,
-                kwargs={
-                    # Tensor keys
-                    "pred_key": "coordinate",
-                    "true_key": "coordinate",
-                    "mask_key": "coordinate_mask",
-                    # Entity mask keys
-                    "dna_mask_key": "is_dna",
-                    "rna_mask_key": "is_rna",
-                    "ligand_mask_key": "is_ligand",
-                    # Weights
-                    # "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
-                    # "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
-                    # "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
-                    # Behaviour
-                    "enable_alignment": True,
-                    "expand_ground_truth": True,
-                    # Extra filter mask key
-                    "extra_filter_mask_key": "is_protein",
-                },
-            ),
-            LossComponent(
-                name="mse_dna_loss",
-                loss_class=MSELoss,
-                weight=4.0,
-                kwargs={
-                    # Tensor keys
-                    "pred_key": "coordinate",
-                    "true_key": "coordinate",
-                    "mask_key": "coordinate_mask",
-                    # Entity mask keys
-                    "dna_mask_key": "is_dna",
-                    "rna_mask_key": "is_rna",
-                    "ligand_mask_key": "is_ligand",
-                    # Weights
-                    # "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
-                    # "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
-                    # "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
-                    # Behaviour
-                    "enable_alignment": True,
-                    "expand_ground_truth": True,
-                    # Extra filter mask key
-                    "extra_filter_mask_key": "is_dna",
-                },
-            ),
-            LossComponent(
-                name="mse_rna_loss",
-                loss_class=MSELoss,
-                weight=4.0,
-                kwargs={
-                    # Tensor keys
-                    "pred_key": "coordinate",
-                    "true_key": "coordinate",
-                    "mask_key": "coordinate_mask",
-                    # Entity mask keys
-                    "dna_mask_key": "is_dna",
-                    "rna_mask_key": "is_rna",
-                    "ligand_mask_key": "is_ligand",
-                    # Weights
-                    # "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
-                    # "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
-                    # "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
-                    # Behaviour
-                    "enable_alignment": True,
-                    "expand_ground_truth": True,
-                    # Extra filter mask key
-                    "extra_filter_mask_key": "is_rna",
-                },
-            ),
-            LossComponent(
-                name="mse_ligand_loss",
-                loss_class=MSELoss,
-                weight=1.0,
-                kwargs={
-                    # Tensor keys
-                    "pred_key": "coordinate",
-                    "true_key": "coordinate",
-                    "mask_key": "coordinate_mask",
-                    # Entity mask keys
-                    "dna_mask_key": "is_dna",
-                    "rna_mask_key": "is_rna",
-                    "ligand_mask_key": "is_ligand",
-                    # Weights
-                    # "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
-                    # "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
-                    # "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
-                    # Behaviour
-                    "enable_alignment": True,
-                    "expand_ground_truth": True,
-                    # Extra filter mask key
-                    "extra_filter_mask_key": "is_ligand",
                 },
             ),
             LossComponent(

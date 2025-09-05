@@ -38,7 +38,7 @@ from protenix.data.dataloader import get_dataloaders
 # from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
-from protenix.model.loss import ELBOLoss
+from protenix.model.loss import VAELoss
 from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
@@ -173,7 +173,7 @@ class ArtiosAllAtomTrainer(object):
         logging.info("Finished init ENV.")
 
     def init_loss(self):
-        self.loss = ELBOLoss(self.configs)
+        self.loss = VAELoss(self.configs)
         self.symmetric_permutation = SymmetricPermutation(
             self.configs, error_dir=self.error_dir
         )
@@ -350,20 +350,17 @@ class ArtiosAllAtomTrainer(object):
             raise e
         return batch, log_dict
 
-    def get_loss(
-        self, batch: dict, mode: str = "train"
-    ) -> tuple[torch.Tensor, dict, dict]:
+    def get_loss(self, batch: dict, mode: str = "train") -> tuple[torch.Tensor, dict]:
         assert mode in ["train", "eval"]
         self.loss.to(batch["label_dict"]["coordinate"].device)
-        loss, loss_dict, monitor_data = autocasting_disable_decorator(
-            self.configs.skip_amp.loss
-        )(self.loss)(
+        loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
+            self.loss
+        )(
             feat_dict=batch["input_feature_dict"],
             pred_dict=batch["pred_dict"],
             label_dict=batch["label_dict"],
-            mode=mode,
         )
-        return loss, loss_dict, monitor_data
+        return loss, loss_dict
 
     @torch.no_grad()
     def get_metrics(self, batch: dict) -> dict:
@@ -487,7 +484,7 @@ class ArtiosAllAtomTrainer(object):
                     # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode, seed=index)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, monitor_data = self.get_loss(
+                    loss, loss_dict = self.get_loss(
                         batch, mode="train"
                     )  # eval, loss evaluated in the same way as train
 
@@ -534,7 +531,7 @@ class ArtiosAllAtomTrainer(object):
 
                             # Compute loss over the noised latents and log
                             batch["pred_dict"]["coordinate"] = coords
-                            loss, loss_dict, monitor_data = self.get_loss(
+                            loss, loss_dict = self.get_loss(
                                 batch, mode="train"
                             )  # eval, loss evaluated in the same way as train
 
@@ -645,7 +642,7 @@ class ArtiosAllAtomTrainer(object):
 
         with enable_amp:
             batch, _ = self.model_forward(batch, mode="train")
-            loss, loss_dict, _ = self.get_loss(batch, mode="train")
+            loss, loss_dict = self.get_loss(batch, mode="train")
 
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):

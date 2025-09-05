@@ -637,3 +637,51 @@ def softmax_cross_entropy(logits: Tensor, labels: Tensor) -> Tensor:
         dim=-1,
     )
     return loss
+
+
+def masked_mean(
+    input: Tensor,
+    mask: Tensor,
+    axes: int | list[int],
+    keepdim: bool = False,
+    eps: float = 1e-6,
+) -> Tensor:
+    """
+    Calculate the masked mean of the input tensor. Assumes the input and the mask
+    have the same number of dimensions but not necessarily the same shape.
+
+    Args:
+        input (Tensor): The input tensor.
+        mask (Tensor): The mask tensor.
+        axes (int | list[int]): The axes to reduce.
+        keepdim (bool): Whether to keep the dimensions of the input tensor.
+        eps (float): The epsilon to add to the denominator to avoid division by zero.
+
+    Returns:
+        Tensor: The masked mean of the input tensor.
+    """
+    assert len(input.shape) == len(
+        mask.shape
+    ), "Input and mask must have the same number of dimensions"
+
+    if isinstance(axes, int):
+        axes = [axes]
+
+    broadcast_factor = 1.0
+    for ax in axes:
+        input_size = input.shape[ax]
+        mask_size = mask.shape[ax]
+        if mask_size == 1:
+            broadcast_factor = broadcast_factor * input_size
+        elif input_size == mask_size:
+            continue
+        else:
+            raise ValueError(
+                f"Input and mask must have the same size or mask must be 1 along the reduced axes. Got input size {input_size} and mask size {mask_size} along axis {ax}"
+            )
+
+    mean = (input * mask).sum(dim=axes, keepdim=keepdim) / (
+        mask.sum(dim=axes, keepdim=keepdim) * broadcast_factor + eps
+    )
+
+    return mean

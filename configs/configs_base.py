@@ -269,6 +269,7 @@ loss_configs = {
         "diffusion_sparse_loss_enable": GlobalConfigValue("loss_metrics_sparse_enable"),
         "diffusion_lddt_loss_dense": True,  # only set true in initial training for training speed
         "resolution": {"min": 0.1, "max": 4.0},
+        "reduction": "mean",
         "weight": {  # TODO: set unused loss weights to 0 (for completion)
             "alpha_confidence": 1e-4,
             "alpha_pae": 0.0,  # or 1 in finetuning stage 3
@@ -340,6 +341,17 @@ loss_configs = {
                 "sequence": {},  # TODO: link with loss
             },
             "kl_divergence": {"reduction": "mean", "q": 1.5},
+        },
+        "vae": {
+            "reconstruction": {
+                "mse": {
+                    "weight_mse": 1.0,
+                    "weight_dna": 4.0,
+                    "weight_rna": 4.0,
+                    "weight_ligand": 1.0,
+                    "eps": 1e-6,
+                }
+            }
         },
         "flow": {
             "centre_atom": {

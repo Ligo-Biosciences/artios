@@ -849,7 +849,7 @@ class ArtiosAllAtomTrainer(object):
                                 )
                                 self.torchwatcher.watch(
                                     step=self.step,
-                                    track_gradients=True,
+                                    track_gradients=False,
                                     track_activations=True,
                                     track_parameters=False,
                                     prefix="train",

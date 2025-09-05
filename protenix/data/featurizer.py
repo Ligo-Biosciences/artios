@@ -480,13 +480,11 @@ class Featurizer(object):
         bond_features["token_bonds"] = torch.Tensor(token_adj_matrix)
         return bond_features
 
-    def get_extra_features(self) -> dict[str, torch.Tensor]:
+    def _get_atom_to_token_idx(self) -> torch.Tensor:
         """
-        Get other features not listed in AlphaFold3 SI Chapter 2.8 Table 5.
+        Get the mapping from atom index to token index.
+        """
 
-        Returns:
-            Dict[str, torch.Tensor]: a dict of extra features.
-        """
         atom_to_token_idx_dict = {}
         for idx, token in enumerate(self.cropped_token_array.tokens):
             for atom_idx in token.atom_indices:
@@ -499,6 +497,16 @@ class Featurizer(object):
                 for atom_idx in range(len(self.cropped_atom_array))
             ]
         ).long()
+        return atom_to_token_idx
+
+    def get_extra_features(self) -> dict[str, torch.Tensor]:
+        """
+        Get other features not listed in AlphaFold3 SI Chapter 2.8 Table 5.
+
+        Returns:
+            Dict[str, torch.Tensor]: a dict of extra features.
+        """
+        atom_to_token_idx = self._get_atom_to_token_idx()
 
         extra_features = {}
         extra_features["atom_to_token_idx"] = atom_to_token_idx  # [N_atom]
@@ -793,6 +801,13 @@ class Featurizer(object):
         for i, token in enumerate(self.cropped_token_array):
             dense_to_flat[i, : len(token)] = 1
         labels["dense_to_flat_atom_mask"] = torch.Tensor(dense_to_flat).long()
+
+        # Add loss masks
+        atom_to_token_idx = self._get_atom_to_token_idx()  # [N_atom]
+        labels["atom_loss_mask"] = (
+            labels["coordinate_mask"] * labels["has_centre_atom"][atom_to_token_idx]
+        )  # [N_atom]
+        labels["token_loss_mask"] = labels["has_centre_atom"]  # [N_token]
 
         return labels
 

@@ -163,10 +163,10 @@ class VAELoss(AggregatedLoss):
                     "rna_mask_key": "is_rna",
                     "ligand_mask_key": "is_ligand",
                     # Weights
-                    "weight_protein": 1.0,  # configs.loss.vae.reconstruction.mse.weight_protein,
-                    "weight_dna": 2.0,  # configs.loss.vae.reconstruction.mse.weight_dna,
-                    "weight_rna": 2.0,  # configs.loss.vae.reconstruction.mse.weight_rna,
-                    "weight_ligand": 2.0,  # configs.loss.vae.reconstruction.mse.weight_ligand,
+                    "weight_protein": configs.loss.vae.reconstruction.mse.weight_protein,
+                    "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
+                    "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
+                    "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
                     # Behaviour
                     "enable_alignment": True,
                     "expand_ground_truth": True,

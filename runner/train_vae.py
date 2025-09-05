@@ -48,7 +48,6 @@ from protenix.utils.monitoring import analyse_vae_latents, grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
-from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.dumper import DataDumper
 from runner.ema import EMAWrapper
@@ -131,13 +130,13 @@ class ArtiosAllAtomTrainer(object):
                 experiment_name=self.configs.run_name,
                 source_tracking_config=source_config,
             )
-            self.torchwatcher = TorchWatcher(
-                model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
-                run=self.neptune_run,
-                track_layers=None,  # optionally specify
-                tensor_stats=["norm"],
-                base_namespace="model_metrics",
-            )  # torchwatcher for model internals
+            # self.torchwatcher = TorchWatcher(
+            #     model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
+            #     run=self.neptune_run,
+            #     track_layers=None,  # optionally specify
+            #     tensor_stats=["norm"],
+            #     base_namespace="model_metrics",
+            # )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 

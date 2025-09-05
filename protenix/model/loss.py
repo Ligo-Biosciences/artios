@@ -155,9 +155,9 @@ class VAELoss(AggregatedLoss):
                     "rna_mask_key": "is_rna",
                     "ligand_mask_key": "is_ligand",
                     # Weights
-                    "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
-                    "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
-                    "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
+                    # "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
+                    # "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
+                    # "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
                     # Behaviour
                     "enable_alignment": True,
                     "expand_ground_truth": True,
@@ -177,9 +177,9 @@ class VAELoss(AggregatedLoss):
                     "rna_mask_key": "is_rna",
                     "ligand_mask_key": "is_ligand",
                     # Weights
-                    "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
-                    "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
-                    "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
+                    # "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
+                    # "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
+                    # "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
                     # Behaviour
                     "enable_alignment": True,
                     "expand_ground_truth": True,
@@ -190,7 +190,7 @@ class VAELoss(AggregatedLoss):
             LossComponent(
                 name="mse_dna_loss",
                 loss_class=MSELoss,
-                weight=0.0,
+                weight=4.0,
                 kwargs={
                     # Tensor keys
                     "pred_key": "coordinate",
@@ -201,9 +201,9 @@ class VAELoss(AggregatedLoss):
                     "rna_mask_key": "is_rna",
                     "ligand_mask_key": "is_ligand",
                     # Weights
-                    "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
-                    "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
-                    "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
+                    # "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
+                    # "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
+                    # "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
                     # Behaviour
                     "enable_alignment": True,
                     "expand_ground_truth": True,
@@ -214,7 +214,7 @@ class VAELoss(AggregatedLoss):
             LossComponent(
                 name="mse_rna_loss",
                 loss_class=MSELoss,
-                weight=0.0,
+                weight=4.0,
                 kwargs={
                     # Tensor keys
                     "pred_key": "coordinate",
@@ -225,9 +225,9 @@ class VAELoss(AggregatedLoss):
                     "rna_mask_key": "is_rna",
                     "ligand_mask_key": "is_ligand",
                     # Weights
-                    "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
-                    "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
-                    "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
+                    # "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
+                    # "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
+                    # "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
                     # Behaviour
                     "enable_alignment": True,
                     "expand_ground_truth": True,
@@ -238,7 +238,7 @@ class VAELoss(AggregatedLoss):
             LossComponent(
                 name="mse_ligand_loss",
                 loss_class=MSELoss,
-                weight=0.0,
+                weight=1.0,
                 kwargs={
                     # Tensor keys
                     "pred_key": "coordinate",
@@ -249,9 +249,9 @@ class VAELoss(AggregatedLoss):
                     "rna_mask_key": "is_rna",
                     "ligand_mask_key": "is_ligand",
                     # Weights
-                    "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
-                    "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
-                    "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
+                    # "weight_dna": configs.loss.vae.reconstruction.mse.weight_dna,
+                    # "weight_rna": configs.loss.vae.reconstruction.mse.weight_rna,
+                    # "weight_ligand": configs.loss.vae.reconstruction.mse.weight_ligand,
                     # Behaviour
                     "enable_alignment": True,
                     "expand_ground_truth": True,

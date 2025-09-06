@@ -40,6 +40,8 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import VAELoss
+from protenix.model.modules.atom_attention import LocalAttnTransformer
+from protenix.model.modules.transformer_v2 import Transformer
 from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
@@ -48,6 +50,7 @@ from protenix.utils.monitoring import analyse_vae_latents, grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
+from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.dumper import DataDumper
 from runner.ema import EMAWrapper
@@ -130,13 +133,13 @@ class ArtiosAllAtomTrainer(object):
                 experiment_name=self.configs.run_name,
                 source_tracking_config=source_config,
             )
-            # self.torchwatcher = TorchWatcher(
-            #     model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
-            #     run=self.neptune_run,
-            #     track_layers=None,  # optionally specify
-            #     tensor_stats=["norm"],
-            #     base_namespace="model_metrics",
-            # )  # torchwatcher for model internals
+            self.torchwatcher = TorchWatcher(
+                model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
+                run=self.neptune_run,
+                track_layers=[LocalAttnTransformer, Transformer],  # optionally specify
+                tensor_stats=["norm"],
+                base_namespace="model_metrics",
+            )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 
@@ -846,13 +849,13 @@ class ArtiosAllAtomTrainer(object):
                                     {"train/lr": last_lr},
                                     step=self.step,
                                 )
-                                # self.torchwatcher.watch(
-                                #     step=self.step,
-                                #     track_gradients=False,
-                                #     track_activations=True,
-                                #     track_parameters=False,
-                                #     prefix="train",
-                                # )
+                                self.torchwatcher.watch(
+                                    step=self.step,
+                                    track_gradients=False,
+                                    track_activations=True,
+                                    track_parameters=False,
+                                    prefix="train",
+                                )
                             self.print(f"Step {self.step}, lr: {last_lr}")
                         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                             self.neptune_run.log_metrics(metrics, step=self.step)

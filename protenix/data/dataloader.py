@@ -20,6 +20,7 @@ import torch.distributed as dist
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import DataLoader, DistributedSampler, Sampler
 
+from protenix.data.batch_utils import DataCollator
 from protenix.data.dataset import Dataset, get_datasets
 from protenix.utils.logger import get_logger
 
@@ -76,7 +77,7 @@ class WeightedSampler(Sampler):
 
 
 class DistributedWeightedSampler(DistributedSampler):
-    """
+    """x
     A distributed weighted sampler for multiple nodes.
     """
 
@@ -107,7 +108,9 @@ class DistributedWeightedSampler(DistributedSampler):
         self.epoch = 0
         self.num_samples = num_samples
 
-        self.num_samples_per_replica = int(math.ceil(self.num_samples / self.num_replicas))
+        self.num_samples_per_replica = int(
+            math.ceil(self.num_samples / self.num_replicas)
+        )
         self.total_size = self.num_samples_per_replica * self.num_replicas
 
     def __iter__(self) -> Iterator[int]:
@@ -187,7 +190,9 @@ class KeySumBalancedSampler(Sampler):
 
         if isinstance(self.dataset.indices_list, list):
             # e.g. recentPDB test set
-            dataset_values = [x[self.key].astype(int)[0] for x in self.dataset.indices_list]
+            dataset_values = [
+                x[self.key].astype(int)[0] for x in self.dataset.indices_list
+            ]
         else:
             # e.g. posebuster test set
             dataset_values = self.dataset.indices_list[self.key].astype(int).to_numpy()
@@ -224,7 +229,9 @@ class KeySumBalancedSampler(Sampler):
         # Assign remaining samples if the dataset isn't divisible perfectly
         if len(all_indices) > total_samples:
             for i in range(len(all_indices) - total_samples):
-                worker_assignments[i % self.num_replicas].append(all_indices[total_samples + i])
+                worker_assignments[i % self.num_replicas].append(
+                    all_indices[total_samples + i]
+                )
 
         # Return the indices assigned to the current worker
         return worker_assignments
@@ -311,6 +318,7 @@ def get_dataloaders(
     """
     train_dataset, test_datasets = get_datasets(configs, error_dir)
     if world_size > 1:
+        # TODO: does the sampler need to be changed at all? I don't know!
         train_sampler = DistributedWeightedSampler(
             train_dataset,
             train_dataset.merged_datapoint_weights,
@@ -320,10 +328,11 @@ def get_dataloaders(
         )
         train_dl = DistributedDataLoader(
             dataset=train_dataset,
-            batch_size=1,
+            batch_size=1,  # TODO: change to be configurable
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
-            collate_fn=lambda batch: batch[0],
+            # collate_fn=lambda batch: batch[0], #TODO: needs completely changing.
+            collate_fn=DataCollator(),
             sampler=train_sampler,
         )
     else:
@@ -335,10 +344,11 @@ def get_dataloaders(
         )
         train_dl = IterDataLoader(
             dataset=train_dataset,
-            batch_size=1,
+            batch_size=1,  # TODO: change to be configurable
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
-            collate_fn=lambda batch: batch[0],
+            # collate_fn=lambda batch: batch[0],
+            collate_fn=DataCollator(),
             sampler=train_sampler,
         )
 
@@ -359,5 +369,7 @@ def get_dataloaders(
             sampler=test_sampler,
             collate_fn=lambda batch: batch[0],
         )
-    logger.info(f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}")
+    logger.info(
+        f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}"
+    )
     return train_dl, test_dls

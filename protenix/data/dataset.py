@@ -603,6 +603,7 @@ class BaseSingleDataset(Dataset):
 
         assert current_n_atom > 1, "Crop has <= 1 atom."
         # Pad features and labels
+        # TODO: remove padding!!
         pad_args = {
             "current_n_atom": current_n_atom,
             "max_n_atom": max_n_atom,
@@ -826,6 +827,7 @@ class BaseSingleDataset(Dataset):
             label_full_dict["interested_ligand_mask"] = interested_ligand_mask
 
         # Masks for Chain/Interface Metrics
+        # TODO: not needed.
         if self.find_eval_chain_interface:
             (
                 eval_type,

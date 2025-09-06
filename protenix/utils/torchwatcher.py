@@ -26,6 +26,8 @@ TENSOR_STATS = {
     "mean": lambda x: x.mean().item(),
     "std": lambda x: x.std().item(),
     "norm": lambda x: x.norm().item(),
+    "channel_norm": lambda x: x.norm(dim=-1).mean().item(),
+    "channel_rms": lambda x: (x**2).mean(dim=-1).sqrt().mean().item(),
     "min": lambda x: x.min().item(),
     "max": lambda x: x.max().item(),
     "var": lambda x: x.var().item(),

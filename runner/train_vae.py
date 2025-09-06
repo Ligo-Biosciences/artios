@@ -155,7 +155,7 @@ class ArtiosAllAtomTrainer(object):
                     AtomAttentionDecoder,
                 ],  # optionally specify
                 track_layers_name_includes=["linear_q", "linear_k"],
-                tensor_stats=["norm", "mean", "abs_mean"],
+                tensor_stats=["channel_norm", "channel_rms", "mean", "abs_mean"],
                 base_namespace="model_metrics",
             )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))

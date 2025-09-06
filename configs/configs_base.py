@@ -345,7 +345,7 @@ loss_configs = {
         "vae": {
             "reconstruction": {
                 "mse": {
-                    "weight": 1.0,  # TODO: delete all of these weight_mse's
+                    "weight_mse": 1.0,  # TODO: delete all of these weight_mse's
                     "weight_protein": 1.0,
                     "weight_dna": 4.0 * 2 + 2.0,  # TODO: remove all of this
                     "weight_rna": 4.0 * 2 + 2.0,

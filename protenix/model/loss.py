@@ -80,7 +80,7 @@ class VAELoss(AggregatedLoss):
         components = [
             LossComponent(
                 name="mse_loss",
-                weight=configs.loss.vae.mse.weight,
+                weight=configs.loss.vae.reconstruction.mse.weight_mse,
                 loss=MSELoss(
                     # Tensor keys
                     pred_key="coordinate",

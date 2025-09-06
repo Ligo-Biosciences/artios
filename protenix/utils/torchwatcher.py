@@ -45,7 +45,10 @@ class _HookManager:
     """
 
     def __init__(
-        self, model: nn.Module, track_layers: Optional[List[Type[nn.Module]]] = None
+        self,
+        model: nn.Module,
+        track_layers: Optional[List[Type[nn.Module]]] = None,
+        track_layers_name_includes: Optional[List[str]] = None,
     ):
         """
         Initialize HookManager with layer types to track.
@@ -55,6 +58,9 @@ class _HookManager:
             track_layers (Optional[List[Type[nn.Module]]]): List of PyTorch layer types to track.
                                                           If None, tracks all layers in the model.
                                                           If specified, must contain valid PyTorch layer types.
+            track_layers_name_includes (Optional[List[str]]): List of strings that layer names should contain.
+                                                            If specified, layers with names containing any of these
+                                                            strings will be tracked.
 
         Raises:
             TypeError: If model is not a PyTorch model
@@ -66,6 +72,7 @@ class _HookManager:
         self.activations: Dict[str, torch.Tensor] = {}
         self.gradients: Dict[str, torch.Tensor] = {}
         self.track_layers = track_layers
+        self.track_layers_name_includes = track_layers_name_includes or []
 
     def save_activation(self, name: str):
         """Create a forward hook to save layer activations."""
@@ -111,10 +118,27 @@ class _HookManager:
                 # Skip the model itself
                 if name == "":
                     continue
-                # Track all layers if track_layers is None, otherwise only specified types
-                if self.track_layers is None or any(
+
+                should_track = False
+
+                # Check if we should track all layers
+                if self.track_layers is None and not self.track_layers_name_includes:
+                    should_track = True
+
+                # Check layer type filtering
+                if self.track_layers is not None and any(
                     isinstance(module, layer_type) for layer_type in self.track_layers
                 ):
+                    should_track = True
+
+                # Check name-based filtering
+                if self.track_layers_name_includes and any(
+                    name_include in name
+                    for name_include in self.track_layers_name_includes
+                ):
+                    should_track = True
+
+                if should_track:
                     hook = module.register_forward_hook(self.save_activation(name))
                     self.hooks.append(hook)
 
@@ -124,10 +148,27 @@ class _HookManager:
                 # Skip the model itself
                 if name == "":
                     continue
-                # Track all layers if track_layers is None, otherwise only specified types
-                if self.track_layers is None or any(
+
+                should_track = False
+
+                # Check if we should track all layers
+                if self.track_layers is None and not self.track_layers_name_includes:
+                    should_track = True
+
+                # Check layer type filtering
+                if self.track_layers is not None and any(
                     isinstance(module, layer_type) for layer_type in self.track_layers
                 ):
+                    should_track = True
+
+                # Check name-based filtering
+                if self.track_layers_name_includes and any(
+                    name_include in name
+                    for name_include in self.track_layers_name_includes
+                ):
+                    should_track = True
+
+                if should_track:
                     hook = module.register_full_backward_hook(self.save_gradient(name))
                     self.hooks.append(hook)
 
@@ -165,6 +206,7 @@ class TorchWatcher:
         model: nn.Module,
         run: Any,  # Made more flexible to support different logging mechanisms
         track_layers: Optional[List[Type[nn.Module]]] = None,
+        track_layers_name_includes: Optional[List[str]] = "",
         tensor_stats: Optional[
             List[Literal["mean", "std", "norm", "min", "max", "var", "abs_mean"]]
         ] = None,
@@ -179,6 +221,8 @@ class TorchWatcher:
             track_layers (Optional[List[Type[nn.Module]]]): List of PyTorch layer types to track.
                                                           If None, tracks all layers in the model.
                                                           If specified, must contain valid PyTorch layer types.
+            track_layers_name_includes (Optional[List[str]]): List of strings which will be tracked if their layer name
+                                                             includes a string matching it.
             tensor_stats (Optional[List[str]]): List of statistics to compute.
                                               Available options: mean, std, norm, min, max, var, abs_mean.
                                               Defaults to ['mean'] if not specified.
@@ -193,7 +237,7 @@ class TorchWatcher:
 
         self.model = model
         self.run = run
-        self.hm = _HookManager(model, track_layers)
+        self.hm = _HookManager(model, track_layers, track_layers_name_includes)
         self.debug_metrics: Dict[str, float] = {}
         self.base_namespace = base_namespace
 

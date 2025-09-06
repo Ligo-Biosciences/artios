@@ -40,8 +40,17 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import VAELoss
-from protenix.model.modules.atom_attention import LocalAttnTransformer
-from protenix.model.modules.transformer_v2 import Transformer
+from protenix.model.modules.atom_attention import (
+    AtomAttentionDecoder,
+    AtomAttentionEncoder,
+)
+from protenix.model.modules.transformer_v2 import (
+    DiffusionTransformer,
+    DiTBlock,
+    LocalAttnTransformer,
+    LocalAttnTransformerBlock,
+    Transformer,
+)
 from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
@@ -136,8 +145,17 @@ class ArtiosAllAtomTrainer(object):
             self.torchwatcher = TorchWatcher(
                 model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
                 run=self.neptune_run,
-                track_layers=[LocalAttnTransformer, Transformer],  # optionally specify
-                tensor_stats=["norm"],
+                track_layers=[
+                    LocalAttnTransformer,
+                    Transformer,
+                    DiffusionTransformer,
+                    DiTBlock,
+                    LocalAttnTransformerBlock,
+                    AtomAttentionEncoder,
+                    AtomAttentionDecoder,
+                ],  # optionally specify
+                track_layers_name_includes=["linear_q", "linear_k"],
+                tensor_stats=["norm", "mean", "abs_mean"],
                 base_namespace="model_metrics",
             )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))

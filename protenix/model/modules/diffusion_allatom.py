@@ -476,6 +476,7 @@ class DiffusionModule(nn.Module):
         a_token = a_token + self.latent_head_transition(a_token)
         return self.latent_final_linear(self.latent_final_layernorm(a_token))
 
+    @torch.compile
     def f_forward(
         self,
         r_noisy_coord: torch.Tensor,

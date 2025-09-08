@@ -184,8 +184,9 @@ def pad_data(
     Returns:
         Padded data dictionary
     """
-    assert (
-        ["input_feature_dict", "label_dict", "label_full_dict", "basic"] in data
+    assert all(
+        key in data
+        for key in ["input_feature_dict", "label_dict", "label_full_dict", "basic"]
     ), "Data must contain input_feature_dict, label_dict, label_full_dict, and basic"
     padded_data = {}
 

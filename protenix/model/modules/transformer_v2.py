@@ -248,6 +248,8 @@ class DiTBlock(nn.Module):
             gating=True,
             final_linear_init="default",
         )
+        # TODO: temporary torch compile
+        self.attention = torch.compile(self.attention)
         # Transition
         self.mlp_layernorm = LayerNorm(c_token, elementwise_affine=False)
         self.mlp = nn.Sequential(

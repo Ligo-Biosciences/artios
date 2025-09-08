@@ -377,14 +377,14 @@ class ArtiosAllAtomFlowTrainer(object):
         assert mode in ["train", "eval"]
         self.loss.to(batch["label_dict"]["coordinate"].device)  # Move loss to device
 
-        loss, loss_dict, monitor_data = autocasting_disable_decorator(
-            self.configs.skip_amp.loss
-        )(self.loss)(
+        loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
+            self.loss
+        )(
             feat_dict=batch["input_feature_dict"],
             pred_dict=batch["pred_dict"],
             label_dict=batch["label_dict"],
         )
-        return loss, loss_dict, monitor_data
+        return loss, loss_dict
 
     @torch.no_grad()
     def get_metrics(self, batch: dict) -> dict:
@@ -573,7 +573,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     )
 
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, monitor_data = self.get_loss(
+                    loss, loss_dict = self.get_loss(
                         batch, mode="train"
                     )  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)
@@ -703,7 +703,7 @@ class ArtiosAllAtomFlowTrainer(object):
             batch, _ = self.model_forward(
                 batch, encoder=self.vae_shell.vae.encoder, mode="train"
             )
-            loss, loss_dict, _ = self.get_loss(batch, mode="train")
+            loss, loss_dict = self.get_loss(batch, mode="train")
 
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):

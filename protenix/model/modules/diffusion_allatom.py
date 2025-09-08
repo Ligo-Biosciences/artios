@@ -454,8 +454,6 @@ class DiffusionModule(nn.Module):
         self.diffusion_transformer = DiffusionTransformer(
             **transformer, c_token=c_token, c_s=c_s, c_z=c_z
         )
-        # TODO: temporary compilation
-        self.diffusion_transformer = torch.compile(self.diffusion_transformer)
         self.layernorm_a = LayerNorm(c_token)
 
         # Coordinate velocity head

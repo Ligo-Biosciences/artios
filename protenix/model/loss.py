@@ -106,7 +106,7 @@ class FlowLoss(AggregatedLoss):
                     "expand_ground_truth": True,
                     # Per sample scale keys TODO: better name would be nice
                     "timestep_key": "coord_timestep",
-                    "sigma_key": "sigma_coord",
+                    "sigma": configs.loss.flow.sigma_coord,
                 },
             ),
             LossComponent(
@@ -133,7 +133,7 @@ class FlowLoss(AggregatedLoss):
                     "expand_ground_truth": False,
                     # Per sample scale keys
                     "timestep_key": "latent_timestep",
-                    "sigma_key": "sigma_latent",
+                    "sigma": configs.loss.flow.sigma_latent,
                 },
             ),
         ]

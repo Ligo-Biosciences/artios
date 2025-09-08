@@ -328,7 +328,7 @@ def get_dataloaders(
         )
         train_dl = DistributedDataLoader(
             dataset=train_dataset,
-            batch_size=1,  # TODO: change to be configurable
+            batch_size=4,  # TODO: change to be configurable
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             # collate_fn=lambda batch: batch[0], #TODO: needs completely changing.
@@ -347,7 +347,7 @@ def get_dataloaders(
         )
         train_dl = IterDataLoader(
             dataset=train_dataset,
-            batch_size=1,  # TODO: change to be configurable
+            batch_size=4,  # TODO: change to be configurable
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             # collate_fn=lambda batch: batch[0],

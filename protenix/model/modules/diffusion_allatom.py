@@ -459,12 +459,12 @@ class DiffusionModule(nn.Module):
         # Coordinate velocity head
         self.coord_head_transition = Transition(c_in=c_token, n=2)
         self.coord_final_layernorm = LayerNorm(c_token)
-        self.coord_final_linear = LinearNoBias(c_token, 3)
+        self.coord_final_linear = LinearNoBias(c_token, 3, init="zeros")
 
         # Latent velocity head
         self.latent_head_transition = Transition(c_in=c_token, n=2)
         self.latent_final_layernorm = LayerNorm(c_token)
-        self.latent_final_linear = LinearNoBias(c_token, c_latent)
+        self.latent_final_linear = LinearNoBias(c_token, c_latent, init="zeros")
 
     def coord_head(self, a_token: torch.Tensor):
         """Coordinate head for velocity prediction."""

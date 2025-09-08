@@ -184,12 +184,6 @@ def pad_data(
     Returns:
         Padded data dictionary
     """
-    assert all(
-        key in data
-        for key in ["input_feature_dict", "label_dict", "label_full_dict", "basic"]
-    ), "Data must contain input_feature_dict, label_dict, label_full_dict, and basic"
-    padded_data = {}
-
     # Get current dimensions from the sample
     feat = data["input_feature_dict"]
     pad_args = {
@@ -205,24 +199,9 @@ def pad_data(
         "max_n_pocket": max_n_pocket,
     }
 
-    padded_data["input_feature_dict"] = pad_features_dict(
-        data["input_feature_dict"],
-        **pad_args,
-    )
-
-    padded_data["label_dict"] = pad_features_dict(
-        data["label_dict"],
-        **pad_args,
-    )
-
-    padded_data["label_full_dict"] = data["label_full_dict"]
-
-    padded_data["basic"] = data["basic"]
-
-    # Copy optional arrays if present
-    if "cropped_atom_array" in data:
-        padded_data["cropped_atom_array"] = data["cropped_atom_array"]
-    if "cropped_token_array" in data:
-        padded_data["cropped_token_array"] = data["cropped_token_array"]
-
-    return padded_data
+    # Pad input feature dict and label dict
+    return {
+        **data,
+        "input_feature_dict": pad_features_dict(data["input_feature_dict"], **pad_args),
+        "label_dict": pad_features_dict(data["label_dict"], **pad_args),
+    }

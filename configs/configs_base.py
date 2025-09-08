@@ -193,6 +193,7 @@ model_configs = {
             "sigma_coord": GlobalConfigValue("sigma_coord"),
             "sigma_latent": GlobalConfigValue("sigma_latent"),
             "c_token": GlobalConfigValue("c_token"),
+            "c_latent": GlobalConfigValue("c_latent"),
             # "c_atom": GlobalConfigValue("c_atom"),
             # "c_atompair": GlobalConfigValue("c_atompair"),
             "c_z": GlobalConfigValue("c_z"),

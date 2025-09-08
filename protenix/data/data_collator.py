@@ -25,6 +25,11 @@ class DataCollatorWithPadding:
         bin_ends: List[int] = None,
         crop_size: int = 384,
         return_atom_token_arrays: bool = False,
+        list_features: List[str] = [
+            "pdb_id",
+            "chain_id",
+            "bioassembly_dict_fpath",
+        ],
     ):
         """
         Initialise the DataCollatorWithPadding.
@@ -37,6 +42,7 @@ class DataCollatorWithPadding:
             crop_size: Maximum number of tokens (used to calculate max atoms)
             return_atom_token_arrays: Whether to include cropped_atom_array and
                 cropped_token_array in the output batch.
+            list_features: List of features which will be collated into a list.
         """
         self.max_n_msa = max_n_msa
         self.max_n_template = max_n_template
@@ -44,6 +50,8 @@ class DataCollatorWithPadding:
         self.bin_ends = bin_ends
         self.crop_size = crop_size
         self.return_atom_token_arrays = return_atom_token_arrays
+
+        self.list_features = list_features
 
     def __call__(
         self, batch: List[Dict[str, Any]]
@@ -137,9 +145,10 @@ class DataCollatorWithPadding:
     ) -> Dict[str, Any]:
         """
         Collate a single dictionary type across the batch.
+        Features in the list_features are stored in a list.
+            This is for features such as str's, like pdb_id.
         Features of type torch.Tensor are stacked along the batch dimension.
-        Features of type list are stored in a list (producing a list of lists).
-        Appearance of any other type will raise an error.
+        Any other type will raise an error.
 
         Args:
             dict_key: The dictionary key to collate ("input_feature_dict", etc.)
@@ -154,17 +163,16 @@ class DataCollatorWithPadding:
         sample_dict = padded_batch[0][dict_key]
 
         for feature_key in sample_dict.keys():
-            # List of values for this feature across the batch
             feature_values = [data[dict_key][feature_key] for data in padded_batch]
-            # Assert all values for this feature have same type
+            # Assert all values for feature have same type
             assert all(
                 isinstance(value, type(feature_values[0])) for value in feature_values
             )
 
-            # List features stored inside a list
-            if isinstance(feature_values[0], list):
+            # List features get stored in a list
+            if feature_key in self.list_features:
                 collated_dict[feature_key] = feature_values
-            # torch tensors stacked along batch dimension
+            # torch tensors get stacked along batch dimension
             elif isinstance(feature_values[0], torch.Tensor):
                 collated_dict[feature_key] = torch.stack(feature_values, dim=0)
             # Raise error for other types

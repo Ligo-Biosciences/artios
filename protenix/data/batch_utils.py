@@ -91,7 +91,9 @@ class BinnedDataCollator:
 
         Args:
             batch: A list of dictionaries, where each dictionary is the output
-                from a single sample from the dataset __getitem__ method.
+                from a single sample from the dataset __getitem__ method. Each sample will have keys
+                (input_feature_dict, label_dict, label_full_dict, and basic) and optional keys
+                (cropped_atom_array, cropped_token_array).
 
         Returns:
             A dictionary containing the batched data with keys:

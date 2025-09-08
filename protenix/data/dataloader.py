@@ -328,13 +328,13 @@ def get_dataloaders(
         )
         train_dl = DistributedDataLoader(
             dataset=train_dataset,
-            batch_size=4,  # TODO: change to be configurable
+            batch_size=2,  # TODO: change to be configurable
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             # collate_fn=lambda batch: batch[0], #TODO: needs completely changing.
             collate_fn=BinnedDataCollator(
                 **configs.data.padding,
-                crop_size=train_dataset.cropping_configs["crop_size"],
+                crop_size=configs.train_crop_size,
             ),
             sampler=train_sampler,
         )
@@ -347,13 +347,13 @@ def get_dataloaders(
         )
         train_dl = IterDataLoader(
             dataset=train_dataset,
-            batch_size=4,  # TODO: change to be configurable
+            batch_size=2,  # TODO: change to be configurable
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             # collate_fn=lambda batch: batch[0],
             collate_fn=BinnedDataCollator(
                 **configs.data.padding,
-                crop_size=train_dataset.cropping_configs["crop_size"],
+                crop_size=configs.train_crop_size,
             ),
             sampler=train_sampler,
         )

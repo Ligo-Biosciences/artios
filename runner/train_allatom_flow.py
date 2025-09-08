@@ -383,7 +383,6 @@ class ArtiosAllAtomFlowTrainer(object):
             feat_dict=batch["input_feature_dict"],
             pred_dict=batch["pred_dict"],
             label_dict=batch["label_dict"],
-            mode=mode,
         )
         return loss, loss_dict, monitor_data
 

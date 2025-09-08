@@ -302,6 +302,7 @@ class LayerNorm(nn.Module):
         )
 
 
+@torch.compiler.disable
 def attention(
     q: Tensor,
     k: Tensor,

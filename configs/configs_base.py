@@ -357,6 +357,7 @@ loss_configs = {
         "flow": {
             "centre_atom": {
                 "weight_mse": 1.0,
+                "weight_protein": 1.0,
                 "weight_dna": 5.0,
                 "weight_rna": 5.0,
                 "weight_ligand": 10.0,

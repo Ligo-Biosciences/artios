@@ -14,6 +14,7 @@ Cross attention and self attention are separated.
 from functools import partial
 from typing import List, Tuple
 
+import torch
 from torch import Tensor, nn
 
 from protenix.model.modules.components import Attention, SwiGLU, Transition
@@ -488,6 +489,7 @@ class DiffusionTransformer(nn.Module):
             == len(pair_mask.shape[:-2])
         ), "Batch dimension mismatch."
 
+    @torch.compile  # TODO: appropriate place?
     def forward(self, a: Tensor, s: Tensor, z: Tensor, pair_mask: Tensor):
         """
         Args:

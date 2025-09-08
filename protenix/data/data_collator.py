@@ -24,7 +24,7 @@ class DataCollatorWithPadding:
         max_n_pocket: int = 30,
         bin_ends: List[int] = None,
         crop_size: int = 384,
-        return_atom_token_arrays: bool = False,
+        return_atom_token_arrays: bool = True,
         list_features: List[str] = [
             "pdb_id",
             "chain_id",

@@ -81,14 +81,11 @@ class FlowLoss(AggregatedLoss):
     """Flow matching loss."""
 
     def __init__(self, configs):
-        raise NotImplementedError(
-            "FlowLoss needs updating to work with new LossComponents"
-        )
         components = [
             LossComponent(
                 name="mse_centre_atom_loss",
                 loss_class=MSELoss,
-                weight=1 / 3,  # TODO: change this to 1.0
+                weight=1 / 3,
                 kwargs={
                     # Tensor keys
                     "pred_key": "centre_coordinate",
@@ -127,10 +124,10 @@ class FlowLoss(AggregatedLoss):
                     "rna_mask_key": "is_rna_token",
                     "ligand_mask_key": "is_ligand_token",
                     # Weights
-                    "weight_protein": configs.loss.flow.centre_atom.weight_protein,
-                    "weight_dna": configs.loss.flow.centre_atom.weight_dna,
-                    "weight_rna": configs.loss.flow.centre_atom.weight_rna,
-                    "weight_ligand": configs.loss.flow.centre_atom.weight_ligand,
+                    "weight_protein": 1.0,
+                    "weight_dna": 1.0,
+                    "weight_rna": 1.0,
+                    "weight_ligand": 1.0,
                     # Behaviour
                     "enable_alignment": False,
                     "expand_ground_truth": False,

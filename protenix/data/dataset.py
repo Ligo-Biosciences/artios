@@ -31,11 +31,10 @@ from protenix.common.constants import EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
 from protenix.data.msa_featurizer import MSAFeaturizer
-from protenix.data.padding_utils import pad_features_dict
+from protenix.data.padding_utils import get_atom_padding_length, pad_features_dict
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.data.utils import (
     data_type_transform,
-    get_atom_padding_length,
     make_dummy_feature,
 )
 from protenix.utils.cropping import CropData

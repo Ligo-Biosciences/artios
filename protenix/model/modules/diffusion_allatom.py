@@ -121,6 +121,7 @@ class DiffusionConditioning(nn.Module):
         self.transition_s1 = Transition(c_in=self.c_s, n=2)
         self.transition_s2 = Transition(c_in=self.c_s, n=2)
 
+    @torch.compiler.disable
     def get_ligand_condition(
         self,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
@@ -211,6 +212,7 @@ class DiffusionConditioning(nn.Module):
         c_s = c_s + self.embed_ligand_ref_pos(ligand_ref_pos)
         return c_s, z
 
+    @torch.compiler.disable
     def get_target_condition(
         self,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
@@ -279,7 +281,7 @@ class DiffusionConditioning(nn.Module):
 
         return s_target, z_target
 
-    # @torch.compile
+    @torch.compile
     def forward(
         self,
         r_noisy_coord: torch.Tensor,

@@ -2,10 +2,12 @@
 Simplified padding utilities using get_data_shape_dict for shape inference.
 """
 
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 
+import numpy as np
 import torch
 
+from protenix.common.atom_types import DENSE_ATOM_NUM
 from protenix.data.utils import get_data_shape_dict
 from protenix.model.utils import pad_at_dim
 
@@ -19,6 +21,28 @@ DEFAULT_PADDING_VALUES: Dict[str, Union[float, int]] = {
     "ref_space_uid": 0,
     "template_restype": 31,  # Gap token for templates
 }
+
+
+def get_atom_padding_length(n_atom: int, bin_ends: list[int], crop_size: int) -> int:
+    """
+    Get the bin end (padding target) for the given number of atoms. Also calculates the largest
+    bin end for the given crop size.
+
+    Args:
+        n_atom (int): Number of atoms in structure.
+        bin_ends (list[int]): List of bin ends.
+        crop_size (int): Crop size.
+
+    Returns:
+        int: Bin end (padding target) for the given number of atoms.
+    """
+    max_bin_end = crop_size * DENSE_ATOM_NUM
+    bin_ends.append(max_bin_end)
+
+    for end in bin_ends:
+        if n_atom <= end:
+            return end
+    return bin_ends[-1]
 
 
 def pad_features_dict(
@@ -134,3 +158,70 @@ def pad_features_dict(
         padded_dict[key] = padded_tensor
 
     return padded_dict
+
+
+def pad_data(
+    data: Dict[str, Any],
+    max_n_atom: int,
+    max_n_token: int,
+    max_n_msa: int,
+    max_n_template: int,
+    max_n_pocket: int,
+) -> Dict[str, Any]:
+    """
+    Pad a single data dictionary from the Dataset to the maximum dimensions. Each data dictionary
+    has keys (input_feature_dict, label_dict, label_full_dict, and basic) and optional keys
+    (cropped_atom_array, cropped_token_array).
+
+    Args:
+        data: Unpadded data dictionary
+        max_n_atom: Target dimensions for padding
+        max_n_token: Target dimensions for padding
+        max_n_msa: Target dimensions for padding
+        max_n_template: Target dimensions for padding
+        max_n_pocket: Target dimensions for padding
+
+    Returns:
+        Padded data dictionary
+    """
+    assert (
+        ["input_feature_dict", "label_dict", "label_full_dict", "basic"] in data
+    ), "Data must contain input_feature_dict, label_dict, label_full_dict, and basic"
+    padded_data = {}
+
+    # Get current dimensions from the sample
+    feat = data["input_feature_dict"]
+    pad_args = {
+        "current_n_atom": feat["atom_to_token_idx"].shape[0],
+        "max_n_atom": max_n_atom,
+        "current_n_token": feat["token_index"].shape[0],
+        "max_n_token": max_n_token,
+        "current_n_msa": feat["msa"].shape[0],
+        "max_n_msa": max_n_msa,
+        "current_n_template": feat.get("template_restype", np.array([1])).shape[0],
+        "max_n_template": max_n_template,
+        "current_n_pocket": 1,
+        "max_n_pocket": max_n_pocket,
+    }
+
+    padded_data["input_feature_dict"] = pad_features_dict(
+        data["input_feature_dict"],
+        **pad_args,
+    )
+
+    padded_data["label_dict"] = pad_features_dict(
+        data["label_dict"],
+        **pad_args,
+    )
+
+    padded_data["label_full_dict"] = data["label_full_dict"]
+
+    padded_data["basic"] = data["basic"]
+
+    # Copy optional arrays if present
+    if "cropped_atom_array" in data:
+        padded_data["cropped_atom_array"] = data["cropped_atom_array"]
+    if "cropped_token_array" in data:
+        padded_data["cropped_token_array"] = data["cropped_token_array"]
+
+    return padded_data

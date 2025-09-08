@@ -20,7 +20,7 @@ import torch.distributed as dist
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import DataLoader, DistributedSampler, Sampler
 
-from protenix.data.batch_utils import DataCollator
+from protenix.data.batch_utils import BinnedDataCollator
 from protenix.data.dataset import Dataset, get_datasets
 from protenix.utils.logger import get_logger
 
@@ -332,7 +332,10 @@ def get_dataloaders(
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             # collate_fn=lambda batch: batch[0], #TODO: needs completely changing.
-            collate_fn=DataCollator(),
+            collate_fn=BinnedDataCollator(
+                **configs.data.padding,
+                crop_size=train_dataset.cropping_configs["crop_size"],
+            ),
             sampler=train_sampler,
         )
     else:
@@ -348,7 +351,10 @@ def get_dataloaders(
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             # collate_fn=lambda batch: batch[0],
-            collate_fn=DataCollator(),
+            collate_fn=BinnedDataCollator(
+                **configs.data.padding,
+                crop_size=train_dataset.cropping_configs["crop_size"],
+            ),
             sampler=train_sampler,
         )
 

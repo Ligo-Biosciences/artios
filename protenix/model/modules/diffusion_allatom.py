@@ -279,7 +279,7 @@ class DiffusionConditioning(nn.Module):
 
         return s_target, z_target
 
-    @torch.compile
+    # @torch.compile
     def forward(
         self,
         r_noisy_coord: torch.Tensor,

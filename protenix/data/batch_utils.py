@@ -32,9 +32,6 @@ from typing import Any, Dict, List, Union
 import torch
 
 from protenix.data.padding_utils import get_atom_padding_length, pad_data
-from protenix.utils.logger import get_logger
-
-logger = get_logger(__name__)
 
 
 class BinnedDataCollator:

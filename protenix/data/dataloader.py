@@ -332,7 +332,10 @@ def get_dataloaders(
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             collate_fn=DataCollatorWithPadding(
-                **configs.data.padding,
+                max_n_msa=configs.data.padding.max_n_msa,
+                max_n_template=configs.data.padding.max_n_template,
+                max_n_pocket=configs.data.padding.max_n_pocket,
+                bin_ends=configs.data.padding.bin_ends,
                 crop_size=configs.train_crop_size,
             ),
             sampler=train_sampler,
@@ -350,7 +353,10 @@ def get_dataloaders(
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             collate_fn=DataCollatorWithPadding(
-                **configs.data.padding,
+                max_n_msa=configs.data.padding.max_n_msa,
+                max_n_template=configs.data.padding.max_n_template,
+                max_n_pocket=configs.data.padding.max_n_pocket,
+                bin_ends=configs.data.padding.bin_ends,
                 crop_size=configs.train_crop_size,
             ),
             sampler=train_sampler,

@@ -454,6 +454,8 @@ class DiffusionModule(nn.Module):
         self.diffusion_transformer = DiffusionTransformer(
             **transformer, c_token=c_token, c_s=c_s, c_z=c_z
         )
+        # TODO: temporary compilation
+        self.diffusion_transformer = torch.compile(self.diffusion_transformer)
         self.layernorm_a = LayerNorm(c_token)
 
         # Coordinate velocity head
@@ -476,7 +478,6 @@ class DiffusionModule(nn.Module):
         a_token = a_token + self.latent_head_transition(a_token)
         return self.latent_final_linear(self.latent_final_layernorm(a_token))
 
-    @torch.compile
     def f_forward(
         self,
         r_noisy_coord: torch.Tensor,

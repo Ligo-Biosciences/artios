@@ -115,7 +115,7 @@ class FlowLoss(AggregatedLoss):
                 weight=1 / configs.c_latent,
                 kwargs={
                     # Tensor keys
-                    "pred_key": "latents_mean",
+                    "pred_key": "latents",
                     "true_key": "latents",
                     "mask_key": "token_loss_mask",
                     # Entity mask keys

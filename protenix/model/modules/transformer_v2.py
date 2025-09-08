@@ -254,6 +254,8 @@ class DiTBlock(nn.Module):
             SwiGLU(c_in=c_token, c_out=2 * c_token),
             LinearNoBias(2 * c_token, c_token, init="default"),
         )
+        # TODO: temporary torch compile
+        self.mlp = torch.compile(self.mlp)
 
     def _verify_inputs(
         self,
@@ -489,7 +491,6 @@ class DiffusionTransformer(nn.Module):
             == len(pair_mask.shape[:-2])
         ), "Batch dimension mismatch."
 
-    @torch.compile  # TODO: appropriate place?
     def forward(self, a: Tensor, s: Tensor, z: Tensor, pair_mask: Tensor):
         """
         Args:

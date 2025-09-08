@@ -596,6 +596,7 @@ class BaseSingleDataset(Dataset):
         basic_info["chain_id"] = chain_id_list
 
         # Get padding length
+        # TODO: to be moved to collate_fn()
         current_n_atom = feat["atom_to_token_idx"].shape[0]
         max_n_atom = get_atom_padding_length(
             current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
@@ -828,19 +829,19 @@ class BaseSingleDataset(Dataset):
 
         # Masks for Chain/Interface Metrics
         # TODO: not needed.
-        if self.find_eval_chain_interface:
-            (
-                eval_type,
-                cluster_id,
-                chain_1_mask,
-                chain_2_mask,
-            ) = self._get_eval_chain_interface_mask(
-                idx=idx, atom_array_chain_id=full_atom_array.chain_id
-            )
-            labels_dict["eval_type"] = eval_type  # [N_eval]
-            labels_dict["cluster_id"] = cluster_id  # [N_eval]
-            labels_dict["chain_1_mask"] = chain_1_mask  # [N_eval, N_atom]
-            labels_dict["chain_2_mask"] = chain_2_mask  # [N_eval, N_atom]
+        # if self.find_eval_chain_interface:
+        #     (
+        #         eval_type,
+        #         cluster_id,
+        #         chain_1_mask,
+        #         chain_2_mask,
+        #     ) = self._get_eval_chain_interface_mask(
+        #         idx=idx, atom_array_chain_id=full_atom_array.chain_id
+        #     )
+        #     labels_dict["eval_type"] = eval_type  # [N_eval]
+        #     labels_dict["cluster_id"] = cluster_id  # [N_eval]
+        #     labels_dict["chain_1_mask"] = chain_1_mask  # [N_eval, N_atom]
+        #     labels_dict["chain_2_mask"] = chain_2_mask  # [N_eval, N_atom]
 
         # Make dummy features for not implemented features
         dummy_feats = []
@@ -866,7 +867,8 @@ class BaseSingleDataset(Dataset):
         features_dict["is_distillation"] = torch.tensor([self.is_distillation])
         if self.is_distillation is True:
             features_dict["resolution"] = torch.tensor([-1.0])
-        return features_dict, labels_dict, label_full_dict
+        # return features_dict, labels_dict, label_full_dict
+        return features_dict, labels_dict, {}
 
 
 def get_msa_featurizer(configs, dataset_name: str, stage: str) -> Optional[Callable]:

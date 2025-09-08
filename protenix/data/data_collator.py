@@ -1,32 +1,3 @@
-"""Dedicated file for everything involving batching. This will include:
-    - Collating the data coming out of the dataset
-
-The data that comes out of the dataset is a dictionary with the following keys:
-    - input_feature_dict
-    - label_dict
-    - label_full_dict
-    - basic
-    - (optional) cropped_atom_array
-    - (optional) cropped_token_array
-
-We need to collate this data into a batch. For now this includes:
-    - Iterating over the different dictionaries (input_feature_dict, label_dict, label_full_dict and basic)
-    - Iterating over the different keys in the dictionaries
-    - Stacking the tensors along the first dimension (using torch.stack on dim=0)
-    - Spotting exceptions to these rules and accomodating for this
-
-Collating data into a batch is going to involve creating a DataCollator() class. this will have a
-__call__ method that will be called on a batch ( which will come in as a list of dictionaries) and return
-a tuple of dictionaries with the following keys:
-    - input_feature_dict
-    - label_dict
-    - label_full_dict
-    - basic
-which now contain features with a batch dimension.
-
-This will be used in the dataloader.py file.
-"""
-
 from typing import Any, Dict, List, Union
 
 import torch
@@ -34,14 +5,16 @@ import torch
 from protenix.data.padding_utils import get_atom_padding_length, pad_data
 
 
-class BinnedDataCollator:
+class DataCollatorWithPadding:
     """
-    Collates batches of data from the dataset into batched tensors.
+    Collates batches of data from the dataset.
 
-    This collator handles padding of features to consistent shapes within
-    each batch before stacking tensors along the batch dimension.
-    Special handling is provided for non-tensor features that should
-    remain as lists.
+    This collator first pads all datapoints in the batch to a common shape that
+    depends on the maximum number of atoms in the batch.
+    Features are then collated across the batch.
+        - For tensor features, this involves stacking along the batch dimension.
+        - For list features, this involves storing in a list of lists.
+        - For other types, an error is raised.
     """
 
     def __init__(
@@ -54,7 +27,7 @@ class BinnedDataCollator:
         return_atom_token_arrays: bool = False,
     ):
         """
-        Initialise the BinnedDataCollator.
+        Initialise the DataCollatorWithPadding.
 
         Args:
             max_n_msa: Maximum number of MSA sequences
@@ -72,14 +45,6 @@ class BinnedDataCollator:
         self.crop_size = crop_size
         self.return_atom_token_arrays = return_atom_token_arrays
 
-        # Features that should be kept as lists rather than stacked
-        # These are typically strings or identifiers
-        self.list_features = {
-            "pdb_id",
-            "chain_id",
-            "bioassembly_dict_fpath",
-        }
-
     def __call__(
         self, batch: List[Dict[str, Any]]
     ) -> Dict[str, Union[Dict[str, torch.Tensor], List[Any]]]:
@@ -90,7 +55,7 @@ class BinnedDataCollator:
         pads all samples to these dimensions, then stacks them along the batch dimension.
 
         Args:
-            batch: A list of dictionaries, where each dictionary is the output
+            batch (list[dict]): A list of dictionaries, where each dictionary is the output
                 from a single sample from the dataset __getitem__ method. Each sample will have keys
                 (input_feature_dict, label_dict, label_full_dict, and basic) and optional keys
                 (cropped_atom_array, cropped_token_array).
@@ -104,30 +69,23 @@ class BinnedDataCollator:
                 - (optional) cropped_atom_arrays: List of AtomArrays
                 - (optional) cropped_token_arrays: List of TokenArrays
         """
-        # batch_size = len(batch)
-        # TODO: add a _validate_batch() method
-
         # Get max atom padding length for the batch
         atom_padding_length = self._get_atom_padding_length(batch)
 
         # Pad all samples to the maximum dimensions
         padded_batch = self._pad_batch(batch, atom_padding_length)
 
-        # Initialise output dictionaries
-        collated = {
-            "input_feature_dict": {},
-            "label_dict": {},
-            # "label_full_dict": {},
-            "basic": {},
-        }
-
-        # Process each dictionary type and stack padded tensors
+        # Collate dicts
+        collated = {}
         for dict_key in ["input_feature_dict", "label_dict", "basic"]:
-            collated[dict_key] = self._collate_dict(dict_key, padded_batch)
+            collated[dict_key] = self._collate_dicts(dict_key, padded_batch)
 
-        # Handle optional atom and token arrays if requested
+        # Add optional atom and token arrays if requested
         if self.return_atom_token_arrays:
             self._add_optional_arrays(collated, padded_batch)
+
+        # NOTE: temp solution : Add an empty label full dict
+        collated["label_full_dict"] = {}
 
         return collated
 
@@ -174,11 +132,14 @@ class BinnedDataCollator:
                 sample["cropped_token_array"] for sample in padded_batch
             ]
 
-    def _collate_dict(
+    def _collate_dicts(
         self, dict_key: str, padded_batch: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
         Collate a single dictionary type across the batch.
+        Features of type torch.Tensor are stacked along the batch dimension.
+        Features of type list are stored in a list (producing a list of lists).
+        Appearance of any other type will raise an error.
 
         Args:
             dict_key: The dictionary key to collate ("input_feature_dict", etc.)
@@ -187,25 +148,27 @@ class BinnedDataCollator:
                 (cropped_atom_array, cropped_token_array).
 
         Returns:
-            Collated dictionary for this key
+            Collated dictionary for this dictionary key
         """
         collated_dict = {}
         sample_dict = padded_batch[0][dict_key]
 
         for feature_key in sample_dict.keys():
             # List of values for this feature across the batch
-            feature_values = [sample[dict_key][feature_key] for sample in padded_batch]
+            feature_values = [data[dict_key][feature_key] for data in padded_batch]
+            # Assert all values for this feature have same type
+            assert all(
+                isinstance(value, type(feature_values[0])) for value in feature_values
+            )
 
-            # Check if this feature should be kept as a list
-            if feature_key in self.list_features:
+            # List features stored inside a list
+            if isinstance(feature_values[0], list):
                 collated_dict[feature_key] = feature_values
-
+            # torch tensors stacked along batch dimension
             elif isinstance(feature_values[0], torch.Tensor):
-                # Stack tensors along batch dimension
                 collated_dict[feature_key] = torch.stack(feature_values, dim=0)
-
+            # Raise error for other types
             else:
-                # Raise error for unexpected feature types
                 raise ValueError(f"Unexpected feature type: {type(feature_values[0])}")
 
         return collated_dict

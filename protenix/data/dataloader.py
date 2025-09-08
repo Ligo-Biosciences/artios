@@ -20,7 +20,7 @@ import torch.distributed as dist
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import DataLoader, DistributedSampler, Sampler
 
-from protenix.data.batch_utils import BinnedDataCollator
+from protenix.data.data_collator import DataCollatorWithPadding
 from protenix.data.dataset import Dataset, get_datasets
 from protenix.utils.logger import get_logger
 
@@ -328,11 +328,10 @@ def get_dataloaders(
         )
         train_dl = DistributedDataLoader(
             dataset=train_dataset,
-            batch_size=8,  # TODO: change to be configurable
+            batch_size=configs.batch_size,
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
-            # collate_fn=lambda batch: batch[0], #TODO: needs completely changing.
-            collate_fn=BinnedDataCollator(
+            collate_fn=DataCollatorWithPadding(
                 **configs.data.padding,
                 crop_size=configs.train_crop_size,
             ),
@@ -347,11 +346,10 @@ def get_dataloaders(
         )
         train_dl = IterDataLoader(
             dataset=train_dataset,
-            batch_size=8,  # TODO: change to be configurable
+            batch_size=configs.batch_size,
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
-            # collate_fn=lambda batch: batch[0],
-            collate_fn=BinnedDataCollator(
+            collate_fn=DataCollatorWithPadding(
                 **configs.data.padding,
                 crop_size=configs.train_crop_size,
             ),

@@ -48,7 +48,7 @@ class DiffusionConditioning(nn.Module):
         ### Ligand features
         # Ligand reference position embeddings
         self.embed_ligand_ref_pos = LinearNoBias(3, self.c_s)
-        self.embed_ligand_pair_offsets = LinearNoBias(3, self.c_z, high_precision=True)
+        self.embed_ligand_pair_offsets = LinearNoBias(3, self.c_z, high_precision=False)
         self.embed_ligand_pair_invd = LinearNoBias(1, self.c_z)
         self.embed_ref_mask = LinearNoBias(1, self.c_s)
         self.embed_pair_offsets_valid = LinearNoBias(1, self.c_z)
@@ -279,6 +279,7 @@ class DiffusionConditioning(nn.Module):
 
         return s_target, z_target
 
+    @torch.compile
     def forward(
         self,
         r_noisy_coord: torch.Tensor,

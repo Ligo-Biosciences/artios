@@ -169,6 +169,8 @@ class DataCollatorWithPadding:
                 collated_dict[feature_key] = torch.stack(feature_values, dim=0)
             # Raise error for other types
             else:
-                raise ValueError(f"Unexpected feature type: {type(feature_values[0])}")
+                raise ValueError(
+                    f"Unexpected feature type for key {feature_key}: {type(feature_values[0])}"
+                )
 
         return collated_dict

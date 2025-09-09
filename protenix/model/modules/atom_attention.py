@@ -259,6 +259,7 @@ class AtomAttentionEncoder(nn.Module):
 
         # Per-atom conditioning
         c_l, p_lm = self._per_atom_conditioning(input_feature_dict)
+        print("shape of p_lm after per_atom_conditioning", p_lm.shape)
 
         # Compute the trunked pair mask
         # [..., N_atom]
@@ -274,12 +275,15 @@ class AtomAttentionEncoder(nn.Module):
         trunked_pair_mask = queries_mask[..., :, None] * keys_mask[..., None, :]
 
         # Mask the representations
+        print("shape of p_lm before trunked_pair_mask", p_lm.shape)
         p_lm = p_lm * trunked_pair_mask[..., None]
+        print("shape of p_lm after trunked_pair_mask", p_lm.shape)
         c_l = c_l * atom_mask[..., None]
 
         # N_sample dimension gets added
         c_l = c_l.unsqueeze(-3)
         p_lm = p_lm.unsqueeze(-5)
+        print("shape of p_lm after unsqueeze", p_lm.shape)
         atom_mask = atom_mask.unsqueeze(-2)
         trunked_pair_mask = trunked_pair_mask.unsqueeze(-4)
 
@@ -320,8 +324,9 @@ class AtomAttentionEncoder(nn.Module):
             num_keys=self.num_keys,
             num_queries=self.num_queries,
         )
+        print("shape of p_lm before add queries and keys", p_lm.shape)
         p_lm = p_lm + queries_c_l[..., :, None, :] + keys_c_m[..., None, :, :]
-        print("shape of p_lm before small_mlp", p_lm.shape)
+        print("shape of p_lm after add queries and keys", p_lm.shape)
         # [..., N_sample | 1, n_blocks, n_queries, n_keys, c_atompair]
 
         # Small MLP on the pair activations

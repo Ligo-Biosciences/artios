@@ -1,8 +1,9 @@
 from abc import abstractmethod
+from copy import deepcopy
 from typing import Any, List
 
-from biotite.structure import AtomArray
-from peppr import RamaScore, RotamerScore
+from biotite.structure import AtomArray, connect_via_distances
+from peppr import RamaScore, RotamerScore, find_clashes
 from peppr.rotamer import ConformerClass
 
 
@@ -59,12 +60,59 @@ class PepprResidueScore:
         self.num_valid_residues = 0.0
         self.num_total_residues = 0.0
 
+    def __call__(self, pred_arrays: List[AtomArray]) -> float:
+        """Compute the number of valid residues per sample.
+
+        Args:
+            pred_arrays: List of AtomArray objects.
+
+        Returns:
+            float: Number of valid residues per sample.
+        """
+        if self.num_total_residues > 0.0 or self.num_valid_residues > 0.0:
+            raise ValueError("Cannot call __call__ after compute")
+
+        self.reset()
+        self.update(pred_arrays)
+        result = self.compute()
+        self.reset()
+        return result
+
 
 class PerResidueRotamerScore(PepprResidueScore):
     def compute_scores(self, pred_array: AtomArray) -> List[Any]:
-        return RotamerScore.from_atoms(pred_array)
+        return RotamerScore.from_atoms(pred_array).rotamer_scores
 
 
 class PerResidueRamaScore(PepprResidueScore):
     def compute_scores(self, pred_array: AtomArray) -> List[Any]:
-        return RamaScore.from_atoms(pred_array)
+        return RamaScore.from_atoms(pred_array).rama_scores
+
+
+class StructureClashScore:
+    def __init__(self):
+        self.num_clashes = 0.0
+        self.num_total_interactions = 0.0
+        return
+
+    def update(self, pred_array_list: List[AtomArray]):
+        for pred_array in pred_array_list:
+            filtered_array = deepcopy(pred_array[pred_array.res_name != "UNK"])
+            filtered_array.bonds = connect_via_distances(filtered_array)
+            clashes = find_clashes(filtered_array)
+            self.num_clashes += len(clashes) / len(filtered_array)
+            self.num_total_interactions += 1.0
+
+    def compute(self) -> float:
+        return self.num_clashes / self.num_total_interactions
+
+    def reset(self):
+        self.num_clashes = 0.0
+        self.num_total_interactions = 0.0
+
+    def __call__(self, pred_array: List[AtomArray]) -> float:
+        self.reset()
+        self.update(pred_array)
+        result = self.compute()
+        self.reset()
+        return result

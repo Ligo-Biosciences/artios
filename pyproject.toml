@@ -68,6 +68,8 @@ dev = [
     "flake8",
     "mypy",
     "pre-commit",
+    "ipykernel",
+    "notebook",
 ]
 
 [project.urls]

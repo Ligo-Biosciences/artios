@@ -647,11 +647,11 @@ class ArtiosAllAtomFlowTrainer(object):
 
             metrics = simple_metric_wrapper.calc()
             if rotamer_score.num_total_residues > 0.0:
-                metrics["rotamer_score"] = rotamer_score.compute()
+                metrics["val/rotamer_score"] = rotamer_score.compute()
             if rama_score.num_total_residues > 0.0:
-                metrics["rama_score"] = rama_score.compute()
+                metrics["val/rama_score"] = rama_score.compute()
             if clash_score.num_total_interactions > 0.0:
-                metrics["clash_score"] = clash_score.compute()
+                metrics["val/clash_score"] = clash_score.compute()
             rotamer_score.reset()
             rama_score.reset()
             clash_score.reset()

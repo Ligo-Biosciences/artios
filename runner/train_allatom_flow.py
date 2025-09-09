@@ -98,6 +98,7 @@ class ArtiosAllAtomFlowTrainer(object):
         self.structure_dir = f"{self.run_dir}/structures"
         self.dump_dir = f"{self.run_dir}/dumps"
         self.error_dir = f"{self.run_dir}/errors"
+        self.logs_dir = f"{self.run_dir}/logs"
 
         # Add dump dir for training time inference
         self.configs.dump_dir = self.prediction_dir
@@ -111,6 +112,7 @@ class ArtiosAllAtomFlowTrainer(object):
             os.makedirs(self.structure_dir)
             os.makedirs(self.dump_dir)
             os.makedirs(self.error_dir)
+            os.makedirs(self.logs_dir)
             save_config(
                 self.configs,
                 os.path.join(self.configs.base_dir, self.run_name, "config.yaml"),

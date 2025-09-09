@@ -956,71 +956,106 @@ class ArtiosAllAtomFlowTrainer(object):
         use_ema = hasattr(self, "power_law_ema_wrappers")
         self.print(f"Using power law ema's: {use_ema}")
 
-        while True:
-            for batch in self.train_dl:
-                is_update_step = (self.global_step + 1) % self.iters_to_accumulate == 0
-                is_last_step = (self.step + 1) == self.configs.max_steps
-                step_need_log = (self.step + 1) % self.configs.log_interval == 0
+        def trace_handler(p):
+            output = p.key_averages().table(
+                sort_by="self_cuda_time_total", row_limit=20
+            )
+            print(output)
+            # Only save trace from rank 0 to avoid file conflicts
+            if DIST_WRAPPER.rank == 0:
+                tracename = f"trace_{p.step_num}_rank{DIST_WRAPPER.rank}.json"
+                filepath = f"{self.logs_dir}/{tracename}"
+                # Ensure directory exists before writing
+                os.makedirs(self.logs_dir, exist_ok=True)
+                p.export_chrome_trace(filepath)
+                # self.neptune_log_files({f"profiling/{tracename}": filepath})
 
-                step_need_eval = (
-                    self.configs.eval_interval > 0
-                    and (self.step + 1) % self.configs.eval_interval == 0
-                )
-                step_need_save = (
-                    self.configs.checkpoint_interval > 0
-                    and (self.step + 1) % self.configs.checkpoint_interval == 0
-                )
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(
+                wait=10,
+                warmup=10,
+                active=10,
+                skip_first=50,
+                skip_first_wait=1,
+                repeat=1,
+            ),
+            on_trace_ready=trace_handler,
+        ) as p:
+            while True:
+                for batch in self.train_dl:
+                    is_update_step = (
+                        self.global_step + 1
+                    ) % self.iters_to_accumulate == 0
+                    is_last_step = (self.step + 1) == self.configs.max_steps
+                    step_need_log = (self.step + 1) % self.configs.log_interval == 0
 
-                is_last_step &= is_update_step
-                step_need_log &= is_update_step
-                step_need_eval &= is_update_step
-                step_need_save &= is_update_step
+                    step_need_eval = (
+                        self.configs.eval_interval > 0
+                        and (self.step + 1) % self.configs.eval_interval == 0
+                    )
+                    step_need_save = (
+                        self.configs.checkpoint_interval > 0
+                        and (self.step + 1) % self.configs.checkpoint_interval == 0
+                    )
 
-                batch = to_device(batch, self.device)
-                self.progress_bar()
-                self.train_step(batch)
-                if use_ema:
-                    for wrapper in self.power_law_ema_wrappers:
-                        wrapper.update(t=self.step + 1)
-                if step_need_log or is_last_step:
-                    metrics = self.train_metric_wrapper.calc()
-                    self.print(f"Step {self.step} train: {metrics}")
-                    last_lr = self.lr_scheduler.get_last_lr()[0]
-                    if DIST_WRAPPER.rank == 0:
-                        if self.configs.use_wandb:
-                            self.neptune_run.log_metrics(
-                                {"train/lr": last_lr},
-                                step=self.step,
-                            )
-                        self.print(f"Step {self.step}, lr: {last_lr}")
-                    if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                        self.neptune_run.log_metrics(metrics, step=self.step)
+                    is_last_step &= is_update_step
+                    step_need_log &= is_update_step
+                    step_need_eval &= is_update_step
+                    step_need_save &= is_update_step
 
-                if step_need_save or is_last_step:
-                    self.print(f"beginning Saving checkpoint at step {self.step}")
-                    self.save_checkpoint()  # Saves non-ema checkpoint
+                    batch = to_device(batch, self.device)
+                    self.progress_bar()
+                    self.train_step(batch)
                     if use_ema:
                         for wrapper in self.power_law_ema_wrappers:
-                            wrapper.apply_shadow()
-                            self.save_checkpoint(
-                                ema_suffix=f"ema_{wrapper.sigma}", save_model_only=True
-                            )
-                            wrapper.restore()
-                        wait_for_all_processes()
+                            wrapper.update(t=self.step + 1)
+                    if step_need_log or is_last_step:
+                        metrics = self.train_metric_wrapper.calc()
+                        self.print(f"Step {self.step} train: {metrics}")
+                        last_lr = self.lr_scheduler.get_last_lr()[0]
+                        if DIST_WRAPPER.rank == 0:
+                            if self.configs.use_wandb:
+                                self.neptune_run.log_metrics(
+                                    {"train/lr": last_lr},
+                                    step=self.step,
+                                )
+                            self.print(f"Step {self.step}, lr: {last_lr}")
+                        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                            self.neptune_run.log_metrics(metrics, step=self.step)
 
-                if step_need_eval or is_last_step:
-                    self.evaluate()
-                    self.on_validation_epoch_end()
+                    if step_need_save or is_last_step:
+                        self.print(f"beginning Saving checkpoint at step {self.step}")
+                        self.save_checkpoint()  # Saves non-ema checkpoint
+                        if use_ema:
+                            for wrapper in self.power_law_ema_wrappers:
+                                wrapper.apply_shadow()
+                                self.save_checkpoint(
+                                    ema_suffix=f"ema_{wrapper.sigma}",
+                                    save_model_only=True,
+                                )
+                                wrapper.restore()
+                            wait_for_all_processes()
 
-                self.global_step += 1
-                if self.global_step % self.iters_to_accumulate == 0:
-                    self.step += 1
+                    if step_need_eval or is_last_step:
+                        self.evaluate()
+                        self.on_validation_epoch_end()
+
+                    self.global_step += 1
+                    if self.global_step % self.iters_to_accumulate == 0:
+                        self.step += 1
+                    if self.step >= self.configs.max_steps:
+                        self.print(f"Finish training after {self.step} steps")
+                        break
+
+                    # Profiler step
+                    p.step()
+
                 if self.step >= self.configs.max_steps:
-                    self.print(f"Finish training after {self.step} steps")
                     break
-
-            if self.step >= self.configs.max_steps:
-                break
 
 
 def main():

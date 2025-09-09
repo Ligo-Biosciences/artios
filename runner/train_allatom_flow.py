@@ -41,7 +41,11 @@ from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.data.utils import save_structure_cif
 from protenix.metrics.lddt_metrics import LDDTMetrics
-from protenix.metrics.plausibility import PerResidueRamaScore, PerResidueRotamerScore
+from protenix.metrics.plausibility import (
+    PerResidueRamaScore,
+    PerResidueRotamerScore,
+    StructureClashScore,
+)
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import FlowLoss
@@ -525,6 +529,7 @@ class ArtiosAllAtomFlowTrainer(object):
         simple_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
         rotamer_score = PerResidueRotamerScore()
         rama_score = PerResidueRamaScore()
+        clash_score = StructureClashScore()
         eval_precision = {
             "fp32": torch.float32,
             "bf16": torch.bfloat16,
@@ -614,6 +619,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
                     rotamer_score.update(pred_atom_array_list)
                     rama_score.update(pred_atom_array_list)
+                    clash_score.update(pred_atom_array_list)
 
                     if self.latents_inference is not None:
                         for name, tensor in self.get_latents_data(batch).items():
@@ -644,8 +650,11 @@ class ArtiosAllAtomFlowTrainer(object):
                 metrics["rotamer_score"] = rotamer_score.compute()
             if rama_score.num_total_residues > 0.0:
                 metrics["rama_score"] = rama_score.compute()
+            if clash_score.num_total_interactions > 0.0:
+                metrics["clash_score"] = clash_score.compute()
             rotamer_score.reset()
             rama_score.reset()
+            clash_score.reset()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
             ### Plots

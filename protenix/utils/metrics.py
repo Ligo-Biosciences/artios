@@ -47,17 +47,19 @@ class SimpleMetricAggregator(object):
         value_dict = self._metric_data.setdefault(namespace, {})
         value_dict.setdefault(key, [])
         if isinstance(value, (float, int)):
-            value = torch.tensor([value])
+            value = np.array([value])
         elif isinstance(value, torch.Tensor):
-            # Keep as tensor, just detach to avoid gradient computation
+            # First detach and move to CPU, then convert to numpy
             try:
                 value = value.detach()
                 if value.dim() == 0:
-                    value = value.unsqueeze(0)  # Make scalar into 1D tensor
+                    value = np.array([value.cpu().item()])
+                else:
+                    value = value.cpu().numpy()
             except RuntimeError as e:
-                raise RuntimeError(f"Error processing tensor for key {key}: {str(e)}")
+                raise RuntimeError(f"Error converting tensor for key {key}: {str(e)}")
         elif isinstance(value, np.ndarray):
-            value = torch.from_numpy(value)
+            pass
         else:
             raise ValueError(f"Unsupported type for metric data: {type(value)}")
         value_dict[key].append(value)
@@ -74,9 +76,7 @@ class SimpleMetricAggregator(object):
                 for key, data in value_dict.items():
                     plain_key = f"{namespace}/{key}" if namespace != "default" else key
                     plain_key = f"{plain_key}.{agg_name}"
-                    # Convert tensors to CPU numpy arrays for aggregation
-                    concatenated_data = torch.cat(data, dim=0).cpu().numpy()
-                    results[plain_key] = agg_func(concatenated_data)
+                    results[plain_key] = agg_func(np.concatenate(data, axis=0))
         if self.need_gather and not self.gather_before_calc:  # need gather after calc
             results = gather_and_merge(results, aggregation_func=np.mean)
         return results

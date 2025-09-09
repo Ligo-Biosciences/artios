@@ -86,7 +86,7 @@ def centre_random_augmentation(
     else:
         try:
             center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (
-                mask.sum(dim=-1) + eps
+                mask.sum(dim=-1, keepdim=True) + eps
             )
         except Exception as e:
             print("Error in centering calculation:")

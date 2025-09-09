@@ -1029,7 +1029,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     batch = to_device(batch, self.device)
                     self.progress_bar()
                     self.train_step(batch)
-                    if use_ema:
+                    if use_ema and is_update_step:
                         for wrapper in self.power_law_ema_wrappers:
                             wrapper.update(t=self.step + 1)
                     if step_need_log or is_last_step:

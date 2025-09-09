@@ -146,12 +146,11 @@ data_configs = {
         "max_n_msa": 1,
         "max_n_template": 4,
         "max_n_pocket": 16,
+        "bin_ends": ListValue([2112, 3008, 4000]),
     },
-    "train_sets": ListValue(
-        ["weightedPDB_before2109_wopb_nometalc_0925", "distillation"]
-    ),
+    "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925"]),
     "train_sampler": {
-        "train_sample_weights": ListValue([0.5, 0.5]),
+        "train_sample_weights": ListValue([1.0]),
         "sampler_type": "weighted",
     },
     "test_sets": ListValue(["recentPDB_1536_sample384_0925"]),

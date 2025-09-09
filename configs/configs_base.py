@@ -57,6 +57,7 @@ basic_configs = {
 }
 data_configs = {
     # Data
+    "batch_size": 8,
     "train_crop_size": 384,
     "test_max_n_token": -1,
     "train_lig_atom_rename": False,  # TODO:

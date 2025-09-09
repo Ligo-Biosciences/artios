@@ -78,19 +78,21 @@ def centre_random_augmentation(
     N_atom = x_input_coords.size(-2)
     device = x_input_coords.device
 
-    print("shapes in centre_random_augmentation")
-    print("x_input_coords.shape", x_input_coords.shape)
-    print("mask.shape", mask.shape)
-
     # Move to origin [..., N_atom, 3]
     if mask is None:
         x_input_coords = x_input_coords - torch.mean(
             input=x_input_coords, dim=-2, keepdim=True
         )
     else:
-        center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (
-            mask.sum(dim=-1) + eps
-        )
+        try:
+            center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (
+                mask.sum(dim=-1) + eps
+            )
+        except Exception as e:
+            print("Error in centering calculation:")
+            print(f"x_input_coords shape: {x_input_coords.shape}")
+            print(f"mask shape: {mask.shape}")
+            raise e
         x_input_coords = x_input_coords - center.unsqueeze(dim=-2)
 
     # Expand to [..., N_sample, N_atom, 3]

@@ -139,7 +139,7 @@ class ArtiosAllAtomTrainer(object):
             )
             self.neptune_run = Run(  # neptune
                 project=self.configs.project,
-                experiment_name=self.configs.run_name,
+                experiment_name=self.run_name,
                 source_tracking_config=source_config,
             )
             self.torchwatcher = TorchWatcher(
@@ -855,7 +855,7 @@ class ArtiosAllAtomTrainer(object):
                     batch = to_device(batch, self.device)
                     self.progress_bar()
                     self.train_step(batch)
-                    if use_ema:  # TODO: is_update_step
+                    if use_ema and is_update_step:
                         self.ema_wrapper.update()
                     if step_need_log or is_last_step:
                         metrics = self.train_metric_wrapper.calc()

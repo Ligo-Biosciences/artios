@@ -345,7 +345,13 @@ def attention(
     attn_weights = q @ k / (q.shape[-1] ** 0.5)
 
     if attn_bias is not None:
-        attn_weights = add(attn_weights, attn_bias)
+        try:
+            attn_weights = add(attn_weights, attn_bias)
+        except Exception as e:
+            print("Error in attention calculation:")
+            print(f"attn_weights shape: {attn_weights.shape}")
+            print(f"attn_bias shape: {attn_bias.shape}")
+            raise e
 
     # fill out of mask with -inf (based on dtype)
     attn_weights.masked_fill_(~pair_mask, -inf)

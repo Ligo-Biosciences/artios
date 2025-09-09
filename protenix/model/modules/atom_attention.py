@@ -327,6 +327,7 @@ class AtomAttentionEncoder(nn.Module):
         p_lm = p_lm + self.small_mlp(p_lm)
 
         # Local Attn Transformer
+        # TODO: add a print
         q_l = self.atom_transformer(
             q=q_l, c=c_l, p=p_lm, trunked_pair_mask=trunked_pair_mask
         )

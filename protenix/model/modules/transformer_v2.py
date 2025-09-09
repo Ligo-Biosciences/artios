@@ -28,6 +28,7 @@ from protenix.model.modules.primitives import (
     LinearNoBias,
 )
 from protenix.model.utils import permute_final_dims
+from protenix.utils.profiler import profile_function
 
 
 class TransformerBlock(nn.Module):
@@ -489,6 +490,7 @@ class DiffusionTransformer(nn.Module):
             == len(pair_mask.shape[:-2])
         ), "Batch dimension mismatch."
 
+    @profile_function("diffusion_transformer")
     @torch.compile
     def forward(self, a: Tensor, s: Tensor, z: Tensor, pair_mask: Tensor):
         """
@@ -823,6 +825,7 @@ class LocalAttnTransformer(nn.Module):
 
         return blocks
 
+    @profile_function("atom_transformer")
     def forward(
         self,
         *,

@@ -341,16 +341,16 @@ class AtomAttentionEncoder(nn.Module):
         p_lm = p_lm + self.small_mlp(p_lm)
 
         # Local Attn Transformer
-        # TODO: add a print
         q_l = self.atom_transformer(
             q=q_l, c=c_l, p=p_lm, trunked_pair_mask=trunked_pair_mask
         )
 
         # Aggregate to token
+        print("shape of q_l before average_atom_to_token", q_l.shape)
         a = average_atom_to_token(
             x_atom=F.relu(self.final_linear(q_l)),
             atom_mask=atom_mask,
-            atom_to_token_idx=atom_to_token_idx,
+            atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
             n_token=n_token,
         )
         return a, q_l, c_l, p_lm

@@ -97,7 +97,10 @@ class StructureClashScore:
 
     def update(self, pred_array_list: List[AtomArray]):
         for pred_array in pred_array_list:
-            filtered_array = deepcopy(pred_array[pred_array.res_name != "UNK"])
+            filtered_array = deepcopy(pred_array)
+            filtered_array = filtered_array[pred_array.res_name != "UNK"]
+            filtered_array = filtered_array[filtered_array.element != "U"]
+
             filtered_array.bonds = connect_via_distances(filtered_array)
             clashes = find_clashes(filtered_array)
             self.num_clashes += len(clashes) / len(filtered_array)

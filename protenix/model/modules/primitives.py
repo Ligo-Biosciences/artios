@@ -348,7 +348,8 @@ def attention(
         attn_weights = add(attn_weights, attn_bias)
 
     # fill out of mask with -inf (based on dtype)
-    attn_weights = torch.masked_fill(attn_weights, ~pair_mask, -inf)
+    attn_weights.masked_fill_(~pair_mask, -inf)
+    # attn_weights = torch.masked_fill(attn_weights, ~pair_mask, -inf)
 
     # [..., n_q, n_kv]
     attn_weights = F.softmax(attn_weights, dim=-1)

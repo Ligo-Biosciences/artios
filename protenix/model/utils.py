@@ -78,6 +78,10 @@ def centre_random_augmentation(
     N_atom = x_input_coords.size(-2)
     device = x_input_coords.device
 
+    print("shapes in centre_random_augmentation")
+    print("x_input_coords.shape", x_input_coords.shape)
+    print("mask.shape", mask.shape)
+
     # Move to origin [..., N_atom, 3]
     if mask is None:
         x_input_coords = x_input_coords - torch.mean(

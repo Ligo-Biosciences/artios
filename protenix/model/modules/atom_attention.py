@@ -300,7 +300,7 @@ class AtomAttentionEncoder(nn.Module):
             print("shape of z before getting trunked", z.shape)
             z_local_pairs = broadcast_token_to_local_atom_pair(
                 z_token=self.linear_no_bias_z(self.layernorm_z(z)),
-                atom_to_token_idx=atom_to_token_idx,
+                atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
                 num_queries=self.num_queries,
                 num_keys=self.num_keys,
             )  # [..., N_sample | 1, n_blocks, n_queries, n_keys, c_atompair]

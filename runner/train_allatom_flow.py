@@ -519,9 +519,9 @@ class ArtiosAllAtomFlowTrainer(object):
             # Restore original model state
             self.flow_model.load_state_dict(current_state)
 
-            # Plot all the metrics on Neptune
-            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
+        # Plot all the metrics on Neptune
+        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):

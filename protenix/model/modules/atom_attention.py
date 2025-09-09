@@ -321,6 +321,7 @@ class AtomAttentionEncoder(nn.Module):
             num_queries=self.num_queries,
         )
         p_lm = p_lm + queries_c_l[..., :, None, :] + keys_c_m[..., None, :, :]
+        print("shape of p_lm before small_mlp", p_lm.shape)
         # [..., N_sample | 1, n_blocks, n_queries, n_keys, c_atompair]
 
         # Small MLP on the pair activations

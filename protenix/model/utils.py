@@ -270,6 +270,7 @@ def broadcast_token_to_atom(x_token: Tensor, atom_to_token_idx: Tensor) -> Tenso
         Tensor: atom embedding
             [..., N_atom, d]
     """
+    assert x_token.shape[:-2] == atom_to_token_idx[:-1]
 
     if len(atom_to_token_idx.shape) == 1:
         # shape = [N_atom], easy index

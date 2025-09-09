@@ -223,6 +223,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
         torch.cuda.empty_cache()
         self.optimizer = get_optimizer(self.configs, self.flow_model)
+        self.optimizer = torch.compile(self.optimizer)  # add compilation to optimizer
         self.init_scheduler()
 
     def init_scheduler(self, **kwargs):
@@ -830,8 +831,7 @@ class ArtiosAllAtomFlowTrainer(object):
     @profile_function("on_before_optimizer_step")
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
-        step_need_log = (self.step + 1) % self.configs.log_interval == 0
-        if self.configs.monitor.grad_norm and step_need_log:
+        if self.configs.monitor.grad_norm:
             _, total_norm = grad_norm(self.flow_model, norm_type=2)
 
             # Average across all ranks

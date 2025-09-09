@@ -529,6 +529,7 @@ def sample_noising(
     # (Optional) Encode
     if encoder is not None:
         with torch.no_grad():
+            # TODO: clean this up
             x_target_sample = x_target_augment[..., 0, :, :].unsqueeze(
                 -3
             )  # extract one sample

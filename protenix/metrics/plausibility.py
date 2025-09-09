@@ -1,3 +1,4 @@
+import logging
 from abc import abstractmethod
 from copy import deepcopy
 from typing import Any, List
@@ -5,6 +6,8 @@ from typing import Any, List
 from biotite.structure import AtomArray, connect_via_distances
 from peppr import RamaScore, RotamerScore, find_clashes
 from peppr.rotamer import ConformerClass
+
+logger = logging.getLogger(__name__)
 
 
 class PepprResidueScore:
@@ -97,11 +100,17 @@ class StructureClashScore:
 
     def update(self, pred_array_list: List[AtomArray]):
         for pred_array in pred_array_list:
-            filtered_array = deepcopy(pred_array[pred_array.res_name != "UNK"])
-            filtered_array.bonds = connect_via_distances(filtered_array)
-            clashes = find_clashes(filtered_array)
-            self.num_clashes += len(clashes) / len(filtered_array)
-            self.num_total_interactions += 1.0
+            try:
+                filtered_array = deepcopy(pred_array)
+                filtered_array = filtered_array[pred_array.res_name != "UNK"]
+                filtered_array = filtered_array[filtered_array.element != "U"]
+
+                filtered_array.bonds = connect_via_distances(filtered_array)
+                clashes = find_clashes(filtered_array)
+                self.num_clashes += len(clashes) / len(filtered_array)
+                self.num_total_interactions += 1.0
+            except Exception as e:
+                logger.error(f"Error computing clash score: {e}")
 
     def compute(self) -> float:
         return self.num_clashes / self.num_total_interactions

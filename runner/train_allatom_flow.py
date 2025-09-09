@@ -223,7 +223,9 @@ class ArtiosAllAtomFlowTrainer(object):
 
         torch.cuda.empty_cache()
         self.optimizer = get_optimizer(self.configs, self.flow_model)
-        self.optimizer = torch.compile(self.optimizer)  # add compilation to optimizer
+        self.optimizer.step = torch.compile(
+            self.optimizer.step
+        )  # add compilation to optimizer
         self.init_scheduler()
 
     def init_scheduler(self, **kwargs):

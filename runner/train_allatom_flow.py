@@ -682,6 +682,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
     def train_step(self, batch: dict):
         self.flow_model.train()
+
         # FP16 training has not been verified yet
         train_precision = {
             "fp32": torch.float32,
@@ -829,7 +830,8 @@ class ArtiosAllAtomFlowTrainer(object):
     @profile_function("on_before_optimizer_step")
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
-        if self.configs.monitor.grad_norm:
+        step_need_log = (self.step + 1) % self.configs.log_interval == 0
+        if self.configs.monitor.grad_norm and step_need_log:
             _, total_norm = grad_norm(self.flow_model, norm_type=2)
 
             # Average across all ranks

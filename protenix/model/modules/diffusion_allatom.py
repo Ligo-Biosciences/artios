@@ -354,7 +354,7 @@ class DiffusionConditioning(nn.Module):
         ).to(z.dtype)
 
         # 2. Normalise and embed both timesteps
-        s = expand_at_dim(
+        s = s + expand_at_dim(
             self.latent_t_embed(self.layernorm_latent_t(timestep_latent)),
             dim=-2,
             n=n_token,

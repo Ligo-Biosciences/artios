@@ -38,7 +38,11 @@ class PepprResidueScore:
         ), f"Pred array elements must be AtomArray, got {type(pred_arrays[0])}"
 
         for pred_array in pred_arrays:
-            score_list = self.compute_scores(pred_array)
+            try:
+                score_list = self.compute_scores(pred_array)
+            except Exception as e:
+                logger.error(f"Error computing scores: {e}")
+                continue
 
             assert isinstance(
                 score_list, List

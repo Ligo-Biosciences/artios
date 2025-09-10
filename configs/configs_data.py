@@ -60,8 +60,10 @@ default_weighted_pdb_configs = {
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
 }
 
-
-DATA_ROOT_DIR = "af3-dev/release_data/"  # BEWARE: adjusted to absolute path for Modal!
+# TODO: temporary for separate folder
+DATA_ROOT_DIR = (
+    "../af3-dev/release_data/"  # BEWARE: adjusted to absolute path for Modal!
+)
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md

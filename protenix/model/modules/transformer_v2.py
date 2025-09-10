@@ -524,10 +524,10 @@ class DiffusionTransformer(nn.Module):
         pair_bias_fused = permute_final_dims(
             pair_bias_fused, [2, 0, 1]
         )  # [..., num_heads * num_blocks, N, N]
+        # TODO: repeat pair_bias_fused so its N_Sample dimension is N_sample, not just 1.
         pair_biases = pair_bias_fused.chunk(self.num_blocks, dim=-3)
 
         # Prepare blocks
-        print("shape of pair biases before prep blocks", pair_biases[0].shape)
         blocks = self._prep_blocks(
             scale_attns=scale_attns,
             shift_attns=shift_attns,

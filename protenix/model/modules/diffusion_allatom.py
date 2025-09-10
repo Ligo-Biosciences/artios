@@ -354,7 +354,6 @@ class DiffusionConditioning(nn.Module):
         ).to(z.dtype)
 
         # 2. Normalise and embed both timesteps
-        print("shape of s before adding timestep embeddings", s.shape)
         s = s.unsqueeze(-3)
         s = s + expand_at_dim(
             self.latent_t_embed(self.layernorm_latent_t(timestep_latent)),
@@ -531,8 +530,6 @@ class DiffusionModule(nn.Module):
             input_feature_dict=input_feature_dict,
             inplace_safe=inplace_safe,
         )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
-        print("shape of s after diffusion conditioning", s.shape)
-        print("shape of z after diffusion conditioning", z.shape)
 
         # Embed noisy coordinates and latents into token space
         a_coord = self.linear_no_bias_r_embed(r_noisy_coord)
@@ -548,10 +545,7 @@ class DiffusionModule(nn.Module):
         a_token = a_token * token_mask[..., None]
         z = z.unsqueeze(-4)
         z = z * pair_mask[..., None]
-        print("shape of a_token before diffusion transformer", a_token.shape)
-        print("shape of s before diffusion transformer", s.shape)
-        print("shape of z before diffusion transformer", z.shape)
-        print("shape of pair_mask before diffusion transformer", pair_mask.shape)
+
         a_token = self.diffusion_transformer(a=a_token, s=s, z=z, pair_mask=pair_mask)
         a_token = a_token * token_mask[..., None]
         a_token = self.layernorm_a(a_token)

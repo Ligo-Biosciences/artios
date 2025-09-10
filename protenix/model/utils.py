@@ -271,7 +271,7 @@ def broadcast_token_to_atom(x_token: Tensor, atom_to_token_idx: Tensor) -> Tenso
             [..., N_atom, d]
     """
     assert (
-        x_token.shape[:-2] == atom_to_token_idx[:-1]
+        len(x_token.shape[:-2]) == len(atom_to_token_idx[:-1])
     ), f"got x_token.shape[:-2] = {x_token.shape[:-2]}, atom_to_token_idx[:-1] = {atom_to_token_idx[:-1]}"
 
     if len(atom_to_token_idx.shape) == 1:
@@ -310,10 +310,10 @@ def average_atom_to_token(
             [..., N_token, d]
     """
     assert (
-        x_atom.shape[:-2] == atom_to_token_idx.shape[:-1]
+        len(x_atom.shape[:-2]) == len(atom_to_token_idx.shape[:-1])
     ), f"got x_atom.shape[:-2] = {x_atom.shape[:-2]}, atom_to_token_idx.shape[:-1] = {atom_to_token_idx.shape[:-1]}"
     assert (
-        x_atom.shape[:-2] == atom_mask.shape[:-1]
+        len(x_atom.shape[:-2]) == len(atom_mask.shape[:-1])
     ), f"got x_atom.shape[:-2] = {x_atom.shape[:-2]}, atom_mask.shape[:-1] = {atom_mask.shape[:-1]}"
 
     # Mask out the padding atoms

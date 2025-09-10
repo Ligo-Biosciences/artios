@@ -527,7 +527,7 @@ class DiffusionTransformer(nn.Module):
         pair_biases = pair_bias_fused.chunk(self.num_blocks, dim=-3)
 
         # Prepare blocks
-        print("shape of pair biases before prep blocks", pair_biases.shape)
+        print("shape of pair biases before prep blocks", pair_biases[0].shape)
         blocks = self._prep_blocks(
             scale_attns=scale_attns,
             shift_attns=shift_attns,

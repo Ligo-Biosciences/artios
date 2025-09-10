@@ -431,13 +431,18 @@ class BaseSingleDataset(Dataset):
     ):
         """
         Assign a random asymmetric unit as the target if train_with_binding_target is True.
-        Otherwise, assign all False.
+        Otherwise, assign all False. If there is only one asym_id, set is_target to False.
         """
         # Pick target chain
         unique_asym_ids = np.unique(atom_array.asym_id_int)
-        target_asym_id = np.random.choice(unique_asym_ids)
 
-        if train_with_binding_target and np.random.rand() < binding_target_train_rate:
+        # If there's only one asym_id, set all is_target to False
+        if len(unique_asym_ids) == 1:
+            atom_array.set_annotation(
+                "is_target", np.zeros_like(atom_array.asym_id_int, dtype=bool)
+            )
+        elif train_with_binding_target and np.random.rand() < binding_target_train_rate:
+            target_asym_id = np.random.choice(unique_asym_ids)
             # Add target annotation to atom array
             atom_array.set_annotation(
                 "is_target", atom_array.asym_id_int == target_asym_id

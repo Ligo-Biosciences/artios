@@ -546,6 +546,7 @@ class DiffusionModule(nn.Module):
 
         # Apply diffusion transformer on token representations
         a_token = a_token * token_mask[..., None]
+        z = expand_at_dim(z, dim=-4, n=N_sample)
         z = z * pair_mask[..., None]
         print("shape of a_token before diffusion transformer", a_token.shape)
         print("shape of s before diffusion transformer", s.shape)

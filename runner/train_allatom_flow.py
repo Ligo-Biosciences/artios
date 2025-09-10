@@ -682,7 +682,8 @@ class ArtiosAllAtomFlowTrainer(object):
 
     @profile_function("backward_pass")
     def backward_pass(self, loss, scaler):
-        scaler.scale(loss / self.iters_to_accumulate).backward()
+        # scaler.scale(loss / self.iters_to_accumulate).backward()
+        scaler.scale(loss).backward()
 
     @profile_function("optimizer_step")
     def optimizer_step(self, scaler):
@@ -719,6 +720,11 @@ class ArtiosAllAtomFlowTrainer(object):
                 batch, encoder=self.vae_shell.vae.encoder, mode="train"
             )
             loss, loss_dict = self.get_loss(batch, mode="train")
+
+            # Divide loss by number of iterations to accumulate to average gradient contribution
+            loss = loss / self.iters_to_accumulate
+            for key, value in loss_dict.items():
+                loss_dict[key] = value / self.iters_to_accumulate
 
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):

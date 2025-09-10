@@ -307,6 +307,8 @@ def average_atom_to_token(
         Tensor: token-level embedding
             [..., N_token, d]
     """
+    assert x_atom.shape[:-2] == atom_to_token_idx[:-1]
+    assert x_atom.shape[:-2] == atom_mask.shape[:-1]
 
     # Mask out the padding atoms
     x_atom = x_atom * atom_mask[..., None]

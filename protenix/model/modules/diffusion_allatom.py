@@ -155,7 +155,7 @@ class DiffusionConditioning(nn.Module):
         # [..., N_atom, 3] -> [..., N_token, 3]
         ligand_ref_pos = average_atom_to_token(
             x_atom=ligand_ref_pos,
-            atom_to_token_idx=atom_to_token_idx,
+            atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
             atom_mask=atom_mask,
             n_token=n_token,
         )
@@ -163,7 +163,7 @@ class DiffusionConditioning(nn.Module):
         # Compute v_lm mask
         token_ref_space_uid = average_atom_to_token(
             x_atom=input_feature_dict["ref_space_uid"].unsqueeze(-1),
-            atom_to_token_idx=atom_to_token_idx,
+            atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
             atom_mask=atom_mask,
             n_token=n_token,
         )  # [..., N_token, 1]
@@ -204,7 +204,7 @@ class DiffusionConditioning(nn.Module):
 
         c_s = average_atom_to_token(
             x_atom=c_s,
-            atom_to_token_idx=atom_to_token_idx,
+            atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
             atom_mask=atom_mask,
             n_token=n_token,
         )  # [..., N_token, c_s]

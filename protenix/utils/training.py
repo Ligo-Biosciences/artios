@@ -157,6 +157,7 @@ def get_optimizer(configs, model: torch.nn.Module) -> torch.optim.Optimizer:
                 lr=configs.lr,
                 weight_decay=configs.weight_decay,
                 betas=(configs.adam.beta1, configs.adam.beta2),
+                fused=torch.cuda.is_available(),
             )
     elif configs.use_muon:
         optimizer = get_muon(

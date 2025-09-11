@@ -107,7 +107,7 @@ model_configs = {
     "c_atom": 256,  # 64
     "c_atompair": 16,  # 16
     "c_token": 768,  # 192
-    "c_latent": 8,
+    "c_latent": 10,
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,

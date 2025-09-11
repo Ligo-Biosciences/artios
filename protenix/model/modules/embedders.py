@@ -109,7 +109,7 @@ class RelativePositionEncoding(nn.Module):
         self.embed_relpos_features = LinearNoBias(
             in_features=(4 * self.r_max + 2 * self.s_max + 7),
             out_features=self.c_z,
-            init="normal",
+            init="lecun",
         )
         self.input_feature = {
             "asym_id": 1,

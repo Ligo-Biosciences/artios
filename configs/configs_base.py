@@ -171,7 +171,7 @@ model_configs = {
         "N_sample_mini_rollout": 1,
         "stoch_type_coord": "proteina",
         "stoch_type_latent": "laproteina",
-        "alpha": 0.8,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha": 0.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
         "sigma_coord": GlobalConfigValue("sigma_coord"),
         "sigma_latent": GlobalConfigValue("sigma_latent"),

@@ -136,9 +136,9 @@ class FlowLoss(AggregatedLoss):
                     # Behaviour
                     enable_alignment=True,
                     expand_ground_truth=True,
-                    # Per sample scale keys TODO: better name would be nice
+                    # Per sample scale keys
                     timestep_key="coord_timestep",
-                    sigma=configs.loss.flow.centre_atom.sigma,
+                    sigma=configs.loss.flow.sigma_centre_atom,
                     metric_suffix="_centre_atom",
                 ),
             ),
@@ -165,12 +165,12 @@ class FlowLoss(AggregatedLoss):
                     expand_ground_truth=False,
                     # Per sample scale keys
                     timestep_key="latent_timestep",
-                    sigma=configs.loss.flow.latent.sigma,
+                    sigma=configs.loss.flow.sigma_latent,
                     metric_suffix="_latent",
                 ),
             ),
         ]
-        super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
+        super().__init__(components, reduction="mean")
 
 
 class ELBOLoss(AggregatedLoss):

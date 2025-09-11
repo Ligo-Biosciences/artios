@@ -138,7 +138,7 @@ class FlowLoss(AggregatedLoss):
                     expand_ground_truth=True,
                     # Per sample scale keys
                     timestep_key="coord_timestep",
-                    sigma=configs.loss.flow.sigma_centre_atom,
+                    sigma=configs.loss.flow.sigma_coord,
                     metric_suffix="_centre_atom",
                 ),
             ),

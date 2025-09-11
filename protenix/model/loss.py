@@ -138,7 +138,7 @@ class FlowLoss(AggregatedLoss):
                     expand_ground_truth=True,
                     # Per sample scale keys TODO: better name would be nice
                     timestep_key="coord_timestep",
-                    sigma_key="sigma_coord",
+                    sigma=configs.loss.flow.centre_atom.sigma,
                     metric_suffix="_centre_atom",
                 ),
             ),
@@ -147,7 +147,7 @@ class FlowLoss(AggregatedLoss):
                 weight=1 / configs.c_latent,
                 loss=MSELoss(
                     # Tensor keys
-                    pred_key="latents_mean",
+                    pred_key="latents",
                     true_key="latents",
                     mask_key="token_loss_mask",
                     # Entity mask keys
@@ -156,16 +156,16 @@ class FlowLoss(AggregatedLoss):
                     rna_mask_key="is_rna_token",
                     ligand_mask_key="is_ligand_token",
                     # Weights
-                    weight_protein=configs.loss.flow.centre_atom.weight_protein,
-                    weight_dna=configs.loss.flow.centre_atom.weight_dna,
-                    weight_rna=configs.loss.flow.centre_atom.weight_rna,
-                    weight_ligand=configs.loss.flow.centre_atom.weight_ligand,
+                    weight_protein=1.0,
+                    weight_dna=1.0,
+                    weight_rna=1.0,
+                    weight_ligand=1.0,
                     # Behaviour
                     enable_alignment=False,
                     expand_ground_truth=False,
                     # Per sample scale keys
                     timestep_key="latent_timestep",
-                    sigma_key="sigma_latent",
+                    sigma=configs.loss.flow.latent.sigma,
                     metric_suffix="_latent",
                 ),
             ),

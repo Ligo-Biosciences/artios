@@ -216,11 +216,11 @@ model_configs = {
         },
         "autoencoder": {
             "c_latent": GlobalConfigValue("c_latent"),
-            "c_token": GlobalConfigValue("c_token"),
-            "c_z": GlobalConfigValue("c_z"),
+            "c_token": 768,  # GlobalConfigValue("c_token"), TODO: hardcoded for checkpoint loading
+            "c_z": 128,  # GlobalConfigValue("c_z"),
             "sigma_coord": GlobalConfigValue("sigma_coord"),
             "encoder": {
-                "n_blocks": 6,  # TODO: this is a lot, we should consider shrinking
+                "n_blocks": 6,
                 "n_heads": 4,
             },
             "decoder": {

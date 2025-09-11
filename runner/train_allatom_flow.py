@@ -728,7 +728,6 @@ class ArtiosAllAtomFlowTrainer(object):
         # with profile_function("backward_pass"):
         # scaler.scale(loss / self.iters_to_accumulate).backward()
         self.backward_pass(loss, scaler)
-        print(f"loss value after backward pass: {loss.item()}")
 
         # For simplicity, the global training step is used
         if (self.global_step + 1) % self.iters_to_accumulate == 0:

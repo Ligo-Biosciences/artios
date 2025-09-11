@@ -139,6 +139,7 @@ class FlowLoss(AggregatedLoss):
                     # Per sample scale keys TODO: better name would be nice
                     timestep_key="coord_timestep",
                     sigma_key="sigma_coord",
+                    metric_suffix="_centre_atom",
                 ),
             ),
             LossComponent(
@@ -165,6 +166,7 @@ class FlowLoss(AggregatedLoss):
                     # Per sample scale keys
                     timestep_key="latent_timestep",
                     sigma_key="sigma_latent",
+                    metric_suffix="_latent",
                 ),
             ),
         ]

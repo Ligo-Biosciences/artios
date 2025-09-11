@@ -12,17 +12,215 @@ Cross attention and self attention are separated.
 """
 
 from functools import partial
-from typing import Tuple
+from typing import List, Tuple
 
+import torch
 from torch import Tensor, nn
 
-from protenix.model.modules.components import Attention, Transition
-from protenix.model.modules.primitives import BiasInitLinear, LayerNorm, LinearNoBias
-from protenix.model.modules.rearrange import (
+from protenix.model.modules.components import Attention, SwiGLU, Transition
+from protenix.model.modules.layout import (
     rearrange_to_key_subset,
     rearrange_to_query_subset,
 )
+from protenix.model.modules.primitives import (
+    BiasInitLinear,
+    LayerNorm,
+    LinearNoBias,
+)
 from protenix.model.utils import permute_final_dims
+from protenix.utils.profiler import profile_function
+
+
+class TransformerBlock(nn.Module):
+    """
+    Standard Transformer block with pair-bias functionality.
+    """
+
+    def __init__(
+        self,
+        c_a: int,
+        c_z: int,
+        num_heads: int,
+    ) -> None:
+        """
+        Args:
+            c_a (int): dimension of single embedding.
+            c_z (int): dimension of pair embedding.
+            num_heads (int): number of heads in attention.
+        """
+        super(TransformerBlock, self).__init__()
+        self.c_a = c_a
+        self.c_z = c_z
+        self.num_heads = num_heads
+        assert c_a % num_heads == 0
+
+        # Attention
+        self.attn_layernorm = LayerNorm(c_a)
+        self.attention = Attention(
+            q_dim=c_a,
+            kv_dim=c_a,
+            head_dim=c_a // num_heads,
+            num_heads=num_heads,
+            gating=False,
+        )
+        # MLP (with built-in layernorm)
+        self.transition = Transition(c_in=c_a, n=4)
+
+    def _verify_inputs(self, a: Tensor, pair_bias: Tensor, pair_mask: Tensor):
+        """Verify the inputs to the transformer block."""
+        assert (
+            pair_bias.shape[-2:] == pair_mask.shape[-2:] == (a.shape[-2], a.shape[-2])
+        ), f"Pair bias and mask dimension mismatch. Expected [N, N], got {pair_bias.shape[-2:]} and {pair_mask.shape[-2:]}"
+
+        assert (
+            pair_bias.shape[-3] == self.num_heads
+        ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {pair_bias.shape[-3]}"
+
+    def forward(self, a: Tensor, pair_bias: Tensor, pair_mask: Tensor) -> Tensor:
+        """
+        Args:
+            a (Tensor): the single feature aggregate per-atom representation
+                [..., N, c_a]
+            pair_bias (Tensor): pair embedding
+                [..., N, N, c_z]
+            pair_mask (Tensor): pair mask for the attention
+                [..., N, N]
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Single and pair embeddings.
+                - a: [..., N, c_a]
+                - z: [..., N, N, c_z]
+        """
+        self._verify_inputs(a, pair_bias=pair_bias, pair_mask=pair_mask)
+
+        # Attention
+        attn_input = self.attn_layernorm(a)
+        a = a + self.attention(
+            q_x=attn_input,
+            kv_x=attn_input,
+            pair_bias=pair_bias,
+            pair_mask=pair_mask,
+        )
+
+        # MLP
+        a = a + self.transition(a)
+        return a
+
+
+class Transformer(nn.Module):
+    """
+    Standard Transformer with pair-bias functionality.
+    """
+
+    def __init__(
+        self,
+        c_a: int,
+        c_z: int,
+        num_blocks: int,
+        num_heads: int,
+    ) -> None:
+        """
+        Args:
+            c_a (int): single embedding dimension.
+            c_z (int): pair embedding dimension.
+            num_blocks (int): number of blocks in Transformer.
+            num_heads (int): number of heads in attention.
+            dropout (float, optional): dropout probability for attention weights.
+        """
+        super(Transformer, self).__init__()
+        self.c_a = c_a
+        self.c_z = c_z
+        self.num_blocks = num_blocks
+        self.num_heads = num_heads
+
+        # Pair bias projection
+        self.z_layernorm = LayerNorm(c_z)
+        self.z_proj = LinearNoBias(c_z, num_heads * num_blocks)
+
+        self.blocks = nn.ModuleList()
+        for _ in range(num_blocks):
+            block = TransformerBlock(
+                c_a=c_a,
+                c_z=c_z,
+                num_heads=num_heads,
+            )
+            self.blocks.append(block)
+
+    def _verify_inputs(self, a: Tensor, z: Tensor, pair_mask: Tensor):
+        """Verify the inputs to the transformer."""
+
+        n_token = a.shape[-2]
+        c_a = a.shape[-1]
+        c_z = z.shape[-1]
+
+        # check feature dims
+        assert (
+            c_a == self.c_a
+        ), f"Input token dimension mismatch. Expected {self.c_a}, got {c_a}"
+        assert (
+            c_z == self.c_z
+        ), f"Input pair bias dimension mismatch. Expected {self.c_z}, got {c_z}"
+
+        # check shared dims
+        assert z.shape[-3:-1] == (
+            n_token,
+            n_token,
+        ), f"Input pair bias dimension mismatch. Expected [N, N], got {z.shape[-3:-1]}"
+        assert (
+            pair_mask.shape[-2:]
+            == (
+                n_token,
+                n_token,
+            )
+        ), f"Input pair mask dimension mismatch. Expected [N, N], got {pair_mask.shape[-2:]}"
+
+        # check batch dims
+        assert (
+            len(a.shape[:-2]) == len(z.shape[:-3]) == len(pair_mask.shape[:-2])
+        ), "Batch dimension mismatch."
+
+    def _prep_blocks(
+        self, pair_biases: Tensor, pair_mask: Tensor
+    ) -> List[TransformerBlock]:
+        """Prepare the transformer blocks."""
+        blocks = [
+            partial(block, pair_bias=pair_biases[i], pair_mask=pair_mask)
+            for i, block in enumerate(self.blocks)
+        ]
+        return blocks
+
+    def forward(self, a: Tensor, z: Tensor, pair_mask: Tensor) -> Tensor:
+        """
+        Args:
+            a (Tensor): single embedding
+                [..., N, c_a]
+            z (Tensor): pair embedding to be used for pair bias
+                [..., N, N, c_z]
+            pair_mask (Tensor): pair mask for attention
+                [..., N, N]
+
+        Returns:
+            Tensor: the output of Transformer
+                [..., N, c_a]
+        """
+        self._verify_inputs(a, z, pair_mask)
+
+        # Project and chunk pair bias
+        z = self.z_layernorm(z)
+        pair_bias_fused = self.z_proj(z)
+        pair_bias_fused = permute_final_dims(
+            pair_bias_fused, [2, 0, 1]
+        )  # [..., num_heads * num_blocks, N, N]
+        pair_biases = pair_bias_fused.chunk(self.num_blocks, dim=-3)
+
+        # Prepare blocks
+        blocks = self._prep_blocks(pair_biases=pair_biases, pair_mask=pair_mask.bool())
+
+        # Transformer tower
+        for block in blocks:
+            # TODO: grad checkpointing logic
+            a = block(a)
+        return a
 
 
 class DiTBlock(nn.Module):
@@ -41,8 +239,8 @@ class DiTBlock(nn.Module):
         self.c_token = c_token
         self.num_heads = num_heads
 
-        self.attn_layernorm = LayerNorm(c_token, elementwise_affine=False)
         # Attention
+        self.attn_layernorm = LayerNorm(c_token, elementwise_affine=False)
         self.attention = Attention(
             q_dim=c_token,
             kv_dim=c_token,
@@ -51,9 +249,12 @@ class DiTBlock(nn.Module):
             gating=True,
             final_linear_init="default",
         )
-        self.mlp_layernorm = LayerNorm(c_token, elementwise_affine=False)
         # Transition
-        self.transition = Transition(c_in=c_token, n=2, output_linear_init="default")
+        self.mlp_layernorm = LayerNorm(c_token, elementwise_affine=False)
+        self.mlp = nn.Sequential(
+            SwiGLU(c_in=c_token, c_out=2 * c_token),
+            LinearNoBias(2 * c_token, c_token, init="default"),
+        )
 
     def _verify_inputs(
         self,
@@ -70,15 +271,11 @@ class DiTBlock(nn.Module):
         """Verify the inputs to the transformer block."""
         assert (
             pair_bias.shape[-2:] == pair_mask.shape[-2:] == (a.shape[-2], a.shape[-2])
-        ), "Pair bias and mask dimension mismatch. Expected [N, N], got {} and {}".format(
-            pair_bias.shape[-2:], pair_mask.shape[-2:]
-        )
+        ), f"Pair bias and mask dimension mismatch. Expected [N, N], got {pair_bias.shape[-2:]} and {pair_mask.shape[-2:]}"
 
         assert (
             pair_bias.shape[-3] == self.num_heads
-        ), "Pair bias dimension mismatch. Expected {}, got {}".format(
-            self.num_heads, pair_bias.shape[-3]
-        )
+        ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {pair_bias.shape[-3]}"
 
         assert (
             a.shape[-2:]
@@ -147,7 +344,7 @@ class DiTBlock(nn.Module):
 
         # Adaln + MLP
         mlp_input = scale_mlp * self.mlp_layernorm(a) + shift_mlp
-        mlp_output = self.transition(mlp_input)
+        mlp_output = self.mlp(mlp_input)
         a = a + (gate_mlp * mlp_output)
         return a
 
@@ -293,13 +490,19 @@ class DiffusionTransformer(nn.Module):
             == len(pair_mask.shape[:-2])
         ), "Batch dimension mismatch."
 
+    @profile_function("diffusion_transformer")
+    @torch.compile
     def forward(self, a: Tensor, s: Tensor, z: Tensor, pair_mask: Tensor):
         """
         Args:
-            a: [..., N, c_token]
-            s: [..., N, c_s]
-            z: [..., N, N, c_z]
-            pair_mask: [..., N, N]
+            a (Tensor): single representation
+                [..., N, c_token]
+            s (Tensor): single conditioning
+                [..., N, c_s]
+            z (Tensor): pair representation
+                [..., N, N, c_z]
+            pair_mask: pair mask for the attention
+                [..., N, N]
         """
         self._verify_inputs(a, s, z, pair_mask)
 
@@ -311,7 +514,7 @@ class DiffusionTransformer(nn.Module):
         shift_attns, shift_mlps = self._chunk_block_params(self.shift_proj(s))
         gate_attns, gate_mlps = self._chunk_block_params(self.gate_proj(s))
 
-        # Embed and chunk pair bias
+        # Project and chunk pair bias
         z = self.z_layernorm(z)
         pair_bias_fused = self.z_proj(z)
         pair_bias_fused = permute_final_dims(
@@ -378,9 +581,12 @@ class LocalAttnTransformerBlock(nn.Module):
             gating=True,
             final_linear_init="default",
         )
+        # AdaLN MLP
         self.mlp_layernorm = LayerNorm(c_atom, elementwise_affine=False)
-        # Transition
-        self.transition = Transition(c_in=c_atom, n=2, output_linear_init="default")
+        self.mlp = nn.Sequential(
+            SwiGLU(c_in=c_atom, c_out=2 * c_atom),
+            LinearNoBias(2 * c_atom, c_atom, init="default"),
+        )
 
     def _verify_inputs(
         self,
@@ -413,6 +619,18 @@ class LocalAttnTransformerBlock(nn.Module):
         assert (
             trunked_pair_bias.shape[-3] == self.num_heads
         ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {trunked_pair_bias.shape[-3]}"
+
+        assert (
+            len(q_l.shape[:-2])
+            == len(scale_attn.shape[:-2])
+            == len(shift_attn.shape[:-2])
+            == len(gate_attn.shape[:-2])
+            == len(scale_mlp.shape[:-2])
+            == len(shift_mlp.shape[:-2])
+            == len(gate_mlp.shape[:-2])
+            == len(trunked_pair_bias.shape[:-4])
+            == len(trunked_pair_mask.shape[:-3])
+        ), f"Number of batch dims should match. Expected {len(scale_attn.shape[:-2])}"
 
     def forward(
         self,
@@ -490,7 +708,7 @@ class LocalAttnTransformerBlock(nn.Module):
         mlp_input = scale_mlp * self.mlp_layernorm(q_l) + shift_mlp
 
         # MLP, Gate the MLP output and add as residual
-        mlp_output = self.transition(mlp_input)
+        mlp_output = self.mlp(mlp_input)
         q_l = q_l + (gate_mlp * mlp_output)
 
         return q_l
@@ -575,6 +793,8 @@ class LocalAttnTransformer(nn.Module):
 
         return attn_params, mlp_params
 
+    # TODO: add verify inputs here
+
     def _prep_blocks(
         self,
         *,
@@ -605,6 +825,7 @@ class LocalAttnTransformer(nn.Module):
 
         return blocks
 
+    @profile_function("atom_transformer")
     def forward(
         self,
         *,

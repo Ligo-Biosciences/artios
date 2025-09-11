@@ -480,13 +480,11 @@ class Featurizer(object):
         bond_features["token_bonds"] = torch.Tensor(token_adj_matrix)
         return bond_features
 
-    def get_extra_features(self) -> dict[str, torch.Tensor]:
+    def _get_atom_to_token_idx(self) -> torch.Tensor:
         """
-        Get other features not listed in AlphaFold3 SI Chapter 2.8 Table 5.
+        Get the mapping from atom index to token index.
+        """
 
-        Returns:
-            Dict[str, torch.Tensor]: a dict of extra features.
-        """
         atom_to_token_idx_dict = {}
         for idx, token in enumerate(self.cropped_token_array.tokens):
             for atom_idx in token.atom_indices:
@@ -499,6 +497,16 @@ class Featurizer(object):
                 for atom_idx in range(len(self.cropped_atom_array))
             ]
         ).long()
+        return atom_to_token_idx
+
+    def get_extra_features(self) -> dict[str, torch.Tensor]:
+        """
+        Get other features not listed in AlphaFold3 SI Chapter 2.8 Table 5.
+
+        Returns:
+            Dict[str, torch.Tensor]: a dict of extra features.
+        """
+        atom_to_token_idx = self._get_atom_to_token_idx()
 
         extra_features = {}
         extra_features["atom_to_token_idx"] = atom_to_token_idx  # [N_atom]
@@ -654,11 +662,15 @@ class Featurizer(object):
         mask_features["bond_mask"] = torch.Tensor(
             bond_mask_mat
         ).long()  # [N_atom, N_atom]
+
+        # Add token and atom masks for padding
+        mask_features["token_mask"] = torch.ones(len(self.cropped_token_array)).long()
+        mask_features["atom_mask"] = torch.ones(len(self.cropped_atom_array)).long()
         return mask_features
 
     def get_target_features(self) -> dict[str, torch.Tensor]:
         """
-        Get target-specific features for training. 
+        Get target-specific features for training.
         Adds the target_centre_coordinate, target_restype, and is_target_token features.
 
         Returns:
@@ -673,6 +685,7 @@ class Featurizer(object):
         is_target_token = self.cropped_atom_array.is_target[
             centre_atom_indices
         ]  # [N_token]
+        target_token_valid = self.cropped_atom_array.is_resolved[centre_atom_indices]
 
         # Centre atom coordinates of the target
         target_features["target_centre_coordinate"] = torch.Tensor(
@@ -684,7 +697,7 @@ class Featurizer(object):
         restype = centre_atoms.cano_seq_resname
         restype_onehot = self.restype_onehot_encoded(restype)
         target_features["target_restype"] = restype_onehot * torch.Tensor(
-            is_target_token
+            is_target_token * target_token_valid
         ).unsqueeze(-1)
 
         # Target is_hotspot feature
@@ -693,7 +706,7 @@ class Featurizer(object):
 
         # Binary indicator for target tokens
         target_features["is_target_token"] = torch.Tensor(
-            is_target_token
+            is_target_token * target_token_valid
         ).long()  # [N_token]
 
         return target_features
@@ -788,6 +801,13 @@ class Featurizer(object):
         for i, token in enumerate(self.cropped_token_array):
             dense_to_flat[i, : len(token)] = 1
         labels["dense_to_flat_atom_mask"] = torch.Tensor(dense_to_flat).long()
+
+        # Add loss masks
+        atom_to_token_idx = self._get_atom_to_token_idx()  # [N_atom]
+        labels["atom_loss_mask"] = (
+            labels["coordinate_mask"] * labels["has_centre_atom"][atom_to_token_idx]
+        )  # [N_atom]
+        labels["token_loss_mask"] = labels["has_centre_atom"]  # [N_token]
 
         return labels
 

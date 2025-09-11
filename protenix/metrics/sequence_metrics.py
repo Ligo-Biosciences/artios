@@ -16,6 +16,8 @@
 import torch
 import torch.nn as nn
 
+from protenix.model import utils
+
 
 def compute_sequence_recovery(
     pred_dict: dict, input_feature_dict: dict
@@ -56,6 +58,7 @@ class SequenceMetrics(nn.Module):
 
         seq_logits = pred_dict["seq_logits"]  # [..., N_sample, N_token, N_restype]
         true_restype = input_feature_dict["restype"]  # [..., N_token, N_restype]
+        N_sample = seq_logits.shape[-3]
 
         # Convert logits to  sequence indices
         pred_seq_indices = torch.argmax(seq_logits, dim=-1)  # [..., N_sample, N_token]
@@ -66,7 +69,13 @@ class SequenceMetrics(nn.Module):
             pred_seq_indices == true_seq_indices
         ).float()  # [..., N_sample, N_token]
 
-        out["seq_rec_rate"] = correct_predictions.mean(dim=-1)
+        # Masked mean
+        valid_mask = input_feature_dict["token_mask"]  # [..., N_token]
+        valid_mask = utils.expand_at_dim(valid_mask, dim=-2, n=N_sample)
+        seq_rec_rate = utils.masked_mean(
+            correct_predictions, valid_mask, axes=-1
+        )  # [..., N_sample]
+        out["seq_rec_rate"] = seq_rec_rate  # correct_predictions.mean(dim=-1)
         return out
 
     def aggregate(

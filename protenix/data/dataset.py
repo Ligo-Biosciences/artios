@@ -31,8 +31,13 @@ from protenix.common.constants import EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
 from protenix.data.msa_featurizer import MSAFeaturizer
+from protenix.data.padding_utils import pad_features_dict
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
-from protenix.data.utils import data_type_transform, make_dummy_feature
+from protenix.data.utils import (
+    data_type_transform,
+    get_atom_padding_length,
+    make_dummy_feature,
+)
 from protenix.utils.cropping import CropData
 from protenix.utils.file_io import read_indices_csv
 from protenix.utils.logger import get_logger
@@ -98,6 +103,10 @@ class BaseSingleDataset(Dataset):
         self.limits = kwargs.get(
             "limits", -1
         )  # Limit number of indices rows, mainly for test
+
+        # Padding configs
+        self.bin_ends = kwargs.get("bin_ends", [])
+        self.padding = kwargs.get("padding", {})
 
         # Binding target configs
         self.train_with_binding_target = kwargs.get("train_with_binding_target", False)
@@ -422,13 +431,18 @@ class BaseSingleDataset(Dataset):
     ):
         """
         Assign a random asymmetric unit as the target if train_with_binding_target is True.
-        Otherwise, assign all False.
+        Otherwise, assign all False. If there is only one asym_id, set is_target to False.
         """
         # Pick target chain
         unique_asym_ids = np.unique(atom_array.asym_id_int)
-        target_asym_id = np.random.choice(unique_asym_ids)
 
-        if train_with_binding_target and np.random.rand() < binding_target_train_rate:
+        # If there's only one asym_id, set all is_target to False
+        if len(unique_asym_ids) == 1:
+            atom_array.set_annotation(
+                "is_target", np.zeros_like(atom_array.asym_id_int, dtype=bool)
+            )
+        elif train_with_binding_target and np.random.rand() < binding_target_train_rate:
+            target_asym_id = np.random.choice(unique_asym_ids)
             # Add target annotation to atom array
             atom_array.set_annotation(
                 "is_target", atom_array.asym_id_int == target_asym_id
@@ -586,6 +600,29 @@ class BaseSingleDataset(Dataset):
         ]
         basic_info["chain_id"] = chain_id_list
 
+        # Get padding length
+        current_n_atom = feat["atom_to_token_idx"].shape[0]
+        max_n_atom = get_atom_padding_length(
+            current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
+        )
+
+        assert current_n_atom > 1, "Crop has <= 1 atom."
+        # Pad features and labels
+        pad_args = {
+            "current_n_atom": current_n_atom,
+            "max_n_atom": max_n_atom,
+            "current_n_token": feat["token_index"].shape[0],
+            "max_n_token": self.cropping_configs["crop_size"],
+            "current_n_msa": feat["msa"].shape[0],
+            "max_n_msa": self.padding["max_n_msa"],
+            "current_n_template": feat.get("template_restype", np.array([1])).shape[0],
+            "max_n_template": self.padding["max_n_template"],
+            "current_n_pocket": 1,
+            "max_n_pocket": self.padding["max_n_pocket"],
+        }
+        feat = pad_features_dict(feat, **pad_args)
+        label = pad_features_dict(label, **pad_args)
+
         data = {
             "input_feature_dict": feat,
             "label_dict": label,
@@ -604,8 +641,8 @@ class BaseSingleDataset(Dataset):
         bioassembly_dict: dict[str, Any],
         crop_size: int,
         method_weights: list[float],
-        contiguous_crop_complete_lig: bool = True,
-        spatial_crop_complete_lig: bool = True,
+        contiguous_crop_complete_lig: bool = False,
+        spatial_crop_complete_lig: bool = False,
         drop_last: bool = True,
         remove_metal: bool = True,
     ) -> tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any]]:
@@ -741,7 +778,8 @@ class BaseSingleDataset(Dataset):
         labels_dict = feat.get_labels()
 
         # Permutation list for atom permutation
-        features_dict["atom_perm_list"] = feat.get_atom_permutation_list()
+        # TODO: for symmetric permutation, this will be required.
+        # features_dict["atom_perm_list"] = feat.get_atom_permutation_list()
 
         # Labels for multi-chain permutation
         # Note: the returned full_atom_array may contain fewer atoms than the input
@@ -1143,6 +1181,8 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
+        dataset_param["bin_ends"] = data_config.get("bin_ends", [])
+        dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
@@ -1170,6 +1210,8 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
+        dataset_param["bin_ends"] = data_config.get("bin_ends", [])
+        dataset_param["padding"] = data_config.get("padding", {})
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

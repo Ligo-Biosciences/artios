@@ -26,6 +26,7 @@ import rootutils
 import torch
 import torch.distributed as dist
 from neptune_scale import Run
+from neptune_scale.api.run import SourceTrackingConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
@@ -38,7 +39,18 @@ from protenix.data.dataloader import get_dataloaders
 # from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
-from protenix.model.loss import ELBOLoss
+from protenix.model.loss import VAELoss
+from protenix.model.modules.atom_attention import (
+    AtomAttentionDecoder,
+    AtomAttentionEncoder,
+)
+from protenix.model.modules.transformer_v2 import (
+    DiffusionTransformer,
+    DiTBlock,
+    LocalAttnTransformer,
+    LocalAttnTransformerBlock,
+    Transformer,
+)
 from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
@@ -47,6 +59,7 @@ from protenix.utils.monitoring import analyse_vae_latents, grad_norm
 from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
+from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.dumper import DataDumper
 from runner.ema import EMAWrapper
@@ -62,8 +75,8 @@ class ArtiosAllAtomTrainer(object):
         self.configs = configs
         self.init_env()
         self.init_basics()
-        self.init_log()
         self.init_model()
+        self.init_log()
         self.init_loss()
         self.init_data()
         self.try_load_checkpoint()
@@ -117,10 +130,34 @@ class ArtiosAllAtomTrainer(object):
 
     def init_log(self):
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            self.neptune_run = Run(
-                project=self.configs.project,
-                experiment_name=self.configs.run_name,
+            source_config = SourceTrackingConfig(  # source-code tracking
+                namespace="source_code",
+                upload_entry_point=True,
+                upload_diff_head=True,
+                upload_diff_upstream=True,
+                upload_run_command=True,
             )
+            self.neptune_run = Run(  # neptune
+                project=self.configs.project,
+                experiment_name=self.run_name,
+                source_tracking_config=source_config,
+            )
+            self.torchwatcher = TorchWatcher(
+                model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
+                run=self.neptune_run,
+                track_layers=[
+                    LocalAttnTransformer,
+                    Transformer,
+                    DiffusionTransformer,
+                    DiTBlock,
+                    LocalAttnTransformerBlock,
+                    AtomAttentionEncoder,
+                    AtomAttentionDecoder,
+                ],  # optionally specify
+                track_layers_name_includes=["linear_q", "linear_k"],
+                tensor_stats=["channel_norm", "channel_rms", "mean", "abs_mean"],
+                base_namespace="model_metrics",
+            )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 
@@ -172,8 +209,11 @@ class ArtiosAllAtomTrainer(object):
         torch.set_float32_matmul_precision("high")
         logging.info("Finished init ENV.")
 
+        # Set torch compile cache limit
+        torch._dynamo.config.cache_size_limit = 16
+
     def init_loss(self):
-        self.loss = ELBOLoss(self.configs)
+        self.loss = VAELoss(self.configs)
         self.symmetric_permutation = SymmetricPermutation(
             self.configs, error_dir=self.error_dir
         )
@@ -350,20 +390,17 @@ class ArtiosAllAtomTrainer(object):
             raise e
         return batch, log_dict
 
-    def get_loss(
-        self, batch: dict, mode: str = "train"
-    ) -> tuple[torch.Tensor, dict, dict]:
+    def get_loss(self, batch: dict, mode: str = "train") -> tuple[torch.Tensor, dict]:
         assert mode in ["train", "eval"]
         self.loss.to(batch["label_dict"]["coordinate"].device)
-        loss, loss_dict, monitor_data = autocasting_disable_decorator(
-            self.configs.skip_amp.loss
-        )(self.loss)(
+        loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
+            self.loss
+        )(
             feat_dict=batch["input_feature_dict"],
             pred_dict=batch["pred_dict"],
             label_dict=batch["label_dict"],
-            mode=mode,
         )
-        return loss, loss_dict, monitor_data
+        return loss, loss_dict
 
     @torch.no_grad()
     def get_metrics(self, batch: dict) -> dict:
@@ -487,7 +524,7 @@ class ArtiosAllAtomTrainer(object):
                     # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(batch, mode=mode, seed=index)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, monitor_data = self.get_loss(
+                    loss, loss_dict = self.get_loss(
                         batch, mode="train"
                     )  # eval, loss evaluated in the same way as train
 
@@ -495,52 +532,52 @@ class ArtiosAllAtomTrainer(object):
 
                     # TODO: refactor this, measuring latent perturbation.
 
-                    if self.latents:
-                        # Perturb the latents with flow matching interpolation at specific timesteps
-                        mu = batch["pred_dict"]["latents_mean"]
+                    # if self.latents:
+                    #     # Perturb the latents with flow matching interpolation at specific timesteps
+                    #     mu = batch["pred_dict"]["latents_mean"]
 
-                        # Generate noise once
-                        noise = torch.randn_like(mu)  # * self.configs.sigma_latent
+                    #     # Generate noise once
+                    #     noise = torch.randn_like(mu)  # * self.configs.sigma_latent
 
-                        # Evaluate at specific timesteps
-                        noise_scales = [1e-4, 1e-3, 1e-2, 0.1, 0.5]
+                    #     # Evaluate at specific timesteps
+                    #     noise_scales = [1e-4, 1e-3, 1e-2, 0.1, 0.5]
 
-                        for t in noise_scales:
-                            # Create timestep tensor with the specific value
-                            # timestep = torch.ones_like(mu) * t
+                    #     for t in noise_scales:
+                    #         # Create timestep tensor with the specific value
+                    #         # timestep = torch.ones_like(mu) * t
 
-                            # Noise latents to this specific timestep
-                            noised_latents = mu + t * noise
+                    #         # Noise latents to this specific timestep
+                    #         noised_latents = mu + t * noise
 
-                            # noise_w_flow_matching(
-                            #    data=mu,
-                            #    noise=noise,
-                            #    timestep=timestep,
-                            # )
+                    #         # noise_w_flow_matching(
+                    #         #    data=mu,
+                    #         #    noise=noise,
+                    #         #    timestep=timestep,
+                    #         # )
 
-                            with enable_amp:
-                                # Decode noised latents
-                                coords, seq_logits = self.model.module.decode(
-                                    latents=noised_latents,
-                                    centre_coordinates=batch["label_dict"][
-                                        "centre_coordinate"
-                                    ],
-                                    centre_mask=batch["label_dict"]["has_centre_atom"],
-                                    input_feature_dict=batch["input_feature_dict"],
-                                    dense_to_flat_mask=batch["label_dict"][
-                                        "dense_to_flat_atom_mask"
-                                    ],
-                                )
+                    #         with enable_amp:
+                    #             # Decode noised latents
+                    #             coords, seq_logits = self.model.module.decode(
+                    #                 latents=noised_latents,
+                    #                 centre_coordinates=batch["label_dict"][
+                    #                     "centre_coordinate"
+                    #                 ],
+                    #                 centre_mask=batch["label_dict"]["has_centre_atom"],
+                    #                 input_feature_dict=batch["input_feature_dict"],
+                    #                 dense_to_flat_mask=batch["label_dict"][
+                    #                     "dense_to_flat_atom_mask"
+                    #                 ],
+                    #             )
 
-                            # Compute loss over the noised latents and log
-                            batch["pred_dict"]["coordinate"] = coords
-                            loss, loss_dict, monitor_data = self.get_loss(
-                                batch, mode="train"
-                            )  # eval, loss evaluated in the same way as train
+                    #         # Compute loss over the noised latents and log
+                    #         batch["pred_dict"]["coordinate"] = coords
+                    #         loss, loss_dict = self.get_loss(
+                    #             batch, mode="train"
+                    #         )  # eval, loss evaluated in the same way as train
 
-                            simple_metrics.update(
-                                {f"noised_latent_mse_loss_σ={t}": loss_dict["mse_loss"]}
-                            )
+                    #         simple_metrics.update(
+                    #             {f"noised_latent_mse_loss_σ={t}": loss_dict["mse_loss"]}
+                    #         )
 
                     # Additional metrics
                     metrics_dict = self.get_metrics(batch)
@@ -548,6 +585,9 @@ class ArtiosAllAtomTrainer(object):
 
                 # TODO: do model inference, save the structures with dumper and log to neptune
                 if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
+                    coordinate = batch["pred_dict"]["coordinate"]
+                    n_atoms = len(batch["cropped_atom_array"])
+                    batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
                     saved_files = self.dumper.dump(
                         dataset_name=test_name,
                         pdb_id=pid,
@@ -645,7 +685,7 @@ class ArtiosAllAtomTrainer(object):
 
         with enable_amp:
             batch, _ = self.model_forward(batch, mode="train")
-            loss, loss_dict, _ = self.get_loss(batch, mode="train")
+            loss, loss_dict = self.get_loss(batch, mode="train")
 
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):
@@ -760,70 +800,111 @@ class ArtiosAllAtomTrainer(object):
         use_ema = hasattr(self, "ema_wrapper")
         self.print(f"Using power law ema's: {use_ema}")
 
-        while True:
-            for batch in self.train_dl:
-                # Print pdb id and step
-                is_update_step = (self.global_step + 1) % self.iters_to_accumulate == 0
-                is_last_step = (self.step + 1) == self.configs.max_steps
-                step_need_log = (self.step + 1) % self.configs.log_interval == 0
+        def trace_handler(p):
+            output = p.key_averages().table(
+                sort_by="self_cuda_time_total", row_limit=20
+            )
+            print(output)
+            # Only save trace from rank 0 to avoid file conflicts
+            if DIST_WRAPPER.rank == 0:
+                tracename = f"trace_{p.step_num}_rank{DIST_WRAPPER.rank}.json"
+                filepath = f"{self.logs_dir}/{tracename}"
+                # Ensure directory exists before writing
+                os.makedirs(self.logs_dir, exist_ok=True)
+                p.export_chrome_trace(filepath)
+                # self.neptune_log_files({f"profiling/{tracename}": filepath})
 
-                step_need_eval = (
-                    self.configs.eval_interval > 0
-                    and (self.step + 1) % self.configs.eval_interval == 0
-                )
-                step_need_save = (
-                    self.configs.checkpoint_interval > 0
-                    and (self.step + 1) % self.configs.checkpoint_interval == 0
-                )
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(
+                wait=10,
+                warmup=10,
+                active=10,
+                skip_first=50,
+                skip_first_wait=1,
+                repeat=1,
+            ),
+            on_trace_ready=trace_handler,
+        ) as p:
+            while True:
+                for batch in self.train_dl:
+                    # Print pdb id and step
+                    is_update_step = (
+                        self.global_step + 1
+                    ) % self.iters_to_accumulate == 0
+                    is_last_step = (self.step + 1) == self.configs.max_steps
+                    step_need_log = (self.step + 1) % self.configs.log_interval == 0
 
-                is_last_step &= is_update_step
-                step_need_log &= is_update_step
-                step_need_eval &= is_update_step
-                step_need_save &= is_update_step
+                    step_need_eval = (
+                        self.configs.eval_interval > 0
+                        and (self.step + 1) % self.configs.eval_interval == 0
+                    )
+                    step_need_save = (
+                        self.configs.checkpoint_interval > 0
+                        and (self.step + 1) % self.configs.checkpoint_interval == 0
+                    )
 
-                batch = to_device(batch, self.device)
-                self.progress_bar()
-                self.train_step(batch)
-                if use_ema:  # TODO: is_update_step
-                    self.ema_wrapper.update()
-                if step_need_log or is_last_step:
-                    metrics = self.train_metric_wrapper.calc()
-                    self.print(f"Step {self.step} train: {metrics}")
-                    last_lr = self.lr_scheduler.get_last_lr()[0]
-                    if DIST_WRAPPER.rank == 0:
-                        if self.configs.use_wandb:
-                            self.neptune_run.log_metrics(
-                                {"train/lr": last_lr},
-                                step=self.step,
+                    is_last_step &= is_update_step
+                    step_need_log &= is_update_step
+                    step_need_eval &= is_update_step
+                    step_need_save &= is_update_step
+
+                    batch = to_device(batch, self.device)
+                    self.progress_bar()
+                    self.train_step(batch)
+                    if use_ema and is_update_step:
+                        self.ema_wrapper.update()
+                    if step_need_log or is_last_step:
+                        metrics = self.train_metric_wrapper.calc()
+                        self.print(f"Step {self.step} train: {metrics}")
+                        last_lr = self.lr_scheduler.get_last_lr()[0]
+                        if DIST_WRAPPER.rank == 0:
+                            if self.configs.use_wandb:
+                                self.neptune_run.log_metrics(
+                                    {"train/lr": last_lr},
+                                    step=self.step,
+                                )
+                                self.torchwatcher.watch(
+                                    step=self.step,
+                                    track_gradients=False,
+                                    track_activations=True,
+                                    track_parameters=False,
+                                    prefix="train",
+                                )
+                            self.print(f"Step {self.step}, lr: {last_lr}")
+                        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                            self.neptune_run.log_metrics(metrics, step=self.step)
+
+                    if step_need_save or is_last_step:
+                        self.print(f"beginning Saving checkpoint at step {self.step}")
+                        self.save_checkpoint()  # Saves non-ema checkpoint
+                        if use_ema:
+                            self.ema_wrapper.apply_shadow()
+                            self.save_checkpoint(
+                                ema_suffix=f"_ema_{self.ema_wrapper.decay}"
                             )
-                        self.print(f"Step {self.step}, lr: {last_lr}")
-                    if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                        self.neptune_run.log_metrics(metrics, step=self.step)
+                            self.ema_wrapper.restore()
+                            # wait_for_all_processes()
 
-                if step_need_save or is_last_step:
-                    self.print(f"beginning Saving checkpoint at step {self.step}")
-                    self.save_checkpoint()  # Saves non-ema checkpoint
-                    if use_ema:
-                        self.ema_wrapper.apply_shadow()
-                        self.save_checkpoint(
-                            ema_suffix=f"_ema_{self.ema_wrapper.decay}"
-                        )
-                        self.ema_wrapper.restore()
-                        # wait_for_all_processes()
+                    if step_need_eval or is_last_step:
+                        self.evaluate()
+                        self.on_validation_epoch_end()
 
-                if step_need_eval or is_last_step:
-                    self.evaluate()
-                    self.on_validation_epoch_end()
+                    self.global_step += 1
+                    if self.global_step % self.iters_to_accumulate == 0:
+                        self.step += 1
+                    if self.step >= self.configs.max_steps:
+                        self.print(f"Finish training after {self.step} steps")
+                        break
 
-                self.global_step += 1
-                if self.global_step % self.iters_to_accumulate == 0:
-                    self.step += 1
+                    # Profiler step
+                    p.step()
+
                 if self.step >= self.configs.max_steps:
-                    self.print(f"Finish training after {self.step} steps")
                     break
-
-            if self.step >= self.configs.max_steps:
-                break
 
 
 def main():

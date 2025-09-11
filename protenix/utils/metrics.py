@@ -70,6 +70,7 @@ class SimpleMetricAggregator(object):
             metric_data = gather_and_merge(
                 metric_data, aggregation_func=lambda x: sum(x, [])
             )
+            print(f"metric_data: {metric_data}")
         results = {}
         for agg_name, agg_func in self.aggregators.items():
             for namespace, value_dict in metric_data.items():

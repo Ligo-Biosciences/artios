@@ -102,7 +102,9 @@ class AtomAttentionEncoder(nn.Module):
             )
 
         self.linear_no_bias_cl = LinearNoBias(
-            in_features=self.c_atom, out_features=self.c_atompair, init="relu"
+            in_features=self.c_atom,
+            out_features=self.c_atompair,
+            init="relu",  # TODO: orthogonal init
         )
         self.linear_no_bias_cm = LinearNoBias(
             in_features=self.c_atom, out_features=self.c_atompair, init="relu"

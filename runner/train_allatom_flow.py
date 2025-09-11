@@ -682,8 +682,8 @@ class ArtiosAllAtomFlowTrainer(object):
 
     @profile_function("backward_pass")
     def backward_pass(self, loss, scaler):
-        # scaler.scale(loss / self.iters_to_accumulate).backward()
-        scaler.scale(loss).backward()
+        scaler.scale(loss / self.iters_to_accumulate).backward()
+        # scaler.scale(loss).backward()
 
     @profile_function("optimizer_step")
     def optimizer_step(self, scaler):
@@ -721,18 +721,15 @@ class ArtiosAllAtomFlowTrainer(object):
             )
             loss, loss_dict = self.get_loss(batch, mode="train")
 
-            # Divide loss by number of iterations to accumulate to average gradient contribution
-            loss = loss / self.iters_to_accumulate
-            for key, value in loss_dict.items():
-                loss_dict[key] = value / self.iters_to_accumulate
-
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):
                 self.print(f"Skip iteration with NaN loss: {self.step} steps")
                 loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
         # with profile_function("backward_pass"):
         # scaler.scale(loss / self.iters_to_accumulate).backward()
+        print(f"loss value before backward pass: {loss.item()}")
         self.backward_pass(loss, scaler)
+        print(f"loss value after backward pass: {loss.item()}")
 
         # For simplicity, the global training step is used
         if (self.global_step + 1) % self.iters_to_accumulate == 0:

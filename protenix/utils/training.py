@@ -105,9 +105,7 @@ def get_muon(
     muon_params = [
         p for n, p in param_dict.items() if p.dim() >= 2 and "embed" not in n
     ]
-    adamw_params = [
-        p for n, p in param_dict.items() if p.dim() < 2 or "final" in n or "embed" in n
-    ]
+    adamw_params = [p for n, p in param_dict.items() if p.dim() < 2 or "embed" in n]
     optim_groups = [
         {
             "params": muon_params,

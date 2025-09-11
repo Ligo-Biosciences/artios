@@ -133,7 +133,7 @@ class ArtiosAllAtomFlowTrainer(object):
                 experiment_name=self.run_name,
             )
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
-        self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
+        self.train_metric_wrapper = SimpleMetricAggregator(["nan_avg"])
 
     def init_env(self):
         """Init pytorch/cuda envs."""
@@ -727,7 +727,6 @@ class ArtiosAllAtomFlowTrainer(object):
                 loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
         # with profile_function("backward_pass"):
         # scaler.scale(loss / self.iters_to_accumulate).backward()
-        print(f"loss value before backward pass: {loss.item()}")
         self.backward_pass(loss, scaler)
         print(f"loss value after backward pass: {loss.item()}")
 

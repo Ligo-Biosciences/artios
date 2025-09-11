@@ -148,12 +148,14 @@ data_configs = {
         "max_n_pocket": 16,
         "bin_ends": ListValue([2112, 3008, 4000]),
     },
-    "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925"]),
+    "train_sets": ListValue(
+        ["weightedPDB_before2109_wopb_nometalc_0925", "distillation"]
+    ),
     "train_sampler": {
         "train_sample_weights": ListValue([0.5, 0.5]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["recentPDB_1536_sample384_0925", "distillation"]),
+    "test_sets": ListValue(["recentPDB_1536_sample384_0925"]),
     "weightedPDB_before2109_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),

@@ -26,6 +26,7 @@ common_aggregator = {
     "max": lambda x: np.max(x),
     "min": lambda x: np.min(x),
     "nonzero_avg": lambda x: np.mean(x[x != 0]) if np.any(x != 0) else np.nan,
+    "nan_avg": lambda x: np.nanmean(x),
 }
 
 
@@ -60,6 +61,10 @@ class SimpleMetricAggregator(object):
                 raise RuntimeError(f"Error converting tensor for key {key}: {str(e)}")
         elif isinstance(value, np.ndarray):
             pass
+        elif isinstance(value, list):
+            for item in value:
+                self.add(key, item, namespace)
+            return
         else:
             raise ValueError(f"Unsupported type for metric data: {type(value)}")
         value_dict[key].append(value)

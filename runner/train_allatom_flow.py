@@ -27,6 +27,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from neptune_scale import Run
+from neptune_scale.api.run import SourceTrackingConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
@@ -49,6 +50,11 @@ from protenix.metrics.plausibility import (
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import FlowLoss
+from protenix.model.modules.components import Attention, Transition
+from protenix.model.modules.transformer_v2 import (
+    DiffusionTransformer,
+    DiTBlock,
+)
 from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
@@ -63,6 +69,7 @@ from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.profiler import profile_function
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
+from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
 
@@ -76,8 +83,8 @@ class ArtiosAllAtomFlowTrainer(object):
         self.configs = configs
         self.init_env()
         self.init_basics()
-        self.init_log()
         self.init_model()
+        self.init_log()
         self.init_loss()
         self.init_data()
         self.try_load_checkpoint()
@@ -133,10 +140,33 @@ class ArtiosAllAtomFlowTrainer(object):
     def init_log(self):
         self.neptune_run = None
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            source_config = SourceTrackingConfig(  # source-code tracking
+                namespace="source_code",
+                upload_entry_point=True,
+                upload_diff_head=True,
+                upload_diff_upstream=True,
+                upload_run_command=True,
+            )
             self.neptune_run = Run(
                 project=self.configs.project,
                 experiment_name=self.run_name,
+                source_tracking_config=source_config,
             )
+            self.torchwatcher = TorchWatcher(
+                model=self.flow_model.module
+                if DIST_WRAPPER.world_size > 1
+                else self.flow_model,
+                run=self.neptune_run,
+                track_layers=[
+                    DiffusionTransformer,
+                    DiTBlock,
+                    Attention,
+                    Transition,
+                ],  # optionally specify
+                track_layers_name_includes=["linear_q", "linear_k", "mlp"],
+                tensor_stats=["channel_norm", "channel_rms", "mean", "abs_mean"],
+                base_namespace="model_metrics",
+            )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 

@@ -163,8 +163,8 @@ class ArtiosAllAtomFlowTrainer(object):
                     Attention,
                     Transition,
                 ],  # optionally specify
-                track_layers_name_includes=["linear_q", "linear_k", "mlp"],
-                tensor_stats=["channel_norm", "channel_rms", "mean", "abs_mean"],
+                track_layers_name_includes=["linear_q", "linear_k"],
+                tensor_stats=["channel_rms", "abs_mean"],
                 base_namespace="model_metrics",
             )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))

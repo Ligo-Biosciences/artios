@@ -70,7 +70,13 @@ class SimpleMetricAggregator(object):
             metric_data = gather_and_merge(
                 metric_data, aggregation_func=lambda x: sum(x, [])
             )
-            print(f"metric_data: {metric_data}")
+            print(f"metric_data keys: {metric_data.keys()}")
+            try:
+                print(
+                    f"metric_data keys of the first item: {metric_data[list(metric_data.keys())[0]].keys()}"
+                )
+            except Exception as e:
+                print(f"Error getting keys of the first item: {e}")
         results = {}
         for agg_name, agg_func in self.aggregators.items():
             for namespace, value_dict in metric_data.items():

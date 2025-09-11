@@ -528,15 +528,11 @@ def sample_noising(
     # (Optional) Encode
     if encoder is not None:
         with torch.no_grad():
-            # TODO: clean this up
-            # x_target_sample = x_target_augment[..., 0, :, :].unsqueeze(
-            #     -3
-            # )  # extract one sample
-            mu, _ = encoder(input_feature_dict, x_target_augment)
-            eps = torch.randn_like(mu)  # reparameterized latents
-            noise_level = torch.rand(mu.shape[:-2], device=eps.device, dtype=eps.dtype)
-            gamma = noise_level[..., None, None] * 0.5
-            x_target_augment = mu + gamma * eps  # noise the latents
+            x_target_augment, _ = encoder(input_feature_dict, x_target_augment)
+            # eps = torch.randn_like(mu)  # reparameterized latents
+            # noise_level = torch.rand(mu.shape[:-2], device=eps.device, dtype=eps.dtype)
+            # gamma = noise_level[..., None, None] * 0.5
+            # x_target_augment = mu + gamma * eps  # noise the latents
 
             # Add N_sample back in
             # x_target_augment = expand_at_dim(

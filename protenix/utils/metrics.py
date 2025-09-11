@@ -75,24 +75,6 @@ class SimpleMetricAggregator(object):
             metric_data = gather_and_merge(
                 metric_data, aggregation_func=lambda x: sum(x, [])
             )
-            print(f"metric_data keys: {metric_data.keys()}")
-            try:
-                first_namespace = list(metric_data.keys())[0]
-                first_key = list(metric_data[first_namespace].keys())[0]
-                first_data = metric_data[first_namespace][first_key]
-
-                print(
-                    f"metric_data keys of the first namespace: {metric_data[first_namespace].keys()}"
-                )
-                print(f"the first key in the first namespace: {first_key}")
-                print(f"type of data for first key: {type(first_data)}")
-                print(f"length of data list for first key: {len(first_data)}")
-                print(f"shape of first array in the list: {first_data[0].shape}")
-                print(
-                    f"shape after concatenation would be: {np.concatenate(first_data, axis=0).shape}"
-                )
-            except Exception as e:
-                print(f"Error getting info: {e}")
         results = {}
         for agg_name, agg_func in self.aggregators.items():
             for namespace, value_dict in metric_data.items():

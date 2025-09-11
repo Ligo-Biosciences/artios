@@ -63,7 +63,7 @@ class DiffusionConditioning(nn.Module):
             "ref_atom_name_chars": 4 * 64,
         }
         self.ligand_condition_embed = LinearNoBias(
-            sum(self.ligand_input_feature.values()), self.c_s, init="normal"
+            sum(self.ligand_input_feature.values()), self.c_s, init="lecun"
         )
 
         # Token bonds
@@ -94,7 +94,7 @@ class DiffusionConditioning(nn.Module):
         self.entity_type_embed = LinearNoBias(
             in_features=sum(self.entity_features.values()),
             out_features=self.c_s,
-            init="normal",
+            init="lecun",
         )
 
         ### Target features

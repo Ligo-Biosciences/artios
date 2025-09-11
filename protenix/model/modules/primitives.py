@@ -101,6 +101,11 @@ def normal_init_(weight, bias=None):
     init_bias_to_zero_(bias)
 
 
+def orthogonal_init_(weight, bias=None):
+    nn.init.orthogonal_(weight)
+    init_bias_to_zero_(bias)
+
+
 def bias_init_fn(weight: Tensor, bias: Optional[Tensor], biasinit: float = 0.0) -> None:
     """Helper function to initialize BiasInitLinear weights and bias"""
     with torch.no_grad():
@@ -123,6 +128,7 @@ class Linear(nn.Linear):
         init: str = "default",
         init_fn: Optional[Callable[[Tensor, Tensor], None]] = None,
         high_precision: bool = False,
+        effective_fan_in: Optional[int] = None,
     ) -> None:
         """
         Args:
@@ -147,11 +153,12 @@ class Linear(nn.Linear):
                 Overrides init if not None.
             cast_to_high_precision (bool, optional): Cast inputs and weights to high precision when performing operation.
                 Defaults to False.
+            TODO: effective fan in
         """
         super(Linear, self).__init__(in_features, out_features, bias)
 
         init_methods = {
-            "default": lecun_normal_init_,
+            "default": orthogonal_init_,  # lecun_normal_init_,
             "relu": he_normal_init_,
             "glorot": glorot_uniform_init_,
             "gating": gating_init_,

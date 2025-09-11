@@ -149,7 +149,9 @@ class InferenceDataset(Dataset):
         for mol_type in ["ligand", "protein", "dna", "rna"]:
             mol_type_mask = feat[f"is_{mol_type}"].bool()
             stats[f"{mol_type}/atom"] = int(mol_type_mask.sum(dim=-1).item())
-            stats[f"{mol_type}/token"] = len(torch.unique(feat["atom_to_token_idx"][mol_type_mask]))
+            stats[f"{mol_type}/token"] = len(
+                torch.unique(feat["atom_to_token_idx"][mol_type_mask])
+            )
 
         N_asym = len(torch.unique(data["input_feature_dict"]["asym_id"]))
         data.update(
@@ -194,7 +196,7 @@ class InferenceDataset(Dataset):
             "added_feature": t3 - t2,
         }
 
-        return data, atom_array, time_tracker
+        return data, atom_array, token_array, time_tracker
 
     def __len__(self) -> int:
         return len(self.inputs)
@@ -205,11 +207,13 @@ class InferenceDataset(Dataset):
             sample_name = single_sample_dict["name"]
             logger.info(f"Featurizing {sample_name}...")
 
-            data, atom_array, _ = self.process_one(single_sample_dict=single_sample_dict)
+            data, atom_array, token_array, _ = self.process_one(
+                single_sample_dict=single_sample_dict
+            )
             error_message = ""
         except Exception as e:
-            data, atom_array = {}, None
+            data, atom_array, token_array = {}, None, None
             error_message = f"{e}:\n{traceback.format_exc()}"
         data["sample_name"] = single_sample_dict["name"]
         data["sample_index"] = index
-        return data, atom_array, error_message
+        return data, atom_array, token_array, error_message

@@ -47,11 +47,13 @@ class DiffusionConditioning(nn.Module):
 
         ### Ligand features
         # Ligand reference position embeddings
-        self.embed_ligand_ref_pos = LinearNoBias(3, self.c_s)
-        self.embed_ligand_pair_offsets = LinearNoBias(3, self.c_z, high_precision=False)
-        self.embed_ligand_pair_invd = LinearNoBias(1, self.c_z)
-        self.embed_ref_mask = LinearNoBias(1, self.c_s)
-        self.embed_pair_offsets_valid = LinearNoBias(1, self.c_z)
+        self.embed_ligand_ref_pos = LinearNoBias(3, self.c_s, init="lecun")
+        self.embed_ligand_pair_offsets = LinearNoBias(
+            3, self.c_z, init="lecun", high_precision=False
+        )
+        self.embed_ligand_pair_invd = LinearNoBias(1, self.c_z, init="lecun")
+        self.embed_ref_mask = LinearNoBias(1, self.c_s, init="normal")
+        self.embed_pair_offsets_valid = LinearNoBias(1, self.c_z, init="normal")
 
         # Ligand condition embeddings
         self.ligand_input_feature = {
@@ -61,12 +63,12 @@ class DiffusionConditioning(nn.Module):
             "ref_atom_name_chars": 4 * 64,
         }
         self.ligand_condition_embed = LinearNoBias(
-            sum(self.ligand_input_feature.values()), self.c_s
+            sum(self.ligand_input_feature.values()), self.c_s, init="normal"
         )
 
         # Token bonds
         self.token_bonds_embed = LinearNoBias(
-            in_features=1, out_features=self.c_z, init="zeros"
+            in_features=1, out_features=self.c_z, init="normal"
         )
 
         ### Relpos
@@ -77,9 +79,9 @@ class DiffusionConditioning(nn.Module):
         ### Timestep embeddings
         self.fourier_embedding = FourierEmbedding(c=c_timestep_embedding)
         self.layernorm_latent_t = LayerNorm(c_timestep_embedding)
-        self.latent_t_embed = LinearNoBias(c_timestep_embedding, self.c_s)
+        self.latent_t_embed = LinearNoBias(c_timestep_embedding, self.c_s, init="lecun")
         self.layernorm_coord_t = LayerNorm(c_timestep_embedding)
-        self.coord_t_embed = LinearNoBias(c_timestep_embedding, self.c_s)
+        self.coord_t_embed = LinearNoBias(c_timestep_embedding, self.c_s, init="lecun")
 
         # Entity type embedding
         self.entity_features = {
@@ -90,7 +92,9 @@ class DiffusionConditioning(nn.Module):
             "is_target_token": 1,
         }
         self.entity_type_embed = LinearNoBias(
-            in_features=sum(self.entity_features.values()), out_features=self.c_s
+            in_features=sum(self.entity_features.values()),
+            out_features=self.c_s,
+            init="normal",
         )
 
         ### Target features
@@ -112,12 +116,16 @@ class DiffusionConditioning(nn.Module):
         self.num_bins = len(lower_bins)
 
         # Target feature embeddings
-        self.embed_target_restype = LinearNoBias(32, self.c_s)
-        self.embed_target_coord = LinearNoBias(3, self.c_s)
-        self.embed_target_pair_dist = LinearNoBias(self.n_target_dist_bins, self.c_z)
+        self.embed_target_restype = LinearNoBias(32, self.c_s, init="normal")
+        self.embed_target_coord = LinearNoBias(3, self.c_s, init="lecun")
+        self.embed_target_pair_dist = LinearNoBias(
+            self.n_target_dist_bins, self.c_z, init="normal"
+        )
 
         ### Transitions
-        self.transition_z = Transition(c_in=self.c_z, n=2)
+        self.transition_z = Transition(
+            c_in=self.c_z, n=2
+        )  # TODO: are zero init's appropriate here with Muon?
         self.transition_s1 = Transition(c_in=self.c_s, n=2)
         self.transition_s2 = Transition(c_in=self.c_s, n=2)
 
@@ -443,16 +451,17 @@ class DiffusionModule(nn.Module):
             c_s=c_s,
         )
         # Coordinate embedding layer
-        self.linear_no_bias_r_embed = LinearNoBias(3, c_token)
+        self.linear_no_bias_r_embed = LinearNoBias(3, c_token, init="lecun")
 
         # Latent embedding layer
         # self.layernorm_latent = LayerNorm(c_latent)
-        self.linear_no_bias_latent_embed = LinearNoBias(c_latent, c_token)
+        self.linear_no_bias_latent_embed = LinearNoBias(c_latent, c_token, init="lecun")
 
         # Alg20: line4
         self.layernorm_s = LayerNorm(c_s)
         self.linear_no_bias_s = LinearNoBias(
-            in_features=c_s, out_features=c_token, init="zeros"
+            in_features=c_s,
+            out_features=c_token,
         )
         self.diffusion_transformer = DiffusionTransformer(
             **transformer, c_token=c_token, c_s=c_s, c_z=c_z

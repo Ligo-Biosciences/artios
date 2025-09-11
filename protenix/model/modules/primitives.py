@@ -97,7 +97,7 @@ def gating_init_(weight, bias=None):
 
 
 def normal_init_(weight, bias=None):
-    nn.init.kaiming_normal_(weight, nonlinearity="linear")
+    nn.init.normal_(weight, mean=0.0, std=1.0)
     init_bias_to_zero_(bias)
 
 
@@ -129,7 +129,6 @@ class Linear(nn.Linear):
         init: str = "default",
         init_fn: Optional[Callable[[Tensor, Tensor], None]] = None,
         high_precision: bool = False,
-        effective_fan_in: Optional[int] = None,
     ) -> None:
         """
         Args:
@@ -154,12 +153,12 @@ class Linear(nn.Linear):
                 Overrides init if not None.
             cast_to_high_precision (bool, optional): Cast inputs and weights to high precision when performing operation.
                 Defaults to False.
-            TODO: effective fan in
         """
         super(Linear, self).__init__(in_features, out_features, bias)
 
         init_methods = {
             "default": orthogonal_init_,  # lecun_normal_init_,
+            "lecun": lecun_normal_init_,
             "relu": he_normal_init_,
             "glorot": glorot_uniform_init_,
             "gating": gating_init_,

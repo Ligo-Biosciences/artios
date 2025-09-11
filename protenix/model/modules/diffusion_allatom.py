@@ -451,13 +451,15 @@ class DiffusionModule(nn.Module):
             c_s=c_s,
         )
         # Coordinate embedding layer
-        self.linear_no_bias_r_embed = LinearNoBias(3, c_token)  # init="lecun"
+        self.linear_no_bias_r_embed = LinearNoBias(
+            3, c_token, init="lecun"
+        )  # init="lecun"
 
         # Latent embedding layer
         # self.layernorm_latent = LayerNorm(c_latent)
         self.linear_no_bias_latent_embed = LinearNoBias(
-            c_latent, c_token
-        )  # init="lecun"
+            c_latent, c_token, init="lecun"
+        )  #
 
         # Alg20: line4
         self.layernorm_s = LayerNorm(c_s)

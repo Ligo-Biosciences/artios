@@ -52,7 +52,9 @@ def zeropower_via_newtonschulz5(G, steps: int):
 
 
 def adjust_muon_update(A, B):
-    return 0.2 * math.sqrt(max(A, B))
+    # TODO: make base-width configurable
+    base_width = 384
+    return 0.2 * math.sqrt(base_width * A / B)
 
 
 def muon_update(grad, momentum, beta=0.95, ns_steps=5, nesterov=True):

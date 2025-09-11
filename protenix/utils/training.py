@@ -103,10 +103,8 @@ def get_muon(
     # create optim groups. Any parameters that is 2D, is non-embedding, and not final will have Muon, otherwise no.
     # i.e. all weight tensors in matmuls use Muon, all biases, layernorms, and input / output projections don't.
     muon_params = [
-        p
-        for n, p in param_dict.items()
-        if p.dim() >= 2 and "final" not in n and "embed" not in n
-    ]  # TODO: change all projections to include "embed" in name
+        p for n, p in param_dict.items() if p.dim() >= 2 and "embed" not in n
+    ]
     adamw_params = [
         p for n, p in param_dict.items() if p.dim() < 2 or "final" in n or "embed" in n
     ]

@@ -51,7 +51,7 @@ basic_configs = {
     "ema_vae_decay": 0.999,
     "power_law_ema_sigma": ListValue([0.08, 0.12]),
     "post_hoc_ema_sigma": ListValue([0.06, 0.08, 0.10]),
-    "calc_post_hoc_ema_during_training": False,
+    "calc_post_hoc_ema_during_training": True,
     "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],
 }
@@ -193,6 +193,7 @@ model_configs = {
             "sigma_coord": GlobalConfigValue("sigma_coord"),
             "sigma_latent": GlobalConfigValue("sigma_latent"),
             "c_token": GlobalConfigValue("c_token"),
+            "c_latent": GlobalConfigValue("c_latent"),
             # "c_atom": GlobalConfigValue("c_atom"),
             # "c_atompair": GlobalConfigValue("c_atompair"),
             "c_z": GlobalConfigValue("c_z"),
@@ -203,8 +204,8 @@ model_configs = {
             #    "n_heads": 4,
             # },
             "transformer": {
-                "n_blocks": 24,
-                "n_heads": 16,
+                "num_blocks": 24,
+                "num_heads": 16,
             },
             # "atom_decoder": {
             #    "n_blocks": 3,
@@ -269,6 +270,7 @@ loss_configs = {
         "diffusion_sparse_loss_enable": GlobalConfigValue("loss_metrics_sparse_enable"),
         "diffusion_lddt_loss_dense": True,  # only set true in initial training for training speed
         "resolution": {"min": 0.1, "max": 4.0},
+        "reduction": "mean",
         "weight": {  # TODO: set unused loss weights to 0 (for completion)
             "alpha_confidence": 1e-4,
             "alpha_pae": 0.0,  # or 1 in finetuning stage 3
@@ -308,7 +310,6 @@ loss_configs = {
                 "weight_rna": 5.0,
                 "weight_ligand": 10.0,
                 "eps": 1e-6,
-                # "use_uncertainty": False,
             },
             "bond": {
                 "eps": 1e-6,
@@ -316,7 +317,6 @@ loss_configs = {
             "smooth_lddt": {
                 "eps": 1e-6,
                 "k": 300,
-                "use_uncertainty": False,
             },
             "neighbour_mse": {
                 "eps": 1e-6,
@@ -343,9 +343,22 @@ loss_configs = {
             },
             "kl_divergence": {"reduction": "mean", "q": 1.5},
         },
+        "vae": {
+            "reconstruction": {
+                "mse": {
+                    "weight_protein": 1.0,
+                    "weight_mse": 1.0,  # TODO: delete all of these weight_mse's
+                    "weight_dna": 4.0 * 2 + 2.0,  # TODO: remove all of this
+                    "weight_rna": 4.0 * 2 + 2.0,
+                    "weight_ligand": 1.0 * 2 + 2.0,
+                    "eps": 1e-6,
+                }
+            }
+        },
         "flow": {
             "centre_atom": {
                 "weight_mse": 1.0,
+                "weight_protein": 1.0,
                 "weight_dna": 5.0,
                 "weight_rna": 5.0,
                 "weight_ligand": 10.0,

@@ -43,7 +43,9 @@ def rmsd(
         mask = torch.ones(true_pose.shape[:-1], device=true_pose.device)
 
     # [...]
-    err2 = (torch.square(pred_pose - true_pose).sum(dim=-1) * mask).sum(dim=-1) / mask.sum(dim=-1)
+    err2 = (torch.square(pred_pose - true_pose).sum(dim=-1) * mask).sum(
+        dim=-1
+    ) / mask.sum(dim=-1)
     rmsd = err2.add(eps).sqrt()
     if reduce:
         rmsd = rmsd.mean()
@@ -82,11 +84,13 @@ def align_pred_to_true(
 
     weighted_n_atoms = torch.sum(weight, dim=-1, keepdim=True).unsqueeze(-1)
     pred_pose_centroid = (
-        torch.sum(pred_pose * weight.unsqueeze(-1), dim=-2, keepdim=True) / weighted_n_atoms
+        torch.sum(pred_pose * weight.unsqueeze(-1), dim=-2, keepdim=True)
+        / weighted_n_atoms
     )
     pred_pose_centered = pred_pose - pred_pose_centroid
     true_pose_centroid = (
-        torch.sum(true_pose * weight.unsqueeze(-1), dim=-2, keepdim=True) / weighted_n_atoms
+        torch.sum(true_pose * weight.unsqueeze(-1), dim=-2, keepdim=True)
+        / weighted_n_atoms
     )
     true_pose_centered = true_pose - true_pose_centroid
     H_mat = torch.matmul(
@@ -99,7 +103,9 @@ def align_pred_to_true(
     if not allowing_reflection:
         det = torch.linalg.det(torch.matmul(v, u))
 
-        diagonal = torch.stack([torch.ones_like(det), torch.ones_like(det), det], dim=-1)
+        diagonal = torch.stack(
+            [torch.ones_like(det), torch.ones_like(det), det], dim=-1
+        )
         rot = torch.matmul(
             torch.diag_embed(diagonal).to(u.device),
             u,
@@ -107,7 +113,9 @@ def align_pred_to_true(
         rot = torch.matmul(v, rot)
     else:
         rot = torch.matmul(v, u)
-    translate = true_pose_centroid - torch.matmul(pred_pose_centroid, rot.transpose(-1, -2))
+    translate = true_pose_centroid - torch.matmul(
+        pred_pose_centroid, rot.transpose(-1, -2)
+    )
 
     pred_pose_translated = (
         torch.matmul(pred_pose_centered, rot.transpose(-1, -2)) + true_pose_centroid
@@ -152,11 +160,16 @@ def partially_aligned_rmsd(
     )
     transformed_pose = torch.matmul(pred_pose, rot.transpose(-1, -2)) + translate
     err_atom = torch.square(transformed_pose - true_pose).sum(dim=-1) * atom_mask
-    aligned_mask, unaligned_mask = atom_mask * align_mask.float(), atom_mask * (
-        1 - align_mask.float()
+    aligned_mask, unaligned_mask = (
+        atom_mask * align_mask.float(),
+        atom_mask * (1 - align_mask.float()),
     )
-    aligned_part_err_square = (err_atom * aligned_mask).sum(dim=-1) / aligned_mask.sum(dim=-1)
-    unaligned_part_err_square = (err_atom * unaligned_mask).sum(dim=-1) / unaligned_mask.sum(dim=-1)
+    aligned_part_err_square = (err_atom * aligned_mask).sum(dim=-1) / aligned_mask.sum(
+        dim=-1
+    )
+    unaligned_part_err_square = (err_atom * unaligned_mask).sum(
+        dim=-1
+    ) / unaligned_mask.sum(dim=-1)
     aligned_part_rmsd = aligned_part_err_square.add(eps).sqrt()
     unaligned_part_rmsd = unaligned_part_err_square.add(eps).sqrt()
     if reduce:
@@ -241,6 +254,57 @@ def weighted_rigid_align(
             pred_pose=x,
             true_pose=x_target,
             atom_mask=None,
+            weight=atom_weight,
+            allowing_reflection=False,
+        )
+        return x_aligned, rot, trans
+
+
+def weighted_rigid_align_V2(
+    x: torch.Tensor,
+    x_target: torch.Tensor,
+    atom_weight: torch.Tensor,
+    mask: torch.Tensor,
+    stop_gradient: bool = True,
+) -> tuple[torch.Tensor]:
+    """Implements Algorithm 28 in AF3. Wrap `align_pred_to_true`.
+
+    Args:
+        x (torch.Tensor): input coordinates, it will be moved to match x_target.
+            [..., N, 3]
+        x_target (torch.Tensor): target coordinates for the input to match.
+            [..., N, 3]
+        atom_weight (torch.Tensor): weights for each atom.
+            [..., N]
+        mask (torch.Tensor): mask for the atoms.
+            [..., N]
+        stop_gradient (bool): whether to detach the output. If true, will run it with no_grad() ctx.
+
+    Returns:
+        x_aligned (torch.Tensor): rotated, translated x which should be closer to x_target.
+            [..., N, 3]
+    """
+
+    if len(atom_weight.shape) == len(x.shape) - 1:
+        assert atom_weight.shape[:-1] == x.shape[:-2]
+    else:
+        assert len(atom_weight.shape) == 1 and atom_weight.shape[-1] == x.shape[-2]
+
+    if stop_gradient:
+        with torch.no_grad():
+            x_aligned, rot, trans = align_pred_to_true(
+                pred_pose=x,
+                true_pose=x_target,
+                atom_mask=mask,
+                weight=atom_weight,
+                allowing_reflection=False,
+            )
+            return x_aligned.detach()
+    else:
+        x_aligned, rot, trans = align_pred_to_true(
+            pred_pose=x,
+            true_pose=x_target,
+            atom_mask=mask,
             weight=atom_weight,
             allowing_reflection=False,
         )

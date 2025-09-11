@@ -60,8 +60,7 @@ default_weighted_pdb_configs = {
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
 }
 
-
-DATA_ROOT_DIR = "af3-dev/release_data/"  # BEWARE: adjusted to absolute path for Modal!
+DATA_ROOT_DIR = "af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -141,6 +140,12 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": True,
     "binding_target_train_rate": 0.75,
+    "bin_ends": ListValue([2112, 3008, 4000]),
+    "padding": {
+        "max_n_msa": 1,
+        "max_n_template": 4,
+        "max_n_pocket": 16,
+    },
     "train_sets": ListValue(
         ["weightedPDB_before2109_wopb_nometalc_0925", "distillation"]
     ),
@@ -157,7 +162,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            "pdb_list": "",
+            "pdb_list": "",  # ["1sr0"]
             "random_sample_if_failed": True,
             "max_n_token": 3000,  # -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,

@@ -17,6 +17,7 @@ from typing import Optional, Union
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from scipy.spatial.transform import Rotation
 from torch import Tensor
 
@@ -239,7 +240,9 @@ def batched_gather(
     ranges = []
     for i, s in enumerate(data.shape[:no_batch_dims]):
         r = torch.arange(s)
-        r = r.view(*(*((1,) * i), -1, *((1,) * (len(inds.shape) - i - 1))))
+        pre_index_dims = (1,) * i
+        post_index_dims = (1,) * (len(inds.shape) - i - 1)
+        r = r.view(*pre_index_dims, -1, *post_index_dims)
         ranges.append(r)
 
     remaining_dims = [slice(None) for _ in range(len(data.shape) - no_batch_dims)]
@@ -276,33 +279,45 @@ def broadcast_token_to_atom(x_token: Tensor, atom_to_token_idx: Tensor) -> Tenso
     )
 
 
-def aggregate_atom_to_token(
+def average_atom_to_token(
     x_atom: Tensor,
+    atom_mask: Tensor,
     atom_to_token_idx: Tensor,
-    n_token: Optional[int] = None,
-    reduce: str = "mean",
+    n_token: int,
 ) -> Tensor:
     """Aggregate atom embedding to obtain token embedding
 
     Args:
         x_atom (Tensor): atom-level embedding
             [..., N_atom, d]
+        atom_mask (Tensor): atom mask indicating non-padding atoms
+            [..., N_atom]
         atom_to_token_idx (Tensor): map atom to token idx
             [..., N_atom] or [N_atom]
-        n_token (int, optional): number of tokens in total. Defaults to None.
-        reduce (str, optional): aggregation method. Defaults to "mean".
+        n_token (int): number of tokens in total.
 
     Returns:
         Tensor: token-level embedding
             [..., N_token, d]
     """
 
-    # Broadcasting in the given dim.
-    out = scatter(
-        src=x_atom, index=atom_to_token_idx, dim=-2, dim_size=n_token, reduce=reduce
-    )
+    # Mask out the padding atoms
+    x_atom = x_atom * atom_mask[..., None]
 
-    return out
+    # Sum the atoms
+    out_sum = scatter(
+        src=x_atom, index=atom_to_token_idx, dim=-2, dim_size=n_token, reduce="sum"
+    )
+    out_count = scatter(
+        src=atom_mask[..., None],
+        index=atom_to_token_idx,
+        dim=-2,
+        dim_size=n_token,
+        reduce="sum",
+    )
+    out_mean = out_sum / (out_count + 1e-4)
+
+    return out_mean
 
 
 def sample_indices(
@@ -602,3 +617,71 @@ def beta_function(
     normalization = torch.exp(log_norm)
 
     return t ** (alpha - 1) * (1 - t) ** (beta - 1) / normalization
+
+
+def softmax_cross_entropy(logits: Tensor, labels: Tensor) -> Tensor:
+    """Softmax cross entropy
+
+    Args:
+        logits (Tensor): classification logits
+            [..., num_class]
+        labels (Tensor): classification labels (value = probability)
+            [..., num_class]
+
+    Returns:
+        Tensor: softmax cross entropy
+            [...]
+    """
+    loss = -1 * torch.sum(
+        labels * F.log_softmax(logits, dim=-1),
+        dim=-1,
+    )
+    return loss
+
+
+def masked_mean(
+    input: Tensor,
+    mask: Tensor,
+    axes: int | list[int],
+    keepdim: bool = False,
+    eps: float = 1e-6,
+) -> Tensor:
+    """
+    Calculate the masked mean of the input tensor. Assumes the input and the mask
+    have the same number of dimensions but not necessarily the same shape.
+
+    Args:
+        input (Tensor): The input tensor.
+        mask (Tensor): The mask tensor.
+        axes (int | list[int]): The axes to reduce.
+        keepdim (bool): Whether to keep the dimensions of the input tensor.
+        eps (float): The epsilon to add to the denominator to avoid division by zero.
+
+    Returns:
+        Tensor: The masked mean of the input tensor.
+    """
+    assert len(input.shape) == len(
+        mask.shape
+    ), "Input and mask must have the same number of dimensions"
+
+    if isinstance(axes, int):
+        axes = [axes]
+
+    broadcast_factor = 1.0
+    for ax in axes:
+        input_size = input.shape[ax]
+        mask_size = mask.shape[ax]
+        if mask_size == 1:
+            broadcast_factor = broadcast_factor * input_size
+        elif input_size == mask_size:
+            continue
+        else:
+            raise ValueError(
+                f"Input and mask must have the same size or mask must be 1 along the reduced axes. Got input size {input_size} and mask size {mask_size} along axis {ax}"
+            )
+
+    mean = (input * mask).sum(dim=axes, keepdim=keepdim) / (
+        mask.sum(dim=axes, keepdim=keepdim) * broadcast_factor + eps
+    )
+
+    return mean

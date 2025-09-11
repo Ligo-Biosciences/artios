@@ -1,17 +1,3 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import math
 from typing import Callable, Optional, Tuple, Union
 
@@ -22,7 +8,6 @@ import torch.nn.functional as F
 from scipy.stats import truncnorm
 from torch import Tensor
 
-from protenix.model.modules.rearrange import rearrange_qk_to_dense_trunk
 from protenix.model.utils import (
     add,
 )
@@ -30,8 +15,6 @@ from protenix.model.utils import (
 # Optimized layer norm
 
 try:
-    from protenix.model.layer_norm.layer_norm import FusedLayerNormAffineFunction
-
     CUDA_AVAILABLE = True
 except OSError:
     CUDA_AVAILABLE = False
@@ -287,6 +270,7 @@ class LayerNorm(nn.Module):
                 "bias", torch.zeros(normalized_shape, device=device, dtype=dtype)
             )
 
+    # @torch.compiler.disable(recursive=True)
     def forward(self, x: Tensor) -> Tensor:
         """Forward pass using optimized kernel on GPU, regular layernorm on CPU.
 
@@ -297,27 +281,28 @@ class LayerNorm(nn.Module):
             Tensor: Normalized tensor
         """
 
-        if (
-            CUDA_AVAILABLE
-            and x.is_cuda
-            and x.dtype in [torch.float32, torch.float16, torch.bfloat16]
-        ):
-            # Use optimized CUDA kernel implementation
-            return FusedLayerNormAffineFunction.apply(
-                x, self.weight, self.bias, self.normalized_shape, self.eps
-            )
+        # if (
+        #     CUDA_AVAILABLE
+        #     and x.is_cuda
+        #     and x.dtype in [torch.float32, torch.float16, torch.bfloat16]
+        # ):
+        #     # Use optimized CUDA kernel implementation
+        #     return FusedLayerNormAffineFunction.apply(
+        #         x, self.weight, self.bias, self.normalized_shape, self.eps
+        #     )
 
-        else:
-            # Manual implementation using torch.functional
-            return F.layer_norm(
-                x,
-                self.normalized_shape,
-                self.weight if self.elementwise_affine else None,
-                self.bias if self.elementwise_affine else None,
-                self.eps,
-            )
+        # else:
+        # Manual implementation using torch.functional
+        return F.layer_norm(
+            x,
+            self.normalized_shape,
+            self.weight,
+            self.bias,
+            self.eps,
+        )
 
 
+@torch.compiler.disable
 def attention(
     q: Tensor,
     k: Tensor,
@@ -363,7 +348,8 @@ def attention(
         attn_weights = add(attn_weights, attn_bias)
 
     # fill out of mask with -inf (based on dtype)
-    attn_weights = torch.masked_fill(attn_weights, pair_mask, -inf)
+    attn_weights.masked_fill_(~pair_mask, -inf)
+    # attn_weights = torch.masked_fill(attn_weights, ~pair_mask, -inf)
 
     # [..., n_q, n_kv]
     attn_weights = F.softmax(attn_weights, dim=-1)
@@ -372,74 +358,3 @@ def attention(
     attn_output = attn_weights @ v
 
     return attn_output
-
-
-def gather_pair_embedding_in_dense_trunk(x: Tensor, idx_q: Tensor, idx_k: Tensor):
-    """
-    Selectively gather elements from a tensor using two sets of indices.
-
-        x: [..., N_token, N_token, d]
-        idx_q: [N_b, N_q]
-        idx_k: [N_b, N_k]
-
-    Return:
-        y: [..., N_b, N_q, N_k, d]
-            where y[..., b, i, j, :] = x[..., idx_q[b, i], idx_k[b, j], :]
-    """
-    idx_q = idx_q.long()
-    idx_k = idx_k.long()
-    assert len(idx_q.shape) == len(idx_k.shape) == 2
-
-    # Get the shape parameters
-    N_b, N_q = idx_q.shape
-    N_k = idx_k.shape[1]
-
-    # Expand idx_q and idx_k to match the shape required for advanced indexing
-    idx_q_expanded = idx_q.unsqueeze(-1).expand(-1, -1, N_k)
-    idx_k_expanded = idx_k.unsqueeze(1).expand(-1, N_q, -1)
-
-    # Use advanced indexing to gather the desired elements
-    y = x[..., idx_q_expanded, idx_k_expanded, :]
-
-    return y
-
-
-def broadcast_token_to_local_atom_pair(
-    z_token: Tensor,
-    atom_to_token_idx: Tensor,
-    n_queries: int,
-    n_keys: int,
-    compute_mask: bool = True,
-) -> Tensor:
-    """Broadcast token pair embedding to atom pair embedding
-
-    Args:
-        z_token (Tensor): token pair embedding
-            [..., N_token, N_token, d]
-        atom_to_token_idx (Tensor): map atom idx to token idx
-            [N_atom]
-
-    Returns:
-        z_gathered_blocked (Tensor): atom pair embedding, with local blocked shape
-            [..., n_trunks, n_queries, n_keys, d]
-        pad_mask (Tensor):
-            [n_trunks, n_queries, n_keys]
-        q_pad_length (int)
-    """
-
-    # [N_atom] -> [n_trunks, n_queries] and [n_trunks, n_keys]
-    atom_to_token_idx_q, atom_to_token_idx_k, pad_info = rearrange_qk_to_dense_trunk(
-        atom_to_token_idx,
-        atom_to_token_idx,
-        dim_q=-1,
-        dim_k=-1,
-        n_queries=n_queries,
-        n_keys=n_keys,
-        compute_mask=compute_mask,
-    )
-
-    z_gathered_blocked = gather_pair_embedding_in_dense_trunk(
-        z_token, idx_q=atom_to_token_idx_q, idx_k=atom_to_token_idx_k
-    )
-
-    return z_gathered_blocked, pad_info

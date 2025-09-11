@@ -41,6 +41,11 @@ from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.data.utils import save_structure_cif
 from protenix.metrics.lddt_metrics import LDDTMetrics
+from protenix.metrics.plausibility import (
+    PerResidueRamaScore,
+    PerResidueRotamerScore,
+    StructureClashScore,
+)
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import FlowLoss
@@ -55,6 +60,7 @@ from protenix.utils.monitoring import (
     grad_norm,
 )
 from protenix.utils.permutation.permutation import SymmetricPermutation
+from protenix.utils.profiler import profile_function
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
@@ -98,6 +104,7 @@ class ArtiosAllAtomFlowTrainer(object):
         self.structure_dir = f"{self.run_dir}/structures"
         self.dump_dir = f"{self.run_dir}/dumps"
         self.error_dir = f"{self.run_dir}/errors"
+        self.logs_dir = f"{self.run_dir}/logs"
 
         # Add dump dir for training time inference
         self.configs.dump_dir = self.prediction_dir
@@ -111,6 +118,7 @@ class ArtiosAllAtomFlowTrainer(object):
             os.makedirs(self.structure_dir)
             os.makedirs(self.dump_dir)
             os.makedirs(self.error_dir)
+            os.makedirs(self.logs_dir)
             save_config(
                 self.configs,
                 os.path.join(self.configs.base_dir, self.run_name, "config.yaml"),
@@ -371,21 +379,21 @@ class ArtiosAllAtomFlowTrainer(object):
         )
         return batch, log_dict
 
+    @profile_function("get_loss")
     def get_loss(
         self, batch: dict, mode: str = "train"
     ) -> tuple[torch.Tensor, dict, dict]:
         assert mode in ["train", "eval"]
         self.loss.to(batch["label_dict"]["coordinate"].device)  # Move loss to device
 
-        loss, loss_dict, monitor_data = autocasting_disable_decorator(
-            self.configs.skip_amp.loss
-        )(self.loss)(
+        loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
+            self.loss
+        )(
             feat_dict=batch["input_feature_dict"],
             pred_dict=batch["pred_dict"],
             label_dict=batch["label_dict"],
-            mode=mode,
         )
-        return loss, loss_dict, monitor_data
+        return loss, loss_dict
 
     @torch.no_grad()
     def get_metrics(self, batch: dict) -> dict:
@@ -511,14 +519,17 @@ class ArtiosAllAtomFlowTrainer(object):
             # Restore original model state
             self.flow_model.load_state_dict(current_state)
 
-            # Plot all the metrics on Neptune
-            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
+        # Plot all the metrics on Neptune
+        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):
         # Init Metric Aggregator
         simple_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
+        rotamer_score = PerResidueRotamerScore()
+        rama_score = PerResidueRamaScore()
+        clash_score = StructureClashScore()
         eval_precision = {
             "fp32": torch.float32,
             "bf16": torch.bfloat16,
@@ -574,7 +585,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     )
 
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict, monitor_data = self.get_loss(
+                    loss, loss_dict = self.get_loss(
                         batch, mode="train"
                     )  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)
@@ -602,9 +613,13 @@ class ArtiosAllAtomFlowTrainer(object):
                         mode="inference",
                     )
 
-                    saved_files = self.save_outputs(
+                    saved_files, pred_atom_array_list = self.save_outputs(
                         pred_dict=pred_dict, batch=batch, ema_suffix=ema_suffix
                     )
+
+                    rotamer_score.update(pred_atom_array_list)
+                    rama_score.update(pred_atom_array_list)
+                    clash_score.update(pred_atom_array_list)
 
                     if self.latents_inference is not None:
                         for name, tensor in self.get_latents_data(batch).items():
@@ -631,6 +646,15 @@ class ArtiosAllAtomFlowTrainer(object):
                 torch.cuda.empty_cache()
 
             metrics = simple_metric_wrapper.calc()
+            if rotamer_score.num_total_residues > 0.0:
+                metrics["val/rotamer_score"] = rotamer_score.compute()
+            if rama_score.num_total_residues > 0.0:
+                metrics["val/rama_score"] = rama_score.compute()
+            if clash_score.num_total_interactions > 0.0:
+                metrics["val/clash_score"] = clash_score.compute()
+            rotamer_score.reset()
+            rama_score.reset()
+            clash_score.reset()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
             ### Plots
@@ -677,8 +701,19 @@ class ArtiosAllAtomFlowTrainer(object):
                 self.flow_model.parameters(), self.configs.grad_clip_norm
             )
 
+    @profile_function("backward_pass")
+    def backward_pass(self, loss, scaler):
+        scaler.scale(loss / self.iters_to_accumulate).backward()
+
+    @profile_function("optimizer_step")
+    def optimizer_step(self, scaler):
+        scaler.step(self.optimizer)
+        scaler.update()
+        self.optimizer.zero_grad(set_to_none=True)
+
     def train_step(self, batch: dict):
         self.flow_model.train()
+
         # FP16 training has not been verified yet
         train_precision = {
             "fp32": torch.float32,
@@ -704,13 +739,15 @@ class ArtiosAllAtomFlowTrainer(object):
             batch, _ = self.model_forward(
                 batch, encoder=self.vae_shell.vae.encoder, mode="train"
             )
-            loss, loss_dict, _ = self.get_loss(batch, mode="train")
+            loss, loss_dict = self.get_loss(batch, mode="train")
 
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):
                 self.print(f"Skip iteration with NaN loss: {self.step} steps")
                 loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
-        scaler.scale(loss / self.iters_to_accumulate).backward()
+        # with profile_function("backward_pass"):
+        # scaler.scale(loss / self.iters_to_accumulate).backward()
+        self.backward_pass(loss, scaler)
 
         # For simplicity, the global training step is used
         if (self.global_step + 1) % self.iters_to_accumulate == 0:
@@ -721,10 +758,11 @@ class ArtiosAllAtomFlowTrainer(object):
             scaler.unscale_(self.optimizer)
             self.on_before_optimizer_step()
             # Do grad clip only
+            # with profile_function("optimizer_step"):
             self.update()
-            scaler.step(self.optimizer)
-            scaler.update()
-            self.optimizer.zero_grad(set_to_none=True)
+            self.optimizer_step(scaler)
+            # scaler.step(self.optimizer)
+            # scaler.update()
             self.lr_scheduler.step()
         for key, value in loss_dict.items():
             if "loss" not in key:
@@ -823,6 +861,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     flatten_nested(weight_norms), step=self.step
                 )
 
+    @profile_function("on_before_optimizer_step")
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
         if self.configs.monitor.grad_norm:
@@ -866,6 +905,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
         # Save each sample
         saved_files = []
+        atom_arrays = []
         for idx in range(coordinate.shape[-4]):
             sample_dense_coords = coordinate[idx]
             sample_restype_onehot = restype_onehot[idx]
@@ -905,13 +945,14 @@ class ArtiosAllAtomFlowTrainer(object):
                     pdb_id=pdb_id,
                 )
                 saved_files.append(output_path)
+                atom_arrays.append(predicted_atom_array)
                 self.print(f"Saved sample {idx} to {output_path}")
 
             except Exception as e:
                 self.print(f"Error saving sample {idx}: {e}")
                 continue
 
-        return saved_files
+        return saved_files, atom_arrays
 
     def log_structure_files_to_wandb(self, cif_files: list[Path], ema_suffix: str = ""):
         if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
@@ -957,71 +998,106 @@ class ArtiosAllAtomFlowTrainer(object):
         use_ema = hasattr(self, "power_law_ema_wrappers")
         self.print(f"Using power law ema's: {use_ema}")
 
-        while True:
-            for batch in self.train_dl:
-                is_update_step = (self.global_step + 1) % self.iters_to_accumulate == 0
-                is_last_step = (self.step + 1) == self.configs.max_steps
-                step_need_log = (self.step + 1) % self.configs.log_interval == 0
+        def trace_handler(p):
+            output = p.key_averages().table(
+                sort_by="self_cuda_time_total", row_limit=20
+            )
+            print(output)
+            # Only save trace from rank 0 to avoid file conflicts
+            if DIST_WRAPPER.rank == 0:
+                tracename = f"trace_{p.step_num}_rank{DIST_WRAPPER.rank}.json"
+                filepath = f"{self.logs_dir}/{tracename}"
+                # Ensure directory exists before writing
+                os.makedirs(self.logs_dir, exist_ok=True)
+                p.export_chrome_trace(filepath)
+                # self.neptune_log_files({f"profiling/{tracename}": filepath})
 
-                step_need_eval = (
-                    self.configs.eval_interval > 0
-                    and (self.step + 1) % self.configs.eval_interval == 0
-                )
-                step_need_save = (
-                    self.configs.checkpoint_interval > 0
-                    and (self.step + 1) % self.configs.checkpoint_interval == 0
-                )
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(
+                wait=10,
+                warmup=10,
+                active=10,
+                skip_first=50,
+                skip_first_wait=1,
+                repeat=1,
+            ),
+            on_trace_ready=trace_handler,
+        ) as p:
+            while True:
+                for batch in self.train_dl:
+                    is_update_step = (
+                        self.global_step + 1
+                    ) % self.iters_to_accumulate == 0
+                    is_last_step = (self.step + 1) == self.configs.max_steps
+                    step_need_log = (self.step + 1) % self.configs.log_interval == 0
 
-                is_last_step &= is_update_step
-                step_need_log &= is_update_step
-                step_need_eval &= is_update_step
-                step_need_save &= is_update_step
+                    step_need_eval = (
+                        self.configs.eval_interval > 0
+                        and (self.step + 1) % self.configs.eval_interval == 0
+                    )
+                    step_need_save = (
+                        self.configs.checkpoint_interval > 0
+                        and (self.step + 1) % self.configs.checkpoint_interval == 0
+                    )
 
-                batch = to_device(batch, self.device)
-                self.progress_bar()
-                self.train_step(batch)
-                if use_ema:
-                    for wrapper in self.power_law_ema_wrappers:
-                        wrapper.update(t=self.step + 1)
-                if step_need_log or is_last_step:
-                    metrics = self.train_metric_wrapper.calc()
-                    self.print(f"Step {self.step} train: {metrics}")
-                    last_lr = self.lr_scheduler.get_last_lr()[0]
-                    if DIST_WRAPPER.rank == 0:
-                        if self.configs.use_wandb:
-                            self.neptune_run.log_metrics(
-                                {"train/lr": last_lr},
-                                step=self.step,
-                            )
-                        self.print(f"Step {self.step}, lr: {last_lr}")
-                    if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                        self.neptune_run.log_metrics(metrics, step=self.step)
+                    is_last_step &= is_update_step
+                    step_need_log &= is_update_step
+                    step_need_eval &= is_update_step
+                    step_need_save &= is_update_step
 
-                if step_need_save or is_last_step:
-                    self.print(f"beginning Saving checkpoint at step {self.step}")
-                    self.save_checkpoint()  # Saves non-ema checkpoint
-                    if use_ema:
+                    batch = to_device(batch, self.device)
+                    self.progress_bar()
+                    self.train_step(batch)
+                    if use_ema and is_update_step:
                         for wrapper in self.power_law_ema_wrappers:
-                            wrapper.apply_shadow()
-                            self.save_checkpoint(
-                                ema_suffix=f"ema_{wrapper.sigma}", save_model_only=True
-                            )
-                            wrapper.restore()
-                        wait_for_all_processes()
+                            wrapper.update(t=self.step + 1)
+                    if step_need_log or is_last_step:
+                        metrics = self.train_metric_wrapper.calc()
+                        self.print(f"Step {self.step} train: {metrics}")
+                        last_lr = self.lr_scheduler.get_last_lr()[0]
+                        if DIST_WRAPPER.rank == 0:
+                            if self.configs.use_wandb:
+                                self.neptune_run.log_metrics(
+                                    {"train/lr": last_lr},
+                                    step=self.step,
+                                )
+                            self.print(f"Step {self.step}, lr: {last_lr}")
+                        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                            self.neptune_run.log_metrics(metrics, step=self.step)
 
-                if step_need_eval or is_last_step:
-                    self.evaluate()
-                    self.on_validation_epoch_end()
+                    if step_need_save or is_last_step:
+                        self.print(f"beginning Saving checkpoint at step {self.step}")
+                        self.save_checkpoint()  # Saves non-ema checkpoint
+                        if use_ema:
+                            for wrapper in self.power_law_ema_wrappers:
+                                wrapper.apply_shadow()
+                                self.save_checkpoint(
+                                    ema_suffix=f"ema_{wrapper.sigma}",
+                                    save_model_only=True,
+                                )
+                                wrapper.restore()
+                            wait_for_all_processes()
 
-                self.global_step += 1
-                if self.global_step % self.iters_to_accumulate == 0:
-                    self.step += 1
+                    if step_need_eval or is_last_step:
+                        self.evaluate()
+                        self.on_validation_epoch_end()
+
+                    self.global_step += 1
+                    if self.global_step % self.iters_to_accumulate == 0:
+                        self.step += 1
+                    if self.step >= self.configs.max_steps:
+                        self.print(f"Finish training after {self.step} steps")
+                        break
+
+                    # Profiler step
+                    p.step()
+
                 if self.step >= self.configs.max_steps:
-                    self.print(f"Finish training after {self.step} steps")
                     break
-
-            if self.step >= self.configs.max_steps:
-                break
 
 
 def main():

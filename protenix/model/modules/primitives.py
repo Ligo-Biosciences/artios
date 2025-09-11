@@ -102,7 +102,8 @@ def normal_init_(weight, bias=None):
 
 
 def orthogonal_init_(weight, bias=None):
-    nn.init.orthogonal_(weight)
+    fan_out, fan_in = weight.shape
+    nn.init.orthogonal_(weight) * math.sqrt(fan_out / fan_in)
     init_bias_to_zero_(bias)
 
 

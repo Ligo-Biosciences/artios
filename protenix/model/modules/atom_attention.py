@@ -297,10 +297,11 @@ class AtomAttentionEncoder(nn.Module):
             # Broadcast token pair vectors to local atom pairs
             z_local_pairs = broadcast_token_to_local_atom_pair(
                 z_token=self.linear_no_bias_z(self.layernorm_z(z)),
-                atom_to_token_idx=atom_to_token_idx,
+                atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
                 num_queries=self.num_queries,
                 num_keys=self.num_keys,
             )  # [..., N_sample | 1, n_blocks, n_queries, n_keys, c_atompair]
+
             p_lm = p_lm + z_local_pairs
             p_lm = p_lm * trunked_pair_mask[..., None]
 
@@ -337,7 +338,7 @@ class AtomAttentionEncoder(nn.Module):
         a = average_atom_to_token(
             x_atom=F.relu(self.final_linear(q_l)),
             atom_mask=atom_mask,
-            atom_to_token_idx=atom_to_token_idx,
+            atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
             n_token=n_token,
         )
         return a, q_l, c_l, p_lm

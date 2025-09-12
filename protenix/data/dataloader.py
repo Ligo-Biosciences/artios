@@ -20,6 +20,7 @@ import torch.distributed as dist
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import DataLoader, DistributedSampler, Sampler
 
+from protenix.data.data_collator import DataCollatorWithPadding
 from protenix.data.dataset import Dataset, get_datasets
 from protenix.utils.logger import get_logger
 
@@ -76,7 +77,7 @@ class WeightedSampler(Sampler):
 
 
 class DistributedWeightedSampler(DistributedSampler):
-    """
+    """x
     A distributed weighted sampler for multiple nodes.
     """
 
@@ -319,6 +320,7 @@ def get_dataloaders(
     """
     train_dataset, test_datasets = get_datasets(configs, error_dir)
     if world_size > 1:
+        # TODO: does the sampler need to be changed at all? I don't know!
         train_sampler = DistributedWeightedSampler(
             train_dataset,
             train_dataset.merged_datapoint_weights,
@@ -328,10 +330,16 @@ def get_dataloaders(
         )
         train_dl = DistributedDataLoader(
             dataset=train_dataset,
-            batch_size=1,
+            batch_size=configs.batch_size,
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
-            collate_fn=lambda batch: batch[0],
+            collate_fn=DataCollatorWithPadding(
+                max_n_msa=configs.data.padding.max_n_msa,
+                max_n_template=configs.data.padding.max_n_template,
+                max_n_pocket=configs.data.padding.max_n_pocket,
+                bin_ends=configs.data.padding.bin_ends,
+                crop_size=configs.train_crop_size,
+            ),
             sampler=train_sampler,
         )
     else:
@@ -343,10 +351,16 @@ def get_dataloaders(
         )
         train_dl = IterDataLoader(
             dataset=train_dataset,
-            batch_size=1,
+            batch_size=configs.batch_size,
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
-            collate_fn=lambda batch: batch[0],
+            collate_fn=DataCollatorWithPadding(
+                max_n_msa=configs.data.padding.max_n_msa,
+                max_n_template=configs.data.padding.max_n_template,
+                max_n_pocket=configs.data.padding.max_n_pocket,
+                bin_ends=configs.data.padding.bin_ends,
+                crop_size=configs.train_crop_size,
+            ),
             sampler=train_sampler,
         )
 

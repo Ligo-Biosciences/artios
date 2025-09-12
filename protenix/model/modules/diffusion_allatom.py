@@ -208,7 +208,7 @@ class DiffusionConditioning(nn.Module):
                 )
             )
             * is_ligand
-        )  # [N_atom, c_s]
+        )  # [..., N_atom, c_s]
 
         c_s = average_atom_to_token(
             x_atom=c_s,
@@ -362,6 +362,7 @@ class DiffusionConditioning(nn.Module):
         ).to(z.dtype)
 
         # 2. Normalise and embed both timesteps
+        s = s.unsqueeze(-3)
         s = s + expand_at_dim(
             self.latent_t_embed(self.layernorm_latent_t(timestep_latent)),
             dim=-2,
@@ -548,7 +549,7 @@ class DiffusionModule(nn.Module):
         a_coord = self.linear_no_bias_r_embed(r_noisy_coord)
         a_latent = self.linear_no_bias_latent_embed(r_noisy_latent)
 
-        a_token = a_coord + a_latent
+        a_token = a_coord + a_latent  # [..., N_sample, N_token, c_token]
 
         # Mix single conditioning into token representation
         a_token = a_token + self.linear_no_bias_s(self.layernorm_s(s))
@@ -556,7 +557,9 @@ class DiffusionModule(nn.Module):
 
         # Apply diffusion transformer on token representations
         a_token = a_token * token_mask[..., None]
+        z = z.unsqueeze(-4)
         z = z * pair_mask[..., None]
+
         a_token = self.diffusion_transformer(a=a_token, s=s, z=z, pair_mask=pair_mask)
         a_token = a_token * token_mask[..., None]
         a_token = self.layernorm_a(a_token)

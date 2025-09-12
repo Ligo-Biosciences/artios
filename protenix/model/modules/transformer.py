@@ -218,8 +218,8 @@ class Transformer(nn.Module):
 
         # Transformer tower
         for block in blocks:
-            # TODO: grad checkpointing logic
-            a = block(a)
+            # TODO: temporary grad checkpointing logic
+            a = torch.utils.checkpoint.checkpoint(block, a, use_reentrant=False)
         return a
 
 
@@ -289,8 +289,8 @@ class DiTBlock(nn.Module):
 
     def forward(
         self,
-        *,
         a: Tensor,
+        *,
         scale_attn: Tensor,
         shift_attn: Tensor,
         gate_attn: Tensor,

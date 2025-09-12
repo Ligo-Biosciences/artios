@@ -528,17 +528,7 @@ def sample_noising(
     # (Optional) Encode
     if encoder is not None:
         with torch.no_grad():
-            # TODO: hardcoded sigma_data
-            x_target_augment, _ = encoder(input_feature_dict, x_target_augment / 12.0)
-            # eps = torch.randn_like(mu)  # reparameterized latents
-            # noise_level = torch.rand(mu.shape[:-2], device=eps.device, dtype=eps.dtype)
-            # gamma = noise_level[..., None, None] * 0.5
-            # x_target_augment = mu + gamma * eps  # noise the latents
-
-            # Add N_sample back in
-            # x_target_augment = expand_at_dim(
-            #     x_target_augment.squeeze(-3), dim=-3, n=num_sample
-            # )
+            x_target_augment, _ = encoder(input_feature_dict, x_target_augment)
 
     # Generate timestep
     timestep = timestep_sampler(

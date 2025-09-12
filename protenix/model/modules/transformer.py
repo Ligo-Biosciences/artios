@@ -118,6 +118,7 @@ class Transformer(nn.Module):
         c_z: int,
         num_blocks: int,
         num_heads: int,
+        checkpoint_grads: bool = True,
     ) -> None:
         """
         Args:
@@ -125,13 +126,14 @@ class Transformer(nn.Module):
             c_z (int): pair embedding dimension.
             num_blocks (int): number of blocks in Transformer.
             num_heads (int): number of heads in attention.
-            dropout (float, optional): dropout probability for attention weights.
+            checkpoint_grads (bool): whether to use gradient checkpointing during training
         """
         super(Transformer, self).__init__()
         self.c_a = c_a
         self.c_z = c_z
         self.num_blocks = num_blocks
         self.num_heads = num_heads
+        self.checkpoint_grads = checkpoint_grads
 
         # Pair bias projection
         self.z_layernorm = LayerNorm(c_z)
@@ -218,8 +220,11 @@ class Transformer(nn.Module):
 
         # Transformer tower
         for block in blocks:
-            # TODO: temporary grad checkpointing logic
-            a = torch.utils.checkpoint.checkpoint(block, a, use_reentrant=False)
+            if self.checkpoint_grads:
+                a = torch.utils.checkpoint.checkpoint(block, a, use_reentrant=False)
+            else:
+                a = block(a)
+
         return a
 
 
@@ -357,6 +362,7 @@ class DiffusionTransformer(nn.Module):
         c_s: int,
         c_z: int,
         num_heads: int,
+        checkpoint_grads: bool = True,
     ):
         """
         Args:
@@ -365,6 +371,7 @@ class DiffusionTransformer(nn.Module):
             c_s: (int) condition embedding dimension
             c_z: (int) pair bias embedding dimension
             num_heads: (int) number of attention heads
+            checkpoint_grads (bool): whether to use gradient checkpointing during training
         """
         super().__init__()
 
@@ -375,6 +382,7 @@ class DiffusionTransformer(nn.Module):
         self.c_s = c_s
         self.c_z = c_z
         self.num_heads = num_heads
+        self.checkpoint_grads = checkpoint_grads
 
         self.condition_layernorm = LayerNorm(c_s)
 
@@ -524,7 +532,7 @@ class DiffusionTransformer(nn.Module):
         pair_bias_fused = permute_final_dims(
             pair_bias_fused, [2, 0, 1]
         )  # [..., num_heads * num_blocks, N, N]
-        # TODO: repeat pair_bias_fused so its N_Sample dimension is N_sample, not just 1.
+        # TODO: repeat pair_bias_fused so its N_sample dimension is N_sample, not just 1.
         pair_biases = pair_bias_fused.chunk(self.num_blocks, dim=-3)
 
         # Prepare blocks
@@ -541,20 +549,23 @@ class DiffusionTransformer(nn.Module):
 
         # DiT Tower
         for block in blocks:
-            # TODO: grad checkpointing logic
-            a = block(a=a)
+            if self.checkpoint_grads:
+                a = torch.utils.checkpoint.checkpoint(block, a, use_reentrant=False)
+            else:
+                a = block(a)
 
         return a
 
 
 class LocalAttnTransformerBlock(nn.Module):
-    """Local Attention Transformer Block, used for local attention within LocalAttnTransformer.
-
-    TODO: needs a unit test.
-    """
+    """Local Attention Transformer Block, used for local attention within LocalAttnTransformer."""
 
     def __init__(
-        self, c_atom: int, num_heads: int, num_queries: int = 32, num_keys: int = 128
+        self,
+        c_atom: int,
+        num_heads: int,
+        num_queries: int = 32,
+        num_keys: int = 128,
     ):
         """
         Args:
@@ -729,6 +740,7 @@ class LocalAttnTransformer(nn.Module):
         num_heads: int,
         num_queries: int = 32,
         num_keys: int = 128,
+        checkpoint_grads: bool = False,
     ):
         """
         Args:
@@ -739,6 +751,7 @@ class LocalAttnTransformer(nn.Module):
             num_heads: (int) number of attention heads
             num_queries: (int) number of queries
             num_keys: (int) number of keys
+            checkpoint_grads (bool): whether to use gradient checkpointing during training
         """
         super().__init__()
 
@@ -747,6 +760,7 @@ class LocalAttnTransformer(nn.Module):
         self.c_cond = c_cond
         self.c_atompair = c_atompair
         self.num_heads = num_heads
+        self.checkpoint_grads = checkpoint_grads
 
         self.condition_layernorm = LayerNorm(c_cond)
 
@@ -848,8 +862,6 @@ class LocalAttnTransformer(nn.Module):
 
         Returns:
             [..., N_atom, c_atom]
-
-        TODO: needs unit test.
         """
 
         # Conditioning prep
@@ -882,7 +894,9 @@ class LocalAttnTransformer(nn.Module):
 
         # LocalAttn Tower
         for block in blocks:
-            # TODO: grad checkpointing logic
-            q = block(q)
+            if self.checkpoint_grads:
+                q = torch.utils.checkpoint.checkpoint(block, q, use_reentrant=False)
+            else:
+                q = block(q)
 
         return q

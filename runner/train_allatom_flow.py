@@ -51,7 +51,7 @@ from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import FlowLoss
 from protenix.model.modules.components import Attention, Transition
-from protenix.model.modules.transformer_v2 import (
+from protenix.model.modules.transformer import (
     DiffusionTransformer,
     DiTBlock,
 )

@@ -10,7 +10,7 @@ from protenix.model.modules.layout import (
     rearrange_to_query_subset,
 )
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
-from protenix.model.modules.transformer_v2 import LocalAttnTransformer
+from protenix.model.modules.transformer import LocalAttnTransformer
 from protenix.model.utils import (
     average_atom_to_token,
     broadcast_token_to_atom,

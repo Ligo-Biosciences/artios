@@ -6,7 +6,7 @@ import torch.nn as nn
 from protenix.model.modules.components import Transition
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
-from protenix.model.modules.transformer_v2 import DiffusionTransformer
+from protenix.model.modules.transformer import DiffusionTransformer
 from protenix.model.utils import (
     average_atom_to_token,
     centre_random_augmentation,

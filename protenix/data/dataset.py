@@ -31,11 +31,10 @@ from protenix.common.constants import EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
 from protenix.data.msa_featurizer import MSAFeaturizer
-from protenix.data.padding_utils import pad_features_dict
+from protenix.data.padding_utils import get_atom_padding_length, pad_features_dict
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.data.utils import (
     data_type_transform,
-    get_atom_padding_length,
     make_dummy_feature,
 )
 from protenix.utils.cropping import CropData
@@ -601,6 +600,7 @@ class BaseSingleDataset(Dataset):
         basic_info["chain_id"] = chain_id_list
 
         # Get padding length
+        # TODO: to be moved to collate_fn()
         current_n_atom = feat["atom_to_token_idx"].shape[0]
         max_n_atom = get_atom_padding_length(
             current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
@@ -608,6 +608,7 @@ class BaseSingleDataset(Dataset):
 
         assert current_n_atom > 1, "Crop has <= 1 atom."
         # Pad features and labels
+        # TODO: remove padding!!
         pad_args = {
             "current_n_atom": current_n_atom,
             "max_n_atom": max_n_atom,
@@ -831,19 +832,20 @@ class BaseSingleDataset(Dataset):
             label_full_dict["interested_ligand_mask"] = interested_ligand_mask
 
         # Masks for Chain/Interface Metrics
-        if self.find_eval_chain_interface:
-            (
-                eval_type,
-                cluster_id,
-                chain_1_mask,
-                chain_2_mask,
-            ) = self._get_eval_chain_interface_mask(
-                idx=idx, atom_array_chain_id=full_atom_array.chain_id
-            )
-            labels_dict["eval_type"] = eval_type  # [N_eval]
-            labels_dict["cluster_id"] = cluster_id  # [N_eval]
-            labels_dict["chain_1_mask"] = chain_1_mask  # [N_eval, N_atom]
-            labels_dict["chain_2_mask"] = chain_2_mask  # [N_eval, N_atom]
+        # TODO: not needed.
+        # if self.find_eval_chain_interface:
+        #     (
+        #         eval_type,
+        #         cluster_id,
+        #         chain_1_mask,
+        #         chain_2_mask,
+        #     ) = self._get_eval_chain_interface_mask(
+        #         idx=idx, atom_array_chain_id=full_atom_array.chain_id
+        #     )
+        #     labels_dict["eval_type"] = eval_type  # [N_eval]
+        #     labels_dict["cluster_id"] = cluster_id  # [N_eval]
+        #     labels_dict["chain_1_mask"] = chain_1_mask  # [N_eval, N_atom]
+        #     labels_dict["chain_2_mask"] = chain_2_mask  # [N_eval, N_atom]
 
         # Make dummy features for not implemented features
         dummy_feats = []
@@ -869,7 +871,8 @@ class BaseSingleDataset(Dataset):
         features_dict["is_distillation"] = torch.tensor([self.is_distillation])
         if self.is_distillation is True:
             features_dict["resolution"] = torch.tensor([-1.0])
-        return features_dict, labels_dict, label_full_dict
+        # return features_dict, labels_dict, label_full_dict
+        return features_dict, labels_dict, {}
 
 
 def get_msa_featurizer(configs, dataset_name: str, stage: str) -> Optional[Callable]:

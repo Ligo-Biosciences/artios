@@ -57,6 +57,7 @@ basic_configs = {
 }
 data_configs = {
     # Data
+    "batch_size": 8,
     "train_crop_size": 384,
     "test_max_n_token": -1,
     "train_lig_atom_rename": False,  # TODO:
@@ -346,14 +347,14 @@ loss_configs = {
         "vae": {
             "reconstruction": {
                 "mse": {
-                    "weight_protein": 1.0,
                     "weight_mse": 1.0,  # TODO: delete all of these weight_mse's
+                    "weight_protein": 1.0,
                     "weight_dna": 4.0 * 2 + 2.0,  # TODO: remove all of this
                     "weight_rna": 4.0 * 2 + 2.0,
                     "weight_ligand": 1.0 * 2 + 2.0,
                     "eps": 1e-6,
-                }
-            }
+                },
+            },
         },
         "flow": {
             "centre_atom": {

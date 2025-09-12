@@ -282,8 +282,10 @@ def sample_latent_diffusion(
     sigma_latent: float = 1.0,
     stoch_type_coord: str = "deterministic",
     stoch_type_latent: str = "deterministic",
-    alpha: float = 1.0,
-    gamma: float = 1.0,
+    alpha_coord: float = 1.0,
+    alpha_latent: float = 1.0,
+    gamma_coord: float = 1.0,
+    gamma_latent: float = 1.0,
     second_order: bool = False,
     inplace_safe: bool = False,
     guiding_denoise_net: Optional[Callable] = None,
@@ -309,8 +311,10 @@ def sample_latent_diffusion(
         sigma_latent (float): Scale of the latents.
         stoch_type_coord (str): The stochasticity function for the centre coords.
         stoch_type_latent (str): The stochasticity function for the latents.
-        alpha (float): Size of stochasticity.
-        gamma (float): Temperature of the stochasticity.
+        alpha_coord (float): Size of stochasticity for the centre coords.
+        alpha_latent (float): Size of stochasticity for the latents.
+        gamma_coord (float): Temperature of the stochasticity for the centre coords.
+        gamma_latent (float): Temperature of the stochasticity for the latents.
         second_order (bool): Whether to use the second order method.
         inplace_safe (bool): Whether to use inplace operations.
         guiding_denoise_net (Optional[Callable]): The guiding denoising network.
@@ -333,7 +337,10 @@ def sample_latent_diffusion(
     print(f"sigma_latent: {sigma_latent}")
     print(f"stoch_type_coord: {stoch_type_coord}")
     print(f"stoch_type_latent: {stoch_type_latent}")
-    print(f"alpha: {alpha}")
+    print(f"alpha_coord: {alpha_coord}")
+    print(f"alpha_latent: {alpha_latent}")
+    print(f"gamma_coord: {gamma_coord}")
+    print(f"gamma_latent: {gamma_latent}")
     print(f"gamma: {gamma}")
     print(f"second_order: {second_order}")
     print(f"inplace_safe: {inplace_safe}")
@@ -348,22 +355,22 @@ def sample_latent_diffusion(
     # Stochasticity functions (normalised such that int_{0}^{1}(g(t)) = 1)
     # TODO: check these integrals. I think off by factor of 2.
     stoch_schedules = {
-        "deterministic": lambda t: torch.zeros_like(t),
-        "constant": lambda t: torch.ones_like(t) * (0.5 * (alpha**2)),
-        "non_singular": lambda t: torch.where(
+        "deterministic": lambda t, alpha: torch.zeros_like(t),
+        "constant": lambda t, alpha: torch.ones_like(t) * (0.5 * (alpha**2)),
+        "non_singular": lambda t, alpha: torch.where(
             t > 0.95,  # do not noise close to 1 for ligand's sake
             torch.zeros_like(t),
             4 * 0.5 * (alpha**2) * (1 - t),
         ),  # int_{0}^{1}(non_sing) = 1/4
-        "zero_ends": lambda t: 12
+        "zero_ends": lambda t, alpha: 12
         * 0.5
         * (alpha**2)
         * t
         * (1 - t),  # int_{0}^{1}(zero_ends) = 1/12
-        "proteina": lambda t: torch.where(
+        "proteina": lambda t, alpha: torch.where(
             t > 0.95, torch.zeros_like(t), 0.5 * ((alpha**2) / (t + 0.01))
         ),
-        "beta": lambda t: torch.where(
+        "beta": lambda t, alpha: torch.where(
             t > 0.95,
             torch.zeros_like(t),
             2
@@ -371,7 +378,7 @@ def sample_latent_diffusion(
             * (alpha**2)
             * beta_function(t, beta_mean, beta_std, device=device, dtype=dtype),
         ),
-        "laproteina": lambda t: torch.where(
+        "laproteina": lambda t, alpha: torch.where(
             t > 0.95,
             torch.zeros_like(t),
             0.5 * torch.pi / 2 * (alpha**2) * torch.tan(torch.pi / 2 * (1 - t) - 0.01),
@@ -383,8 +390,8 @@ def sample_latent_diffusion(
         raise ValueError(f"Invalid stochasticity type: {stoch_type_latent}")
 
     # Stochasticity schedules for centre coords and latents
-    g_coord = stoch_schedules[stoch_type_coord](coord_timesteps)
-    g_latent = stoch_schedules[stoch_type_latent](latent_timesteps)
+    g_coord = stoch_schedules[stoch_type_coord](coord_timesteps, alpha_coord)
+    g_latent = stoch_schedules[stoch_type_latent](latent_timesteps, alpha_latent)
 
     ### Sampling logic
     # Generate noise
@@ -456,12 +463,12 @@ def sample_latent_diffusion(
             r = (
                 r
                 + update_coord
-                + torch.sqrt(2 * step_coord * g_coord_t * gamma) * noise_r
+                + torch.sqrt(2 * step_coord * g_coord_t * gamma_coord) * noise_r
             )
             l = (
                 l
                 + update_latent
-                + torch.sqrt(2 * step_latent * g_latent_t * gamma) * noise_l
+                + torch.sqrt(2 * step_latent * g_latent_t * gamma_latent) * noise_l
             )
         else:
             # Calculate intermediate prediction
@@ -490,12 +497,12 @@ def sample_latent_diffusion(
             r = (
                 r
                 + 1 / 2 * (update_coord + update_2_coord)
-                + torch.sqrt(2 * step_coord * g_coord_t * gamma) * noise_r
+                + torch.sqrt(2 * step_coord * g_coord_t * gamma_coord) * noise_r
             )
             l = (
                 l
                 + 1 / 2 * (update_latent + update_2_latent)
-                + torch.sqrt(2 * step_latent * g_latent_t * gamma) * noise_l
+                + torch.sqrt(2 * step_latent * g_latent_t * gamma_latent) * noise_l
             )
 
     return r, l

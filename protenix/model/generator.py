@@ -528,7 +528,7 @@ def sample_noising(
     # (Optional) Encode
     if encoder is not None:
         with torch.no_grad():
-            x_target_augment, _ = encoder(input_feature_dict, x_target_augment)
+            x_target_augment = encoder(input_feature_dict, x_target_augment)
 
     # Generate timestep
     timestep = timestep_sampler(

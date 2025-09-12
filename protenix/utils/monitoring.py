@@ -176,10 +176,7 @@ def analyse_vae_latents(latents: dict, plot_per_batch: bool = False):
 
     Args:
         latents (dict): A dictionary containing the latents.
-          Keys: "mean", "logvar"
             mean (list[np.array]): List of mean latents tensors. Each array
-                is of shape [N_sample*N_token, c_latent]
-            logvar (list[np.array]): List of logvar latents tensors. Each array
                 is of shape [N_sample*N_token, c_latent]
             restype (list[np.array]): List of residue labels tensors. Each array
                 is of shape [N_sample*N_token]
@@ -196,36 +193,34 @@ def analyse_vae_latents(latents: dict, plot_per_batch: bool = False):
 
     # Reshape data across batch dimension
     latents["mean"] = [a.reshape(-1, a.shape[-1]) for a in latents["mean"]]
-    latents["logvar"] = [a.reshape(-1, a.shape[-1]) for a in latents["logvar"]]
+    # latents["logvar"] = [a.reshape(-1, a.shape[-1]) for a in latents["logvar"]]
     latents["restype"] = [a.reshape(-1) for a in latents["restype"]]
 
     # Combine batches if not plotting per batch
     if not plot_per_batch:
         latents = {
             "mean": [np.concatenate(latents["mean"], axis=-2)],
-            "logvar": [np.concatenate(latents["logvar"], axis=-2)],
+            # "logvar": [np.concatenate(latents["logvar"], axis=-2)],
             "restype": [np.concatenate(latents["restype"], axis=-1)],
         }
 
     figs = {}
-    for batch_idx, (latents_mean, latents_logvar, latents_restype) in enumerate(
-        zip(latents["mean"], latents["logvar"], latents["restype"])
+    for batch_idx, (latents_mean, latents_restype) in enumerate(
+        zip(latents["mean"], latents["restype"])
     ):
-        eps = np.random.randn(*latents_mean.shape)
-        latents_sample = latents_mean + np.exp(0.5 * latents_logvar) * eps
+        # eps = np.random.randn(*latents_mean.shape)
 
         suffix = f"_batch_{batch_idx}" if plot_per_batch else ""
 
         # Plots figs
-        figs[f"tsne{suffix}"] = plot_tsne(latents_sample, latents_restype, suffix)
-        figs[f"hist{suffix}"] = plot_histograms(latents_sample, suffix)
-        figs[f"qq{suffix}"] = plot_qq_plots(latents_sample, suffix)
-        figs[f"cov_heatmap{suffix}"] = plot_covariance_heatmap(latents_sample, suffix)
-        figs[f"eigs{suffix}"] = plot_eigenvalues(latents_sample, suffix)
+        figs[f"tsne{suffix}"] = plot_tsne(latents_mean, latents_restype, suffix)
+        figs[f"hist{suffix}"] = plot_histograms(latents_mean, suffix)
+        figs[f"qq{suffix}"] = plot_qq_plots(latents_mean, suffix)
+        figs[f"cov_heatmap{suffix}"] = plot_covariance_heatmap(latents_mean, suffix)
+        figs[f"eigs{suffix}"] = plot_eigenvalues(latents_mean, suffix)
 
         # Additional histograms for mean and logvar
         figs[f"hist_mean{suffix}"] = plot_histograms(latents_mean, suffix)
-        figs[f"hist_logvar{suffix}"] = plot_histograms(latents_logvar, suffix)
 
         # New plot: mean and std per latent dim for each restype
         figs[f"restype_stats{suffix}"] = plot_restype_latent_stats(

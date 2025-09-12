@@ -44,7 +44,7 @@ from protenix.model.modules.atom_attention import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
 )
-from protenix.model.modules.transformer_v2 import (
+from protenix.model.modules.transformer import (
     DiffusionTransformer,
     DiTBlock,
     LocalAttnTransformer,

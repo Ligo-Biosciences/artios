@@ -503,6 +503,10 @@ class DiffusionTransformer(nn.Module):
                 [..., N, N, c_z]
             pair_mask: pair mask for the attention
                 [..., N, N]
+
+        Notes:
+            We currently hand the DiT with an N_sample dimension in its inputs.
+            For computational efficiency, z has only a 1 N_sample dimension.
         """
         self._verify_inputs(a, s, z, pair_mask)
 
@@ -520,6 +524,7 @@ class DiffusionTransformer(nn.Module):
         pair_bias_fused = permute_final_dims(
             pair_bias_fused, [2, 0, 1]
         )  # [..., num_heads * num_blocks, N, N]
+        # TODO: repeat pair_bias_fused so its N_Sample dimension is N_sample, not just 1.
         pair_biases = pair_bias_fused.chunk(self.num_blocks, dim=-3)
 
         # Prepare blocks

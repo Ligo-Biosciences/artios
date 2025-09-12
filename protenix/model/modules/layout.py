@@ -89,6 +89,8 @@ def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
         y (Tensor): [..., N_b, N_q, N_k, d]
             where y[..., b, i, j, :] = x[..., idx_q[..., b, i], idx_k[..., b, j], :]
     """
+    assert x.shape[:-3] == idx_q.shape[:-2]
+    assert x.shape[:-3] == idx_k.shape[:-2]
     assert idx_q.shape[:-1] == idx_k.shape[:-1]
     idx_q = idx_q.long()
     idx_k = idx_k.long()
@@ -136,6 +138,7 @@ def broadcast_token_to_local_atom_pair(
         z_gathered_blocked (Tensor): atom pair embedding, with local blocked shape
             [..., n_trunks, n_queries, n_keys, d]
     """
+    assert atom_to_token_idx.shape[:-1] == z_token.shape[:-3]
 
     # [..., N_atom] -> [..., n_trunks, n_queries] and [..., n_trunks, n_keys]
     atom_to_token_idx_q = rearrange_to_query_subset(

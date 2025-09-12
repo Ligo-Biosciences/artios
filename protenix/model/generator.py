@@ -341,7 +341,6 @@ def sample_latent_diffusion(
     print(f"alpha_latent: {alpha_latent}")
     print(f"gamma_coord: {gamma_coord}")
     print(f"gamma_latent: {gamma_latent}")
-    print(f"gamma: {gamma}")
     print(f"second_order: {second_order}")
     print(f"inplace_safe: {inplace_safe}")
     print(

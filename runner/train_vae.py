@@ -41,13 +41,9 @@ from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import VAELoss
 from protenix.model.modules.atom_attention import (
-    AtomAttentionDecoder,
     AtomAttentionEncoder,
 )
 from protenix.model.modules.transformer import (
-    DiffusionTransformer,
-    DiTBlock,
-    LocalAttnTransformer,
     LocalAttnTransformerBlock,
     Transformer,
 )
@@ -146,16 +142,12 @@ class ArtiosAllAtomTrainer(object):
                 model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
                 run=self.neptune_run,
                 track_layers=[
-                    LocalAttnTransformer,
-                    Transformer,
-                    DiffusionTransformer,
-                    DiTBlock,
                     LocalAttnTransformerBlock,
+                    Transformer,
                     AtomAttentionEncoder,
-                    AtomAttentionDecoder,
                 ],  # optionally specify
                 track_layers_name_includes=["linear_q", "linear_k"],
-                tensor_stats=["channel_norm", "channel_rms", "mean", "abs_mean"],
+                tensor_stats=["channel_rms", "abs_mean"],
                 base_namespace="model_metrics",
             )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))

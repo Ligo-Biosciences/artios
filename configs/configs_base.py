@@ -166,13 +166,13 @@ model_configs = {
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
-        "N_sample": 10,  # 1
+        "N_sample": 20,  # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type_coord": "beta",
         "stoch_type_latent": "non_singular",
-        "alpha_coord": 1.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
-        "alpha_latent": 0.25,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha_coord": 1.2,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha_latent": 0.1,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma_coord": 1.0,
         "gamma_latent": 1.0,
         "sigma_coord": GlobalConfigValue("sigma_coord"),

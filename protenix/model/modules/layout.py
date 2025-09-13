@@ -4,6 +4,7 @@ import torch
 from torch import Tensor
 
 from protenix.model.utils import index_at_dim, reshape_at_dim
+from protenix.utils.profiler import profile_function
 
 
 @functools.lru_cache(maxsize=10)
@@ -24,6 +25,7 @@ def _get_key_trunk_indices(n, n_queries, n_keys):
     return key_indices
 
 
+@profile_function("rearrange_to_query_subset")
 @torch.compiler.disable
 def rearrange_to_query_subset(
     q_x: Tensor, rearrange_dim: int, num_queries: int
@@ -47,6 +49,7 @@ def rearrange_to_query_subset(
     return reshape_at_dim(q_x, dim=rearrange_dim, target_shape=(n_trunks, num_queries))
 
 
+@profile_function("rearrange_to_key_subset")
 @torch.compiler.disable
 def rearrange_to_key_subset(
     k_x: Tensor, rearrange_dim: int, num_keys: int, num_queries: int
@@ -74,6 +77,7 @@ def rearrange_to_key_subset(
     return index_at_dim(k_x, rearrange_dim, key_indices)
 
 
+@profile_function("gather_trunk_pair_embedding")
 @torch.compiler.disable
 def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
     """
@@ -117,6 +121,7 @@ def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
     return x[tuple(ranges)]
 
 
+@profile_function("broadcast_token_to_local_atom_pair")
 @torch.compiler.disable
 def broadcast_token_to_local_atom_pair(
     z_token: Tensor,

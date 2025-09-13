@@ -498,7 +498,7 @@ class DiffusionTransformer(nn.Module):
         ), "Batch dimension mismatch."
 
     # @profile_function("diffusion_transformer")
-    @torch.compile
+    # @torch.compile
     def forward(self, a: Tensor, s: Tensor, z: Tensor, pair_mask: Tensor):
         """
         Args:

@@ -66,7 +66,6 @@ from protenix.utils.monitoring import (
     grad_norm,
 )
 from protenix.utils.permutation.permutation import SymmetricPermutation
-from protenix.utils.profiler import profile_function
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.torchwatcher import TorchWatcher
@@ -409,7 +408,7 @@ class ArtiosAllAtomFlowTrainer(object):
         )
         return batch, log_dict
 
-    @profile_function("get_loss")
+    # @profile_function("get_loss")
     def get_loss(
         self, batch: dict, mode: str = "train"
     ) -> tuple[torch.Tensor, dict, dict]:
@@ -731,12 +730,12 @@ class ArtiosAllAtomFlowTrainer(object):
                 self.flow_model.parameters(), self.configs.grad_clip_norm
             )
 
-    @profile_function("backward_pass")
+    # @profile_function("backward_pass")
     def backward_pass(self, loss, scaler):
         scaler.scale(loss / self.iters_to_accumulate).backward()
         # scaler.scale(loss).backward()
 
-    @profile_function("optimizer_step")
+    # @profile_function("optimizer_step")
     def optimizer_step(self, scaler):
         scaler.step(self.optimizer)
         scaler.update()
@@ -892,7 +891,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     flatten_nested(weight_norms), step=self.step
                 )
 
-    @profile_function("on_before_optimizer_step")
+    # @profile_function("on_before_optimizer_step")
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
         if self.configs.monitor.grad_norm:

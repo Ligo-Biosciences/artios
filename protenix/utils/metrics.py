@@ -16,7 +16,6 @@ import numpy as np
 import torch
 
 from protenix.utils.distributed import gather_and_merge
-from protenix.utils.profiler import profile_function
 
 common_aggregator = {
     "avg": lambda x: np.mean(x),
@@ -43,7 +42,7 @@ class SimpleMetricAggregator(object):
 
         self.aggregators = {name: common_aggregator[name] for name in aggregator_names}
 
-    @profile_function("metric_aggregator_add")
+    # @profile_function("metric_aggregator_add")
     def add(self, key, value, namespace="default"):
         value_dict = self._metric_data.setdefault(namespace, {})
         value_dict.setdefault(key, [])

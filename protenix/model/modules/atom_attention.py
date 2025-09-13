@@ -16,7 +16,6 @@ from protenix.model.utils import (
     broadcast_token_to_atom,
     flatten_final_dims,
 )
-from protenix.utils.profiler import profile_function
 
 
 class AtomAttentionEncoder(nn.Module):
@@ -226,7 +225,7 @@ class AtomAttentionEncoder(nn.Module):
         p_lm = p_lm * v_lm  # mask inter-conformer nonsense
         return c_l, p_lm
 
-    @profile_function("atom_attention_encoder")
+    # @profile_function("atom_attention_encoder")
     def forward(
         self,
         input_feature_dict: Dict[str, Tensor],
@@ -393,7 +392,7 @@ class AtomAttentionDecoder(nn.Module):
         self.final_layernorm = LayerNorm(c_atom)
         self.final_linear = LinearNoBias(c_atom, 3, init="zeros", high_precision=True)
 
-    @profile_function("atom_attention_decoder")
+    # @profile_function("atom_attention_decoder")
     def forward(
         self,
         a: Tensor,

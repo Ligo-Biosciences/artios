@@ -11,7 +11,7 @@ def profile_function(label=None):
 
     Example usage:
     ```python
-    @profile_function(label="example_train")
+    #@profile_function(label="example_train")
     def example_train():
         pass
     ```

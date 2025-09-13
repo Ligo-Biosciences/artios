@@ -608,8 +608,8 @@ def beta_function(
             )
 
         if device is not None and dtype is not None:
-            alpha = Tensor(alpha, device=device, dtype=dtype)
-            beta = Tensor(beta, device=device, dtype=dtype)
+            alpha = torch.tensor(alpha, device=device, dtype=dtype)
+            beta = torch.tensor(beta, device=device, dtype=dtype)
 
     # Calculate Beta function normalization constant using log-gamma
     # B(alpha, beta) = Γ(alpha)Γ(beta)/Γ(alpha+beta)

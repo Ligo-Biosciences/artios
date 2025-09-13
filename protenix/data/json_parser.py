@@ -28,7 +28,6 @@ from rdkit.Chem import AllChem
 from rdkit.Chem import BondType as RDKitBondType
 
 from protenix.data import ccd
-from protenix.data.parser import MMCIFParser
 
 logger = logging.getLogger(__name__)
 
@@ -615,86 +614,28 @@ def add_entity_atom_array(single_job_dict: dict) -> dict:
     Returns:
         dict: deepcopy and updated job dict with atom_array
     """
-
-    valid_keys = ["design, target", "name"]
-    small_mol_keys = ["ligand"]
-    polymer_keys = ["proteinChain", "dnaSequence", "rnaSequence"]
-    biomol_keys = small_mol_keys + polymer_keys
-    smiles_ligand_count = 0
-
     single_job_dict = copy.deepcopy(single_job_dict)
-
-    assert all(
-        key in valid_keys for key in single_job_dict.keys()
-    ), f"single_job_dict must only contain allowed keys: {valid_keys}"
-
-    for entity in single_job_dict.get("design", []):
-        key = list(entity.keys())[0]
-
-        assert (
-            key in biomol_keys
-        ), f"design entity must only contain allowed keys: {biomol_keys}"
-        assert (
-            len(list(entity.keys())) == 1
-        ), f"design entity must only contain one key got {list(entity.keys())}"
-
-        if key in polymer_keys:
-            atom_info = build_design_polymer(entity)
-        elif key in small_mol_keys:
-            atom_info = build_ligand(entity)
-            atom_info["atom_array"].is_target[:] = False
-            if not entity["ligand"].startswith("CCD_"):
+    sequences = single_job_dict["sequences"]
+    smiles_ligand_count = 0
+    for entity_info in sequences:
+        if info := entity_info.get("proteinChain"):
+            atom_info = build_polymer(entity_info)
+        elif info := entity_info.get("dnaSequence"):
+            atom_info = build_polymer(entity_info)
+        elif info := entity_info.get("rnaSequence"):
+            atom_info = build_polymer(entity_info)
+        elif info := entity_info.get("ligand"):
+            atom_info = build_ligand(entity_info)
+            if not info["ligand"].startswith("CCD_"):
                 smiles_ligand_count += 1
                 assert smiles_ligand_count <= 99, "too many smiles ligands"
                 # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
-                entity["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
+                atom_info["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
+        elif info := entity_info.get("ion"):
+            atom_info = build_ligand(entity_info)
         else:
-            raise ValueError(f"invalid design entity key: {key}")
-
-        entity.update(atom_info)
-
-    for entity in single_job_dict.get("target", []):
-        assert (
-            len(list(entity.keys())) == 1
-        ), f"target entity must only contain one key got {list(entity.keys())}"
-
-        if key in polymer_keys:
-            atom_info = build_target_polymer(entity)
-        elif key in small_mol_keys:
-            atom_info = build_ligand(entity)
-            atom_info["atom_array"].is_target[:] = True
-
-            if not entity["ligand"].startswith("CCD_"):
-                smiles_ligand_count += 1
-                assert smiles_ligand_count <= 99, "too many smiles ligands"
-                # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
-                entity["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
-        else:
-            raise ValueError(f"invalid design entity key: {key}")
-
-        entity.update(atom_info)
-
+            raise ValueError(
+                "entity type must be proteinChain, dnaSequence, rnaSequence, ligand or ion"
+            )
+        info.update(atom_info)
     return single_job_dict
-
-
-def build_design_polymer(entity: dict) -> dict:
-    pass
-
-
-def build_target_polymer(entity: dict) -> dict:
-    poly_type, info = list(entity.items())[0]
-
-    parser = MMCIFParser(mmcif_file=info["file"])
-    atom_array = parser.get_bioassembly()["atom_array"]
-
-    assert (
-        np.unique(atom_array.chain_id).shape[0] == 1
-    ), "Expected single chain structure, but found multiple chains"
-
-    # TODO add in hotspots, is_target, residue_range
-    atom_array.is_target[:] = True
-
-    atom_array.is_hotspot[:] = False
-    atom_array.is_hotspot[entity["hotspot_positions"]] = True
-
-    return {"atom_array": atom_array}

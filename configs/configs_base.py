@@ -170,8 +170,8 @@ model_configs = {
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type_coord": "beta",
-        "stoch_type_latent": "zero_ends",
-        "alpha_coord": 1.25,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "stoch_type_latent": "non_singular",
+        "alpha_coord": 1.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "alpha_latent": 0.25,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma_coord": 1.0,
         "gamma_latent": 1.0,
@@ -179,7 +179,7 @@ model_configs = {
         "sigma_latent": GlobalConfigValue("sigma_latent"),
         "second_order": False,
         "guidance_weight": 1.2,
-        "beta_mean": 0.38,
+        "beta_mean": 0.5,
         "beta_std": 0.233,
     },
     "model": {

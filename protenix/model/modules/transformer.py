@@ -117,7 +117,7 @@ class Transformer(nn.Module):
         c_z: int,
         num_blocks: int,
         num_heads: int,
-        checkpoint_grads: bool = True,
+        checkpoint_grads: bool = False,
     ) -> None:
         """
         Args:
@@ -361,7 +361,7 @@ class DiffusionTransformer(nn.Module):
         c_s: int,
         c_z: int,
         num_heads: int,
-        checkpoint_grads: bool = True,
+        checkpoint_grads: bool = False,
     ):
         """
         Args:

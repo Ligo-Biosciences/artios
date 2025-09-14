@@ -409,7 +409,7 @@ training_time_inference_configs = {
     "seeds": ListValue([101]),
     "need_atom_confidence": False,
     "sorted_by_ranking_score": False,
-    "input_json_path": "artios-ligand/samples.json",
+    # "input_json_path": "artios-ligand/samples.json",
     "num_workers": 16,
     "use_msa": False,
 }

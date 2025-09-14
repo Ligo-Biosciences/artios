@@ -10,12 +10,16 @@ Muon Optimizer adapted from KellerJordan
 }
 
 TODO: if this gives performance improvements, refactor it nicely.
-"""
 
-import math
+# TODO: there are crazy performance gains on the table by splitting the parameters with the same shapes into groups
+# and doing batched processing on the GPU. Since neural nets have blocks with the same shapes, it should be simple enough
+# to do this.
+"""
 
 import torch
 import torch.distributed as dist
+
+MUON_LR_SCALAR = 4.0  # constant to make Muon's LR somewhat comparable to AdamW
 
 
 # This code snippet is a modified version adapted from the following GitHub repository:
@@ -51,12 +55,6 @@ def zeropower_via_newtonschulz5(G, steps: int):
     return X
 
 
-def adjust_muon_update(A, B):
-    # TODO: make base-width configurable
-    base_width = 384
-    return 0.2 * math.sqrt(base_width * A / B)
-
-
 def muon_update(grad, momentum, beta=0.95, ns_steps=5, nesterov=True):
     # Calculate update
     momentum.lerp_(grad, 1 - beta)
@@ -68,7 +66,8 @@ def muon_update(grad, momentum, beta=0.95, ns_steps=5, nesterov=True):
     update = zeropower_via_newtonschulz5(update, steps=ns_steps)
 
     # scale update for consistent RMS
-    update *= adjust_muon_update(A=grad.size(-2), B=grad.size(-1))
+    fan_out, fan_in = grad.size()
+    update *= MUON_LR_SCALAR * (fan_out / fan_in) ** 0.5
 
     return update
 
@@ -84,8 +83,12 @@ class Muon(torch.optim.Optimizer):
 
     Muon should only be used for hidden weight layers. The input embedding, final output layer,
     and any internal gains or biases should be optimized using a standard method such as AdamW.
-    Hidden convolutional weights can be trained using Muon by viewing them as 2D and then
-    collapsing their last 3 dimensions.
+
+    NOTE: this method distributes the overhead of Muon across GPUs - instead of each GPU orthogonalizing
+    the gradients redundantly, each is assigned a subset of the weights. This method is untested in highly
+    distributed regimes (>32 GPUs) and relatively small models, at which point the communication overhead might
+    not be worth it.
+
 
     Arguments:
         lr: The learning rate.
@@ -93,6 +96,7 @@ class Muon(torch.optim.Optimizer):
         momentum: The momentum. A value of 0.95 here is usually fine.
     """
 
+    # TODO: type hints
     def __init__(self, params, lr=1e-3, weight_decay=0.0, momentum=0.95):
         """
         Args:
@@ -131,8 +135,10 @@ class Muon(torch.optim.Optimizer):
             params_pad = params + [torch.empty_like(params[-1])] * (
                 dist.get_world_size() - len(params) % dist.get_world_size()
             )
+            # Assign each param to a certain rank
             for base_i in range(len(params))[:: dist.get_world_size()]:
                 if base_i + dist.get_rank() < len(params):
+                    # Each GPU orthogonalizes its parameters
                     p = params[base_i + dist.get_rank()]
                     if p.grad is None:
                         # continue
@@ -149,6 +155,8 @@ class Muon(torch.optim.Optimizer):
 
                     # apply update
                     p.add_(update.reshape(p.shape), alpha=-group["lr"])
+
+                # Sync parameters after GPUs have updated their subsets
                 dist.all_gather(
                     params_pad[base_i : base_i + dist.get_world_size()],
                     params_pad[base_i + dist.get_rank()],
@@ -174,6 +182,7 @@ class SingleDeviceMuon(torch.optim.Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
+            # TODO: separate the Muon update completely into its separate method
             for p in group["params"]:
                 if p.grad is None:
                     # continue
@@ -190,6 +199,7 @@ class SingleDeviceMuon(torch.optim.Optimizer):
         return loss
 
 
+# TODO: type hints
 def adam_update(grad, buf1, buf2, step, betas, eps):
     buf1.lerp_(grad, 1 - betas[0])
     buf2.lerp_(grad.square(), 1 - betas[1])
@@ -261,11 +271,20 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
         for group in self.param_groups:
             if group["use_muon"]:
                 params = group["params"]
-                params_pad = params + [torch.empty_like(params[-1])] * (
-                    dist.get_world_size() - len(params) % dist.get_world_size()
+                params_pad = (
+                    params
+                    + [torch.empty_like(params[-1])]
+                    * (  # empty tensors like the shape of the last parameter?
+                        dist.get_world_size()
+                        - len(params)
+                        % dist.get_world_size()  # add the remainder from e.g. 8 GPUs - (remainder) from parameters
+                    )
                 )
                 for base_i in range(len(params))[:: dist.get_world_size()]:
-                    if base_i + dist.get_rank() < len(params):
+                    if base_i + dist.get_rank() < len(
+                        params
+                    ):  # another remainder check?
+                        # Each rank processes its own parameter
                         p = params[base_i + dist.get_rank()]
                         if p.grad is None:
                             # continue
@@ -281,6 +300,7 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         p.add_(
                             update.reshape(p.shape), alpha=-group["lr"]
                         )  # apply update
+                    # Share params after each rank processes its param.
                     dist.all_gather(
                         params_pad[base_i : base_i + dist.get_world_size()],
                         params_pad[base_i + dist.get_rank()],

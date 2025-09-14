@@ -20,7 +20,6 @@ import os
 from protenix.config.extend_types import (
     GlobalConfigValue,
     ListValue,
-    RequiredValue,
     ValueMaybeNone,
 )
 
@@ -222,7 +221,7 @@ inference_configs = {
     "dump_dir": "./output",
     "need_atom_confidence": False,
     "sorted_by_ranking_score": False,
-    "input_json_path": RequiredValue(str),
+    "input_json_path": "input_new.json",
     "load_checkpoint_path": os.path.join(
         code_directory, "./release_data/checkpoint/model_v0.2.0.pt"
     ),

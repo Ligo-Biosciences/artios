@@ -90,6 +90,7 @@ class DiffusionConditioning(nn.Module):
             "is_dna_token": 1,
             "is_rna_token": 1,
             "is_target_token": 1,
+            "is_hotspot": 1,
         }
         self.entity_type_embed = LinearNoBias(
             in_features=sum(self.entity_features.values()),

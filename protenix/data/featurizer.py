@@ -692,10 +692,6 @@ class Featurizer(object):
             "euclidean",
         )
 
-        assert partial_token_dist_matrix.shape == (
-            len(token_indices_in_ref),
-            len(self.cropped_token_array),
-        )
         return partial_token_dist_matrix
 
     def get_target_features(

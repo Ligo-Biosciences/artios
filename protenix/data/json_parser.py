@@ -710,13 +710,17 @@ def build_target_polymer(entity: dict) -> dict:
         np.unique(atom_array.chain_id).shape[0] == 1
     ), "Expected single chain structure, but found multiple chains"
 
-    # TODO add in hotspots, is_target, residue_range
     atom_array.add_annotation("is_target", dtype=np.int32)
     atom_array.is_target[:] = True
 
     atom_array.add_annotation("is_hotspot", dtype=np.int32)
     atom_array.is_hotspot[:] = False
     atom_array.is_hotspot[info["hotspots"]] = True
+
+    # TODO: is_target_token is only given as true when the centre atoms are
+    # resolved. Probably need to rethink how we're doing this.
+    atom_array.add_annotation("is_resolved", dtype=np.int32)
+    atom_array.is_resolved[:] = True
 
     return {"atom_array": atom_array}
 

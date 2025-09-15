@@ -19,6 +19,7 @@ from typing import Union
 import numpy as np
 import torch
 from biotite.structure import Atom, AtomArray, get_residue_starts
+from scipy.spatial.distance import cdist
 from sklearn.neighbors import KDTree
 
 from protenix.common.atom_types import DENSE_ATOM_NUM
@@ -668,11 +669,44 @@ class Featurizer(object):
         mask_features["atom_mask"] = torch.ones(len(self.cropped_atom_array)).long()
         return mask_features
 
-    def get_target_features(self) -> dict[str, torch.Tensor]:
+    def get_token_dist_mat(self, token_indices_in_ref: np.ndarray) -> np.ndarray:
+        """
+        Get the distance matrix of the tokens in the reference chain.
+
+        Args:
+            token_indices_in_ref (np.ndarray): The indices of the tokens in the reference chain.
+                (num_tokens_in_ref_chain,)
+
+        Returns:
+            numpy.ndarray: The distance matrix of the tokens in the reference chain,
+                           shape=(len(tokens_in_ref_chain), len(tokens)).
+        """
+        centre_atom_indices = self.cropped_token_array.get_annotation(
+            "centre_atom_index"
+        )
+        centre_atoms = self.cropped_atom_array[centre_atom_indices]
+
+        partial_token_dist_matrix = cdist(
+            centre_atoms[token_indices_in_ref].coord,
+            centre_atoms.coord,
+            "euclidean",
+        )
+
+        assert partial_token_dist_matrix.shape == (
+            len(token_indices_in_ref),
+            len(self.cropped_token_array),
+        )
+        return partial_token_dist_matrix
+
+    def get_target_features(
+        self, hotspot_cutoff: float = 5.0
+    ) -> dict[str, torch.Tensor]:
         """
         Get target-specific features for training.
         Adds the target_centre_coordinate, target_restype, and is_target_token features.
 
+        Args:
+            hotspot_cutoff (float):
         Returns:
             Dict[str, torch.Tensor]: A dictionary containing target features.
         """
@@ -682,10 +716,14 @@ class Featurizer(object):
             "centre_atom_index"
         )
         centre_atoms = self.cropped_atom_array[centre_atom_indices]
+        centre_atoms.is_hotspot = np.zeros_like(
+            centre_atoms.is_target
+        )  # dummy is_hotspot feature
+
         is_target_token = self.cropped_atom_array.is_target[
             centre_atom_indices
         ]  # [N_token]
-        target_token_valid = self.cropped_atom_array.is_resolved[centre_atom_indices]
+        token_resolved = self.cropped_atom_array.is_resolved[centre_atom_indices]
 
         # Centre atom coordinates of the target
         target_features["target_centre_coordinate"] = torch.Tensor(
@@ -697,17 +735,45 @@ class Featurizer(object):
         restype = centre_atoms.cano_seq_resname
         restype_onehot = self.restype_onehot_encoded(restype)
         target_features["target_restype"] = restype_onehot * torch.Tensor(
-            is_target_token * target_token_valid
+            is_target_token * token_resolved
         ).unsqueeze(-1)
 
-        # Target is_hotspot feature
+        ### Hotspot feature for target training
         # [N_token] binary indicator for hotspot residues
-        # TODO: iteration number 2 will have this, but not yet.
+        # 1. Distance matrix in the crop
+        target_distance = self.get_token_dist_mat(centre_atoms.is_target)
+        # [n_target_tokens, n_all_tokens]
 
-        # Binary indicator for target tokens
+        # 2. Distance is valid mask
+        target_resolved = centre_atoms.is_resolved[centre_atoms.is_target]
+        target_dist_mask = target_resolved[:, None] * token_resolved[None, :]
+        # [n_target_tokens, n_all_tokens]
+
+        # 3. If distance is less than cutoff (e.g. 5 Angstroms) -> interface
+        mask_distance = target_distance < hotspot_cutoff
+
+        # 4. Find the hotspots in the crop
+        mask_diff_from_target = target_resolved[:, None] * (
+            1 - is_target_token[None, :]
+        )
+        mask = mask_distance * target_dist_mask * mask_diff_from_target
+        mask_interface = np.sum(mask, axis=-1)
+        mask_interface = mask_interface > 0.0
+
+        # Randomly pick between 0 and 5 hotspots
+        interface_indices = np.where(mask_interface)[0]
+        if len(interface_indices) > 0:
+            num_hotspots = np.random.randint(0, min(6, len(interface_indices) + 1))
+            if num_hotspots > 0:
+                selected_hotspots = np.random.choice(
+                    interface_indices, size=num_hotspots, replace=False
+                )
+                centre_atoms.is_hotspot[selected_hotspots] = 1.0
+
         target_features["is_target_token"] = torch.Tensor(
-            is_target_token * target_token_valid
+            is_target_token * token_resolved
         ).long()  # [N_token]
+        target_features["is_hotspot"] = torch.Tensor(centre_atoms.is_hotspot).long()
 
         return target_features
 

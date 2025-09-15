@@ -171,8 +171,8 @@ model_configs = {
         "N_sample_mini_rollout": 1,
         "stoch_type_coord": "beta",
         "stoch_type_latent": "non_singular",
-        "alpha_coord": 0.8,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
-        "alpha_latent": 0.1,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha_coord": 0.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha_latent": 0.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma_coord": 1.0,
         "gamma_latent": 1.0,
         "sigma_coord": GlobalConfigValue("sigma_coord"),
@@ -206,7 +206,7 @@ model_configs = {
             #    "n_heads": 4,
             # },
             "transformer": {
-                "num_blocks": 16,
+                "num_blocks": 24,
                 "num_heads": 16,
             },
             # "atom_decoder": {

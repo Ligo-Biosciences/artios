@@ -544,6 +544,7 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         "target_centre_coordinate": (num_token, 3),
         "target_restype": (num_token, 32),
         "is_target_token": (num_token,),
+        "is_hotspot": (num_token,),
         # Masks
         "token_mask": (num_token,),
         "atom_mask": (num_atom,),

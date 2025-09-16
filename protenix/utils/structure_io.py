@@ -142,7 +142,7 @@ def cif_to_pdb(
 
 
 def save_outputs(
-    output_dir: str,
+    output_dir_list: List[str],
     pred_dict: dict,
     input_feature_dict: dict,
     atom_array: AtomArray,
@@ -173,12 +173,14 @@ def save_outputs(
     chain_ids = centre_atoms.chain_id  # [N_token]
     res_ids = centre_atoms.res_id  # [N_token]
     label_entity_ids = centre_atoms.label_entity_id
-    print("label_entity_ids during save_outputs: ", label_entity_ids)
-    print("chain_ids during save_outputs: ", chain_ids)
-    print("res_ids during save_outputs: ", res_ids)
 
     # Save each sample
     saved_files = []
+
+    assert (
+        len(output_dir_list) == coordinate.shape[-4]
+    ), f"Number of output directories must match number of samples, got {len(output_dir_list)=} and {coordinate.shape[-4]=}"
+
     for idx in range(coordinate.shape[-4]):
         sample_dense_coords = coordinate[idx]
         sample_restype_onehot = restype_onehot[idx]
@@ -201,12 +203,7 @@ def save_outputs(
         )
 
         # Determine output file path
-        output_path = os.path.join(
-            output_dir,
-            f"{pdb_id}_sample_{idx}_{ema_suffix}.cif"
-            if ema_suffix
-            else f"{pdb_id}_sample_{idx}.cif",
-        )
+        output_path = output_dir_list[idx]
 
         # Ensure directory exists
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

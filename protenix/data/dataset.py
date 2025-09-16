@@ -312,7 +312,7 @@ class BaseSingleDataset(Dataset):
                 data = self.process_one(
                     idx,
                     # TODO: this needs to be True for training time inference of the VAE
-                    return_atom_token_array=False,
+                    return_atom_token_array=True,
                 )
                 return data
             except Exception as e:

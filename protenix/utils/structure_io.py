@@ -202,6 +202,10 @@ def save_outputs(
             label_entity_ids=label_entity_ids,
         )
 
+        predicted_atom_array.set_annotation(
+            "b_factor", np.zeros(len(predicted_atom_array))
+        )
+
         # Determine output file path
         output_path = output_dir_list[idx]
 

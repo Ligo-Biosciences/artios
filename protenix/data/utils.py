@@ -502,6 +502,8 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
 
     Returns:
         dict: A dictionary containing the shapes of all data.
+
+    # TODO: clean-up these features to reduce dataloading load
     """
     # Features in AlphaFold3 SI Table5
     feat = {
@@ -579,7 +581,7 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         "pae_rep_atom_mask": (num_atom,),
         "plddt_m_rep_atom_mask": (num_atom,),
         "modified_res_mask": (num_atom,),
-        "bond_mask": (num_atom, num_atom),
+        # "bond_mask": (num_atom, num_atom),
         "is_protein": (num_atom,),  # Atom level, not token level
         "is_rna": (num_atom,),
         "is_dna": (num_atom,),

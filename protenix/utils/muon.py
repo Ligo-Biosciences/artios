@@ -19,7 +19,9 @@ TODO: if this gives performance improvements, refactor it nicely.
 import torch
 import torch.distributed as dist
 
-MUON_LR_SCALAR = 4.0  # constant to make Muon's LR somewhat comparable to AdamW
+MUON_LR_SCALAR = (
+    3.91918358845  # 4.0  # constant to make Muon's LR somewhat comparable to AdamW
+)
 
 
 # This code snippet is a modified version adapted from the following GitHub repository:

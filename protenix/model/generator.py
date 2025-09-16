@@ -327,29 +327,6 @@ def sample_latent_diffusion(
     N_token = input_feature_dict["residue_index"].shape[-1]
     device = input_feature_dict["residue_index"].device
     dtype = torch.float32
-    # Print function kwargs
-    print("\nGenerator function arguments:")
-    print("-" * 50)
-    print(f"denoise_net: {denoise_net.__class__.__name__}")
-    print(f"c_latent: {c_latent}")
-    print(f"N_sample: {N_sample}")
-    print(f"sigma_coord: {sigma_coord}")
-    print(f"sigma_latent: {sigma_latent}")
-    print(f"stoch_type_coord: {stoch_type_coord}")
-    print(f"stoch_type_latent: {stoch_type_latent}")
-    print(f"alpha_coord: {alpha_coord}")
-    print(f"alpha_latent: {alpha_latent}")
-    print(f"gamma_coord: {gamma_coord}")
-    print(f"gamma_latent: {gamma_latent}")
-    print(f"second_order: {second_order}")
-    print(f"inplace_safe: {inplace_safe}")
-    print(
-        f"guiding_denoise_net: {guiding_denoise_net.__class__.__name__ if guiding_denoise_net else None}"
-    )
-    print(f"guidance_weight: {guidance_weight}")
-    print(f"beta_mean: {beta_mean}")
-    print(f"beta_std: {beta_std}")
-    print("-" * 50)
 
     # Stochasticity functions (normalised such that int_{0}^{1}(g(t)) = 1)
     # TODO: check these integrals. I think off by factor of 2.

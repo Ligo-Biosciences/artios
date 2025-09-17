@@ -588,7 +588,7 @@ def sample_noising(
             )
             * scale
         )
-        x_noisy = (t_a - t) * x_0_n + t * x_a
+        x_noisy = (1 - t / t_a) * x_0_n + t / t_a * x_a
 
         # Compute velocity to implied datapoint
         v = (x_a - x_noisy) / (t_a - t)
@@ -600,7 +600,7 @@ def sample_noising(
         # sample t_a from [t + eps, cutoff] uniformly
         # noise protein to t_a with x_a = (1 - t_a) * x_0_a + t_a * x_1
         # noise protein to t_n
-        # x_n = (t_a - t_n) * x_0_n + t_n * x_a
+        # x_n = (1 - t_n / t_a) * x_0_n + t_n / t_a * x_a
         # Compute velocity to implied datapoint
         # v = (x_a - x_n) / (t_a - t_n)
         # Compute implied datapoint

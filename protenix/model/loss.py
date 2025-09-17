@@ -135,7 +135,7 @@ class FlowLoss(AggregatedLoss):
                     weight_ligand=configs.loss.flow.centre_atom.weight_ligand,
                     # Behaviour
                     enable_alignment=True,
-                    expand_ground_truth=True,
+                    expand_ground_truth=False,  # NOTE: needs to be false after ambient adjustment
                     # Per sample scale keys
                     timestep_key="coord_timestep",
                     sigma=configs.loss.flow.sigma_coord,

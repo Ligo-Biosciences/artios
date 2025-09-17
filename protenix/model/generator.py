@@ -555,7 +555,14 @@ def sample_noising(
 
         t_a = torch.where(  # sample t_a from [t + eps, cutoff] uniformly
             t < cutoff,
-            t + eps + torch.rand((*batch_size_shape, num_sample)) * (cutoff - t),
+            t
+            + eps
+            + torch.rand(
+                (*batch_size_shape, num_sample),
+                dtype=dtype,
+                device=x_target_augment.device,
+            )
+            * (cutoff - t),
             1.0,
         )
         t = t[..., None, None]

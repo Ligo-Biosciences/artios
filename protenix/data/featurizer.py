@@ -25,7 +25,6 @@ from sklearn.neighbors import KDTree
 from protenix.common.atom_types import DENSE_ATOM_NUM
 from protenix.common.constants import STD_RESIDUES, STD_RESIDUES_AND_GAP, get_all_elems
 from protenix.data.tokenizer import Token, TokenArray
-from protenix.data.utils import get_ligand_polymer_bond_mask
 from protenix.utils.geometry import angle_3p, random_transform
 
 
@@ -654,15 +653,16 @@ class Featurizer(object):
             self.cropped_atom_array.modified_res_mask
         ).long()
 
-        lig_polymer_bonds = get_ligand_polymer_bond_mask(self.cropped_atom_array)
-        num_atoms = len(self.cropped_atom_array)
-        bond_mask_mat = np.zeros((num_atoms, num_atoms))
-        for i, j, _ in lig_polymer_bonds:
-            bond_mask_mat[i, j] = 1
-            bond_mask_mat[j, i] = 1
-        mask_features["bond_mask"] = torch.Tensor(
-            bond_mask_mat
-        ).long()  # [N_atom, N_atom]
+        # Note: commented out for reducing memory load of features
+        # lig_polymer_bonds = get_ligand_polymer_bond_mask(self.cropped_atom_array)
+        # num_atoms = len(self.cropped_atom_array)
+        # bond_mask_mat = np.zeros((num_atoms, num_atoms))
+        # for i, j, _ in lig_polymer_bonds:
+        #     bond_mask_mat[i, j] = 1
+        #     bond_mask_mat[j, i] = 1
+        # mask_features["bond_mask"] = torch.Tensor(
+        #     bond_mask_mat
+        # ).long()  # [N_atom, N_atom]
 
         # Add token and atom masks for padding
         mask_features["token_mask"] = torch.ones(len(self.cropped_token_array)).long()

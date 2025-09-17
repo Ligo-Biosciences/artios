@@ -217,13 +217,13 @@ class ArtiosAllatom(nn.Module):
             mask=label_dict["coordinate_mask"],
             timestep_sampler=self.latent_timestep_sampler,
             num_sample=N_sample,
-            scale=self.sigma_latent,  # TODO: sigma_latent
+            scale=self.sigma_latent,
             generator=generator,
             input_feature_dict=input_feature_dict,
             encoder=encoder,
         )
 
-        noisy_centre_coords, coord_timestep, _ = sample_noising(
+        noisy_centre_coords, coord_timestep, target_coord = sample_noising(
             input=label_dict["centre_coordinate"],
             mask=label_dict["has_centre_atom"],
             timestep_sampler=self.coord_timestep_sampler,
@@ -255,6 +255,7 @@ class ArtiosAllatom(nn.Module):
         label_dict.update(
             {
                 "latents": gt_latents,  # [..., N_sample, N_token, c_latent]
+                "centre_coordinate": target_coord,  # [..., N_sample, N_token, 3]
             }
         )
 

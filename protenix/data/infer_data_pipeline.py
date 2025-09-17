@@ -101,12 +101,6 @@ class InferenceDataset(Dataset):
             single_sample_dict,
         )
         features_dict, atom_array, token_array = sample2feat.get_feature_dict()
-        # print features
-        for feat_key, feat_value in features_dict.items():
-            print(feat_key)
-            print(feat_value.shape)
-            print(feat_value)
-            print("-" * 100)
 
         features_dict["distogram_rep_atom_mask"] = torch.Tensor(
             atom_array.distogram_rep_atom_mask

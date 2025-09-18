@@ -641,6 +641,7 @@ class ArtiosAllAtomFlowTrainer(object):
                         decoder=self.vae_shell.vae.decoder,
                         mode="inference",
                     )
+                    saved_files = None
                     try:
                         saved_files, pred_atom_array_list = self.save_outputs(
                             pred_dict=pred_dict, batch=batch, ema_suffix=ema_suffix
@@ -658,7 +659,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
                     # Log structure files to Neptune Scale
                     if self.configs.use_wandb:
-                        if saved_files:
+                        if saved_files is not None:
                             files_dict = {}
                             for file_path in saved_files:
                                 # Create a relative key for Neptune using test_name/pdb_id/filename

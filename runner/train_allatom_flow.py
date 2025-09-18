@@ -735,7 +735,6 @@ class ArtiosAllAtomFlowTrainer(object):
     @profile_function("backward_pass")
     def backward_pass(self, loss, scaler):
         scaler.scale(loss / self.iters_to_accumulate).backward()
-        # scaler.scale(loss).backward()
 
     @profile_function("optimizer_step")
     def optimizer_step(self, scaler):
@@ -778,8 +777,6 @@ class ArtiosAllAtomFlowTrainer(object):
             if is_loss_nan_check(loss):
                 self.print(f"Skip iteration with NaN loss: {self.step} steps")
                 loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
-        # with profile_function("backward_pass"):
-        # scaler.scale(loss / self.iters_to_accumulate).backward()
         self.backward_pass(loss, scaler)
 
         # For simplicity, the global training step is used
@@ -791,11 +788,8 @@ class ArtiosAllAtomFlowTrainer(object):
             scaler.unscale_(self.optimizer)
             self.on_before_optimizer_step()
             # Do grad clip only
-            # with profile_function("optimizer_step"):
             self.update()
             self.optimizer_step(scaler)
-            # scaler.step(self.optimizer)
-            # scaler.update()
             self.lr_scheduler.step()
         for key, value in loss_dict.items():
             if "loss" not in key:

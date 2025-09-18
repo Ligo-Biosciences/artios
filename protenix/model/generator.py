@@ -549,27 +549,10 @@ def sample_noising(
     # Working in coordinates
     if encoder is None:
         cutoff = 0.8  # hardcoded for now
-        eps = 1e-3
         t = timestep
         x_1 = x_target_augment
-
-        t_a = torch.where(  # sample t_a from [t + eps, cutoff] uniformly
-            t < cutoff,
-            t
-            + eps
-            + torch.rand(
-                (*batch_size_shape, num_sample),
-                dtype=dtype,
-                device=x_target_augment.device,
-            )
-            * (cutoff - t),
-            1.0,
-        )
-        t = t[..., None, None]
-        t_a = t_a[..., None, None]
-
-        # Noise protein to t_a
-        x_0_a = (
+        t_a = torch.where(t - 1e-2 < cutoff, t + (1 - cutoff), 1.0)
+        anchor_noise = (
             torch.randn(
                 x_target_augment.shape,
                 dtype=dtype,
@@ -577,42 +560,22 @@ def sample_noising(
             )
             * scale
         )
-        x_a = (1 - t_a) * x_0_a + t_a * x_1
 
-        # Noise protein to t_n
-        x_0_n = (
-            torch.randn(
-                x_target_augment.shape,
-                dtype=dtype,
-                device=x_target_augment.device,
-            )
-            * scale
-        )
-        x_noisy = (1 - t / t_a) * x_0_n + t / t_a * x_a
+        x_a = t_a * x_1 + (1 - t_a) * anchor_noise
+        x_noisy = t * x_1 + (1 - t) * noise
 
-        # Compute velocity to implied datapoint
-        v = (x_a - x_noisy) / (t_a - t)
-
-        # Compute implied datapoint
-        x_target_augment = x_noisy + (1 - t) * v
-
-        # if t_n < cutoff
-        # sample t_a from [t + eps, cutoff] uniformly
-        # noise protein to t_a with x_a = (1 - t_a) * x_0_a + t_a * x_1
-        # noise protein to t_n
-        # x_n = (1 - t_n / t_a) * x_0_n + t_n / t_a * x_a
-        # Compute velocity to implied datapoint
-        # v = (x_a - x_n) / (t_a - t_n)
-        # Compute implied datapoint
-        # x_target_augment = x_n + (1 - t_n) * v
+        # Target velocity
+        v_target = (x_a - x_noisy) / (t_a - t)
 
     else:
         # Noise latents as usual
         x_noisy = noise_w_flow_matching(
             x_target_augment, noise, timestep[..., :, None, None]
         )
+        # Target latent velocity
+        v_target = x_target_augment - noise
 
-    return x_noisy, timestep, x_target_augment
+    return x_noisy, timestep, v_target
 
 
 def sample_diffusion_training(

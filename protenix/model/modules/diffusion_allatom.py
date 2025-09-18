@@ -588,6 +588,7 @@ class DiffusionModule(nn.Module):
         latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         inplace_safe: bool = False,
+        return_velocities: bool = False,
         chunk_size: Optional[int] = None,
     ) -> dict[str, torch.Tensor]:
         # Expand timesteps
@@ -611,12 +612,19 @@ class DiffusionModule(nn.Module):
             chunk_size=chunk_size,
         )
 
+        # Bring to correct scale
+        coord_v = self.sigma_coord * r_coord
+        latent_v = self.sigma_latent * r_latent
+
         # Apply skip connections and output scaling for both coordinate and latent predictions
-        coord_pred = noisy_coord * self.c_skip(
+        coord_pred = noisy_coord * self.c_skip(coord_timestep_) + coord_v * self.c_out(
             coord_timestep_
-        ) + r_coord * self.sigma_coord * self.c_out(coord_timestep_)
+        )
         latent_pred = noisy_latent * self.c_skip(
             latent_timestep_
-        ) + r_latent * self.sigma_latent * self.c_out(latent_timestep_)
+        ) + latent_v * self.c_out(latent_timestep_)
+
+        if return_velocities:
+            return coord_v, latent_v
 
         return coord_pred, latent_pred

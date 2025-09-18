@@ -50,7 +50,6 @@ from protenix.metrics.plausibility import (
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import FlowLoss
-from protenix.model.modules.components import Attention, Transition
 from protenix.model.modules.transformer import (
     DiffusionTransformer,
     DiTBlock,
@@ -159,11 +158,9 @@ class ArtiosAllAtomFlowTrainer(object):
                 track_layers=[
                     DiffusionTransformer,
                     DiTBlock,
-                    Attention,
-                    Transition,
                 ],  # optionally specify
                 track_layers_name_includes=["linear_q", "linear_k"],
-                tensor_stats=["channel_rms", "abs_mean"],
+                tensor_stats=["channel_rms"],
                 base_namespace="model_metrics",
             )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))

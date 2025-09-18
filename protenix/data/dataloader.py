@@ -291,7 +291,8 @@ class DistributedDataLoader(DataLoader):
             shuffle=False,
             collate_fn=collate_fn,
             pin_memory=True,
-            prefetch_factor=2,
+            persistent_workers=True,
+            prefetch_factor=batch_size,
         )
         self.counter = 0
 
@@ -362,6 +363,9 @@ def get_dataloaders(
                 crop_size=configs.train_crop_size,
             ),
             sampler=train_sampler,
+            persistent_workers=True,
+            pin_memory=True,
+            prefetch_factor=configs.batch_size,
         )
 
     test_dls = {}

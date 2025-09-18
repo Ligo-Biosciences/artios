@@ -585,7 +585,7 @@ class DiffusionModule(nn.Module):
         cutoff = 0.8
         t_n = timestep
         std = (
-            self.sigma
+            self.sigma_coord
             / (1 - cutoff)
             * ((1 - cutoff) ** 2 + (cutoff - t_n) ** 2 + (1 - t_n) ** 2).sqrt()
         )

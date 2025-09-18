@@ -641,10 +641,12 @@ class ArtiosAllAtomFlowTrainer(object):
                         decoder=self.vae_shell.vae.decoder,
                         mode="inference",
                     )
-
-                    saved_files, pred_atom_array_list = self.save_outputs(
-                        pred_dict=pred_dict, batch=batch, ema_suffix=ema_suffix
-                    )
+                    try:
+                        saved_files, pred_atom_array_list = self.save_outputs(
+                            pred_dict=pred_dict, batch=batch, ema_suffix=ema_suffix
+                        )
+                    except Exception:
+                        pass
 
                     rotamer_score.update(pred_atom_array_list)
                     rama_score.update(pred_atom_array_list)

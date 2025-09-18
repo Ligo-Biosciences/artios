@@ -549,7 +549,7 @@ def sample_noising(
     # Working in coordinates
     if encoder is None:
         cutoff = 0.8  # hardcoded for now
-        t = timestep
+        t = timestep[..., None, None]
         x_1 = x_target_augment
         t_a = torch.where(t - 1e-2 < cutoff, t + (1 - cutoff), 1.0)
         anchor_noise = (

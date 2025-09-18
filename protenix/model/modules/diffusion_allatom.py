@@ -580,6 +580,18 @@ class DiffusionModule(nn.Module):
     def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
         return 1.0
 
+    def velocity_c_out(self, timestep):
+        # Carlos, forgive me.
+        cutoff = 0.8
+        t_n = timestep
+        std = (
+            self.sigma
+            / (1 - cutoff)
+            * ((1 - cutoff) ** 2 + (cutoff - t_n) ** 2 + (1 - t_n) ** 2).sqrt()
+        )
+        # TODO: remove the jank, unify with proper c_out
+        return torch.where(timestep < cutoff, std, 1.0)
+
     def forward(
         self,
         noisy_coord: torch.Tensor,
@@ -613,7 +625,7 @@ class DiffusionModule(nn.Module):
         )
 
         # Bring to correct scale
-        coord_v = self.sigma_coord * r_coord
+        coord_v = self.sigma_coord * r_coord * self.velocity_c_out(coord_timestep_)
         latent_v = self.sigma_latent * r_latent
 
         # Apply skip connections and output scaling for both coordinate and latent predictions

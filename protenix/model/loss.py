@@ -121,7 +121,7 @@ class FlowLoss(AggregatedLoss):
                 loss=MSELoss(
                     # Tensor keys
                     pred_key="centre_coordinate",
-                    true_key="centre_coordinate",
+                    true_key="centre_coordinate_velocity",
                     mask_key="token_loss_mask",
                     # Entity mask keys
                     protein_mask_key="is_protein_token",
@@ -134,7 +134,7 @@ class FlowLoss(AggregatedLoss):
                     weight_rna=configs.loss.flow.centre_atom.weight_rna,
                     weight_ligand=configs.loss.flow.centre_atom.weight_ligand,
                     # Behaviour
-                    enable_alignment=True,
+                    enable_alignment=False,
                     expand_ground_truth=False,  # NOTE: needs to be false after ambient adjustment
                     # Per sample scale keys
                     timestep_key="coord_timestep",
@@ -148,7 +148,7 @@ class FlowLoss(AggregatedLoss):
                 loss=MSELoss(
                     # Tensor keys
                     pred_key="latents",
-                    true_key="latents",
+                    true_key="latent_velocity",
                     mask_key="token_loss_mask",
                     # Entity mask keys
                     protein_mask_key="is_protein_token",

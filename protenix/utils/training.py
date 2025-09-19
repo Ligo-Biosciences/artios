@@ -19,9 +19,7 @@ import torch
 import torch.distributed as dist
 
 from protenix.model.utils import expand_at_dim
-from protenix.utils.muon_v2 import (
-    BatchedMuonWithAdam,  # SingleDeviceMuonWithAuxAdam  # MuonWithAuxAdam
-)
+from protenix.utils.muon_v2 import SingleDeviceMuonWithAuxAdam  # MuonWithAuxAdam
 
 
 def get_adamw(
@@ -133,7 +131,7 @@ def get_muon(
         f"num adamw parameter tensors: {len(adamw_params)}, with {num_adamw_params:,} parameters"
     )
     # Create AdamW optimizer and use the fused version if it is available
-    optimizer = BatchedMuonWithAdam(optim_groups)
+    optimizer = SingleDeviceMuonWithAuxAdam(optim_groups)
 
     return optimizer
 

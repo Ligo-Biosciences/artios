@@ -84,9 +84,15 @@ def centre_random_augmentation(
             input=x_input_coords, dim=-2, keepdim=True
         )
     else:
-        center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (
-            mask.sum(dim=-1) + eps
-        )
+        try:
+            center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (
+                mask.sum(dim=-1, keepdim=True) + eps
+            )
+        except Exception as e:
+            print("Error in centering calculation:")
+            print(f"x_input_coords shape: {x_input_coords.shape}")
+            print(f"mask shape: {mask.shape}")
+            raise e
         x_input_coords = x_input_coords - center.unsqueeze(dim=-2)
 
     # Expand to [..., N_sample, N_atom, 3]
@@ -264,6 +270,9 @@ def broadcast_token_to_atom(x_token: Tensor, atom_to_token_idx: Tensor) -> Tenso
         Tensor: atom embedding
             [..., N_atom, d]
     """
+    assert (
+        len(x_token.shape[:-2]) == len(atom_to_token_idx[:-1])
+    ), f"got x_token.shape[:-2] = {x_token.shape[:-2]}, atom_to_token_idx[:-1] = {atom_to_token_idx[:-1]}"
 
     if len(atom_to_token_idx.shape) == 1:
         # shape = [N_atom], easy index
@@ -300,6 +309,12 @@ def average_atom_to_token(
         Tensor: token-level embedding
             [..., N_token, d]
     """
+    assert (
+        len(x_atom.shape[:-2]) == len(atom_to_token_idx.shape[:-1])
+    ), f"got x_atom.shape[:-2] = {x_atom.shape[:-2]}, atom_to_token_idx.shape[:-1] = {atom_to_token_idx.shape[:-1]}"
+    assert (
+        len(x_atom.shape[:-2]) == len(atom_mask.shape[:-1])
+    ), f"got x_atom.shape[:-2] = {x_atom.shape[:-2]}, atom_mask.shape[:-1] = {atom_mask.shape[:-1]}"
 
     # Mask out the padding atoms
     x_atom = x_atom * atom_mask[..., None]

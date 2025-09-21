@@ -19,7 +19,7 @@ import torch
 import torch.distributed as dist
 
 from protenix.model.utils import expand_at_dim
-from protenix.utils.muon import MuonWithAuxAdam
+from protenix.utils.muon import BatchedMuonWithAdam  # MuonWithAuxAdam
 
 
 def get_adamw(
@@ -103,13 +103,9 @@ def get_muon(
     # create optim groups. Any parameters that is 2D, is non-embedding, and not final will have Muon, otherwise no.
     # i.e. all weight tensors in matmuls use Muon, all biases, layernorms, and input / output projections don't.
     muon_params = [
-        p
-        for n, p in param_dict.items()
-        if p.dim() >= 2 and "final" not in n and "embed" not in n
-    ]  # TODO: change all projections to include "embed" in name
-    adamw_params = [
-        p for n, p in param_dict.items() if p.dim() < 2 or "final" in n or "embed" in n
+        p for n, p in param_dict.items() if p.dim() >= 2 and "embed" not in n
     ]
+    adamw_params = [p for n, p in param_dict.items() if p.dim() < 2 or "embed" in n]
     optim_groups = [
         {
             "params": muon_params,
@@ -135,7 +131,7 @@ def get_muon(
         f"num adamw parameter tensors: {len(adamw_params)}, with {num_adamw_params:,} parameters"
     )
     # Create AdamW optimizer and use the fused version if it is available
-    optimizer = MuonWithAuxAdam(optim_groups)
+    optimizer = BatchedMuonWithAdam(optim_groups)
 
     return optimizer
 

@@ -21,7 +21,9 @@ from protenix.utils.ema_utils import sigma_to_gamma
 class EMAWrapper(object):
     """A wrapper class for exponential moving average of model weights."""
 
-    def __init__(self, model: torch.nn.Module, decay: float = 0.999, mutable_param_keywords=None):
+    def __init__(
+        self, model: torch.nn.Module, decay: float = 0.999, mutable_param_keywords=None
+    ):
         """
         model: a pytorch model to apply EMA
         decay: a scaler to indicate the decay rate
@@ -29,7 +31,9 @@ class EMAWrapper(object):
         """
         self.model = model
         self.decay = decay
-        self.mutable_param_keywords = [s.strip() for s in mutable_param_keywords if s.strip()]
+        self.mutable_param_keywords = [
+            s.strip() for s in mutable_param_keywords if s.strip()
+        ]
         self.shadow = {}
         self.backup = {}
 
@@ -44,7 +48,9 @@ class EMAWrapper(object):
             ):
                 continue
             assert name in self.shadow
-            new_average = (1.0 - self.decay) * param.data + self.decay * self.shadow[name]
+            new_average = (1.0 - self.decay) * param.data + self.decay * self.shadow[
+                name
+            ]
             self.shadow[name] = new_average.clone()
 
     def apply_shadow(self):
@@ -89,7 +95,9 @@ class PowerLawEMAWrapper(EMAWrapper):
         self.sigma = sigma
         self.gamma = sigma_to_gamma(sigma)
 
-        self.mutable_param_keywords = [s.strip() for s in mutable_param_keywords if s.strip()]
+        self.mutable_param_keywords = [
+            s.strip() for s in mutable_param_keywords if s.strip()
+        ]
         self.shadow = {}
         self.backup = {}
 
@@ -104,20 +112,40 @@ class PowerLawEMAWrapper(EMAWrapper):
         Args:
             t (int): The current training step.
         """
+        beta = self.beta_power_law(t)
+
+        if isinstance(beta, complex) or (
+            isinstance(beta, float) and not np.isreal(beta)
+        ):
+            raise ValueError(
+                f"Beta value {beta} is complex at step {t}. This should not happen with valid gamma={self.gamma} and delta_t={self.delta_t}"
+            )
+
+        update_params = []
+        shadow_params = []
         for name, param in self.model.named_parameters():
             if self.mutable_param_keywords and not any(
                 [keyword in name for keyword in self.mutable_param_keywords]
             ):
                 continue
             assert name in self.shadow
+            update_params.append(param)
+            shadow_params.append(self.shadow[name])
 
-            beta = self.beta_power_law(t)
-            if isinstance(beta, complex) or (isinstance(beta, float) and not np.isreal(beta)):
-                raise ValueError(
-                    f"Beta value {beta} is complex at step {t}. This should not happen with valid gamma={self.gamma} and delta_t={self.delta_t}"
-                )
-            new_average = (1.0 - beta) * param.data + beta * self.shadow[name]
-            self.shadow[name] = new_average.to(param.dtype)  # Ensure same dtype as parameter
+            # new_average = (1.0 - beta) * param.data + beta * self.shadow[name]
+            # self.shadow[name] = new_average.to(param.dtype)  # Ensure same dtype as parameter
+
+        # Fast interpolation
+        torch._foreach_lerp_(shadow_params, update_params, 1 - beta)
+
+        # Reassign
+        for i, (name, param) in enumerate(self.model.named_parameters()):
+            if self.mutable_param_keywords and not any(
+                [keyword in name for keyword in self.mutable_param_keywords]
+            ):
+                continue
+            assert name in self.shadow
+            self.shadow[name] = shadow_params[i].to(update_params[i].dtype)
 
     def apply_shadow(self):
         for name, param in self.model.named_parameters():

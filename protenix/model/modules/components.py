@@ -107,7 +107,7 @@ class Transition(nn.Module):
             in_features=n * c_in, out_features=c_in, init=self.output_linear_init
         )
 
-    @torch.compile
+    # @torch.compile
     def forward(self, x: Tensor) -> Tensor:
         """
         Args:

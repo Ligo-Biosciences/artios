@@ -50,13 +50,14 @@ basic_configs = {
     "post_hoc_ema_checkpoint_dir": "",
     "ema_vae_decay": 0.999,
     "power_law_ema_sigma": ListValue([0.08, 0.12]),
-    "post_hoc_ema_sigma": ListValue([0.06, 0.08, 0.10]),
+    "post_hoc_ema_sigma": ListValue([0.08]),
     "calc_post_hoc_ema_during_training": True,
     "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],
 }
 data_configs = {
     # Data
+    "batch_size": 8,
     "train_crop_size": 384,
     "test_max_n_token": -1,
     "train_lig_atom_rename": False,  # TODO:
@@ -218,11 +219,11 @@ model_configs = {
         },
         "autoencoder": {
             "c_latent": GlobalConfigValue("c_latent"),
-            "c_token": GlobalConfigValue("c_token"),
-            "c_z": GlobalConfigValue("c_z"),
+            "c_token": 768,  # GlobalConfigValue("c_token"), TODO: hardcoded for checkpoint loading
+            "c_z": 128,  # GlobalConfigValue("c_z"),
             "sigma_coord": GlobalConfigValue("sigma_coord"),
             "encoder": {
-                "n_blocks": 6,  # TODO: this is a lot, we should consider shrinking
+                "n_blocks": 6,
                 "n_heads": 4,
             },
             "decoder": {
@@ -348,14 +349,14 @@ loss_configs = {
         "vae": {
             "reconstruction": {
                 "mse": {
-                    "weight_protein": 1.0,
                     "weight_mse": 1.0,  # TODO: delete all of these weight_mse's
-                    "weight_dna": 4.0 * 2 + 2.0,  # TODO: remove all of this
-                    "weight_rna": 4.0 * 2 + 2.0,
-                    "weight_ligand": 1.0 * 2 + 2.0,
+                    "weight_protein": 1.0,
+                    "weight_dna": 5.0,  # TODO: remove all of this
+                    "weight_rna": 5.0,
+                    "weight_ligand": 1.0,
                     "eps": 1e-6,
-                }
-            }
+                },
+            },
         },
         "flow": {
             "centre_atom": {

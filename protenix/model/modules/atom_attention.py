@@ -10,7 +10,7 @@ from protenix.model.modules.layout import (
     rearrange_to_query_subset,
 )
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
-from protenix.model.modules.transformer_v2 import LocalAttnTransformer
+from protenix.model.modules.transformer import LocalAttnTransformer
 from protenix.model.utils import (
     average_atom_to_token,
     broadcast_token_to_atom,
@@ -102,7 +102,9 @@ class AtomAttentionEncoder(nn.Module):
             )
 
         self.linear_no_bias_cl = LinearNoBias(
-            in_features=self.c_atom, out_features=self.c_atompair, init="relu"
+            in_features=self.c_atom,
+            out_features=self.c_atompair,
+            init="relu",  # TODO: orthogonal init
         )
         self.linear_no_bias_cm = LinearNoBias(
             in_features=self.c_atom, out_features=self.c_atompair, init="relu"
@@ -223,6 +225,7 @@ class AtomAttentionEncoder(nn.Module):
         p_lm = p_lm * v_lm  # mask inter-conformer nonsense
         return c_l, p_lm
 
+    # @profile_function("atom_attention_encoder")
     def forward(
         self,
         input_feature_dict: Dict[str, Tensor],
@@ -295,10 +298,11 @@ class AtomAttentionEncoder(nn.Module):
             # Broadcast token pair vectors to local atom pairs
             z_local_pairs = broadcast_token_to_local_atom_pair(
                 z_token=self.linear_no_bias_z(self.layernorm_z(z)),
-                atom_to_token_idx=atom_to_token_idx,
+                atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
                 num_queries=self.num_queries,
                 num_keys=self.num_keys,
             )  # [..., N_sample | 1, n_blocks, n_queries, n_keys, c_atompair]
+
             p_lm = p_lm + z_local_pairs
             p_lm = p_lm * trunked_pair_mask[..., None]
 
@@ -335,7 +339,7 @@ class AtomAttentionEncoder(nn.Module):
         a = average_atom_to_token(
             x_atom=F.relu(self.final_linear(q_l)),
             atom_mask=atom_mask,
-            atom_to_token_idx=atom_to_token_idx,
+            atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
             n_token=n_token,
         )
         return a, q_l, c_l, p_lm
@@ -388,6 +392,7 @@ class AtomAttentionDecoder(nn.Module):
         self.final_layernorm = LayerNorm(c_atom)
         self.final_linear = LinearNoBias(c_atom, 3, init="zeros", high_precision=True)
 
+    # @profile_function("atom_attention_decoder")
     def forward(
         self,
         a: Tensor,

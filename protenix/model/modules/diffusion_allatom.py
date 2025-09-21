@@ -6,7 +6,7 @@ import torch.nn as nn
 from protenix.model.modules.components import Transition
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
-from protenix.model.modules.transformer_v2 import DiffusionTransformer
+from protenix.model.modules.transformer import DiffusionTransformer
 from protenix.model.utils import (
     average_atom_to_token,
     centre_random_augmentation,
@@ -47,11 +47,13 @@ class DiffusionConditioning(nn.Module):
 
         ### Ligand features
         # Ligand reference position embeddings
-        self.embed_ligand_ref_pos = LinearNoBias(3, self.c_s)
-        self.embed_ligand_pair_offsets = LinearNoBias(3, self.c_z, high_precision=False)
-        self.embed_ligand_pair_invd = LinearNoBias(1, self.c_z)
-        self.embed_ref_mask = LinearNoBias(1, self.c_s)
-        self.embed_pair_offsets_valid = LinearNoBias(1, self.c_z)
+        self.embed_ligand_ref_pos = LinearNoBias(3, self.c_s, init="lecun")
+        self.embed_ligand_pair_offsets = LinearNoBias(
+            3, self.c_z, init="lecun", high_precision=False
+        )
+        self.embed_ligand_pair_invd = LinearNoBias(1, self.c_z, init="lecun")
+        self.embed_ref_mask = LinearNoBias(1, self.c_s, init="normal")
+        self.embed_pair_offsets_valid = LinearNoBias(1, self.c_z, init="normal")
 
         # Ligand condition embeddings
         self.ligand_input_feature = {
@@ -61,12 +63,12 @@ class DiffusionConditioning(nn.Module):
             "ref_atom_name_chars": 4 * 64,
         }
         self.ligand_condition_embed = LinearNoBias(
-            sum(self.ligand_input_feature.values()), self.c_s
+            sum(self.ligand_input_feature.values()), self.c_s, init="lecun"
         )
 
         # Token bonds
         self.token_bonds_embed = LinearNoBias(
-            in_features=1, out_features=self.c_z, init="zeros"
+            in_features=1, out_features=self.c_z, init="normal"
         )
 
         ### Relpos
@@ -77,9 +79,9 @@ class DiffusionConditioning(nn.Module):
         ### Timestep embeddings
         self.fourier_embedding = FourierEmbedding(c=c_timestep_embedding)
         self.layernorm_latent_t = LayerNorm(c_timestep_embedding)
-        self.latent_t_embed = LinearNoBias(c_timestep_embedding, self.c_s)
+        self.latent_t_embed = LinearNoBias(c_timestep_embedding, self.c_s, init="lecun")
         self.layernorm_coord_t = LayerNorm(c_timestep_embedding)
-        self.coord_t_embed = LinearNoBias(c_timestep_embedding, self.c_s)
+        self.coord_t_embed = LinearNoBias(c_timestep_embedding, self.c_s, init="lecun")
 
         # Entity type embedding
         self.entity_features = {
@@ -88,9 +90,12 @@ class DiffusionConditioning(nn.Module):
             "is_dna_token": 1,
             "is_rna_token": 1,
             "is_target_token": 1,
+            "is_hotspot": 1,
         }
         self.entity_type_embed = LinearNoBias(
-            in_features=sum(self.entity_features.values()), out_features=self.c_s
+            in_features=sum(self.entity_features.values()),
+            out_features=self.c_s,
+            init="lecun",
         )
 
         ### Target features
@@ -112,12 +117,16 @@ class DiffusionConditioning(nn.Module):
         self.num_bins = len(lower_bins)
 
         # Target feature embeddings
-        self.embed_target_restype = LinearNoBias(32, self.c_s)
-        self.embed_target_coord = LinearNoBias(3, self.c_s)
-        self.embed_target_pair_dist = LinearNoBias(self.n_target_dist_bins, self.c_z)
+        self.embed_target_restype = LinearNoBias(32, self.c_s, init="normal")
+        self.embed_target_coord = LinearNoBias(3, self.c_s, init="lecun")
+        self.embed_target_pair_dist = LinearNoBias(
+            self.n_target_dist_bins, self.c_z, init="normal"
+        )
 
         ### Transitions
-        self.transition_z = Transition(c_in=self.c_z, n=2)
+        self.transition_z = Transition(
+            c_in=self.c_z, n=2
+        )  # TODO: are zero init's appropriate here with Muon?
         self.transition_s1 = Transition(c_in=self.c_s, n=2)
         self.transition_s2 = Transition(c_in=self.c_s, n=2)
 
@@ -200,7 +209,7 @@ class DiffusionConditioning(nn.Module):
                 )
             )
             * is_ligand
-        )  # [N_atom, c_s]
+        )  # [..., N_atom, c_s]
 
         c_s = average_atom_to_token(
             x_atom=c_s,
@@ -354,6 +363,7 @@ class DiffusionConditioning(nn.Module):
         ).to(z.dtype)
 
         # 2. Normalise and embed both timesteps
+        s = s.unsqueeze(-3)
         s = s + expand_at_dim(
             self.latent_t_embed(self.layernorm_latent_t(timestep_latent)),
             dim=-2,
@@ -443,11 +453,17 @@ class DiffusionModule(nn.Module):
             c_s=c_s,
         )
         # Coordinate embedding layer
-        self.linear_no_bias_r_embed = LinearNoBias(3, c_token)
+        self.linear_no_bias_r_embed = LinearNoBias(
+            3,
+            c_token,  # init="lecun"
+        )
 
         # Latent embedding layer
         # self.layernorm_latent = LayerNorm(c_latent)
-        self.linear_no_bias_latent_embed = LinearNoBias(c_latent, c_token)
+        self.linear_no_bias_latent_embed = LinearNoBias(
+            c_latent,
+            c_token,  # init="lecun"
+        )
 
         # Alg20: line4
         self.layernorm_s = LayerNorm(c_s)
@@ -534,7 +550,7 @@ class DiffusionModule(nn.Module):
         a_coord = self.linear_no_bias_r_embed(r_noisy_coord)
         a_latent = self.linear_no_bias_latent_embed(r_noisy_latent)
 
-        a_token = a_coord + a_latent
+        a_token = a_coord + a_latent  # [..., N_sample, N_token, c_token]
 
         # Mix single conditioning into token representation
         a_token = a_token + self.linear_no_bias_s(self.layernorm_s(s))
@@ -542,7 +558,9 @@ class DiffusionModule(nn.Module):
 
         # Apply diffusion transformer on token representations
         a_token = a_token * token_mask[..., None]
+        z = z.unsqueeze(-4)
         z = z * pair_mask[..., None]
+
         a_token = self.diffusion_transformer(a=a_token, s=s, z=z, pair_mask=pair_mask)
         a_token = a_token * token_mask[..., None]
         a_token = self.layernorm_a(a_token)
@@ -562,6 +580,18 @@ class DiffusionModule(nn.Module):
     def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
         return 1.0
 
+    def velocity_c_out(self, timestep):
+        # Carlos, forgive me.
+        cutoff = 0.8
+        t_n = timestep
+        std = (
+            self.sigma_coord
+            / (1 - cutoff)
+            * ((1 - cutoff) ** 2 + (cutoff - t_n) ** 2 + (1 - t_n) ** 2).sqrt()
+        )
+        # TODO: remove the jank, unify with proper c_out
+        return torch.where(timestep < cutoff, std, 1.0)
+
     def forward(
         self,
         noisy_coord: torch.Tensor,
@@ -570,6 +600,7 @@ class DiffusionModule(nn.Module):
         latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         inplace_safe: bool = False,
+        return_velocities: bool = False,
         chunk_size: Optional[int] = None,
     ) -> dict[str, torch.Tensor]:
         # Expand timesteps
@@ -593,12 +624,19 @@ class DiffusionModule(nn.Module):
             chunk_size=chunk_size,
         )
 
+        # Bring to correct scale
+        coord_v = self.sigma_coord * r_coord * self.velocity_c_out(coord_timestep_)
+        latent_v = self.sigma_latent * r_latent
+
         # Apply skip connections and output scaling for both coordinate and latent predictions
-        coord_pred = noisy_coord * self.c_skip(
+        coord_pred = noisy_coord * self.c_skip(coord_timestep_) + coord_v * self.c_out(
             coord_timestep_
-        ) + r_coord * self.sigma_coord * self.c_out(coord_timestep_)
+        )
         latent_pred = noisy_latent * self.c_skip(
             latent_timestep_
-        ) + r_latent * self.sigma_latent * self.c_out(latent_timestep_)
+        ) + latent_v * self.c_out(latent_timestep_)
+
+        if return_velocities:
+            return coord_v, latent_v
 
         return coord_pred, latent_pred

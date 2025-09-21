@@ -532,27 +532,14 @@ def sample_noising(
     # (Optional) Encode
     if encoder is not None:
         with torch.no_grad():
-            # TODO: clean this up
-            # x_target_sample = x_target_augment[..., 0, :, :].unsqueeze(
-            #     -3
-            # )  # extract one sample
-            mu, _ = encoder(input_feature_dict, x_target_augment)
-            eps = torch.randn_like(mu)  # reparameterized latents
-            noise_level = torch.rand(mu.shape[:-2], device=eps.device, dtype=eps.dtype)
-            gamma = noise_level[..., None, None] * 0.5
-            x_target_augment = mu + gamma * eps  # noise the latents
-
-            # Add N_sample back in
-            # x_target_augment = expand_at_dim(
-            #     x_target_augment.squeeze(-3), dim=-3, n=num_sample
-            # )
+            x_target_augment = encoder(input_feature_dict, x_target_augment)
 
     # Generate timestep
     timestep = timestep_sampler(
         size=(*batch_size_shape, num_sample), device=device, generator=generator
     ).to(dtype)
 
-    # Generate noise
+    # Sample noise for FM
     noise = (
         torch.randn(
             x_target_augment.shape,
@@ -563,12 +550,36 @@ def sample_noising(
         * scale
     )
 
-    # Noise input
-    x_noisy = noise_w_flow_matching(
-        x_target_augment, noise, timestep[..., :, None, None]
-    )
+    # Working in coordinates
+    if encoder is None:
+        cutoff = 0.8  # hardcoded for now
+        t = timestep[..., None, None]
+        x_1 = x_target_augment
+        t_a = torch.where(t - 1e-2 < cutoff, t + (1 - cutoff), 1.0)
+        anchor_noise = (
+            torch.randn(
+                x_target_augment.shape,
+                dtype=dtype,
+                device=x_target_augment.device,
+            )
+            * scale
+        )
 
-    return x_noisy, timestep, x_target_augment
+        x_a = t_a * x_1 + (1 - t_a) * anchor_noise
+        x_noisy = t * x_1 + (1 - t) * noise
+
+        # Target velocity
+        v_target = (x_a - x_noisy) / (t_a - t)
+
+    else:
+        # Noise latents as usual
+        x_noisy = noise_w_flow_matching(
+            x_target_augment, noise, timestep[..., :, None, None]
+        )
+        # Target latent velocity
+        v_target = x_target_augment - noise
+
+    return x_noisy, timestep, v_target
 
 
 def sample_diffusion_training(

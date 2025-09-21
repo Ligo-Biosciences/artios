@@ -41,13 +41,9 @@ from protenix.metrics.sequence_metrics import SequenceMetrics
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import VAELoss
 from protenix.model.modules.atom_attention import (
-    AtomAttentionDecoder,
     AtomAttentionEncoder,
 )
-from protenix.model.modules.transformer_v2 import (
-    DiffusionTransformer,
-    DiTBlock,
-    LocalAttnTransformer,
+from protenix.model.modules.transformer import (
     LocalAttnTransformerBlock,
     Transformer,
 )
@@ -146,20 +142,16 @@ class ArtiosAllAtomTrainer(object):
                 model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
                 run=self.neptune_run,
                 track_layers=[
-                    LocalAttnTransformer,
-                    Transformer,
-                    DiffusionTransformer,
-                    DiTBlock,
                     LocalAttnTransformerBlock,
+                    Transformer,
                     AtomAttentionEncoder,
-                    AtomAttentionDecoder,
                 ],  # optionally specify
                 track_layers_name_includes=["linear_q", "linear_k"],
-                tensor_stats=["channel_norm", "channel_rms", "mean", "abs_mean"],
+                tensor_stats=["channel_rms", "abs_mean"],
                 base_namespace="model_metrics",
             )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
-        self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
+        self.train_metric_wrapper = SimpleMetricAggregator(["nan_avg"])
 
     def init_env(self):
         """Init pytorch/cuda envs."""
@@ -439,13 +431,11 @@ class ArtiosAllAtomTrainer(object):
 
         # Get num_sample latents and flatten
         latents_mean = batch["pred_dict"]["latents_mean"][..., :num_sample, :, :]
-        latents_logvar = batch["pred_dict"]["latents_logvar"][..., :num_sample, :, :]
 
         num_token = latents_mean.shape[-2]
         c_latent = latents_mean.shape[-1]
 
         latents_mean = latents_mean.reshape(-1, num_sample * num_token, c_latent)
-        latents_logvar = latents_logvar.reshape(-1, num_sample * num_token, c_latent)
 
         # Get token restypes and flatten
         restype = torch.argmax(
@@ -460,10 +450,9 @@ class ArtiosAllAtomTrainer(object):
 
         # Detach and move to CPU
         latents_mean = latents_mean.detach().cpu().float().numpy()
-        latents_logvar = latents_logvar.detach().cpu().float().numpy()
         restype = restype.cpu().numpy()
 
-        return latents_mean, latents_logvar, restype
+        return latents_mean, restype
 
     @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
@@ -476,6 +465,7 @@ class ArtiosAllAtomTrainer(object):
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):
+        # NOTE: currently, the test datasets are not being batched.
         # Init Metric Aggregator
         simple_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
         eval_precision = {
@@ -494,7 +484,7 @@ class ArtiosAllAtomTrainer(object):
         # master_monitor_dict = defaultdict(lambda: defaultdict(list))
 
         self.latents = (
-            {"mean": [], "logvar": [], "restype": []}
+            {"mean": [], "restype": []}
             if self.configs.monitor.latents.track_during_vae_training
             else None
         )
@@ -583,7 +573,7 @@ class ArtiosAllAtomTrainer(object):
                     metrics_dict = self.get_metrics(batch)
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
-                # TODO: do model inference, save the structures with dumper and log to neptune
+                # TODO: this might not work with batching.
                 if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
                     coordinate = batch["pred_dict"]["coordinate"]
                     n_atoms = len(batch["cropped_atom_array"])
@@ -616,13 +606,12 @@ class ArtiosAllAtomTrainer(object):
                     self.latents is not None
                     and index < self.configs.monitor.latents.num_batch
                 ):
-                    latents_mean, latents_logvar, restype = self.get_latents(batch)
+                    latents_mean, restype = self.get_latents(batch)
 
                     self.latents["mean"].append(latents_mean)
-                    self.latents["logvar"].append(latents_logvar)
                     self.latents["restype"].append(restype)
 
-                    del latents_mean, latents_logvar, restype
+                    del latents_mean, restype
 
                 # Metrics
                 for key, value in simple_metrics.items():

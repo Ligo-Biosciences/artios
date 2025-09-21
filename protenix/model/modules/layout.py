@@ -24,6 +24,7 @@ def _get_key_trunk_indices(n, n_queries, n_keys):
     return key_indices
 
 
+# @profile_function("rearrange_to_query_subset")
 @torch.compiler.disable
 def rearrange_to_query_subset(
     q_x: Tensor, rearrange_dim: int, num_queries: int
@@ -47,6 +48,7 @@ def rearrange_to_query_subset(
     return reshape_at_dim(q_x, dim=rearrange_dim, target_shape=(n_trunks, num_queries))
 
 
+##@profile_function("rearrange_to_key_subset")
 @torch.compiler.disable
 def rearrange_to_key_subset(
     k_x: Tensor, rearrange_dim: int, num_keys: int, num_queries: int
@@ -74,6 +76,7 @@ def rearrange_to_key_subset(
     return index_at_dim(k_x, rearrange_dim, key_indices)
 
 
+##@profile_function("gather_trunk_pair_embedding")
 @torch.compiler.disable
 def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
     """
@@ -89,6 +92,8 @@ def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
         y (Tensor): [..., N_b, N_q, N_k, d]
             where y[..., b, i, j, :] = x[..., idx_q[..., b, i], idx_k[..., b, j], :]
     """
+    assert x.shape[:-3] == idx_q.shape[:-2]
+    assert x.shape[:-3] == idx_k.shape[:-2]
     assert idx_q.shape[:-1] == idx_k.shape[:-1]
     idx_q = idx_q.long()
     idx_k = idx_k.long()
@@ -115,6 +120,7 @@ def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
     return x[tuple(ranges)]
 
 
+# @profile_function("broadcast_token_to_local_atom_pair")
 @torch.compiler.disable
 def broadcast_token_to_local_atom_pair(
     z_token: Tensor,
@@ -136,6 +142,7 @@ def broadcast_token_to_local_atom_pair(
         z_gathered_blocked (Tensor): atom pair embedding, with local blocked shape
             [..., n_trunks, n_queries, n_keys, d]
     """
+    assert atom_to_token_idx.shape[:-1] == z_token.shape[:-3]
 
     # [..., N_atom] -> [..., n_trunks, n_queries] and [..., n_trunks, n_keys]
     atom_to_token_idx_q = rearrange_to_query_subset(

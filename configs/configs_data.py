@@ -145,6 +145,7 @@ data_configs = {
         "max_n_msa": 1,
         "max_n_template": 4,
         "max_n_pocket": 16,
+        "bin_ends": ListValue([2112, 3008, 4000]),
     },
     "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925"]),
     "train_sampler": {
@@ -160,7 +161,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            "pdb_list": ["1sr0"],
+            "pdb_list": "",  # ["1s01", "1sr0"],
             "random_sample_if_failed": True,
             "max_n_token": 3000,  # -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,

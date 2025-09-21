@@ -97,7 +97,13 @@ def gating_init_(weight, bias=None):
 
 
 def normal_init_(weight, bias=None):
-    nn.init.kaiming_normal_(weight, nonlinearity="linear")
+    nn.init.normal_(weight, mean=0.0, std=1.0)
+    init_bias_to_zero_(bias)
+
+
+def orthogonal_init_(weight, bias=None):
+    fan_out, fan_in = weight.shape
+    nn.init.orthogonal_(weight) * math.sqrt(fan_out / fan_in)
     init_bias_to_zero_(bias)
 
 
@@ -151,7 +157,8 @@ class Linear(nn.Linear):
         super(Linear, self).__init__(in_features, out_features, bias)
 
         init_methods = {
-            "default": lecun_normal_init_,
+            "default": orthogonal_init_,  # lecun_normal_init_,
+            "lecun": lecun_normal_init_,
             "relu": he_normal_init_,
             "glorot": glorot_uniform_init_,
             "gating": gating_init_,

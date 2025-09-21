@@ -29,7 +29,6 @@ from biotite.structure import AtomArray
 from biotite.structure.io import pdbx
 from biotite.structure.io.pdb import PDBFile
 
-from protenix.common.atom_types import DENSE_ATOM_NUM
 from protenix.common.constants import (
     DNA_STD_RESIDUES,
     PRO_STD_RESIDUES,
@@ -503,6 +502,8 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
 
     Returns:
         dict: A dictionary containing the shapes of all data.
+
+    # TODO: clean-up these features to reduce dataloading load
     """
     # Features in AlphaFold3 SI Table5
     feat = {
@@ -545,6 +546,7 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         "target_centre_coordinate": (num_token, 3),
         "target_restype": (num_token, 32),
         "is_target_token": (num_token,),
+        "is_hotspot": (num_token,),
         # Masks
         "token_mask": (num_token,),
         "atom_mask": (num_atom,),
@@ -579,7 +581,7 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         "pae_rep_atom_mask": (num_atom,),
         "plddt_m_rep_atom_mask": (num_atom,),
         "modified_res_mask": (num_atom,),
-        "bond_mask": (num_atom, num_atom),
+        # "bond_mask": (num_atom, num_atom),
         "is_protein": (num_atom,),  # Atom level, not token level
         "is_rna": (num_atom,),
         "is_dna": (num_atom,),
@@ -601,28 +603,6 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
     # Merged
     all_feat = {**feat, **extra_feat}
     return all_feat, label
-
-
-def get_atom_padding_length(n_atom: int, bin_ends: list[int], crop_size: int) -> int:
-    """
-    Get the bin end (padding target) for the given number of atoms. Also calculates the largest
-    bin end for the given crop size.
-
-    Args:
-        n_atom (int): Number of atoms in structure.
-        bin_ends (list[int]): List of bin ends.
-        crop_size (int): Crop size.
-
-    Returns:
-        int: Bin end (padding target) for the given number of atoms.
-    """
-    max_bin_end = crop_size * DENSE_ATOM_NUM
-    bin_ends.append(max_bin_end)
-
-    for end in bin_ends:
-        if n_atom <= end:
-            return end
-    return bin_ends[-1]
 
 
 def get_lig_lig_bonds(

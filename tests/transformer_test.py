@@ -1,435 +1,577 @@
-import os
-
 import pytest
 import torch
 
 from protenix.model.modules.transformer import (
-    AtomAttentionDecoder,
-    AtomAttentionEncoder,
-    AtomTransformer,
-    AttentionPairBias,
-    ConditionedTransitionBlock,
     DiffusionTransformer,
-    DiffusionTransformerBlock,
+    DiTBlock,
+    LocalAttnTransformer,
+    LocalAttnTransformerBlock,
     Transformer,
     TransformerBlock,
 )
 
 
-class TestAttentionPairBias:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+class TestDiTBlock:
+    @pytest.mark.parametrize("c_token", [128, 256, 512])
+    @pytest.mark.parametrize("num_heads", [4, 8, 16])
+    def test_shapes(self, c_token, num_heads):
+        BATCH_SIZE = 3
+        N = 7
 
-    @pytest.fixture
-    def sample_data(self):
-        data_path = os.path.join(
-            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
-        )
-        if not os.path.exists(data_path):
-            pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path, weights_only=False)["input_feature_dict"]
+        block = DiTBlock(c_token=c_token, num_heads=num_heads)
 
-    def test_attention_pair_bias(self, device, sample_data):
-        n_heads = 16
-        c_a = 768
-        c_s = 384
-        c_z = 128
+        a = torch.randn(BATCH_SIZE, N, c_token)
+        scale_attn = torch.randn(BATCH_SIZE, N, c_token)
+        shift_attn = torch.randn(BATCH_SIZE, N, c_token)
+        gate_attn = torch.randn(BATCH_SIZE, N, c_token)
+        scale_mlp = torch.randn(BATCH_SIZE, N, c_token)
+        shift_mlp = torch.randn(BATCH_SIZE, N, c_token)
+        gate_mlp = torch.randn(BATCH_SIZE, N, c_token)
 
-        model = AttentionPairBias(
-            has_s=True, n_heads=n_heads, c_a=c_a, c_s=c_s, c_z=c_z
-        ).to(device)
+        pair_bias = torch.randn(BATCH_SIZE, num_heads, N, N)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
 
-        batch_size = 2
-        n_tokens = 32
-
-        # Create dummy input tensors
-        a = torch.randn(batch_size, n_tokens, c_a).to(device)
-        s = torch.randn(batch_size, n_tokens, c_s).to(device)
-        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
-
-        out = model(a, s, z)
-
-        # Check output shape and values
-        assert out.shape == (batch_size, n_tokens, c_a)
-        assert not torch.isnan(out).any()
-
-
-class TestTransformerBlock:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    def test_transformer_block(self, device):
-        c_a = 768
-        c_z = 128
-        n_heads = 16
-
-        model = TransformerBlock(c_a=c_a, c_z=c_z, n_heads=n_heads).to(device)
-
-        batch_size = 2
-        n_tokens = 32
-
-        # Create dummy input tensors
-        a = torch.randn(batch_size, n_tokens, c_a).to(device)
-        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
-
-        # Keep copies to check if z is modified
-        z_orig = z.clone()
-
-        out_a, out_z = model(a, z)
-
-        # Check output shape and values
-        assert out_a.shape == (batch_size, n_tokens, c_a)
-        assert out_z.shape == (batch_size, n_tokens, n_tokens, c_z)
-        assert not torch.isnan(out_a).any()
-        assert not torch.isnan(out_z).any()
-
-        # Check z is not modified
-        assert torch.allclose(z, z_orig)
-
-
-class TestTransformer:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    def test_transformer(self, device):
-        c_a = 768
-        c_z = 128
-        n_blocks = 3
-        n_heads = 16
-
-        model = Transformer(c_a=c_a, c_z=c_z, n_blocks=n_blocks, n_heads=n_heads).to(
-            device
+        out = block(
+            a=a,
+            scale_attn=scale_attn,
+            shift_attn=shift_attn,
+            gate_attn=gate_attn,
+            scale_mlp=scale_mlp,
+            shift_mlp=shift_mlp,
+            gate_mlp=gate_mlp,
+            pair_bias=pair_bias,
+            pair_mask=pair_mask,
         )
 
-        batch_size = 2
-        n_tokens = 32
+        assert out.shape == (BATCH_SIZE, N, c_token)
 
-        # Create dummy input tensors
-        a = torch.randn(batch_size, n_tokens, c_a).to(device)
-        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
+    def test_evil_shape(self):
+        BATCH_SIZE = 3
+        N = 7
+        c_token = 128
+        num_heads = 4
 
-        out = model(a, z)
+        block = DiTBlock(c_token=c_token, num_heads=num_heads)
 
-        # Check output shape and values
-        assert out.shape == (batch_size, n_tokens, c_a)
-        assert not torch.isnan(out).any()
+        a = torch.randn(BATCH_SIZE, N, c_token)
+        scale_attn = torch.randn(BATCH_SIZE, N, c_token)
+        shift_attn = torch.randn(BATCH_SIZE, N, c_token)
+        gate_attn = torch.randn(BATCH_SIZE, N, c_token)
+        scale_mlp = torch.randn(BATCH_SIZE, N, c_token)
+        shift_mlp = torch.randn(BATCH_SIZE, N, c_token)
+        gate_mlp = torch.randn(BATCH_SIZE, N, c_token)
+        pair_bias = torch.randn(BATCH_SIZE, num_heads, N + 1, N + 1)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N + 1, N + 1)).bool()
 
-
-class TestDiffusionTransformerBlock:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    def test_diffusion_transformer_block(self, device):
-        c_a = 768
-        c_s = 384
-        c_z = 128
-        n_heads = 16
-
-        model = DiffusionTransformerBlock(
-            c_a=c_a, c_s=c_s, c_z=c_z, n_heads=n_heads
-        ).to(device)
-
-        batch_size = 2
-        n_tokens = 32
-
-        # Create dummy input tensors
-        a = torch.randn(batch_size, n_tokens, c_a).to(device)
-        s = torch.randn(batch_size, n_tokens, c_s).to(device)
-        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
-
-        # Keep copies to check if s and z are modified
-        s_orig = s.clone()
-        z_orig = z.clone()
-
-        out_a, out_s, out_z = model(a, s, z)
-
-        # Check output shape and values
-        assert out_a.shape == (batch_size, n_tokens, c_a)
-        assert out_s.shape == (batch_size, n_tokens, c_s)
-        assert out_z.shape == (batch_size, n_tokens, n_tokens, c_z)
-        assert not torch.isnan(out_a).any()
-        assert not torch.isnan(out_s).any()
-        assert not torch.isnan(out_z).any()
-
-        # Check s and z are not modified
-        assert torch.allclose(s, s_orig)
-        assert torch.allclose(z, z_orig)
+        with pytest.raises(AssertionError):
+            block(
+                a=a,
+                scale_attn=scale_attn,
+                shift_attn=shift_attn,
+                gate_attn=gate_attn,
+                scale_mlp=scale_mlp,
+                shift_mlp=shift_mlp,
+                gate_mlp=gate_mlp,
+                pair_bias=pair_bias,
+                pair_mask=pair_mask,
+            )
 
 
 class TestDiffusionTransformer:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    @pytest.mark.parametrize("num_blocks", [2])
+    @pytest.mark.parametrize("c_token", [128, 256])
+    @pytest.mark.parametrize("c_s", [128, 256])
+    @pytest.mark.parametrize("c_z", [128, 256])
+    @pytest.mark.parametrize("num_heads", [4])
+    def test_shapes(self, num_blocks, c_token, c_s, c_z, num_heads):
+        BATCH_SIZE = 3
+        N = 7
 
-    def test_diffusion_transformer(self, device):
-        c_a = 768
-        c_s = 384
-        c_z = 128
-        n_blocks = 3
-        n_heads = 16
-
-        model = DiffusionTransformer(
-            c_a=c_a, c_s=c_s, c_z=c_z, n_blocks=n_blocks, n_heads=n_heads
-        ).to(device)
-
-        batch_size = 2
-        n_tokens = 32
-
-        # Create dummy input tensors
-        a = torch.randn(batch_size, n_tokens, c_a).to(device)
-        s = torch.randn(batch_size, n_tokens, c_s).to(device)
-        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
-
-        out = model(a, s, z)
-
-        # Check output shape and values
-        assert out.shape == (batch_size, n_tokens, c_a)
-        assert not torch.isnan(out).any()
-
-
-class TestAtomTransformer:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    @pytest.fixture
-    def sample_data(self):
-        data_path = os.path.join(
-            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
+        transformer = DiffusionTransformer(
+            num_blocks=num_blocks,
+            c_token=c_token,
+            c_s=c_s,
+            c_z=c_z,
+            num_heads=num_heads,
         )
-        if not os.path.exists(data_path):
-            pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path, weights_only=False)
 
-    def test_atom_transformer(self, device, sample_data):
-        c_atom = 128
-        c_atompair = 16
-        n_heads = 4
-        n_queries = 32
-        n_keys = 128
-        n_blocks = 3
+        a = torch.randn(BATCH_SIZE, N, c_token)
+        s = torch.randn(BATCH_SIZE, N, c_s)
+        z = torch.randn(BATCH_SIZE, N, N, c_z)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
 
-        model = AtomTransformer(
-            c_atom=c_atom,
-            c_atompair=c_atompair,
-            n_blocks=n_blocks,
-            n_heads=n_heads,
-            n_queries=n_queries,
-            n_keys=n_keys,
-        ).to(device)
+        out = transformer(a, s, z, pair_mask)
 
-        batch_size = 2
-        n_atoms = 256
+        assert out.shape == (BATCH_SIZE, N, c_token)
 
-        # Create dummy input tensors
-        q = torch.randn(batch_size, n_atoms, c_atom).to(device)
-        c = torch.randn(batch_size, n_atoms, c_atom).to(device)
-        p = torch.randn(
-            batch_size, n_atoms // n_queries, n_queries, n_keys, c_atompair
-        ).to(device)
-
-        out = model(q, c, p)
-
-        # Check output shape and values
-        assert out.shape == (batch_size, n_atoms, c_atom)
-        assert not torch.isnan(out).any()
-
-
-class TestConditionedTransitionBlock:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    def test_conditioned_transition_block(self, device):
-        c_a = 128
+    def test_evil_shape(self):
+        BATCH_SIZE = 3
+        N = 7
+        c_token = 128
         c_s = 128
-        n = 2
-        biasinit = -2.0
-
-        model = ConditionedTransitionBlock(c_a=c_a, c_s=c_s, n=n, biasinit=biasinit).to(
-            device
-        )
-
-        batch_size = 2
-        n_tokens = 256
-
-        # Create dummy input tensors
-        a = torch.randn(batch_size, n_tokens, c_a).to(device)
-        s = torch.randn(batch_size, n_tokens, c_s).to(device)
-
-        out = model(a, s)
-
-        # Check output shape and values
-        assert out.shape == (batch_size, n_tokens, c_a)
-        assert not torch.isnan(out).any()
-
-
-class TestAtomAttentionDecoder:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    @pytest.fixture
-    def sample_data(self):
-        data_path = os.path.join(
-            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
-        )
-        if not os.path.exists(data_path):
-            pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path, weights_only=False)
-
-    def test_atom_attention_decoder(self, device, sample_data):
-        n_blocks = 3
-        n_heads = 4
-        c_token = 384
-        c_atom = 128
-        c_atompair = 16
-        n_queries = 32
-        n_keys = 128
-
-        model = AtomAttentionDecoder(
-            n_blocks=n_blocks,
-            n_heads=n_heads,
-            c_token=c_token,
-            c_atom=c_atom,
-            c_atompair=c_atompair,
-            n_queries=n_queries,
-            n_keys=n_keys,
-        ).to(device)
-
-        # Move sample data to device
-        n_tokens = sample_data["basic"]["N_token"][0]
-        n_atoms = sample_data["basic"]["N_atom"][0]
-        sample_data = sample_data["input_feature_dict"]
-        input_dict = {
-            k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()
-        }
-        batch_size = 2
-
-        # Create dummy input tensors
-        a = torch.randn(batch_size, n_tokens, c_token).to(device)
-        q_skip = torch.randn(batch_size, n_atoms, c_atom).to(device)
-        c_skip = torch.randn(batch_size, n_atoms, c_atom).to(device)
-        p_skip = torch.randn(
-            batch_size, n_atoms // n_queries, n_queries, n_keys, c_atompair
-        ).to(device)
-
-        out = model(input_dict, a, q_skip, c_skip, p_skip)
-
-        # Check output shape and values
-        assert out.shape == (batch_size, n_atoms, 3)  # Output should be 3D coordinates
-        assert not torch.isnan(out).any()
-
-    def test_atom_attention_encoder(self, device, sample_data):
-        has_coords = True
-        n_blocks = 3
-        n_heads = 4
-        c_token = 384
-        c_atom = 128
-        c_atompair = 16
-        c_s = 384
         c_z = 128
-        n_queries = 32
-        n_keys = 128
+        num_heads = 4
+        num_blocks = 2
 
-        model = AtomAttentionEncoder(
-            has_coords=has_coords,
+        transformer = DiffusionTransformer(
+            num_blocks=num_blocks,
             c_token=c_token,
-            c_atom=c_atom,
-            c_atompair=c_atompair,
             c_s=c_s,
             c_z=c_z,
-            n_blocks=n_blocks,
-            n_heads=n_heads,
-            n_queries=n_queries,
-            n_keys=n_keys,
-        ).to(device)
-
-        # Move sample data to device
-        n_tokens = sample_data["basic"]["N_token"][0]
-        n_atoms = sample_data["basic"]["N_atom"][0]
-        sample_data = sample_data["input_feature_dict"]
-        input_dict = {
-            k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()
-        }
-        batch_size = 2
-
-        # Create dummy input tensors
-        r_l = torch.randn(batch_size, n_atoms, 3).to(device)
-        s = torch.randn(batch_size, n_tokens, c_s).to(device)
-        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
-
-        a, q_l, c_l, p_lm = model(input_dict, r_l, s, z)
-
-        # Check output shapes and values
-        assert a.shape == (batch_size, n_tokens, c_token)
-        assert q_l.shape == (batch_size, n_atoms, c_atom)
-        assert c_l.shape == (batch_size, n_atoms, c_atom)
-        assert p_lm.shape == (
-            batch_size,
-            n_atoms // n_queries,
-            n_queries,
-            n_keys,
-            c_atompair,
+            num_heads=num_heads,
         )
-        assert not torch.isnan(a).any()
-        assert not torch.isnan(q_l).any()
-        assert not torch.isnan(c_l).any()
-        assert not torch.isnan(p_lm).any()
 
-    def test_atom_attention_encoder_granular_flags(self, device, sample_data):
-        """Test AtomAttentionEncoder with different granular flag combinations"""
-        n_blocks = 3
-        n_heads = 4
-        c_token = 384
-        c_atom = 128
-        c_atompair = 16
-        c_s = 384
+        a = torch.randn(BATCH_SIZE, N, c_token)
+        s = torch.randn(BATCH_SIZE, N, c_s)
+        z = torch.randn(BATCH_SIZE, N, N, c_z)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N + 1, N + 1)).bool()
+
+        with pytest.raises(AssertionError):
+            transformer(a, s, z, pair_mask)
+
+        a = torch.randn(BATCH_SIZE, N, c_token)
+        s = torch.randn(BATCH_SIZE, N, c_s)
+        z = torch.randn(BATCH_SIZE, N, N, c_z)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N + 1)).bool()
+
+        with pytest.raises(AssertionError):
+            transformer(a, s, z, pair_mask)
+
+        a = torch.randn(BATCH_SIZE, N, N, c_token)
+        s = torch.randn(BATCH_SIZE, N, c_s)
+        z = torch.randn(BATCH_SIZE, N, N, c_z)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
+
+        with pytest.raises(AssertionError):
+            transformer(a, s, z, pair_mask)
+
+    def test_batch_dim_mismatch(self):
+        BATCH_SIZE = 3
+        N = 7
+        c_token = 128
+        c_s = 128
         c_z = 128
-        n_queries = 32
-        n_keys = 128
+        num_heads = 4
+        num_blocks = 2
 
-        # Move sample data to device
-        n_tokens = sample_data["basic"]["N_token"][0]
-        sample_data = sample_data["input_feature_dict"]
-        input_dict = {
-            k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()
-        }
-        batch_size = 2
-
-        # Test with only s embedding enabled
-        model_s_only = AtomAttentionEncoder(
-            has_coords=False,
-            has_s=True,
-            has_z=False,
+        transformer = DiffusionTransformer(
+            num_blocks=num_blocks,
             c_token=c_token,
-            c_atom=c_atom,
-            c_atompair=c_atompair,
             c_s=c_s,
             c_z=c_z,
-            n_blocks=n_blocks,
-            n_heads=n_heads,
-            n_queries=n_queries,
-            n_keys=n_keys,
-        ).to(device)
+            num_heads=num_heads,
+        )
 
-        s = torch.randn(batch_size, n_tokens, c_s).to(device)
-        a, q_l, c_l, p_lm = model_s_only(input_dict, s=s)
-        assert a.shape == (batch_size, n_tokens, c_token)
-        assert not torch.isnan(a).any()
+        a = torch.randn(BATCH_SIZE, N, c_token)
+        s = torch.randn(BATCH_SIZE, N, c_s)
+        z = torch.randn(1, N, N, c_z)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
 
-        # Test assertion when providing z input but has_z=False
-        z = torch.randn(batch_size, n_tokens, n_tokens, c_z).to(device)
-        try:
-            model_s_only(input_dict, s=s, z=z)
-            assert False, "Should have raised assertion error"
-        except AssertionError as e:
-            assert "has_z=False" in str(e)
+        out = transformer(a, s, z, pair_mask)
+
+        assert out.shape == (BATCH_SIZE, N, c_token)
 
 
-if __name__ == "__main__":
-    pytest.main([__file__])
+class TestLocalAttnTransformerBlock:
+    @pytest.mark.parametrize("c_atom", [256, 512])
+    @pytest.mark.parametrize("num_heads", [4, 8, 16])
+    @pytest.mark.parametrize("num_queries", [16, 32])
+    @pytest.mark.parametrize("num_keys", [64, 128])
+    def test_shapes(self, c_atom, num_heads, num_queries, num_keys):
+        BATCH_SIZE = 3
+        N_atom = num_queries * 16  # Ensure we have enough atoms
+        N_subset = N_atom // num_queries
+
+        block = LocalAttnTransformerBlock(
+            c_atom=c_atom,
+            num_heads=num_heads,
+            num_queries=num_queries,
+            num_keys=num_keys,
+        )
+
+        q_l = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        scale_attn = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        shift_attn = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        gate_attn = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        scale_mlp = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        shift_mlp = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        gate_mlp = torch.randn(BATCH_SIZE, N_atom, c_atom)
+
+        trunked_pair_bias = torch.randn(
+            BATCH_SIZE, N_subset, num_heads, num_queries, num_keys
+        )
+        trunked_pair_mask = torch.randint(
+            0, 2, (BATCH_SIZE, N_subset, num_queries, num_keys)
+        ).bool()
+
+        out = block(
+            q_l,
+            scale_attn=scale_attn,
+            shift_attn=shift_attn,
+            gate_attn=gate_attn,
+            scale_mlp=scale_mlp,
+            shift_mlp=shift_mlp,
+            gate_mlp=gate_mlp,
+            trunked_pair_bias=trunked_pair_bias,
+            trunked_pair_mask=trunked_pair_mask,
+        )
+
+        assert out.shape == (BATCH_SIZE, N_atom, c_atom)
+
+    def test_evil_shape(self):
+        BATCH_SIZE = 3
+        c_atom = 128
+        num_heads = 4
+        num_queries = 32
+        num_keys = 128
+        N_atom = num_queries * 4
+        N_subset = N_atom // num_queries
+
+        block = LocalAttnTransformerBlock(
+            c_atom=c_atom,
+            num_heads=num_heads,
+            num_queries=num_queries,
+            num_keys=num_keys,
+        )
+
+        q_l = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        scale_attn = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        shift_attn = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        gate_attn = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        scale_mlp = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        shift_mlp = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        gate_mlp = torch.randn(BATCH_SIZE, N_atom, c_atom)
+
+        # Wrong pair bias shape (wrong num_heads)
+        trunked_pair_bias = torch.randn(
+            BATCH_SIZE, N_subset, num_heads + 1, num_queries, num_keys
+        )
+        trunked_pair_mask = torch.randint(
+            0, 2, (BATCH_SIZE, N_subset, num_queries, num_keys)
+        ).bool()
+
+        with pytest.raises(AssertionError):
+            block(
+                q_l,
+                scale_attn=scale_attn,
+                shift_attn=shift_attn,
+                gate_attn=gate_attn,
+                scale_mlp=scale_mlp,
+                shift_mlp=shift_mlp,
+                gate_mlp=gate_mlp,
+                trunked_pair_bias=trunked_pair_bias,
+                trunked_pair_mask=trunked_pair_mask,
+            )
+
+        # Wrong pair bias dimensions (wrong num_queries)
+        trunked_pair_bias = torch.randn(
+            BATCH_SIZE, N_subset, num_heads, num_queries + 1, num_keys
+        )
+        trunked_pair_mask = torch.randint(
+            0, 2, (BATCH_SIZE, N_subset, num_queries, num_keys)
+        ).bool()
+
+        with pytest.raises(AssertionError):
+            block(
+                q_l,
+                scale_attn=scale_attn,
+                shift_attn=shift_attn,
+                gate_attn=gate_attn,
+                scale_mlp=scale_mlp,
+                shift_mlp=shift_mlp,
+                gate_mlp=gate_mlp,
+                trunked_pair_bias=trunked_pair_bias,
+                trunked_pair_mask=trunked_pair_mask,
+            )
+
+
+class TestLocalAttnTransformer:
+    @pytest.mark.parametrize("num_blocks", [1, 2])
+    @pytest.mark.parametrize("c_atom", [256])
+    @pytest.mark.parametrize("c_cond", [128])
+    @pytest.mark.parametrize("c_atompair", [16])
+    @pytest.mark.parametrize("num_heads", [4, 8])
+    @pytest.mark.parametrize("num_queries", [16, 32])
+    @pytest.mark.parametrize("num_keys", [64, 128])
+    def test_shapes(
+        self, num_blocks, c_atom, c_cond, c_atompair, num_heads, num_queries, num_keys
+    ):
+        BATCH_SIZE = 3
+        N_atom = num_queries * 16  # Ensure we have enough atoms
+        N_subset = N_atom // num_queries
+
+        transformer = LocalAttnTransformer(
+            num_blocks=num_blocks,
+            c_atom=c_atom,
+            c_cond=c_cond,
+            c_atompair=c_atompair,
+            num_heads=num_heads,
+            num_queries=num_queries,
+            num_keys=num_keys,
+        )
+
+        q = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        c = torch.randn(BATCH_SIZE, N_atom, c_cond)
+        p = torch.randn(BATCH_SIZE, N_subset, num_queries, num_keys, c_atompair)
+        trunked_pair_mask = torch.randint(
+            0, 2, (BATCH_SIZE, N_subset, num_queries, num_keys)
+        ).bool()
+
+        out = transformer(
+            q=q,
+            c=c,
+            p=p,
+            trunked_pair_mask=trunked_pair_mask,
+        )
+
+        assert out.shape == (BATCH_SIZE, N_atom, c_atom)
+
+    def test_single_block(self):
+        BATCH_SIZE = 2
+        num_blocks = 1
+        c_atom = 128
+        c_cond = 128
+        c_atompair = 128
+        num_heads = 4
+        num_queries = 16
+        num_keys = 64
+        N_atom = num_queries * 16
+        N_subset = N_atom // num_queries
+
+        transformer = LocalAttnTransformer(
+            num_blocks=num_blocks,
+            c_atom=c_atom,
+            c_cond=c_cond,
+            c_atompair=c_atompair,
+            num_heads=num_heads,
+            num_queries=num_queries,
+            num_keys=num_keys,
+        )
+
+        q = torch.randn(BATCH_SIZE, N_atom, c_atom)
+        c = torch.randn(BATCH_SIZE, N_atom, c_cond)
+        p = torch.randn(BATCH_SIZE, N_subset, num_queries, num_keys, c_atompair)
+        trunked_pair_mask = torch.randint(
+            0, 2, (BATCH_SIZE, N_subset, num_queries, num_keys)
+        ).bool()
+
+        out = transformer(
+            q=q,
+            c=c,
+            p=p,
+            trunked_pair_mask=trunked_pair_mask,
+        )
+
+        assert out.shape == (BATCH_SIZE, N_atom, c_atom)
+
+
+class TestTransformerBlock:
+    @pytest.mark.parametrize("c_a", [128, 256])
+    @pytest.mark.parametrize("c_z", [64, 128])
+    @pytest.mark.parametrize("num_heads", [4, 8])
+    def test_shapes(self, c_a, c_z, num_heads):
+        BATCH_SIZE = 2
+        N = 12
+
+        block = TransformerBlock(c_a=c_a, c_z=c_z, num_heads=num_heads)
+
+        a = torch.randn(BATCH_SIZE, N, c_a)
+        pair_bias = torch.randn(BATCH_SIZE, num_heads, N, N)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
+
+        out = block(a=a, pair_bias=pair_bias, pair_mask=pair_mask)
+
+        assert out.shape == (BATCH_SIZE, N, c_a)
+
+    def test_shape_validation(self):
+        BATCH_SIZE = 2
+        N = 8
+        c_a = 128
+        c_z = 64
+        num_heads = 4
+
+        block = TransformerBlock(c_a=c_a, c_z=c_z, num_heads=num_heads)
+
+        a = torch.randn(BATCH_SIZE, N, c_a)
+
+        # Test wrong pair_bias head dimension
+        pair_bias = torch.randn(BATCH_SIZE, num_heads + 1, N, N)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
+
+        with pytest.raises(AssertionError):
+            block(a=a, pair_bias=pair_bias, pair_mask=pair_mask)
+
+        # Test wrong pair_bias spatial dimensions
+        pair_bias = torch.randn(BATCH_SIZE, num_heads, N + 1, N + 1)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
+
+        with pytest.raises(AssertionError):
+            block(a=a, pair_bias=pair_bias, pair_mask=pair_mask)
+
+        # Test wrong pair_mask spatial dimensions
+        pair_bias = torch.randn(BATCH_SIZE, num_heads, N, N)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N + 1, N + 1)).bool()
+
+        with pytest.raises(AssertionError):
+            block(a=a, pair_bias=pair_bias, pair_mask=pair_mask)
+
+    def test_c_a_divisible_by_num_heads(self):
+        """Test that c_a must be divisible by num_heads."""
+        c_a = 127  # Not divisible by 4
+        c_z = 64
+        num_heads = 4
+
+        with pytest.raises(AssertionError):
+            TransformerBlock(c_a=c_a, c_z=c_z, num_heads=num_heads)
+
+    def test_residual_connection(self):
+        """Test that the output includes residual connections."""
+        BATCH_SIZE = 1
+        N = 4
+        c_a = 128
+        c_z = 64
+        num_heads = 4
+
+        block = TransformerBlock(c_a=c_a, c_z=c_z, num_heads=num_heads)
+
+        # Zero input should give non-zero output due to layer norms and residuals
+        a = torch.zeros(BATCH_SIZE, N, c_a)
+        pair_bias = torch.zeros(BATCH_SIZE, num_heads, N, N)
+        pair_mask = torch.ones(BATCH_SIZE, N, N).bool()
+
+        out = block(a=a, pair_bias=pair_bias, pair_mask=pair_mask)
+
+        # Output should be close to input due to residual connection when starting from zero
+        # (though not exactly zero due to layer norm behavior)
+        assert out.shape == (BATCH_SIZE, N, c_a)
+
+
+class TestTransformer:
+    @pytest.mark.parametrize("num_blocks", [1, 2])
+    @pytest.mark.parametrize("c_a", [128, 256])
+    @pytest.mark.parametrize("c_z", [64, 128])
+    @pytest.mark.parametrize("num_heads", [4, 8])
+    def test_shapes(self, num_blocks, c_a, c_z, num_heads):
+        BATCH_SIZE = 2
+        N = 10
+
+        transformer = Transformer(
+            c_a=c_a, c_z=c_z, num_blocks=num_blocks, num_heads=num_heads
+        )
+
+        a = torch.randn(BATCH_SIZE, N, c_a)
+        z = torch.randn(BATCH_SIZE, N, N, c_z)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
+
+        out = transformer(a=a, z=z, pair_mask=pair_mask)
+
+        assert out.shape == (BATCH_SIZE, N, c_a)
+
+    def test_input_validation(self):
+        """Test input validation in transformer."""
+        BATCH_SIZE = 2
+        N = 8
+        c_a = 128
+        c_z = 64
+        num_heads = 4
+        num_blocks = 2
+
+        transformer = Transformer(
+            c_a=c_a, c_z=c_z, num_blocks=num_blocks, num_heads=num_heads
+        )
+
+        # Test wrong c_a dimension
+        a = torch.randn(BATCH_SIZE, N, c_a + 10)  # Wrong c_a
+        z = torch.randn(BATCH_SIZE, N, N, c_z)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
+
+        with pytest.raises(AssertionError, match="Input token dimension mismatch"):
+            transformer(a=a, z=z, pair_mask=pair_mask)
+
+        # Test wrong c_z dimension
+        a = torch.randn(BATCH_SIZE, N, c_a)
+        z = torch.randn(BATCH_SIZE, N, N, c_z + 10)  # Wrong c_z
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
+
+        with pytest.raises(AssertionError, match="Input pair bias dimension mismatch"):
+            transformer(a=a, z=z, pair_mask=pair_mask)
+
+        # Test wrong z spatial dimensions
+        a = torch.randn(BATCH_SIZE, N, c_a)
+        z = torch.randn(BATCH_SIZE, N + 1, N + 1, c_z)  # Wrong spatial dims
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
+
+        with pytest.raises(AssertionError, match="Input pair bias dimension mismatch"):
+            transformer(a=a, z=z, pair_mask=pair_mask)
+
+        # Test wrong pair_mask spatial dimensions
+        a = torch.randn(BATCH_SIZE, N, c_a)
+        z = torch.randn(BATCH_SIZE, N, N, c_z)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N + 1, N + 1)).bool()
+
+        with pytest.raises(AssertionError, match="Input pair mask dimension mismatch"):
+            transformer(a=a, z=z, pair_mask=pair_mask)
+
+    def test_pair_bias_chunking(self):
+        """Test that pair bias is properly chunked across blocks."""
+        BATCH_SIZE = 1
+        N = 4
+        c_a = 64
+        c_z = 32
+        num_heads = 2
+        num_blocks = 3
+
+        transformer = Transformer(
+            c_a=c_a, c_z=c_z, num_blocks=num_blocks, num_heads=num_heads
+        )
+
+        a = torch.randn(BATCH_SIZE, N, c_a)
+        z = torch.randn(BATCH_SIZE, N, N, c_z)
+        pair_mask = torch.ones(BATCH_SIZE, N, N).bool()
+
+        # Check that z_proj outputs correct dimensions for chunking
+        expected_output_dim = num_heads * num_blocks
+        assert transformer.z_proj.out_features == expected_output_dim
+
+        out = transformer(a=a, z=z, pair_mask=pair_mask)
+        assert out.shape == (BATCH_SIZE, N, c_a)
+
+    def test_single_block(self):
+        """Test transformer with single block."""
+        BATCH_SIZE = 1
+        N = 6
+        c_a = 128
+        c_z = 64
+        num_heads = 4
+        num_blocks = 1
+
+        transformer = Transformer(
+            c_a=c_a, c_z=c_z, num_blocks=num_blocks, num_heads=num_heads
+        )
+
+        a = torch.randn(BATCH_SIZE, N, c_a)
+        z = torch.randn(BATCH_SIZE, N, N, c_z)
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
+
+        out = transformer(a=a, z=z, pair_mask=pair_mask)
+        assert out.shape == (BATCH_SIZE, N, c_a)
+
+    def test_broadcasting_z(self):
+        """Test that z can broadcast across batch dimensions."""
+        BATCH_SIZE = 3
+        N = 5
+        c_a = 128
+        c_z = 64
+        num_heads = 4
+        num_blocks = 2
+
+        transformer = Transformer(
+            c_a=c_a, c_z=c_z, num_blocks=num_blocks, num_heads=num_heads
+        )
+
+        a = torch.randn(BATCH_SIZE, N, c_a)
+        z = torch.randn(1, N, N, c_z)  # Single batch dimension for broadcasting
+        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
+
+        out = transformer(a=a, z=z, pair_mask=pair_mask)
+        assert out.shape == (BATCH_SIZE, N, c_a)

@@ -199,7 +199,7 @@ def get_lr_scheduler(
             hold_steps=configs.cosine_annealing.hold_steps,
             decay_steps=configs.cosine_annealing.decay_steps,
             lr=configs.lr,
-            min_lr=configs.lr * configs.min_lr_ratio,
+            min_lr=configs.lr * configs.cosine_annealing.min_lr_ratio,
             **kwargs,
         )
     elif configs.lr_scheduler == "constant":

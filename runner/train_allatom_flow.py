@@ -50,7 +50,6 @@ from protenix.metrics.plausibility import (
 from protenix.model.artios_allatom import ArtiosAllatom
 from protenix.model.artios_vae import ArtiosAllAtomVAE
 from protenix.model.loss import FlowLoss
-from protenix.model.modules.components import Attention, Transition
 from protenix.model.modules.transformer import (
     DiffusionTransformer,
     DiTBlock,
@@ -66,6 +65,7 @@ from protenix.utils.monitoring import (
     grad_norm,
 )
 from protenix.utils.permutation.permutation import SymmetricPermutation
+from protenix.utils.profiler import profile_function
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.torchwatcher import TorchWatcher
@@ -159,11 +159,9 @@ class ArtiosAllAtomFlowTrainer(object):
                 track_layers=[
                     DiffusionTransformer,
                     DiTBlock,
-                    Attention,
-                    Transition,
                 ],  # optionally specify
                 track_layers_name_includes=["linear_q", "linear_k"],
-                tensor_stats=["channel_rms", "abs_mean"],
+                tensor_stats=["channel_rms"],
                 base_namespace="model_metrics",
             )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
@@ -374,6 +372,7 @@ class ArtiosAllAtomFlowTrainer(object):
         if DIST_WRAPPER.rank == 0:
             logging.info(msg)
 
+    @profile_function("model_forward")
     def model_forward(
         self,
         batch: dict,
@@ -408,7 +407,7 @@ class ArtiosAllAtomFlowTrainer(object):
         )
         return batch, log_dict
 
-    # @profile_function("get_loss")
+    @profile_function("get_loss")
     def get_loss(
         self, batch: dict, mode: str = "train"
     ) -> tuple[torch.Tensor, dict, dict]:
@@ -641,7 +640,8 @@ class ArtiosAllAtomFlowTrainer(object):
                         decoder=self.vae_shell.vae.decoder,
                         mode="inference",
                     )
-                    try:  # TODO: this raises an exception on a single H100 and not on 8 A100s
+                    saved_files = None
+                    try:
                         saved_files, pred_atom_array_list = self.save_outputs(
                             pred_dict=pred_dict, batch=batch, ema_suffix=ema_suffix
                         )
@@ -658,7 +658,7 @@ class ArtiosAllAtomFlowTrainer(object):
 
                     # Log structure files to Neptune Scale
                     if self.configs.use_wandb:
-                        if saved_files:
+                        if saved_files is not None:
                             files_dict = {}
                             for file_path in saved_files:
                                 # Create a relative key for Neptune using test_name/pdb_id/filename
@@ -672,9 +672,10 @@ class ArtiosAllAtomFlowTrainer(object):
                             )
                     del saved_files
                 del batch, simple_metrics
-                # if index % 5 == 0:
-                # Release some memory periodically
-                torch.cuda.empty_cache()
+
+                if index % 5 == 0:
+                    # Release some memory periodically
+                    torch.cuda.empty_cache()
 
             metrics = simple_metric_wrapper.calc()
             if rotamer_score.num_total_residues > 0.0:
@@ -732,17 +733,17 @@ class ArtiosAllAtomFlowTrainer(object):
                 self.flow_model.parameters(), self.configs.grad_clip_norm
             )
 
-    # @profile_function("backward_pass")
+    @profile_function("backward_pass")
     def backward_pass(self, loss, scaler):
         scaler.scale(loss / self.iters_to_accumulate).backward()
-        # scaler.scale(loss).backward()
 
-    # @profile_function("optimizer_step")
+    @profile_function("optimizer_step")
     def optimizer_step(self, scaler):
         scaler.step(self.optimizer)
         scaler.update()
         self.optimizer.zero_grad(set_to_none=True)
 
+    @profile_function("train_step")
     def train_step(self, batch: dict):
         self.flow_model.train()
 
@@ -777,8 +778,6 @@ class ArtiosAllAtomFlowTrainer(object):
             if is_loss_nan_check(loss):
                 self.print(f"Skip iteration with NaN loss: {self.step} steps")
                 loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
-        # with profile_function("backward_pass"):
-        # scaler.scale(loss / self.iters_to_accumulate).backward()
         self.backward_pass(loss, scaler)
 
         # For simplicity, the global training step is used
@@ -790,11 +789,8 @@ class ArtiosAllAtomFlowTrainer(object):
             scaler.unscale_(self.optimizer)
             self.on_before_optimizer_step()
             # Do grad clip only
-            # with profile_function("optimizer_step"):
             self.update()
             self.optimizer_step(scaler)
-            # scaler.step(self.optimizer)
-            # scaler.update()
             self.lr_scheduler.step()
         for key, value in loss_dict.items():
             if "loss" not in key:
@@ -893,7 +889,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     flatten_nested(weight_norms), step=self.step
                 )
 
-    # @profile_function("on_before_optimizer_step")
+    @profile_function("on_before_optimizer_step")
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
         if self.configs.monitor.grad_norm:

@@ -102,6 +102,9 @@ class InferenceDataset(Dataset):
         )
         features_dict, atom_array, token_array = sample2feat.get_feature_dict()
 
+        # TODO: temp solution: set the tokenwise is_hotspot to zeros
+        features_dict["is_hotspot"] = torch.zeros(features_dict["is_hotspot"].shape)
+
         features_dict["distogram_rep_atom_mask"] = torch.Tensor(
             atom_array.distogram_rep_atom_mask
         ).long()

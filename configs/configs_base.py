@@ -35,7 +35,7 @@ basic_configs = {
     "load_vae_checkpoint_path": "",
     "load_ema_flow_checkpoint_path": "",
     "load_ema_vae_checkpoint_path": "",  # TODO: no need?
-    "load_strict": True,
+    "load_strict": False,
     "load_params_only": True,
     "guiding_net_path": ValueMaybeNone(""),
     "skip_load_step": False,

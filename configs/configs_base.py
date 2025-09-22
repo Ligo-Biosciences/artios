@@ -96,6 +96,7 @@ optim_configs = {
     },
     # Cosine-annealing
     "cosine_annealing": {
+        "warmup_steps": GlobalConfigValue("warmup_steps"),
         "hold_steps": 50_000,
         "decay_steps": 150_000,
         "min_lr_ratio": 0.1,

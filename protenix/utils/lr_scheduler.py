@@ -42,7 +42,9 @@ class CosineAnnealingWithWarmup(LRScheduler):
         elif step >= self.decay_steps:
             return self.min_lr
         else:
-            decay_ratio = (step - self.warmup_steps) / (self.decay_steps - self.warmup_steps)
+            decay_ratio = (step - self.warmup_steps) / (
+                self.decay_steps - self.warmup_steps
+            )
             assert 0 <= decay_ratio <= 1
             coff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
             return self.min_lr + coff * (self.lr - self.min_lr)
@@ -54,7 +56,75 @@ class CosineAnnealingWithWarmup(LRScheduler):
                 "please use `get_last_lr()`.",
                 UserWarning,
             )
-        return [self._get_step_lr(self.last_epoch) for group in self.optimizer.param_groups]
+        return [
+            self._get_step_lr(self.last_epoch) for group in self.optimizer.param_groups
+        ]
+
+    def _get_closed_form_lr(self):
+        return [self._get_step_lr(self.last_epoch) for base_lr in self.base_lrs]
+
+
+class CosineAnnealingWithWarmupAndHold(LRScheduler):
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        warmup_steps: int,
+        hold_steps: int,
+        decay_steps: int,
+        lr: float,
+        min_lr: float,
+        last_epoch: int = -1,
+        verbose: bool = False,
+    ):
+        """Cosine annealing scheduler with warmup, hold, and decay phases.
+
+        Args:
+            optimizer: The optimizer to schedule
+            warmup_steps: Number of steps for linear warmup from 0 to lr
+            hold_steps: Number of steps to hold at constant lr after warmup
+            decay_steps: Number of steps for cosine decay from lr to min_lr
+            lr: Maximum learning rate (reached after warmup, held during hold phase)
+            min_lr: Minimum learning rate (reached after decay)
+            last_epoch: The index of last epoch
+            verbose: If True, prints a message to stdout for each update
+        """
+        self.warmup_steps = warmup_steps
+        self.hold_steps = hold_steps
+        self.decay_steps = decay_steps
+        self.lr = lr
+        self.min_lr = min_lr
+        self.warmup_end = warmup_steps
+        self.hold_end = warmup_steps + hold_steps
+        self.total_steps = warmup_steps + hold_steps + decay_steps
+        super().__init__(optimizer, last_epoch)
+
+    def _get_step_lr(self, step):
+        if step <= self.warmup_end:
+            # Linear warmup phase
+            return (step + 1) / (self.warmup_steps + 1) * self.lr
+        elif step <= self.hold_end:
+            # Constant hold phase
+            return self.lr
+        elif step >= self.total_steps:
+            # After all phases complete
+            return self.min_lr
+        else:
+            # Cosine decay phase
+            decay_ratio = (step - self.hold_end) / self.decay_steps
+            assert 0 <= decay_ratio <= 1
+            coff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+            return self.min_lr + coff * (self.lr - self.min_lr)
+
+    def get_lr(self):
+        if not self._get_lr_called_within_step:
+            warnings.warn(
+                "To get the last learning rate computed by the scheduler, "
+                "please use `get_last_lr()`.",
+                UserWarning,
+            )
+        return [
+            self._get_step_lr(self.last_epoch) for group in self.optimizer.param_groups
+        ]
 
     def _get_closed_form_lr(self):
         return [self._get_step_lr(self.last_epoch) for base_lr in self.base_lrs]
@@ -96,7 +166,9 @@ class AlphaFold3LRScheduler(LRScheduler):
                 "please use `get_last_lr()`.",
                 UserWarning,
             )
-        return [self._get_step_lr(self.last_epoch) for group in self.optimizer.param_groups]
+        return [
+            self._get_step_lr(self.last_epoch) for group in self.optimizer.param_groups
+        ]
 
 
 def get_lr_scheduler(
@@ -117,14 +189,17 @@ def get_lr_scheduler(
         ValueError: If the specified learning rate scheduler is invalid.
     """
     if configs.lr_scheduler == "af3":
-        lr_scheduler = AlphaFold3LRScheduler(optimizer, **configs.af3_lr_scheduler, **kwargs)
+        lr_scheduler = AlphaFold3LRScheduler(
+            optimizer, **configs.af3_lr_scheduler, **kwargs
+        )
     elif configs.lr_scheduler == "cosine_annealing":
-        lr_scheduler = CosineAnnealingWithWarmup(
+        lr_scheduler = CosineAnnealingWithWarmupAndHold(
             optimizer,
-            configs.warmup_steps,
-            configs.max_steps,
-            configs.lr,
-            configs.lr * configs.min_lr_ratio,
+            warmup_steps=configs.cosine_annealing.warmup_steps,
+            hold_steps=configs.cosine_annealing.hold_steps,
+            decay_steps=configs.cosine_annealing.decay_steps,
+            lr=configs.lr,
+            min_lr=configs.lr * configs.min_lr_ratio,
             **kwargs,
         )
     elif configs.lr_scheduler == "constant":

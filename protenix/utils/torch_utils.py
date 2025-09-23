@@ -13,24 +13,21 @@
 # limitations under the License.
 
 from contextlib import nullcontext
-from typing import Sequence, Union
 
 import numpy as np
 import torch
-from torch import nn
-from torch.nn.parameter import Parameter
 
 
-def to_device(obj, device):
+def to_device(obj, device, non_blocking=False):
     """Move tensor or dict of tensors to device"""
     if isinstance(obj, dict):
         for k, v in obj.items():
             if isinstance(v, dict):
                 to_device(v, device)
             elif isinstance(v, torch.Tensor):
-                obj[k] = obj[k].to(device)
+                obj[k] = obj[k].to(device, non_blocking=non_blocking)
     elif isinstance(obj, torch.Tensor):
-        obj = obj.to(device)
+        obj = obj.to(device, non_blocking=non_blocking)
     else:
         raise Exception(f"type {type(obj)} not supported")
     return obj
@@ -116,7 +113,10 @@ def autocasting_disable_decorator(disable_casting: bool):
             dtype = torch.float32 if disable_casting else None
             with _amp_context:
                 return func(
-                    *(v.to(dtype=dtype) if isinstance(v, torch.Tensor) else v for v in args),
+                    *(
+                        v.to(dtype=dtype) if isinstance(v, torch.Tensor) else v
+                        for v in args
+                    ),
                     **{
                         k: v.to(dtype=dtype) if isinstance(v, torch.Tensor) else v
                         for k, v in kwargs.items()

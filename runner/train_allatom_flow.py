@@ -1077,7 +1077,7 @@ class ArtiosAllAtomFlowTrainer(object):
                     step_need_eval &= is_update_step
                     step_need_save &= is_update_step
 
-                    batch = to_device(batch, self.device)
+                    batch = to_device(batch, self.device, non_blocking=True)
                     self.progress_bar()
                     self.train_step(batch)
                     if use_ema and is_update_step:

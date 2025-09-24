@@ -344,7 +344,7 @@ def sample_latent_diffusion(
         * t
         * (1 - t),  # int_{0}^{1}(zero_ends) = 1/12
         "proteina": lambda t, alpha: torch.where(
-            t > 0.95, torch.zeros_like(t), 0.5 * ((alpha**2) / (t + 0.01))
+            t > 0.95, torch.zeros_like(t), 0.5 * 10 * ((alpha**2) / (t + 0.01))
         ),
         "beta": lambda t, alpha: torch.where(
             t > 0.95,

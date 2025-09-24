@@ -167,15 +167,15 @@ model_configs = {
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
-        "N_sample": 64,  # changed from 1, BATCH SIZE AT SAMPLING
+        "N_sample": 50,  # changed from 1, BATCH SIZE AT SAMPLING
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
-        "stoch_type_coord": "beta",
-        "stoch_type_latent": "non_singular",
-        "alpha_coord": 0.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
-        "alpha_latent": 0.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
-        "gamma_coord": 1.0,
-        "gamma_latent": 1.0,
+        "stoch_type_coord": "proteina",
+        "stoch_type_latent": "laproteina",
+        "alpha_coord": 1.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha_latent": 1.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "gamma_coord": 0.1,
+        "gamma_latent": 0.1,
         "sigma_coord": GlobalConfigValue("sigma_coord"),
         "sigma_latent": GlobalConfigValue("sigma_latent"),
         "second_order": False,

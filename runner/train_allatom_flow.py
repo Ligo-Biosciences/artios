@@ -1051,7 +1051,7 @@ class ArtiosAllAtomFlowTrainer(object):
                 active=10,
                 skip_first=50,
                 skip_first_wait=1,
-                repeat=1,
+                repeat=10,
             ),
             on_trace_ready=trace_handler,
         ) as p:

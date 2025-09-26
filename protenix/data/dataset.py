@@ -32,7 +32,7 @@ from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.padding_utils import get_atom_padding_length, pad_features_dict
-from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
+from protenix.data.tokenizer import TokenArray
 from protenix.data.utils import (
     data_type_transform,
     make_dummy_feature,
@@ -40,6 +40,7 @@ from protenix.data.utils import (
 from protenix.utils.cropping import CropData
 from protenix.utils.file_io import read_indices_csv
 from protenix.utils.logger import get_logger
+from protenix.utils.profiler import profile_function
 from protenix.utils.torch_utils import dict_to_tensor
 
 logger = get_logger(__name__)
@@ -328,6 +329,7 @@ class BaseSingleDataset(Dataset):
                     raise Exception(e)
         return data
 
+    @profile_function("dataset._get_bioassembly_data")
     def _get_bioassembly_data(
         self, idx: int
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -454,6 +456,7 @@ class BaseSingleDataset(Dataset):
 
         return atom_array
 
+    @profile_function("dataset.process_one")
     def process_one(
         self, idx: int, return_atom_token_array: bool = False
     ) -> dict[str, dict]:
@@ -518,20 +521,6 @@ class BaseSingleDataset(Dataset):
             bioassembly_dict["atom_array"] = self._reassign_atom_array_chain_id(
                 bioassembly_dict["atom_array"]
             )
-
-        # TODO: temporary workaround for removing terminal oxygens
-        atom_array = bioassembly_dict["atom_array"]
-        token_array = bioassembly_dict["token_array"]
-
-        # TODO: raise exception if UNK residue present
-        # if np.any(atom_array.res_name == "UNK"):
-        #    raise ValueError("UNK residue present in the atom_array")
-
-        atom_array = atom_array[atom_array.atom_name != "OXT"]
-        token_array = AtomArrayTokenizer(atom_array).get_token_array()
-
-        bioassembly_dict["atom_array"] = atom_array
-        bioassembly_dict["token_array"] = token_array
 
         # Crop
         (
@@ -637,6 +626,7 @@ class BaseSingleDataset(Dataset):
             data["cropped_token_array"] = cropped_token_array
         return data
 
+    @profile_function("dataset.crop")
     def crop(
         self,
         sample_indice: pd.Series,
@@ -738,6 +728,7 @@ class BaseSingleDataset(Dataset):
 
         return eval_type, cluster_id, chain_1_mask, chain_2_mask
 
+    @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(
         self,
         idx: int,

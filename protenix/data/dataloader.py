@@ -363,7 +363,7 @@ def get_dataloaders(
                 crop_size=configs.train_crop_size,
             ),
             sampler=train_sampler,
-            persistent_workers=True,
+            # persistent_workers=True,
             pin_memory=True,
             # prefetch_factor=configs.batch_size,
         )

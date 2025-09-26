@@ -626,6 +626,7 @@ class DiffusionModule(nn.Module):
 
         # Bring to correct scale
         coord_v = self.sigma_coord * r_coord * self.velocity_c_out(coord_timestep_)
+        # coord_v = self.sigma_coord * r_coord
         latent_v = self.sigma_latent * r_latent
 
         # Apply skip connections and output scaling for both coordinate and latent predictions

@@ -336,8 +336,8 @@ def sample_latent_diffusion(
         "non_singular": lambda t, alpha: torch.where(
             t > 0.95,  # do not noise close to 1 for ligand's sake
             torch.zeros_like(t),
-            4 * 0.5 * (alpha**2) * (1 - t),
-        ),  # int_{0}^{1}(non_sing) = 1/4
+            2 * (alpha**2) * (1 - t),
+        ),  # int_{0}^{1}(non_sing) = 1/2
         "zero_ends": lambda t, alpha: 12
         * 0.5
         * (alpha**2)

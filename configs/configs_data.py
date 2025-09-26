@@ -165,7 +165,7 @@ data_configs = {
             ),
             "pdb_list": "",  # ["1s01", "1sr0"],
             "random_sample_if_failed": True,
-            "max_n_token": 3000,  # -1,  # can be used for removing data with too many tokens.
+            "max_n_token": -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,
             "exclusion": {  # do not sample the data based on ions.
                 "mol_1_type": ListValue(["ions"]),
@@ -186,7 +186,7 @@ data_configs = {
             ),
             "pdb_list": "",
             "random_sample_if_failed": True,
-            "max_n_token": 3000,  # -1,  # can be used for removing data with too many tokens.
+            "max_n_token": -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,
             "exclusion": {  # do not sample the data based on ions.
                 "mol_1_type": ListValue(["ions"]),

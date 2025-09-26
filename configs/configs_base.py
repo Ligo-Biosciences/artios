@@ -169,7 +169,7 @@ model_configs = {
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
-        "N_sample": 1,  # 1
+        "N_sample": 8,
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type_coord": "proteina",

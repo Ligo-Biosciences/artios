@@ -23,7 +23,7 @@ def to_device(obj, device, non_blocking=False):
     if isinstance(obj, dict):
         for k, v in obj.items():
             if isinstance(v, dict):
-                to_device(v, device)
+                to_device(v, device, non_blocking=non_blocking)
             elif isinstance(v, torch.Tensor):
                 obj[k] = obj[k].to(device, non_blocking=non_blocking)
     elif isinstance(obj, torch.Tensor):

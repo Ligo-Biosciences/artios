@@ -1057,12 +1057,6 @@ class ArtiosAllAtomFlowTrainer(object):
         ) as p:
             while True:
                 for batch in self.train_dl:
-                    # TODO: remove the prints
-                    print(f"N_atom: {batch["input_feature_dict"]["ref_pos"].shape[-2]}")
-                    print(
-                        f"N_token: {batch["input_feature_dict"]["restype"].shape[-2]}"
-                    )
-
                     is_update_step = (
                         self.global_step + 1
                     ) % self.iters_to_accumulate == 0

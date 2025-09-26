@@ -776,52 +776,52 @@ class BaseSingleDataset(Dataset):
 
         # Labels for multi-chain permutation
         # Note: the returned full_atom_array may contain fewer atoms than the input
-        label_full_dict, full_atom_array = Featurizer.get_gt_full_complex_features(
-            atom_array=full_atom_array,
-            cropped_atom_array=atom_array,
-            get_cropped_asym_only=is_spatial_crop,
-        )
+        # label_full_dict, full_atom_array = Featurizer.get_gt_full_complex_features(
+        #     atom_array=full_atom_array,
+        #     cropped_atom_array=atom_array,
+        #     get_cropped_asym_only=is_spatial_crop,
+        # )
 
         # Masks for Pocket Metrics
-        if self.find_pocket:
-            # Get entity_id of the interested ligand
-            sample_indice = self._get_sample_indice(idx=idx)
-            if sample_indice.mol_1_type == "ligand":
-                lig_entity_id = str(sample_indice.entity_1_id)
-                lig_chain_id = str(sample_indice.chain_1_id)
-            elif sample_indice.mol_2_type == "ligand":
-                lig_entity_id = str(sample_indice.entity_2_id)
-                lig_chain_id = str(sample_indice.chain_2_id)
-            else:
-                raise ValueError("Cannot find ligand from this data point.")
-            # Make sure the cropped array contains interested ligand
-            assert lig_entity_id in set(atom_array.label_entity_id)
-            assert lig_chain_id in set(atom_array.chain_id)
+        # if self.find_pocket:
+        #     # Get entity_id of the interested ligand
+        #     sample_indice = self._get_sample_indice(idx=idx)
+        #     if sample_indice.mol_1_type == "ligand":
+        #         lig_entity_id = str(sample_indice.entity_1_id)
+        #         lig_chain_id = str(sample_indice.chain_1_id)
+        #     elif sample_indice.mol_2_type == "ligand":
+        #         lig_entity_id = str(sample_indice.entity_2_id)
+        #         lig_chain_id = str(sample_indice.chain_2_id)
+        #     else:
+        #         raise ValueError("Cannot find ligand from this data point.")
+        #     # Make sure the cropped array contains interested ligand
+        #     assert lig_entity_id in set(atom_array.label_entity_id)
+        #     assert lig_chain_id in set(atom_array.chain_id)
 
-            # Get asym ID of the specific ligand in the `main` pocket
-            lig_asym_id = atom_array.label_asym_id[atom_array.chain_id == lig_chain_id]
-            assert len(np.unique(lig_asym_id)) == 1
-            lig_asym_id = lig_asym_id[0]
-            ligands = [lig_asym_id]
+        #     # Get asym ID of the specific ligand in the `main` pocket
+        #     lig_asym_id = atom_array.label_asym_id[atom_array.chain_id == lig_chain_id]
+        #     assert len(np.unique(lig_asym_id)) == 1
+        #     lig_asym_id = lig_asym_id[0]
+        #     ligands = [lig_asym_id]
 
-            if self.find_all_pockets:
-                # Get asym ID of other ligands with the same entity_id
-                all_lig_asym_ids = set(
-                    full_atom_array[
-                        full_atom_array.label_entity_id == lig_entity_id
-                    ].label_asym_id
-                )
-                ligands.extend(list(all_lig_asym_ids - set([lig_asym_id])))
+        #     if self.find_all_pockets:
+        #         # Get asym ID of other ligands with the same entity_id
+        #         all_lig_asym_ids = set(
+        #             full_atom_array[
+        #                 full_atom_array.label_entity_id == lig_entity_id
+        #             ].label_asym_id
+        #         )
+        #         ligands.extend(list(all_lig_asym_ids - set([lig_asym_id])))
 
-            # Note: the `main` pocket is the 0-indexed one.
-            # [N_pocket, N_atom], [N_pocket, N_atom].
-            # If not find_all_pockets, then N_pocket = 1.
-            interested_ligand_mask, pocket_mask = feat.get_lig_pocket_mask(
-                atom_array=full_atom_array, lig_label_asym_id=ligands
-            )
+        #     # Note: the `main` pocket is the 0-indexed one.
+        #     # [N_pocket, N_atom], [N_pocket, N_atom].
+        #     # If not find_all_pockets, then N_pocket = 1.
+        #     interested_ligand_mask, pocket_mask = feat.get_lig_pocket_mask(
+        #         atom_array=full_atom_array, lig_label_asym_id=ligands
+        #     )
 
-            label_full_dict["pocket_mask"] = pocket_mask
-            label_full_dict["interested_ligand_mask"] = interested_ligand_mask
+        #     label_full_dict["pocket_mask"] = pocket_mask
+        #     label_full_dict["interested_ligand_mask"] = interested_ligand_mask
 
         # Masks for Chain/Interface Metrics
         # TODO: not needed.

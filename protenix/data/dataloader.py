@@ -365,7 +365,7 @@ def get_dataloaders(
             sampler=train_sampler,
             persistent_workers=True,
             pin_memory=True,
-            prefetch_factor=configs.batch_size,
+            # prefetch_factor=configs.batch_size,
         )
 
     test_dls = {}

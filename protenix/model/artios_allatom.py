@@ -40,6 +40,7 @@ class ArtiosAllatom(nn.Module):
         self.latent_inference_timestep_scheduler = LaProteinaLatentScheduler()
 
         self.diffusion_batch_size = self.configs.diffusion_batch_size
+        self.cfg_drop_probability = self.configs.cfg_drop_probability
 
         # Model
         self.c_s, self.c_z = (
@@ -239,6 +240,7 @@ class ArtiosAllatom(nn.Module):
             coord_timestep=coord_timestep,
             latent_timestep=latent_timestep,
             input_feature_dict=input_feature_dict,
+            unconditional=torch.rand(1).item() < self.cfg_drop_probability,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )

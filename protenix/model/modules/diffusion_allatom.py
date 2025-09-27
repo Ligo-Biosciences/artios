@@ -287,6 +287,7 @@ class DiffusionConditioning(nn.Module):
         z_target = (
             z_target * target_mask_pair[..., None]
         )  # [..., N_token, N_token, c_z]
+        s_target = s_target * is_target_token[..., None]  # [..., N_token, c_s]
 
         return s_target, z_target
 

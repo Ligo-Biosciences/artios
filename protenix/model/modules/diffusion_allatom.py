@@ -298,6 +298,7 @@ class DiffusionConditioning(nn.Module):
         coord_timestep: torch.Tensor,
         latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
+        unconditional: bool = False,
         inplace_safe: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -309,6 +310,7 @@ class DiffusionConditioning(nn.Module):
             latent_timestep (torch.Tensor): the noising timestep for latents
                 [..., N_sample]
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
+            unconditional (bool): unconditional for CFG
             inplace_safe (bool): Whether it is safe to use inplace operations.
         Returns:
             tuple[torch.Tensor, torch.Tensor]: embeddings s and z
@@ -319,6 +321,21 @@ class DiffusionConditioning(nn.Module):
 
         # Grab data on inputs
         n_token = input_feature_dict["residue_index"].shape[-1]
+
+        # Unconditional for CFG
+        if unconditional:
+            input_feature_dict["is_ligand"] = torch.zeros_like(
+                input_feature_dict["is_ligand"]
+            )
+            input_feature_dict["is_ligand_token"] = torch.zeros_like(
+                input_feature_dict["is_ligand_token"]
+            )
+            input_feature_dict["is_target_token"] = torch.zeros_like(
+                input_feature_dict["is_target_token"]
+            )
+            input_feature_dict["is_hotspot"] = torch.zeros_like(
+                input_feature_dict["is_hotspot"]
+            )
 
         # Initialize pair embedding with ligand conformer features
         s_ligand, z_ligand = self.get_ligand_condition(input_feature_dict)
@@ -503,6 +520,7 @@ class DiffusionModule(nn.Module):
         coord_timestep: torch.Tensor,
         latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
+        unconditional: bool = False,
         inplace_safe: bool = False,
         use_fine_grained_checkpoint: bool = False,  # TODO: temporary
         chunk_size: Optional[int] = None,
@@ -521,6 +539,7 @@ class DiffusionModule(nn.Module):
             latent_timestep (torch.Tensor): the noising timestep for latents
                 [..., N_sample]
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input feature dictionary
+            unconditional (bool): unconditional for CFG
             inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
             chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 
@@ -544,6 +563,7 @@ class DiffusionModule(nn.Module):
             coord_timestep=coord_timestep,
             latent_timestep=latent_timestep,
             input_feature_dict=input_feature_dict,
+            unconditional=unconditional,
             inplace_safe=inplace_safe,
         )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
 
@@ -588,6 +608,7 @@ class DiffusionModule(nn.Module):
         coord_timestep: torch.Tensor,
         latent_timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
+        unconditional: bool = False,
         inplace_safe: bool = False,
         chunk_size: Optional[int] = None,
     ) -> dict[str, torch.Tensor]:
@@ -609,6 +630,7 @@ class DiffusionModule(nn.Module):
             latent_timestep=latent_timestep,
             input_feature_dict=input_feature_dict,
             inplace_safe=inplace_safe,
+            unconditional=unconditional,
             chunk_size=chunk_size,
         )
 

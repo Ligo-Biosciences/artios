@@ -44,6 +44,7 @@ basic_configs = {
     "train_confidence_only": False,
     "use_wandb": True,
     "wandb_id": "",  # TODO
+    "neptune_run_id": "",
     "seed": 42,
     "deterministic": False,
     "deterministic_seed": False,

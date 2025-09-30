@@ -422,13 +422,12 @@ class ArtiosAllAtomFlowTrainer(object):
                     continue
 
                 checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
-                _load_checkpoint(
-                    checkpoint_path,
-                    load_params_only=True,
-                )
 
                 # Register only the wrapper corresponding to this sigma
                 matching_wrapper = sigma_to_wrapper[sigma]
+                _load_checkpoint(
+                    checkpoint_path, load_params_only=True, model=matching_wrapper
+                )
                 matching_wrapper.register()
                 self.print(
                     f"Loaded and registered latest EMA checkpoint for sigma={sigma} at step {step}: {checkpoint_file}"

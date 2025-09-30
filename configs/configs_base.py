@@ -33,8 +33,8 @@ basic_configs = {
     "eval_only": False,
     "load_flow_checkpoint_path": "",
     "load_vae_checkpoint_path": "",
-    "load_ema_flow_checkpoint_path": "",
-    "load_ema_vae_checkpoint_path": "",  # TODO: no need?
+    "load_ema_flow_checkpoint_path": "",  # TODO: no need!
+    "load_ema_vae_checkpoint_path": "",  # TODO: no need
     "load_strict": True,
     "load_params_only": True,
     "guiding_net_path": ValueMaybeNone(""),
@@ -43,7 +43,7 @@ basic_configs = {
     "skip_load_scheduler": False,
     "train_confidence_only": False,
     "use_wandb": True,
-    "wandb_id": "",  # TODO
+    "wandb_id": "",  # TODO: deprecated
     "neptune_run_id": "",
     "seed": 42,
     "deterministic": False,

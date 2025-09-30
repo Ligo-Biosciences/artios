@@ -368,6 +368,69 @@ class ArtiosAllAtomFlowTrainer(object):
             )
             self.use_ddp = use_ddp
 
+        # Load power-law EMA wrappers from checkpoint
+        if self.configs.load_ema_checkpoint_paths_directory:
+            checkpoint_dir = self.configs.load_ema_checkpoint_paths_directory
+            if not os.path.exists(checkpoint_dir):
+                raise Exception(
+                    f"EMA checkpoint directory does not exist: {checkpoint_dir}"
+                )
+
+            # Get all checkpoint files from directory
+            checkpoint_files = [
+                f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")
+            ]
+            self.print(
+                f"Found {len(checkpoint_files)} EMA checkpoints in {checkpoint_dir}"
+            )
+
+            # Create mapping of sigma values to their corresponding wrappers
+            sigma_to_wrapper = {
+                wrapper.sigma: wrapper for wrapper in self.power_law_ema_wrappers
+            }
+            # Find the latest checkpoint for each sigma value
+            sigma_to_latest_checkpoint = {}
+
+            for checkpoint_file in checkpoint_files:
+                # Extract step and sigma from filename (format: "{step}_ema_{sigma}.pt")
+                try:
+                    parts = checkpoint_file.replace(".pt", "").split("_ema_")
+                    step = int(parts[0])
+                    sigma = float(parts[1])
+                except (IndexError, ValueError):
+                    self.print(
+                        f"Warning: Could not extract step and sigma from checkpoint filename: {checkpoint_file}"
+                    )
+                    continue
+
+                # Keep track of the latest checkpoint for each sigma
+                if (
+                    sigma not in sigma_to_latest_checkpoint
+                    or step > sigma_to_latest_checkpoint[sigma][0]
+                ):
+                    sigma_to_latest_checkpoint[sigma] = (step, checkpoint_file)
+
+            # Load only the latest checkpoint for each sigma
+            for sigma, (step, checkpoint_file) in sigma_to_latest_checkpoint.items():
+                if sigma not in sigma_to_wrapper:
+                    self.print(
+                        f"Warning: No matching wrapper found for sigma={sigma} in checkpoint: {checkpoint_file}"
+                    )
+                    continue
+
+                checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
+                _load_checkpoint(
+                    checkpoint_path,
+                    load_params_only=True,
+                )
+
+                # Register only the wrapper corresponding to this sigma
+                matching_wrapper = sigma_to_wrapper[sigma]
+                matching_wrapper.register()
+                self.print(
+                    f"Loaded and registered latest EMA checkpoint for sigma={sigma} at step {step}: {checkpoint_file}"
+                )
+
     def print(self, msg: str):
         if DIST_WRAPPER.rank == 0:
             logging.info(msg)

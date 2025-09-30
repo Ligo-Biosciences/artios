@@ -348,17 +348,6 @@ class ArtiosAllAtomFlowTrainer(object):
 
             return model
 
-        # Load model parameters (With no EMA) from checkpoint
-        if self.configs.load_flow_checkpoint_path:
-            self.flow_model = _load_checkpoint(
-                self.configs.load_flow_checkpoint_path,
-                self.configs.load_params_only,
-                model=self.flow_model,
-                skip_load_optimizer=self.configs.skip_load_optimizer,
-                skip_load_scheduler=self.configs.skip_load_scheduler,
-                skip_load_step=self.configs.skip_load_step,
-            )
-
         if self.configs.load_vae_checkpoint_path:
             use_ddp = (
                 self.use_ddp
@@ -424,14 +413,25 @@ class ArtiosAllAtomFlowTrainer(object):
                 checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
 
                 # Register only the wrapper corresponding to this sigma
-                matching_wrapper = sigma_to_wrapper[sigma]
                 _load_checkpoint(
-                    checkpoint_path, load_params_only=True, model=matching_wrapper
+                    checkpoint_path, load_params_only=True, model=self.flow_model
                 )
+                matching_wrapper = sigma_to_wrapper[sigma]
                 matching_wrapper.register()
                 self.print(
                     f"Loaded and registered latest EMA checkpoint for sigma={sigma} at step {step}: {checkpoint_file}"
                 )
+
+        # Load model parameters (With no EMA) from checkpoint
+        if self.configs.load_flow_checkpoint_path:
+            self.flow_model = _load_checkpoint(
+                self.configs.load_flow_checkpoint_path,
+                self.configs.load_params_only,
+                model=self.flow_model,
+                skip_load_optimizer=self.configs.skip_load_optimizer,
+                skip_load_scheduler=self.configs.skip_load_scheduler,
+                skip_load_step=self.configs.skip_load_step,
+            )
 
     def print(self, msg: str):
         if DIST_WRAPPER.rank == 0:

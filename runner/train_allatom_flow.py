@@ -398,7 +398,10 @@ class ArtiosAllAtomFlowTrainer(object):
                 # Keep track of the latest checkpoint for each sigma
                 if (
                     sigma not in sigma_to_latest_checkpoint
-                    or step > sigma_to_latest_checkpoint[sigma][0]
+                    or step
+                    > sigma_to_latest_checkpoint[sigma][
+                        0
+                    ]  # TODO: assert step is smaller than the loaded checkpoint of flow model (or give warning).
                 ):
                     sigma_to_latest_checkpoint[sigma] = (step, checkpoint_file)
 

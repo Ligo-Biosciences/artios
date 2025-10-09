@@ -12,7 +12,6 @@ import torch
 from torch import Tensor
 
 from protenix.model.modules.loss_components import (
-    AmbientFMLoss,
     BaseLoss,
     KLDivergenceLoss,
     MSELoss,
@@ -119,7 +118,7 @@ class FlowLoss(AggregatedLoss):
             LossComponent(
                 name="mse_centre_atom_loss",
                 weight=1 / 3,  # TODO: change this to 1.0
-                loss=AmbientFMLoss(
+                loss=MSELoss(
                     # Tensor keys
                     pred_key="centre_coordinate",
                     true_key="centre_coordinate_velocity",

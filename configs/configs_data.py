@@ -60,7 +60,7 @@ default_weighted_pdb_configs = {
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
 }
 
-DATA_ROOT_DIR = "af3-dev/release_data/"
+DATA_ROOT_DIR = "/af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -147,11 +147,9 @@ data_configs = {
         "max_n_pocket": 16,
         "bin_ends": ListValue([2112, 3008, 4000]),
     },
-    "train_sets": ListValue(
-        ["weightedPDB_before2109_wopb_nometalc_0925", "distillation"]
-    ),
+    "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925"]),
     "train_sampler": {
-        "train_sample_weights": ListValue([0.5, 0.5]),
+        "train_sample_weights": ListValue([1.0]),
         "sampler_type": "weighted",
     },
     "test_sets": ListValue(["recentPDB_1536_sample384_0925"]),

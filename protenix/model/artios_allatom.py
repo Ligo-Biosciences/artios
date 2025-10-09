@@ -67,8 +67,10 @@ class ArtiosAllatom(nn.Module):
                 "sigma_latent",
                 "stoch_type_coord",
                 "stoch_type_latent",
-                "alpha",
-                "gamma",
+                "alpha_coord",
+                "alpha_latent",
+                "gamma_coord",
+                "gamma_latent",
                 "second_order",
                 "guidance_weight",
                 "beta_mean",
@@ -139,6 +141,10 @@ class ArtiosAllatom(nn.Module):
         )
 
         # N_sample different ouputs created via diffusion
+        # NOTE: the coords are sent to the decoder, treated like they are working at sigma_coord
+        # NOTE: the latents are immediately layernormed and then sent through a linear.
+        # TODO: coming out of sample_latent_diffusion, are our coords actually working at the right sigma_coord?
+        # TODO: is our decoder used to seeing coords at this scale ??
         pred_dict["centre_coordinate"], pred_dict["latents"] = (
             self.sample_latent_diffusion(
                 denoise_net=self.diffusion_module,

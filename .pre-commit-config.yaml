@@ -7,16 +7,16 @@ repos:
       # Run the linter.
       - id: ruff
         args: [--fix]
-        exclude: |
-          (?x)^(
-            evaluation/.*
-          )$
+        # exclude: |
+        #   (?x)^(
+        #     evaluation/.*
+        #   )$
       # Run the formatter.
       - id: ruff-format
-        exclude: |
-          (?x)^(
-            evaluation/.*
-          )$
+        # exclude: |
+        #   (?x)^(
+        #     evaluation/.*
+        #   )$
 
 #  - repo: https://github.com/johannsdg/pre-commit-license-headers
 #    rev: v0.1.0

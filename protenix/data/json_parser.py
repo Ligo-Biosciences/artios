@@ -754,7 +754,7 @@ class DesignAtomArrayBuilder:
             self.element = "C"
             self.res_name = "TBD"  # to be designed :)
             self.canonical_res_name = (
-                "GLY"  # TODO: has to be legit resname otherwise featurizer breaks
+                "GLY"  # NOTE: has to be legit resname otherwise featurizer breaks
             )
         elif mol_type == "rna":
             self.atom_name = "C1'"

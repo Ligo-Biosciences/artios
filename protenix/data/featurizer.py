@@ -734,42 +734,46 @@ class Featurizer(object):
             is_target_token * token_resolved
         ).unsqueeze(-1)
 
-        ### Hotspot feature for target training
-        # [N_token] binary indicator for hotspot residues
-        # 1. Distance matrix in the crop
-        target_distance = self.get_token_dist_mat(centre_atoms.is_target)
-        # [n_target_tokens, n_all_tokens]
+        # TODO: completely butchering this for now
+        # ### Hotspot feature for target training
+        # # [N_token] binary indicator for hotspot residues
+        # # 1. Distance matrix in the crop
+        # target_distance = self.get_token_dist_mat(centre_atoms.is_target)
+        # # [n_target_tokens, n_all_tokens]
 
-        # 2. Distance is valid mask
-        target_resolved = centre_atoms.is_resolved[centre_atoms.is_target]
-        target_dist_mask = target_resolved[:, None] * token_resolved[None, :]
-        # [n_target_tokens, n_all_tokens]
+        # # 2. Distance is valid mask
+        # target_resolved = centre_atoms.is_resolved[centre_atoms.is_target]
+        # target_dist_mask = target_resolved[:, None] * token_resolved[None, :]
+        # # [n_target_tokens, n_all_tokens]
 
-        # 3. If distance is less than cutoff (e.g. 5 Angstroms) -> interface
-        mask_distance = target_distance < hotspot_cutoff
+        # # 3. If distance is less than cutoff (e.g. 5 Angstroms) -> interface
+        # mask_distance = target_distance < hotspot_cutoff
 
-        # 4. Find the hotspots in the crop
-        mask_diff_from_target = target_resolved[:, None] * (
-            1 - is_target_token[None, :]
-        )
-        mask = mask_distance * target_dist_mask * mask_diff_from_target
-        mask_interface = np.sum(mask, axis=-1)
-        mask_interface = mask_interface > 0.0
+        # # 4. Find the hotspots in the crop
+        # mask_diff_from_target = target_resolved[:, None] * (
+        #     1 - is_target_token[None, :]
+        # )
+        # mask = mask_distance * target_dist_mask * mask_diff_from_target
+        # mask_interface = np.sum(mask, axis=-1)
+        # mask_interface = mask_interface > 0.0
 
-        # Randomly pick between 0 and 5 hotspots
-        interface_indices = np.where(mask_interface)[0]
-        if len(interface_indices) > 0:
-            num_hotspots = np.random.randint(0, min(6, len(interface_indices) + 1))
-            if num_hotspots > 0:
-                selected_hotspots = np.random.choice(
-                    interface_indices, size=num_hotspots, replace=False
-                )
-                centre_atoms.is_hotspot[selected_hotspots] = 1.0
+        # # Randomly pick between 0 and 5 hotspots
+        # interface_indices = np.where(mask_interface)[0]
+        # if len(interface_indices) > 0:
+        #     num_hotspots = np.random.randint(0, min(6, len(interface_indices) + 1))
+        #     if num_hotspots > 0:
+        #         selected_hotspots = np.random.choice(
+        #             interface_indices, size=num_hotspots, replace=False
+        #         )
+        #         centre_atoms.is_hotspot[selected_hotspots] = 1.0
 
         target_features["is_target_token"] = torch.Tensor(
             is_target_token * token_resolved
         ).long()  # [N_token]
-        target_features["is_hotspot"] = torch.Tensor(centre_atoms.is_hotspot).long()
+
+        # TODO: temp solution: just setting straight to zeros
+        # target_features["is_hotspot"] = torch.Tensor(centre_atoms.is_hotspot).long()
+        target_features["is_hotspot"] = torch.zeros(len(centre_atoms)).long()
 
         return target_features
 

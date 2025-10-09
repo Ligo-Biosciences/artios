@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # TODO: this is quite nasty due to guidance model configs. We should transition to cleaner configs,
-#   potentially with Hydra etc. 
+#   potentially with Hydra etc.
 
 # pylint: disable=C0114
 import os
 
-from protenix.config.extend_types import GlobalConfigValue, ListValue, RequiredValue, ValueMaybeNone
+from protenix.config.extend_types import (
+    GlobalConfigValue,
+    ListValue,
+    ValueMaybeNone,
+)
 
 # Small guidance model
 guidance_model_configs = {
@@ -83,12 +87,12 @@ guidance_model_configs = {
                 },
             ]
         ),
-    },    
+    },
     "inference_timestep_scheduler": {
         "ligo": {"p": -0.7},
         "variable_linear_quadratic": {"m": 0.1, "n": 0.3},
         "la_proteina": {"scale": 10.0},
-    },    
+    },
     "sample_diffusion": {
         "N_step": 200,  # 25
         "N_sample": 1,  # 1
@@ -217,11 +221,11 @@ inference_configs = {
     "dump_dir": "./output",
     "need_atom_confidence": False,
     "sorted_by_ranking_score": False,
-    "input_json_path": RequiredValue(str),
+    "input_json_path": "input_new.json",
     "load_checkpoint_path": os.path.join(
         code_directory, "./release_data/checkpoint/model_v0.2.0.pt"
     ),
     "num_workers": 16,
     "use_msa": False,
-    "guidance_model_configs": guidance_model_configs,
+    # "guidance_model_configs": guidance_model_configs,
 }

@@ -112,7 +112,7 @@ model_configs = {
     "c_atom": 256,  # 64
     "c_atompair": 16,  # 16
     "c_token": 768,  # 192
-    "c_latent": 8,
+    "c_latent": 10,
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
@@ -172,17 +172,19 @@ model_configs = {
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
-        "N_sample": 8,
+        "N_sample": 10,  # changed from 1, BATCH SIZE AT SAMPLING
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type_coord": "proteina",
         "stoch_type_latent": "laproteina",
-        "alpha": 0.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
-        "gamma": 1.0,
+        "alpha_coord": 0.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha_latent": 0.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "gamma_coord": 1.0,
+        "gamma_latent": 1.0,
         "sigma_coord": GlobalConfigValue("sigma_coord"),
         "sigma_latent": GlobalConfigValue("sigma_latent"),
         "second_order": False,
-        "guidance_weight": 1.2,
+        "guidance_weight": 1.0,
         "beta_mean": 0.5,
         "beta_std": 0.233,
     },
@@ -413,7 +415,7 @@ training_time_inference_configs = {
     "seeds": ListValue([101]),
     "need_atom_confidence": False,
     "sorted_by_ranking_score": False,
-    "input_json_path": "artios-ligand/samples.json",
+    # "input_json_path": "artios-ligand/samples.json",
     "num_workers": 16,
     "use_msa": False,
 }

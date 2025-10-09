@@ -171,6 +171,10 @@ class AtomArrayTokenizer(object):
             TokenArray: TokenArray object with annotations.
         """
         centre_atom_indices = np.where(self.atom_array.centre_atom_mask == 1)[0]
+        assert (
+            len(token_array) == len(centre_atom_indices)
+        ), f"got {len(token_array)} tokens and {len(centre_atom_indices)} centre_atom_indices"
+
         token_array.set_annotation("centre_atom_index", centre_atom_indices)
         assert len(token_array) == len(centre_atom_indices)
         return token_array

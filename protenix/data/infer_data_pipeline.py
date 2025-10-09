@@ -101,6 +101,30 @@ class InferenceDataset(Dataset):
             single_sample_dict,
         )
         features_dict, atom_array, token_array = sample2feat.get_feature_dict()
+
+        is_hotspot = torch.zeros(features_dict["is_hotspot"].shape)
+
+        assert len(self.inputs) == 1, "Only one sample is supported currently"
+        assert (
+            len(self.inputs[0]["target"]) == 1
+        ), "Only one target is supported currently"
+
+        initial_offset = 0
+        for design in self.inputs[0]["design"]:
+            chain_key = list(design.keys())[0]
+            initial_offset += design[chain_key]["length"]
+
+        hotspot_indices = []
+        for target in self.inputs[0]["target"]:
+            chain_key = list(target.keys())[0]
+            hotspot_indices.extend(
+                [initial_offset + hotspot for hotspot in target[chain_key]["hotspots"]]
+            )
+
+        is_hotspot[hotspot_indices] = 1.0
+        # is_hotspot = torch.zeros(features_dict["is_hotspot"].shape)
+        features_dict["is_hotspot"] = is_hotspot
+
         features_dict["distogram_rep_atom_mask"] = torch.Tensor(
             atom_array.distogram_rep_atom_mask
         ).long()
@@ -149,7 +173,9 @@ class InferenceDataset(Dataset):
         for mol_type in ["ligand", "protein", "dna", "rna"]:
             mol_type_mask = feat[f"is_{mol_type}"].bool()
             stats[f"{mol_type}/atom"] = int(mol_type_mask.sum(dim=-1).item())
-            stats[f"{mol_type}/token"] = len(torch.unique(feat["atom_to_token_idx"][mol_type_mask]))
+            stats[f"{mol_type}/token"] = len(
+                torch.unique(feat["atom_to_token_idx"][mol_type_mask])
+            )
 
         N_asym = len(torch.unique(data["input_feature_dict"]["asym_id"]))
         data.update(
@@ -194,7 +220,7 @@ class InferenceDataset(Dataset):
             "added_feature": t3 - t2,
         }
 
-        return data, atom_array, time_tracker
+        return data, atom_array, token_array, time_tracker
 
     def __len__(self) -> int:
         return len(self.inputs)
@@ -205,11 +231,13 @@ class InferenceDataset(Dataset):
             sample_name = single_sample_dict["name"]
             logger.info(f"Featurizing {sample_name}...")
 
-            data, atom_array, _ = self.process_one(single_sample_dict=single_sample_dict)
+            data, atom_array, token_array, _ = self.process_one(
+                single_sample_dict=single_sample_dict
+            )
             error_message = ""
         except Exception as e:
-            data, atom_array = {}, None
+            data, atom_array, token_array = {}, None, None
             error_message = f"{e}:\n{traceback.format_exc()}"
         data["sample_name"] = single_sample_dict["name"]
         data["sample_index"] = index
-        return data, atom_array, error_message
+        return data, atom_array, token_array, error_message

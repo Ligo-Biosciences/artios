@@ -601,8 +601,8 @@ def beta_function(
     if mean_std_provided:
         # Convert mean and std to alpha and beta parameters
         if device is not None and dtype is not None:
-            mean = Tensor(mean, device=device, dtype=dtype)
-            std = Tensor(std, device=device, dtype=dtype)
+            mean = torch.tensor(mean, device=device, dtype=dtype)
+            std = torch.tensor(std, device=device, dtype=dtype)
 
         var = std**2
 
@@ -623,8 +623,8 @@ def beta_function(
             )
 
         if device is not None and dtype is not None:
-            alpha = Tensor(alpha, device=device, dtype=dtype)
-            beta = Tensor(beta, device=device, dtype=dtype)
+            alpha = torch.tensor(alpha, device=device, dtype=dtype)
+            beta = torch.tensor(beta, device=device, dtype=dtype)
 
     # Calculate Beta function normalization constant using log-gamma
     # B(alpha, beta) = Γ(alpha)Γ(beta)/Γ(alpha+beta)

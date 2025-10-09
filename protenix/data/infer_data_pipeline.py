@@ -122,12 +122,8 @@ class InferenceDataset(Dataset):
             )
 
         is_hotspot[hotspot_indices] = 1.0
-        logger.info(
-            f"is_hotspot: {is_hotspot}, hotspot_indices: {hotspot_indices}, {len(is_hotspot)=}"
-        )
+        # is_hotspot = torch.zeros(features_dict["is_hotspot"].shape)
         features_dict["is_hotspot"] = is_hotspot
-        # # TODO: temp solution: set the tokenwise is_hotspot to zeros
-        # features_dict["is_hotspot"] = torch.zeros(features_dict["is_hotspot"].shape)
 
         features_dict["distogram_rep_atom_mask"] = torch.Tensor(
             atom_array.distogram_rep_atom_mask

@@ -185,6 +185,8 @@ model_configs = {
         "sigma_latent": GlobalConfigValue("sigma_latent"),
         "second_order": False,
         "guidance_weight": 1.0,
+        "lower_guidance_limit": 0.0,
+        "upper_guidance_limit": 1.0,
         "beta_mean": 0.5,
         "beta_std": 0.233,
     },

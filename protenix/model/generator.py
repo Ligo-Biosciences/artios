@@ -1,17 +1,4 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
+from copy import deepcopy
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -187,9 +174,10 @@ def _denoise_and_compute_velocity_score(
     t_coord_cur: torch.Tensor,
     t_latent_cur: torch.Tensor,
     input_feature_dict: dict,
-    inplace_safe: bool,
+    inplace_safe: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Run denoising network and compute velocity and score for both coord and latent."""
+
     pred_coord, pred_latent = denoise_net(
         noisy_coord=noisy_coord,
         noisy_latent=noisy_latent,
@@ -216,8 +204,10 @@ def _calculate_velocity_and_score(
     t_latent_cur: torch.Tensor,
     input_feature_dict: dict,
     inplace_safe: bool = False,
-    guiding_denoise_net: Optional[Callable] = None,
     guidance_weight: float = 1.0,
+    unconditional_input_feature_dict: Optional[dict] = None,
+    lower_guidance_limit: float = 0.0,
+    upper_guidance_limit: float = 1.0,
 ) -> dict[str, torch.Tensor]:
     """
     Calculate velocity and scaled score for the diffusion process for a single timestep.
@@ -233,35 +223,48 @@ def _calculate_velocity_and_score(
 
     # Denoising
     v_c, v_l, s_c, s_l = _denoise_and_compute_velocity_score(
-        denoise_net,
-        noisy_coord,
-        noisy_latent,
-        t_coord,
-        t_latent,
-        t_coord_cur,
-        t_latent_cur,
-        input_feature_dict,
-        inplace_safe,
+        denoise_net=denoise_net,
+        noisy_coord=noisy_coord,
+        noisy_latent=noisy_latent,
+        t_coord=t_coord,
+        t_latent=t_latent,
+        t_coord_cur=t_coord_cur,
+        t_latent_cur=t_latent_cur,
+        input_feature_dict=input_feature_dict,
+        inplace_safe=inplace_safe,
     )
 
-    # (Optional) Guidance denoising
-    if guiding_denoise_net is not None:
-        v_c_g, v_l_g, s_c_g, s_l_g = _denoise_and_compute_velocity_score(
-            guiding_denoise_net,
-            noisy_coord,
-            noisy_latent,
-            t_coord,
-            t_latent,
-            t_coord_cur,
-            t_latent_cur,
-            input_feature_dict,
-            inplace_safe,
-        )
+    # Guidance denoising
+    v_c_g, v_l_g, s_c_g, s_l_g = _denoise_and_compute_velocity_score(
+        denoise_net=denoise_net,
+        noisy_coord=noisy_coord,
+        noisy_latent=noisy_latent,
+        t_coord=t_coord,
+        t_latent=t_latent,
+        t_coord_cur=t_coord_cur,
+        t_latent_cur=t_latent_cur,
+        input_feature_dict=unconditional_input_feature_dict,
+        inplace_safe=inplace_safe,
+    )
 
-        v_c = guidance_weight * v_c + (1 - guidance_weight) * v_c_g
-        v_l = guidance_weight * v_l + (1 - guidance_weight) * v_l_g
-        s_c = guidance_weight * s_c + (1 - guidance_weight) * s_c_g
-        s_l = guidance_weight * s_l + (1 - guidance_weight) * s_l_g
+    # Apply limited interval
+    guidance_weight = torch.where(
+        t_coord[..., None, None] < lower_guidance_limit,
+        0.0,  # 1.0
+        guidance_weight,
+    )
+    guidance_weight = torch.where(
+        t_coord[..., None, None] > upper_guidance_limit, 1.0, guidance_weight
+    )
+
+    # Skip guidance for the target tokens
+    is_target_token = input_feature_dict["is_target_token"][..., None, :, None]
+    guidance_weight = torch.where(is_target_token.bool(), 1.0, guidance_weight)
+
+    v_c = guidance_weight * v_c + (1 - guidance_weight) * v_c_g
+    v_l = guidance_weight * v_l + (1 - guidance_weight) * v_l_g
+    s_c = guidance_weight * s_c + (1 - guidance_weight) * s_c_g
+    s_l = guidance_weight * s_l + (1 - guidance_weight) * s_l_g
 
     return {
         "centre_velocity": v_c,
@@ -288,10 +291,11 @@ def sample_latent_diffusion(
     gamma_latent: float = 1.0,
     second_order: bool = False,
     inplace_safe: bool = False,
-    guiding_denoise_net: Optional[Callable] = None,
     guidance_weight: float = 1.0,
     beta_mean: Optional[float] = 0.5,
     beta_std: Optional[float] = 0.224,
+    lower_guidance_limit: Optional[float] = 0.0,
+    upper_guidance_limit: Optional[float] = 1.0,
 ) -> torch.Tensor:
     """
     Diffuses latents and centre coords with the allatom Flow model by discretising the FM SDE.
@@ -319,14 +323,34 @@ def sample_latent_diffusion(
         inplace_safe (bool): Whether to use inplace operations.
         guiding_denoise_net (Optional[Callable]): The guiding denoising network.
         guidance_weight (float): The weight of the guidance.
-        beta_mean (Optional[float]): The mean of the beta distribution.
-        beta_std (Optional[float]): The std of the beta distribution.
-
+        beta_mean (float, optional): The mean of the beta distribution.
+        beta_std (float, optional): The std of the beta distribution.
+        lower_guidance_limit (float, optional) = 0.0,
+        upper_guidance_limit: (float, optional) = 1.0
     """
     batch_shape = input_feature_dict["residue_index"].shape[:-1]
     N_token = input_feature_dict["residue_index"].shape[-1]
     device = input_feature_dict["residue_index"].device
     dtype = torch.float32
+
+    # Initialize unconditional input feature dict
+    unconditional_input_feature_dict = deepcopy(input_feature_dict)
+    # TODO: this is messy, temporary hack for now.
+    unconditional_input_feature_dict["token_mask"] = input_feature_dict[
+        "token_mask"
+    ] * (1 - input_feature_dict["is_target_token"])
+    unconditional_input_feature_dict["is_ligand"] = torch.zeros_like(
+        input_feature_dict["is_ligand"]
+    )
+    unconditional_input_feature_dict["is_ligand_token"] = torch.zeros_like(
+        input_feature_dict["is_ligand_token"]
+    )
+    unconditional_input_feature_dict["is_target_token"] = torch.zeros_like(
+        input_feature_dict["is_target_token"]
+    )
+    unconditional_input_feature_dict["is_hotspot"] = torch.zeros_like(
+        input_feature_dict["is_hotspot"]
+    )
 
     # Stochasticity functions (normalised such that int_{0}^{1}(g(t)) = 1)
     # TODO: check these integrals. I think off by factor of 2.
@@ -336,15 +360,15 @@ def sample_latent_diffusion(
         "non_singular": lambda t, alpha: torch.where(
             t > 0.95,  # do not noise close to 1 for ligand's sake
             torch.zeros_like(t),
-            2 * (alpha**2) * (1 - t),
-        ),  # int_{0}^{1}(non_sing) = 1/2
+            4 * 0.5 * (alpha**2) * (1 - t),
+        ),  # int_{0}^{1}(non_sing) = 1/4
         "zero_ends": lambda t, alpha: 12
         * 0.5
         * (alpha**2)
         * t
         * (1 - t),  # int_{0}^{1}(zero_ends) = 1/12
         "proteina": lambda t, alpha: torch.where(
-            t > 0.95, torch.zeros_like(t), 0.5 * 10 * ((alpha**2) / (t + 0.01))
+            t > 0.95, torch.zeros_like(t), 0.5 * ((alpha**2) / (t + 0.01))
         ),
         "beta": lambda t, alpha: torch.where(
             t > 0.95,
@@ -419,8 +443,10 @@ def sample_latent_diffusion(
             t_latent_cur=t_latent_cur,
             input_feature_dict=input_feature_dict,
             inplace_safe=inplace_safe,
-            guiding_denoise_net=guiding_denoise_net,
             guidance_weight=guidance_weight,
+            unconditional_input_feature_dict=unconditional_input_feature_dict,
+            lower_guidance_limit=lower_guidance_limit,
+            upper_guidance_limit=upper_guidance_limit,
         )
 
         # Calculate updates
@@ -459,8 +485,10 @@ def sample_latent_diffusion(
                 t_latent_cur=t_latent_cur,
                 input_feature_dict=input_feature_dict,
                 inplace_safe=inplace_safe,
-                guiding_denoise_net=guiding_denoise_net,
                 guidance_weight=guidance_weight,
+                unconditional_input_feature_dict=unconditional_input_feature_dict,
+                lower_guidance_limit=lower_guidance_limit,
+                upper_guidance_limit=upper_guidance_limit,
             )
 
             update_2_coord = step_coord * (
@@ -556,99 +584,3 @@ def sample_noising(
     )
 
     return x_noisy, timestep, x_target_augment
-
-
-def sample_diffusion_training(
-    timestep_sampler: TrainingTimestepSampler,
-    denoise_net: Callable,
-    label_dict: dict[str, Any],
-    input_feature_dict: dict[str, Any],
-    sigma_data: float = 12.0,
-    N_sample: int = 1,
-    diffusion_chunk_size: Optional[int] = None,
-    generator: torch.Generator = None,
-) -> tuple[torch.Tensor, ...]:
-    """Implements diffusion training. Creates N_sample's of randomly augmented ground truth coordinates,
-    noises the coords via FM style interpolation, sends them through the network to get denoised coords.
-
-    Args:
-        timestep_sampler (TrainingTimestepSampler): the timestep sampler
-        denoise_net (Callable): the network that performs the denoising step.
-        label_dict (dict, optional) : a dictionary containing the followings.
-            "coordinate": the ground-truth coordinates
-                [..., N_atom, 3]
-            "coordinate_mask": whether true coordinates exist.
-                [..., N_atom]
-        input_feature_dict (dict[str, Any]): input meta feature dict
-        N_sample (int): number of training samples
-        generator (torch.Generator): the generator to use for sampling
-    Returns:
-        x_target_augment (torch.Tensor): the augmented ground truth coordinates
-            [..., N_sample, N_atom, 3]
-        coords_pred (torch.Tensor): the predicted coordinates
-            [..., N_sample, N_atom, 3]
-        timestep (torch.Tensor): the timestep
-            [..., N_sample]
-    """
-    batch_size_shape = label_dict["coordinate"].shape[:-2]
-    device = label_dict["coordinate"].device
-    dtype = label_dict["coordinate"].dtype
-
-    # Create N_sample versions of the input structure by randomly rotating and translating
-    x_target_augment = centre_random_augmentation(
-        x_input_coords=label_dict["coordinate"],
-        N_sample=N_sample,
-        mask=label_dict["coordinate_mask"],
-    ).to(dtype)  # [..., N_sample, N_atom, 3]
-
-    # Get timestep for noising
-    # timestep: independent timesteps for each sample [..., N_sample]
-    timestep = timestep_sampler(
-        size=(*batch_size_shape, N_sample), device=device, generator=generator
-    ).to(dtype)
-
-    # Generate noise
-    noise = (
-        torch.randn(
-            x_target_augment.shape,
-            dtype=dtype,
-            device=x_target_augment.device,
-            generator=generator,
-        )
-        * sigma_data
-    )  # [..., N_sample, N_atom, 3]
-
-    # Noise coords FM style ( x_t = (1-t)*x_0 + t*x_1 )
-    x_noisy = noise_w_flow_matching(
-        x_target_augment, noise, timestep[..., :, None, None]
-    )
-
-    # Get denoised output predictions [..., N_sample, N_atom, 3]
-    if diffusion_chunk_size is None:
-        coords_pred = denoise_net(
-            x_noisy=x_noisy,
-            timestep=timestep,
-            input_feature_dict=input_feature_dict,
-        )
-    else:
-        coords_pred = []
-        no_chunks = N_sample // diffusion_chunk_size + (
-            N_sample % diffusion_chunk_size != 0
-        )
-        for i in range(no_chunks):
-            x_noisy_i = x_noisy[
-                ..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size, :, :
-            ]
-            timestep_i = timestep[
-                ..., i * diffusion_chunk_size : (i + 1) * diffusion_chunk_size
-            ]
-            coords_pred_i = denoise_net(
-                x_noisy=x_noisy_i,
-                timestep=timestep_i,
-                input_feature_dict=input_feature_dict,
-            )
-
-            coords_pred.append(coords_pred_i)
-        coords_pred = torch.cat(coords_pred, dim=-3)
-
-    return x_target_augment, coords_pred, timestep

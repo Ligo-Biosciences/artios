@@ -75,6 +75,8 @@ class ArtiosAllatom(nn.Module):
                 "guidance_weight",
                 "beta_mean",
                 "beta_std",
+                "lower_guidance_limit",
+                "upper_guidance_limit",
             ]
         }
         return autocasting_disable_decorator(self.configs.skip_amp.sample_diffusion)(
@@ -87,7 +89,6 @@ class ArtiosAllatom(nn.Module):
         mode: str,
         inplace_safe: bool = False,
         decoder: Optional[nn.Module] = None,
-        guiding_net: Optional[nn.Module] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
         Main inference loop (single model seed) for the Alphafold3 model.
@@ -125,13 +126,6 @@ class ArtiosAllatom(nn.Module):
         #        del input_feature_dict[key]
         #    torch.cuda.empty_cache()
 
-        ### Diffusion
-
-        # Initialise guiding diffusion module
-        guiding_diffusion_module = None
-        if guiding_net is not None:
-            guiding_diffusion_module = guiding_net.diffusion_module
-
         # Generate timesteps for solving the FM SDE
         coord_timesteps = self.coord_inference_timestep_scheduler(
             N_step=N_step, device=device, dtype=dtype
@@ -154,7 +148,6 @@ class ArtiosAllatom(nn.Module):
                 c_latent=self.configs.c_latent,
                 N_sample=N_sample,
                 inplace_safe=inplace_safe,
-                guiding_denoise_net=guiding_diffusion_module,
             )
         )
 
@@ -239,6 +232,21 @@ class ArtiosAllatom(nn.Module):
             generator=generator,
         )
 
+        # With CFG drop probability, train the unconditional model
+        if torch.rand(1).item() < self.cfg_drop_probability:
+            input_feature_dict["is_ligand"] = torch.zeros_like(
+                input_feature_dict["is_ligand"]
+            )
+            input_feature_dict["is_ligand_token"] = torch.zeros_like(
+                input_feature_dict["is_ligand_token"]
+            )
+            input_feature_dict["is_target_token"] = torch.zeros_like(
+                input_feature_dict["is_target_token"]
+            )
+            input_feature_dict["is_hotspot"] = torch.zeros_like(
+                input_feature_dict["is_hotspot"]
+            )
+
         # Denoising
         coord_pred, latent_pred = self.diffusion_module(
             noisy_coord=noisy_centre_coords,
@@ -246,7 +254,6 @@ class ArtiosAllatom(nn.Module):
             coord_timestep=coord_timestep,
             latent_timestep=latent_timestep,
             input_feature_dict=input_feature_dict,
-            unconditional=torch.rand(1).item() < self.cfg_drop_probability,
             inplace_safe=inplace_safe,
             chunk_size=chunk_size,
         )
@@ -289,7 +296,6 @@ class ArtiosAllatom(nn.Module):
         symmetric_permutation: SymmetricPermutation = None,
         encoder: Optional[nn.Module] = None,
         decoder: Optional[nn.Module] = None,
-        guiding_net: Optional[nn.Module] = None,
         seed: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
@@ -336,7 +342,6 @@ class ArtiosAllatom(nn.Module):
                 mode=mode,
                 inplace_safe=False,  # inplace_safe,
                 decoder=decoder,
-                guiding_net=guiding_net,
             )
             log_dict.update({"time": time_tracker})
 

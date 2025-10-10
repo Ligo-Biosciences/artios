@@ -5,8 +5,13 @@ import torch
 
 from protenix.model.generator import (
     InferenceTimestepScheduler,
+    LaProteinaCoordScheduler,
+    LaProteinaLatentScheduler,
     TrainingTimestepSampler,
+    VariableLinQuadScheduler,
+    _calculate_unconditional_binder_velocity_and_score,
     _calculate_velocity_and_score,
+    _denoise_and_compute_velocity_score,
     sample_latent_diffusion,
     sample_noising,
 )
@@ -28,10 +33,31 @@ class TestGenerator:
 
     @pytest.fixture
     def input_dict(self, device, sample_data):
-        return {
+        input_dict = {
             k: v.to(device) if torch.is_tensor(v) else v
             for k, v in sample_data["input_feature_dict"].items()
         }
+
+        # Add required keys if not present
+        batch_shape = input_dict["residue_index"].shape[:-1]
+        n_tokens = input_dict["residue_index"].shape[-1]
+
+        required_keys = [
+            "is_ligand",
+            "is_ligand_token",
+            "is_target_token",
+            "is_hotspot",
+            "token_mask",
+        ]
+        for key in required_keys:
+            if key not in input_dict:
+                if key == "token_mask":
+                    # token_mask should default to all ones (all tokens are valid)
+                    input_dict[key] = torch.ones(*batch_shape, n_tokens, device=device)
+                else:
+                    input_dict[key] = torch.zeros(*batch_shape, n_tokens, device=device)
+
+        return input_dict
 
     @pytest.fixture
     def label_full_dict(self, device, sample_data):
@@ -257,7 +283,7 @@ class TestGenerator:
     def test_sample_latent_diffusion_basic(self, device, input_dict, sample_data):
         """Test basic functionality of sample_latent_diffusion function."""
 
-        # Mock denoise network that returns both coordinates and latents
+        # Mock denoise network that returns coordinates and latents as tuple
         def mock_denoise_net(
             noisy_coord,
             noisy_latent,
@@ -266,10 +292,7 @@ class TestGenerator:
             input_feature_dict,
             inplace_safe=False,
         ):
-            return {
-                "centre_coordinate": torch.zeros_like(noisy_coord),
-                "latents": torch.zeros_like(noisy_latent),
-            }
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
 
         # Get dimensions from sample data
         batch_shape = input_dict["residue_index"].shape[:-1]
@@ -312,10 +335,7 @@ class TestGenerator:
             input_feature_dict,
             inplace_safe=False,
         ):
-            return {
-                "centre_coordinate": torch.zeros_like(noisy_coord),
-                "latents": torch.zeros_like(noisy_latent),
-            }
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
 
         batch_shape = input_dict["residue_index"].shape[:-1]
         n_tokens = input_dict["residue_index"].shape[-1]
@@ -326,7 +346,14 @@ class TestGenerator:
         coord_timesteps = torch.linspace(0, 1, n_steps, device=device)
         latent_timesteps = torch.linspace(0, 1, n_steps, device=device)
 
-        stoch_types = ["deterministic", "constant", "non_singular", "zero_ends", "beta"]
+        stoch_types = [
+            "deterministic",
+            "constant",
+            "non_singular",
+            "zero_ends",
+            "beta",
+            "laproteina",
+        ]
 
         for stoch_type_coord in stoch_types:
             for stoch_type_latent in stoch_types:
@@ -339,8 +366,10 @@ class TestGenerator:
                     N_sample=n_samples,
                     stoch_type_coord=stoch_type_coord,
                     stoch_type_latent=stoch_type_latent,
-                    alpha=1.0,
-                    gamma=1.0,
+                    alpha_coord=1.0,
+                    alpha_latent=1.0,
+                    gamma_coord=1.0,
+                    gamma_latent=1.0,
                 )
 
                 assert coords_pred.shape == (*batch_shape, n_samples, n_tokens, 3)
@@ -366,23 +395,7 @@ class TestGenerator:
             input_feature_dict,
             inplace_safe=False,
         ):
-            return {
-                "centre_coordinate": torch.zeros_like(noisy_coord),
-                "latents": torch.zeros_like(noisy_latent),
-            }
-
-        def mock_guiding_net(
-            noisy_coord,
-            noisy_latent,
-            coord_timestep,
-            latent_timestep,
-            input_feature_dict,
-            inplace_safe=False,
-        ):
-            return {
-                "centre_coordinate": torch.ones_like(noisy_coord),
-                "latents": torch.ones_like(noisy_latent),
-            }
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
 
         batch_shape = input_dict["residue_index"].shape[:-1]
         n_tokens = input_dict["residue_index"].shape[-1]
@@ -400,7 +413,6 @@ class TestGenerator:
             latent_timesteps=latent_timesteps,
             c_latent=c_latent,
             N_sample=n_samples,
-            guiding_denoise_net=mock_guiding_net,
             guidance_weight=0.5,
         )
 
@@ -422,10 +434,7 @@ class TestGenerator:
             input_feature_dict,
             inplace_safe=False,
         ):
-            return {
-                "centre_coordinate": torch.zeros_like(noisy_coord),
-                "latents": torch.zeros_like(noisy_latent),
-            }
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
 
         batch_shape = input_dict["residue_index"].shape[:-1]
         n_tokens = input_dict["residue_index"].shape[-1]
@@ -465,10 +474,7 @@ class TestGenerator:
             input_feature_dict,
             inplace_safe=False,
         ):
-            return {
-                "centre_coordinate": torch.zeros_like(noisy_coord),
-                "latents": torch.zeros_like(noisy_latent),
-            }
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
 
         batch_shape = input_dict["residue_index"].shape[:-1]
         n_tokens = input_dict["residue_index"].shape[-1]
@@ -509,10 +515,7 @@ class TestGenerator:
             input_feature_dict,
             inplace_safe=False,
         ):
-            return {
-                "centre_coordinate": torch.zeros_like(noisy_coord),
-                "latents": torch.zeros_like(noisy_latent),
-            }
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
 
         batch_shape = input_dict["residue_index"].shape[:-1]
         n_tokens = input_dict["residue_index"].shape[-1]
@@ -568,23 +571,7 @@ class TestGenerator:
             input_feature_dict,
             inplace_safe=False,
         ):
-            return {
-                "centre_coordinate": torch.zeros_like(noisy_coord),
-                "latents": torch.zeros_like(noisy_latent),
-            }
-
-        def mock_guiding_net(
-            noisy_coord,
-            noisy_latent,
-            coord_timestep,
-            latent_timestep,
-            input_feature_dict,
-            inplace_safe=False,
-        ):
-            return {
-                "centre_coordinate": torch.ones_like(noisy_coord) * 2,
-                "latents": torch.ones_like(noisy_latent) * 2,
-            }
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
 
         batch_shape = input_dict["residue_index"].shape[:-1]
         n_tokens = input_dict["residue_index"].shape[-1]
@@ -598,6 +585,23 @@ class TestGenerator:
         t_coord_cur = torch.tensor(0.5, device=device)
         t_latent_cur = torch.tensor(0.3, device=device)
 
+        # Add required keys for unconditional dict
+        from copy import deepcopy
+
+        unconditional_input_dict = deepcopy(input_dict)
+        unconditional_input_dict["is_ligand"] = torch.zeros_like(
+            input_dict.get("is_ligand", torch.zeros(1, device=device))
+        )
+        unconditional_input_dict["is_ligand_token"] = torch.zeros_like(
+            input_dict.get("is_ligand_token", torch.zeros(1, device=device))
+        )
+        unconditional_input_dict["is_target_token"] = torch.zeros_like(
+            input_dict.get("is_target_token", torch.zeros(1, device=device))
+        )
+        unconditional_input_dict["is_hotspot"] = torch.zeros_like(
+            input_dict.get("is_hotspot", torch.zeros(1, device=device))
+        )
+
         # Test with guidance
         result = _calculate_velocity_and_score(
             denoise_net=mock_denoise_net,
@@ -607,8 +611,8 @@ class TestGenerator:
             t_latent_cur=t_latent_cur,
             input_feature_dict=input_dict,
             inplace_safe=False,
-            guiding_denoise_net=mock_guiding_net,
             guidance_weight=0.7,
+            unconditional_input_feature_dict=unconditional_input_dict,
         )
 
         # Check that all expected keys are present
@@ -639,10 +643,7 @@ class TestGenerator:
             input_feature_dict,
             inplace_safe=False,
         ):
-            return {
-                "centre_coordinate": torch.zeros_like(noisy_coord),
-                "latents": torch.zeros_like(noisy_latent),
-            }
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
 
         batch_shape = input_dict["residue_index"].shape[:-1]
         n_tokens = input_dict["residue_index"].shape[-1]
@@ -673,7 +674,7 @@ class TestGenerator:
 
         # Test with different latent dimensions
         c_latent_large = 32
-        coords_pred_large, latents_pred_large = sample_latent_diffusion(
+        _, latents_pred_large = sample_latent_diffusion(
             denoise_net=mock_denoise_net,
             input_feature_dict=input_dict,
             coord_timesteps=coord_timesteps,
@@ -688,6 +689,203 @@ class TestGenerator:
             n_tokens,
             c_latent_large,
         )
+
+    def test_sample_latent_diffusion_with_guidance_limits(
+        self, device, input_dict, sample_data
+    ):
+        """Test sample_latent_diffusion with lower and upper guidance limits."""
+
+        def mock_denoise_net(
+            noisy_coord,
+            noisy_latent,
+            coord_timestep,
+            latent_timestep,
+            input_feature_dict,
+            inplace_safe=False,
+        ):
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
+
+        batch_shape = input_dict["residue_index"].shape[:-1]
+        n_tokens = input_dict["residue_index"].shape[-1]
+        c_latent = 8
+        n_steps = 10
+        n_samples = 2
+
+        coord_timesteps = torch.linspace(0, 1, n_steps, device=device)
+        latent_timesteps = torch.linspace(0, 1, n_steps, device=device)
+
+        # Test with custom guidance limits
+        coords_pred, latents_pred = sample_latent_diffusion(
+            denoise_net=mock_denoise_net,
+            input_feature_dict=input_dict,
+            coord_timesteps=coord_timesteps,
+            latent_timesteps=latent_timesteps,
+            c_latent=c_latent,
+            N_sample=n_samples,
+            guidance_weight=0.5,
+            lower_guidance_limit=0.2,
+            upper_guidance_limit=0.8,
+        )
+
+        assert coords_pred.shape == (*batch_shape, n_samples, n_tokens, 3)
+        assert latents_pred.shape == (*batch_shape, n_samples, n_tokens, c_latent)
+        assert not torch.isnan(coords_pred).any()
+        assert not torch.isnan(latents_pred).any()
+
+    def test_calculate_unconditional_binder_velocity_and_score(
+        self, device, input_dict, sample_data
+    ):
+        """Test _calculate_unconditional_binder_velocity_and_score function."""
+
+        def mock_denoise_net(
+            noisy_coord,
+            noisy_latent,
+            coord_timestep,
+            latent_timestep,
+            input_feature_dict,
+            inplace_safe=False,
+        ):
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
+
+        from copy import deepcopy
+
+        batch_shape = input_dict["residue_index"].shape[:-1]
+        n_tokens = input_dict["residue_index"].shape[-1]
+        c_latent = 8
+        n_samples = 2
+
+        # Create test inputs
+        noisy_coord = torch.randn(*batch_shape, n_samples, n_tokens, 3, device=device)
+        noisy_latent = torch.randn(
+            *batch_shape, n_samples, n_tokens, c_latent, device=device
+        )
+        t_coord_cur = torch.tensor(0.5, device=device)
+        t_latent_cur = torch.tensor(0.3, device=device)
+
+        # Create binder and target input feature dicts
+        binder_input_dict = deepcopy(input_dict)
+        target_input_dict = deepcopy(input_dict)
+
+        # Set up is_target_token if not present
+        if "is_target_token" not in binder_input_dict:
+            binder_input_dict["is_target_token"] = torch.zeros(
+                *batch_shape, n_tokens, device=device
+            )
+            target_input_dict["is_target_token"] = torch.zeros(
+                *batch_shape, n_tokens, device=device
+            )
+            # Mark half as target tokens
+            target_input_dict["is_target_token"][..., : n_tokens // 2] = 1.0
+
+        # Test basic functionality
+        result = _calculate_unconditional_binder_velocity_and_score(
+            denoise_net=mock_denoise_net,
+            noisy_coord=noisy_coord,
+            noisy_latent=noisy_latent,
+            t_coord_cur=t_coord_cur,
+            t_latent_cur=t_latent_cur,
+            binder_input_feature_dict=binder_input_dict,
+            target_input_feature_dict=target_input_dict,
+            inplace_safe=False,
+        )
+
+        # Check that all expected keys are present
+        expected_keys = [
+            "centre_velocity",
+            "latent_velocity",
+            "centre_score",
+            "latent_score",
+        ]
+        for key in expected_keys:
+            assert key in result
+            assert not torch.isnan(result[key]).any()
+
+        # Check shapes
+        assert result["centre_velocity"].shape == noisy_coord.shape
+        assert result["latent_velocity"].shape == noisy_latent.shape
+        assert result["centre_score"].shape == noisy_coord.shape
+        assert result["latent_score"].shape == noisy_latent.shape
+
+    def test_new_schedulers(self, device):
+        """Test new scheduler classes."""
+        n_steps = 50
+
+        # Test VariableLinQuadScheduler
+        vl_scheduler = VariableLinQuadScheduler(m=0.097, n=0.418)
+        vl_timesteps = vl_scheduler(N_step=n_steps, device=device)
+        assert vl_timesteps.shape == (n_steps + 1,)
+        assert vl_timesteps[0] == 0
+        assert torch.isclose(vl_timesteps[-1], torch.tensor(1.0, device=device))
+        assert torch.all(torch.diff(vl_timesteps) > 0)
+
+        # Test LaProteinaCoordScheduler
+        lp_coord_scheduler = LaProteinaCoordScheduler(scale=2.0)
+        lp_coord_timesteps = lp_coord_scheduler(N_step=n_steps, device=device)
+        assert lp_coord_timesteps.shape == (n_steps + 1,)
+        assert lp_coord_timesteps[0] == 0
+        assert torch.isclose(lp_coord_timesteps[-1], torch.tensor(1.0, device=device))
+        assert torch.all(torch.diff(lp_coord_timesteps) > 0)
+
+        # Test LaProteinaLatentScheduler
+        lp_latent_scheduler = LaProteinaLatentScheduler()
+        lp_latent_timesteps = lp_latent_scheduler(N_step=n_steps, device=device)
+        assert lp_latent_timesteps.shape == (n_steps + 1,)
+        assert lp_latent_timesteps[0] == 0
+        assert torch.isclose(lp_latent_timesteps[-1], torch.tensor(1.0, device=device))
+        assert torch.all(torch.diff(lp_latent_timesteps) > 0)
+
+    def test_denoise_and_compute_velocity_score(self, device, input_dict, sample_data):
+        """Test _denoise_and_compute_velocity_score helper function."""
+
+        def mock_denoise_net(
+            noisy_coord,
+            noisy_latent,
+            coord_timestep,
+            latent_timestep,
+            input_feature_dict,
+            inplace_safe=False,
+        ):
+            return torch.zeros_like(noisy_coord), torch.zeros_like(noisy_latent)
+
+        batch_shape = input_dict["residue_index"].shape[:-1]
+        n_tokens = input_dict["residue_index"].shape[-1]
+        c_latent = 8
+        n_samples = 2
+
+        # Create test inputs
+        noisy_coord = torch.randn(*batch_shape, n_samples, n_tokens, 3, device=device)
+        noisy_latent = torch.randn(
+            *batch_shape, n_samples, n_tokens, c_latent, device=device
+        )
+        t_coord_cur = torch.tensor(0.5, device=device)
+        t_latent_cur = torch.tensor(0.3, device=device)
+        t_coord = t_coord_cur.new_full((batch_shape + (n_samples,)), t_coord_cur)
+        t_latent = t_latent_cur.new_full((batch_shape + (n_samples,)), t_latent_cur)
+
+        # Test basic functionality
+        v_c, v_l, s_c, s_l = _denoise_and_compute_velocity_score(
+            denoise_net=mock_denoise_net,
+            noisy_coord=noisy_coord,
+            noisy_latent=noisy_latent,
+            t_coord=t_coord,
+            t_latent=t_latent,
+            t_coord_cur=t_coord_cur,
+            t_latent_cur=t_latent_cur,
+            input_feature_dict=input_dict,
+            inplace_safe=False,
+        )
+
+        # Check shapes
+        assert v_c.shape == noisy_coord.shape
+        assert v_l.shape == noisy_latent.shape
+        assert s_c.shape == noisy_coord.shape
+        assert s_l.shape == noisy_latent.shape
+
+        # Check for no NaNs
+        assert not torch.isnan(v_c).any()
+        assert not torch.isnan(v_l).any()
+        assert not torch.isnan(s_c).any()
+        assert not torch.isnan(s_l).any()
 
 
 if __name__ == "__main__":

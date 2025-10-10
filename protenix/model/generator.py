@@ -206,8 +206,6 @@ def _calculate_velocity_and_score(
     inplace_safe: bool = False,
     guidance_weight: float = 1.0,
     unconditional_input_feature_dict: Optional[dict] = None,
-    lower_guidance_limit: float = 0.0,
-    upper_guidance_limit: float = 1.0,
 ) -> dict[str, torch.Tensor]:
     """
     Calculate velocity and scaled score for the diffusion process for a single timestep.
@@ -234,43 +232,100 @@ def _calculate_velocity_and_score(
         inplace_safe=inplace_safe,
     )
 
-    # Guidance denoising
-    v_c_g, v_l_g, s_c_g, s_l_g = _denoise_and_compute_velocity_score(
-        denoise_net=denoise_net,
-        noisy_coord=noisy_coord,
-        noisy_latent=noisy_latent,
-        t_coord=t_coord,
-        t_latent=t_latent,
-        t_coord_cur=t_coord_cur,
-        t_latent_cur=t_latent_cur,
-        input_feature_dict=unconditional_input_feature_dict,
-        inplace_safe=inplace_safe,
-    )
+    if guidance_weight != 1.0:
+        # Guidance denoising
+        v_c_g, v_l_g, s_c_g, s_l_g = _denoise_and_compute_velocity_score(
+            denoise_net=denoise_net,
+            noisy_coord=noisy_coord,
+            noisy_latent=noisy_latent,
+            t_coord=t_coord,
+            t_latent=t_latent,
+            t_coord_cur=t_coord_cur,
+            t_latent_cur=t_latent_cur,
+            input_feature_dict=unconditional_input_feature_dict,
+            inplace_safe=inplace_safe,
+        )
 
-    # Apply limited interval
-    guidance_weight = torch.where(
-        t_coord[..., None, None] < lower_guidance_limit,
-        0.0,  # 1.0
-        guidance_weight,
-    )
-    guidance_weight = torch.where(
-        t_coord[..., None, None] > upper_guidance_limit, 1.0, guidance_weight
-    )
+        # Skip guidance for the target tokens
+        is_target_token = input_feature_dict["is_target_token"][..., None, :, None]
+        guidance_weight = torch.where(is_target_token.bool(), 1.0, guidance_weight)
 
-    # Skip guidance for the target tokens
-    is_target_token = input_feature_dict["is_target_token"][..., None, :, None]
-    guidance_weight = torch.where(is_target_token.bool(), 1.0, guidance_weight)
-
-    v_c = guidance_weight * v_c + (1 - guidance_weight) * v_c_g
-    v_l = guidance_weight * v_l + (1 - guidance_weight) * v_l_g
-    s_c = guidance_weight * s_c + (1 - guidance_weight) * s_c_g
-    s_l = guidance_weight * s_l + (1 - guidance_weight) * s_l_g
+        v_c = guidance_weight * v_c + (1 - guidance_weight) * v_c_g
+        v_l = guidance_weight * v_l + (1 - guidance_weight) * v_l_g
+        s_c = guidance_weight * s_c + (1 - guidance_weight) * s_c_g
+        s_l = guidance_weight * s_l + (1 - guidance_weight) * s_l_g
 
     return {
         "centre_velocity": v_c,
         "latent_velocity": v_l,
         "centre_score": s_c,
         "latent_score": s_l,
+    }
+
+
+def _calculate_unconditional_binder_velocity_and_score(
+    denoise_net: Callable,
+    noisy_coord: torch.Tensor,
+    noisy_latent: torch.Tensor,
+    t_coord_cur: torch.Tensor,
+    t_latent_cur: torch.Tensor,
+    binder_input_feature_dict: dict,
+    target_input_feature_dict: dict,
+    inplace_safe: bool = False,
+) -> dict[str, torch.Tensor]:
+    """
+    Calculates updates such that the binder's velocity and score are gotten from a unconditional
+    forward pass (i.e doesn't see the target at all) and the target's velocity and score are gotten
+    from a conditional forward pass.
+    """
+    batch_shape = binder_input_feature_dict["residue_index"].shape[:-1]
+    N_sample = noisy_coord.shape[-3]
+    dtype = noisy_coord.dtype
+
+    t_coord = t_coord_cur.new_full((batch_shape + (N_sample,)), t_coord_cur).to(dtype)
+    t_latent = t_latent_cur.new_full((batch_shape + (N_sample,)), t_latent_cur).to(
+        dtype
+    )
+
+    # Binder denoising
+    v_c_binder, v_l_binder, s_c_binder, s_l_binder = (
+        _denoise_and_compute_velocity_score(
+            denoise_net=denoise_net,
+            noisy_coord=noisy_coord,
+            noisy_latent=noisy_latent,
+            t_coord=t_coord,
+            t_latent=t_latent,
+            t_coord_cur=t_coord_cur,
+            t_latent_cur=t_latent_cur,
+            input_feature_dict=binder_input_feature_dict,
+            inplace_safe=inplace_safe,
+        )
+    )
+
+    # Target denoising
+    v_c_target, v_l_target, s_c_target, s_l_target = (
+        _denoise_and_compute_velocity_score(
+            denoise_net=denoise_net,
+            noisy_coord=noisy_coord,
+            noisy_latent=noisy_latent,
+            t_coord=t_coord,
+            t_latent=t_latent,
+            t_coord_cur=t_coord_cur,
+            t_latent_cur=t_latent_cur,
+            input_feature_dict=target_input_feature_dict,
+            inplace_safe=inplace_safe,
+        )
+    )
+
+    # TODO: handle using binder updates for the binder, target updates for the target
+    target_mask = target_input_feature_dict["is_target_token"][..., None, :, None]
+    binder_mask = 1 - target_mask
+
+    return {
+        "centre_velocity": v_c_binder * binder_mask + v_c_target * target_mask,
+        "latent_velocity": v_l_binder * binder_mask + v_l_target * target_mask,
+        "centre_score": s_c_binder * binder_mask + s_c_target * target_mask,
+        "latent_score": s_l_binder * binder_mask + s_l_target * target_mask,
     }
 
 
@@ -335,22 +390,24 @@ def sample_latent_diffusion(
 
     # Initialize unconditional input feature dict
     unconditional_input_feature_dict = deepcopy(input_feature_dict)
-    # TODO: this is messy, temporary hack for now.
+
+    # Zero out conditional features for unconditional generation
+    conditional_feature_keys = [
+        "is_ligand",
+        "is_ligand_token",
+        "is_target_token",
+        "is_hotspot",
+    ]
+    for key in conditional_feature_keys:
+        unconditional_input_feature_dict[key] = torch.zeros_like(
+            input_feature_dict[key]
+        )
+    unconditional_sees_target = deepcopy(unconditional_input_feature_dict)
+
+    # Make the unconditional model fully blind to the target coordinates
     unconditional_input_feature_dict["token_mask"] = input_feature_dict[
         "token_mask"
     ] * (1 - input_feature_dict["is_target_token"])
-    unconditional_input_feature_dict["is_ligand"] = torch.zeros_like(
-        input_feature_dict["is_ligand"]
-    )
-    unconditional_input_feature_dict["is_ligand_token"] = torch.zeros_like(
-        input_feature_dict["is_ligand_token"]
-    )
-    unconditional_input_feature_dict["is_target_token"] = torch.zeros_like(
-        input_feature_dict["is_target_token"]
-    )
-    unconditional_input_feature_dict["is_hotspot"] = torch.zeros_like(
-        input_feature_dict["is_hotspot"]
-    )
 
     # Stochasticity functions (normalised such that int_{0}^{1}(g(t)) = 1)
     # TODO: check these integrals. I think off by factor of 2.
@@ -435,20 +492,41 @@ def sample_latent_diffusion(
         )
 
         # Calculate velocity and score
-        pred = _calculate_velocity_and_score(
-            denoise_net=denoise_net,
-            noisy_coord=r,
-            noisy_latent=l,
-            t_coord_cur=t_coord_cur,
-            t_latent_cur=t_latent_cur,
-            input_feature_dict=input_feature_dict,
-            inplace_safe=inplace_safe,
-            guidance_weight=guidance_weight,
-            unconditional_input_feature_dict=unconditional_input_feature_dict,
-            lower_guidance_limit=lower_guidance_limit,
-            upper_guidance_limit=upper_guidance_limit,
-        )
-
+        if t_coord_cur < lower_guidance_limit:  # interval [0, lower_guidance_limit]
+            pred = _calculate_unconditional_binder_velocity_and_score(
+                denoise_net=denoise_net,
+                noisy_coord=r,
+                noisy_latent=l,
+                t_coord_cur=t_coord_cur,
+                t_latent_cur=t_latent_cur,
+                binder_input_feature_dict=unconditional_input_feature_dict,
+                target_input_feature_dict=input_feature_dict,
+            )
+        elif (
+            t_coord_cur < upper_guidance_limit
+        ):  # interval [lower_guidance_limit, upper_guidance_limit]
+            pred = _calculate_velocity_and_score(
+                denoise_net=denoise_net,
+                noisy_coord=r,
+                noisy_latent=l,
+                t_coord_cur=t_coord_cur,
+                t_latent_cur=t_latent_cur,
+                input_feature_dict=input_feature_dict,
+                inplace_safe=inplace_safe,
+                guidance_weight=guidance_weight,
+                unconditional_input_feature_dict=unconditional_sees_target,
+            )
+        else:  # interval [upper_guidance_limit, 1]
+            pred = _calculate_velocity_and_score(
+                denoise_net=denoise_net,
+                noisy_coord=r,
+                noisy_latent=l,
+                t_coord_cur=t_coord_cur,
+                t_latent_cur=t_latent_cur,
+                input_feature_dict=input_feature_dict,
+                inplace_safe=inplace_safe,
+                guidance_weight=1.0,
+            )
         # Calculate updates
         step_coord = t_coord_next - t_coord_cur
         step_latent = t_latent_next - t_latent_cur
@@ -477,19 +555,42 @@ def sample_latent_diffusion(
             r_middle = r + update_coord
             l_middle = l + update_latent
 
-            pred_2 = _calculate_velocity_and_score(
-                denoise_net=denoise_net,
-                noisy_coord=r_middle,
-                noisy_latent=l_middle,
-                t_coord_cur=t_coord_cur,
-                t_latent_cur=t_latent_cur,
-                input_feature_dict=input_feature_dict,
-                inplace_safe=inplace_safe,
-                guidance_weight=guidance_weight,
-                unconditional_input_feature_dict=unconditional_input_feature_dict,
-                lower_guidance_limit=lower_guidance_limit,
-                upper_guidance_limit=upper_guidance_limit,
-            )
+            # For second order, we need to determine which guidance mode to use
+            # based on the current timestep
+            if t_coord_cur < lower_guidance_limit:
+                pred_2 = _calculate_unconditional_binder_velocity_and_score(
+                    denoise_net=denoise_net,
+                    noisy_coord=r_middle,
+                    noisy_latent=l_middle,
+                    t_coord_cur=t_coord_cur,
+                    t_latent_cur=t_latent_cur,
+                    binder_input_feature_dict=unconditional_input_feature_dict,
+                    target_input_feature_dict=input_feature_dict,
+                    inplace_safe=inplace_safe,
+                )
+            elif t_coord_cur < upper_guidance_limit:
+                pred_2 = _calculate_velocity_and_score(
+                    denoise_net=denoise_net,
+                    noisy_coord=r_middle,
+                    noisy_latent=l_middle,
+                    t_coord_cur=t_coord_cur,
+                    t_latent_cur=t_latent_cur,
+                    input_feature_dict=input_feature_dict,
+                    inplace_safe=inplace_safe,
+                    guidance_weight=guidance_weight,
+                    unconditional_input_feature_dict=unconditional_sees_target,
+                )
+            else:
+                pred_2 = _calculate_velocity_and_score(
+                    denoise_net=denoise_net,
+                    noisy_coord=r_middle,
+                    noisy_latent=l_middle,
+                    t_coord_cur=t_coord_cur,
+                    t_latent_cur=t_latent_cur,
+                    input_feature_dict=input_feature_dict,
+                    inplace_safe=inplace_safe,
+                    guidance_weight=1.0,
+                )
 
             update_2_coord = step_coord * (
                 pred_2["centre_velocity"] + g_coord_t * pred_2["centre_score"]

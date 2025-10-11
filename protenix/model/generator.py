@@ -5,9 +5,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from protenix.metrics.rmsd import align_pred_to_true
 from protenix.model.utils import (
     beta_function,
     centre_random_augmentation,
+    expand_at_dim,
     noise_w_flow_matching,
 )
 
@@ -174,6 +176,7 @@ def _denoise_and_compute_velocity_score(
     t_coord_cur: torch.Tensor,
     t_latent_cur: torch.Tensor,
     input_feature_dict: dict,
+    align: bool = False,
     inplace_safe: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Run denoising network and compute velocity and score for both coord and latent."""
@@ -186,6 +189,16 @@ def _denoise_and_compute_velocity_score(
         input_feature_dict=input_feature_dict,
         inplace_safe=inplace_safe,
     )
+
+    if align:
+        n_samples = pred_coord.shape[-3]
+        pred_coord, _, _ = align_pred_to_true(
+            pred_pose=pred_coord,  # [..., N_sample, N_token, 3]
+            true_pose=noisy_coord,  # [..., N_sample, N_token, 3]
+            atom_mask=expand_at_dim(
+                input_feature_dict["token_mask"], dim=-2, n=n_samples
+            ),
+        )
 
     velocity_coord = (pred_coord - noisy_coord) / (1 - t_coord_cur)
     velocity_latent = (pred_latent - noisy_latent) / (1 - t_latent_cur)
@@ -243,6 +256,7 @@ def _calculate_velocity_and_score(
             t_coord_cur=t_coord_cur,
             t_latent_cur=t_latent_cur,
             input_feature_dict=unconditional_input_feature_dict,
+            align=True,  # align the binder
             inplace_safe=inplace_safe,
         )
 
@@ -402,7 +416,7 @@ def sample_latent_diffusion(
         unconditional_input_feature_dict[key] = torch.zeros_like(
             input_feature_dict[key]
         )
-    unconditional_sees_target = deepcopy(unconditional_input_feature_dict)
+    # unconditional_sees_target = deepcopy(unconditional_input_feature_dict)
 
     # Make the unconditional model fully blind to the target coordinates
     unconditional_input_feature_dict["token_mask"] = input_feature_dict[
@@ -499,7 +513,7 @@ def sample_latent_diffusion(
                 noisy_latent=l,
                 t_coord_cur=t_coord_cur,
                 t_latent_cur=t_latent_cur,
-                binder_input_feature_dict=unconditional_input_feature_dict,
+                binder_input_feature_dict=unconditional_input_feature_dict,  # uncond sees target before
                 target_input_feature_dict=input_feature_dict,
             )
         elif (
@@ -514,7 +528,7 @@ def sample_latent_diffusion(
                 input_feature_dict=input_feature_dict,
                 inplace_safe=inplace_safe,
                 guidance_weight=guidance_weight,
-                unconditional_input_feature_dict=unconditional_sees_target,
+                unconditional_input_feature_dict=unconditional_input_feature_dict,
             )
         else:  # interval [upper_guidance_limit, 1]
             pred = _calculate_velocity_and_score(
@@ -578,7 +592,7 @@ def sample_latent_diffusion(
                     input_feature_dict=input_feature_dict,
                     inplace_safe=inplace_safe,
                     guidance_weight=guidance_weight,
-                    unconditional_input_feature_dict=unconditional_sees_target,
+                    unconditional_input_feature_dict=unconditional_input_feature_dict,
                 )
             else:
                 pred_2 = _calculate_velocity_and_score(

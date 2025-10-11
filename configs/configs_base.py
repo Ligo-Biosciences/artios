@@ -175,8 +175,8 @@ model_configs = {
         "N_sample": 10,  # changed from 1, BATCH SIZE AT SAMPLING
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
-        "stoch_type_coord": "proteina",
-        "stoch_type_latent": "laproteina",
+        "stoch_type_coord": "non_singular",
+        "stoch_type_latent": "non_singular",
         "alpha_coord": 0.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "alpha_latent": 0.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma_coord": 1.0,
@@ -185,7 +185,7 @@ model_configs = {
         "sigma_latent": GlobalConfigValue("sigma_latent"),
         "second_order": False,
         "guidance_weight": 1.0,
-        "lower_guidance_limit": 0.0,
+        "lower_guidance_limit": 0.3,
         "upper_guidance_limit": 1.0,
         "beta_mean": 0.5,
         "beta_std": 0.233,
@@ -214,7 +214,7 @@ model_configs = {
             #    "n_heads": 4,
             # },
             "transformer": {
-                "num_blocks": 24,
+                "num_blocks": 16,
                 "num_heads": 16,
             },
             # "atom_decoder": {

@@ -4,6 +4,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 
 from protenix.metrics.rmsd import align_pred_to_true
 from protenix.model.utils import (
@@ -199,6 +200,9 @@ def _denoise_and_compute_velocity_score(
                 input_feature_dict["token_mask"], dim=-2, n=n_samples
             ),
         )
+
+    # Normalize the latent to be on the hypersphere (layernorm at each step)
+    pred_latent = F.layer_norm(pred_latent, (pred_latent.size(-1),))
 
     velocity_coord = (pred_coord - noisy_coord) / (1 - t_coord_cur)
     velocity_latent = (pred_latent - noisy_latent) / (1 - t_latent_cur)

@@ -44,6 +44,24 @@ class SwiGLU(nn.Module):
         return output
 
 
+class MLP(nn.Module):
+    """Feedforward MLP with SwiGLU."""
+
+    def __init__(self, c_in: int, c_out: int, n=2):
+        """
+        Args:
+            c_in (int): Input channels
+            c_out (int): Output channels
+            n (int): expansion factor for hidden dims
+        """
+        super().__init__()
+        self.swiglu = SwiGLU(c_in, c_in * n)
+        self.output_linear = LinearNoBias(c_in * n, c_out)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.output_linear(self.swiglu(x))
+
+
 class AdaptiveLayerNorm(nn.Module):
     """
     Implements the Adaptive Layer Normlization introduced in arXiv:1911.07013

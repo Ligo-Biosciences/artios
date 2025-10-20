@@ -1,252 +1,228 @@
-"""Message passing neural network layers."""
-
-from abc import ABC, abstractmethod
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import torch
-from jaxtyping import Float, Int
+import torch.nn.functional as F
+from jaxtyping import Float
 from torch import Tensor, nn
 
-import protenix.model.modules.message_passing as mp
-from protenix.model import utils
-from protenix.model.modules.components import MLP, Transition
-from protenix.model.modules.primitives import LayerNorm
-from protenix.model.utils import expand_at_dim
+from protenix.model.modules.mpnn_layers import (
+    MPNNDecoderLayer,
+    MPNNEncoderLayer,
+)
 
 
-class BaseMPNNLayer(nn.Module, ABC):
-    """Base class for message passing neural net layers that process node and edge features in graph neural networks."""
+class AllatomMPNN(nn.Module):
+    """All-atom message passing neural network for sequence design.
 
-    @abstractmethod
-    def forward(
+    Args:
+        num_residue_types (int): Number of residue types (32 for all biomolecules)
+        hidden_dim (int): Hidden dimension for all network layers
+        num_encoder_layers (int): Number of encoder layers
+        num_decoder_layers (int): Number of decoder layers
+        num_neighbours (int): Maximum number of neighbors per residue
+        positional_encoding_dim (int, optional): Positional encoding dimension. Defaults to 16.
+        positional_encoding_max_relative_feats (int, optional): Max relative features. Defaults to 32.
+        num_rbf_kernels (int, optional): Number of RBF kernels for distance encoding. Defaults to 16.
+        dropout (float): Dropout probability for regularization. Defaults to 0.0
+        coord_noise (float): Noise scale for coordinate perturbation during training. Defaults to 0.1
+    """
+
+    def __init__(
         self,
-        h_nodes: Float[Tensor, "... nodes node_dim"],
-        h_edges: Float[Tensor, "... nodes neighbors edge_dim"],
-        edge_index: Int[Tensor, "... nodes neighbors"],
-        node_mask: Float[Tensor, "... nodes"],
-        edge_mask: Float[Tensor, "... nodes neighbors"],
+        num_residue_types: int,
+        hidden_dim: int,
+        num_encoder_layers: int,
+        num_decoder_layers: int,
+        num_neighbours: int,
+        positional_encoding_dim: int = 16,
+        positional_encoding_max_relative_feats: int = 32,
+        num_rbf_kernels: int = 16,
+        dropout: float = 0.0,
+        coord_noise: float = 0.1,
+    ):
+        super().__init__()
+
+        self.num_residue_types = num_residue_types
+        self.hidden_dim = hidden_dim
+        self.num_neighbours = num_neighbours
+        self.positional_encoding_dim = positional_encoding_dim
+        self.num_rbf_kernels = num_rbf_kernels
+        self.dropout = dropout
+        self.coord_noise = coord_noise
+
+        self.num_encoder_layers = num_encoder_layers
+        self.num_decoder_layers = num_decoder_layers
+
+        self.featurizer = None
+
+        self.encoder = nn.ModuleList(
+            [MPNNEncoderLayer() for _ in range(num_encoder_layers)]
+        )
+        self.decoder = nn.ModuleList(
+            [MPNNDecoderLayer() for _ in range(num_decoder_layers)]
+        )
+
+        # Projection layers
+        self.sequence_ids_to_hidden = nn.Embedding()
+        self.edge_to_hidden = nn.Linear()
+        self.linear_out = nn.Linear()
+
+    def _generate_random_decoding_order(
+        self,
+        node_feats: Float[Tensor, "batch seqlen hidden_dim"],
+    ) -> Float[Tensor, "batch seq_len"]:
+        """Generate a random decoding order.
+
+        NOTE: we can add spatial smoothing to this later like the one in the Chroma paper.
+        """
+        return torch.argsort(
+            torch.randn(node_feats.shape[:-1], device=node_feats.device), dim=-1
+        )
+
+    def _generate_sequential_masks(
+        self,
+        decoding_order: Float[Tensor, "batch seqlen"],
+        edge_index: Float[Tensor, "batch seqlen neighbours"],
+        node_mask: Float[Tensor, "batch seqlen"],
     ) -> Tuple[
-        Float[Tensor, "... nodes node_dim"],
-        Float[Tensor, "... nodes neighbors edge_dim"],
+        Float[Tensor, "batch seqlen neighbours"],  # forward attention mask
+        Float[Tensor, "batch seqlen neighbours"],  # backward attention mask
     ]:
-        """Forward pass for the encoder layer.
+        """Generate autoregressive attention masks based on decoding order.
+
+        Creates forward and backward attention masks to enforce autoregressive generation order.
+        Forward mask allows attention to future positions, backward mask allows attention to
+        past positions only.
 
         Args:
-            h_nodes: Node features
-            h_edges: Edge features
-            edge_index: Edge indices
-            node_mask: Node mask for valid nodes
-            edge_mask: Edge mask for valid edges
+            decoding_order: Permutation defining generation order
+            edge_index: Graph edge connectivity matrix
+            node_mask: Mask for valid sequence positions
 
         Returns:
-            Tuple[Tensor, Tensor]: Updated node and edge features
-                [..., nodes, node_dim], [..., nodes, neighbors, edge_dim]
+            Tuple of forward and backward atention masks for autoregressive generation
+        """
+        mask_size = edge_index.shape[-2]
+        permutation_matrix_reverse = F.one_hot(
+            decoding_order, num_classes=mask_size
+        ).float()
+
+        # TODO: I don't understand this einsum as well as I should, it comes from ProteinMPNN repo
+        # We should re-write this to be more readable.
+        edge_space_backward_mask = torch.einsum(
+            "ij, biq, bjp -> bqp",
+            (
+                1
+                - torch.triu(torch.ones(mask_size, mask_size, device=edge_index.device))
+            ),
+            permutation_matrix_reverse,
+            permutation_matrix_reverse,
+        )
+
+        # map back to kNN adjacency space and apply node masking
+        backward_attn_mask = torch.gather(
+            edge_space_backward_mask, dim=-1, index=edge_index
+        )
+        mask_1D = node_mask[..., None]
+
+        backward_attn_mask = mask_1D * backward_attn_mask
+        forward_attn_mask = mask_1D * (1.0 - backward_attn_mask)
+
+        return forward_attn_mask, backward_attn_mask
+
+    def _run_decoder_step(
+        self,
+        node_feats: Float[Tensor, "batch seqlen node_dim"],
+        edge_feats: Float[Tensor, "batch seqlen neighbours edge_dim"],
+        sequence_ids: Float[Tensor, "batch seqlen"],
+        edge_index: Float[Tensor, "batch seqlen neighbours"],
+        node_mask: Float[Tensor, "batch seqlen"],
+        forward_attn_mask: Float[Tensor, "batch seqlen neighbours"],
+        backward_attn_mask: Float[Tensor, "batch seqlen neighbours"],
+        edge_mask: Float[Tensor, "batch seqlen neighbours"],
+        zero_shot: bool = False,
+    ) -> Float[Tensor, "batch seqlen num_residue_types"]:
+        """Run a single decoder step with attention masking.
+
+        Args:
+            node_feats: Node features from encoder
+            edge_feats: Base edge features
+            sequence_ids: Current sequence state (residue indices)
+            edge_index: Graph edge connectivity
+            node_mask: Mask indicating valid sequence positions
+            forward_attn_mask: Forward attention mask
+            backward_attn_mask: Backward attention mask
+            zero_shot: Whether to use zero-shot mode. Defaults to False.
+
+        Returns:
+            Raw logits over residue types.
         """
         pass
 
-    def gather_and_concat_neighbourhood(
+    def run_encoder_trunk(
         self,
-        node_emb: Float[Tensor, "... nodes node_dim"],
-        edge_emb: Float[Tensor, "... nodes neighbors edge_dim"],
-        edge_index: Int[Tensor, "... nodes neighbors"],
-    ) -> Float[Tensor, "... nodes neighbors concat_dim"]:
-        """Gather neighbour nodes and concatenate with self nodes and edges.
+        backbone_coords: Float[Tensor, "batch seqlen 4 3"],
+        node_mask: Float[Tensor, "batch seqlen"],
+        residue_idx: Float[Tensor, "batch seqlen"],
+    ) -> Dict[str, Tensor]:
+        """Runs the encoder trunk of the model. The encoder's output is cached between decoder steps.
 
         Args:
-            node_emb: Node features
-            edge_emb: Edge features
-            edge_index: Edge indices
+            context_coords: context atom coordinates
+            node_mask: Mask indicating valid sequence positions
+            residue_idx: Residue position indices for positional encoding
 
         Returns:
-            Concatenated features [..., nodes, neighbors, 2*node_dim + edge_dim]
+            dict: Dictionary containing node_feats, edge_feats, edge_index, and edge_mask
         """
-        n_neighbours = edge_emb.shape[-2]
-        h_neighbors = mp.gather_nodes(
-            node_emb, edge_index
-        )  # [..., nodes, neighbors, node_dim]
-        h_nodes_self = expand_at_dim(
-            node_emb, dim=-2, n=n_neighbours
-        )  # [..., nodes, node_dim] -> [..., nodes, neighbors, node_dim]
-        h_nn = torch.cat([h_nodes_self, edge_emb, h_neighbors], dim=-1)
-        return h_nn
+        # Initialize features
 
+        # Make attention masks
 
-class MPNNEncoderLayer(BaseMPNNLayer):
-    """Message Passing Neural Network encoder layer with neighborhood aggregation."""
-
-    def __init__(
-        self,
-        node_dim: int,
-        edge_dim: int,
-        hidden_dim: int,
-        dropout: float = 0.0,
-    ):
-        """Initialize the PMPNN encoder layer.
-
-        Args:
-            node_dim (int): node dimensionality
-            edge_dim (int): edge dimensionality
-            hidden_dim (int): Hidden dimension for internal transformations
-            output_dim (int): Output dimension for the MLP transformation
-            dropout (float, optional): Dropout probability. Defaults to 0.0.
-            num_heads (int, optional): Number of attention heads. Defaults to 4.
-        """
-        super().__init__()
-
-        self.hidden_dim = hidden_dim
-
-        # Node message
-        self.pre_message_node_norm = LayerNorm(node_dim)
-        self.pre_message_edge_norm = LayerNorm(edge_dim)
-        self.node_message_mlp = MLP(
-            c_in=2 * node_dim + edge_dim, c_out=node_dim, n=2
-        )  # TODO: zero-init these and see if that helps
-
-        # Node update
-        self.node_transition = Transition(
-            c_in=node_dim, n=2, output_linear_init="default"
-        )
-
-        # Edge update
-        self.pre_edge_update_node_norm = LayerNorm(node_dim)
-        self.pre_edge_update_edge_norm = LayerNorm(edge_dim)
-        self.edge_update_mlp = MLP(c_in=2 * node_dim + edge_dim, c_out=edge_dim, n=2)
-
-        self.dropout = nn.Dropout(dropout)
+        # Run encoder
+        return {
+            # node features
+            # edge features
+            # edge index
+            # edge mask
+        }
 
     def forward(
         self,
-        node_emb: Float[Tensor, "... nodes node_dim"],
-        edge_emb: Float[Tensor, "... nodes neighbors edge_dim"],
-        edge_index: Int[Tensor, "... nodes neighbors"],
-        node_mask: Optional[Float[Tensor, "... nodes"]] = None,
-        edge_mask: Optional[Float[Tensor, "... nodes neighbors"]] = None,
-    ) -> Tuple[
-        Float[Tensor, "... nodes node_dim"],
-        Float[Tensor, "... nodes neighbors edge_dim"],
-    ]:
-        """Forward pass through the MPNN encoder layer.
+        context_coords: Float[Tensor, "batch seqlen 4 3"],
+        sequence_ids: Float[Tensor, "batch seqlen"],
+        node_mask: Float[Tensor, "batch seqlen"],
+        residue_idx: Float[Tensor, "batch seqlen"],
+        decoding_order: Optional[Float[Tensor, "batch seqlen"]] = None,
+        zero_shot: bool = False,
+    ) -> Tuple[dict, dict]:
+        """Forward pass for autoregressive protein sequence generation.
+
+        Encodes protein structure into node representations, then generates sequence
+        probabilities using masked attention.
 
         Args:
-            node_emb: Node features
-            edge_emb: Edge features
-            edge_index: Edge indices
-            node_mask: Node mask for valid nodes
-            edge_mask: Attention mask for valid edges
+            context_coords
+            sequence_ids
+            node_mask
+            residue_idx
+            decoding_order
+            zero_shot
 
         Returns:
-            Updated node and edge features
-                [..., nodes, node_dim], [..., nodes, neighbors, edge_dim]
+            Tuple[dict, dict]: Dictionary with logits and stats dictionary
         """
 
-        if node_mask is None:
-            node_mask = torch.ones_like(node_emb[..., 0])
-        if edge_mask is None:
-            edge_mask = torch.ones_like(edge_emb[..., 0])
+        # Run encoder trunk
 
-        # Node Message
-        h_nn = self.gather_and_concat_neighbourhood(
-            node_emb=self.pre_message_node_norm(node_emb),
-            edge_emb=self.pre_message_edge_norm(edge_emb),
-            edge_index=edge_index,
-        )
-        messages = self.dropout(self.node_message_mlp(h_nn))
-        messages = (
-            messages * edge_mask[..., None]
-        )  # [..., nodes, neighbors, output_dim]
-        node_message = utils.masked_mean(messages, mask=edge_mask[..., None], axes=-2)
+        # Select decoding order
 
-        node_emb = node_emb + node_message
+        # Generate masks
 
-        # Node MLP update
-        node_emb = node_emb + self.dropout(self.node_transition(node_emb))
-        node_emb = node_emb * node_mask[..., None]
+        # Run decoder step
+        stats_dict = {}
+        return {}, stats_dict
 
-        # Edge MLP update
-        nodes_emb_norm = self.pre_edge_update_node_norm(node_emb)
-        edges_emb_norm = self.pre_edge_update_edge_norm(edge_emb)
-        h_nn = self.gather_and_concat_neighbourhood(
-            nodes_emb_norm, edges_emb_norm, edge_index
-        )
-
-        edge_emb = edge_emb + self.dropout(
-            self.edge_update_mlp(h_nn)
-        )  # [..., nodes, neighbors, edge_dim]
-        edge_emb = edge_emb * edge_mask[..., None]
-
-        return node_emb, edge_emb
-
-
-class MPNNDecoderLayer(BaseMPNNLayer):
-    """Protein Message Passing Neural Network decoder layer for node feature updates."""
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        dropout: float = 0.0,
-    ):
-        """Initialize the ProteinMPNN decoder layer.
-        TODO: the dimensionality in encoder and decoder layers is not quite right most likely, can be changed during integration.
-        Args:
-            input_dim (int): Input dimension for node+edge concatenation
-            hidden_dim (int): Hidden dimension for internal transformations
-            output_dim (int): Output dimension for the MLP transformation
-            dropout (float, optional): Dropout probability. Defaults to 0.0.
-        """
-        super().__init__()
-
-        self.hidden_dim = hidden_dim
-
-        self.pre_message_node_norm = LayerNorm(hidden_dim)
-        self.pre_message_edge_norm = LayerNorm(hidden_dim)
-        self.edge_mlp = MLP(c_in=2 * hidden_dim, c_out=hidden_dim, n=2)
-
-        self.node_transition = Transition(c_in=hidden_dim, n=4)
-
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(
-        self,
-        node_emb: Float[Tensor, "... nodes node_dim"],
-        edge_emb: Float[Tensor, "... nodes neighbors edge_feat_dim"],
-        node_mask: Optional[Float[Tensor, "... nodes"]] = None,
-        edge_mask: Optional[Float[Tensor, "... nodes neighbors"]] = None,
-    ) -> Float[Tensor, "... nodes node_dim"]:
-        """Forward pass through the ProteinMPNN decoder layer.
-
-        Args:
-            node_emb: Node features
-            edge_emb: Edge features
-            node_mask: Node mask for valid nodes
-            edge_mask: Attention mask for valid edges
-
-        Returns:
-            Updated node features
-        """
-        n_neighbours = edge_emb.shape[-2]
-
-        if node_mask is None:
-            node_mask = torch.ones_like(node_emb[..., 0])
-        if edge_mask is None:
-            edge_mask = torch.ones_like(edge_emb[..., 0])
-
-        # Node message from edges
-        nodes_emb_norm = self.pre_message_node_norm(node_emb)
-        edges_emb_norm = self.pre_message_edge_norm(edge_emb)
-        nodes_self = expand_at_dim(
-            nodes_emb_norm, dim=-2, n=n_neighbours
-        )  # [..., nodes, neighbors, node_dim+seq_dim]
-        h_nn = torch.cat([nodes_self, edges_emb_norm], dim=-1)
-
-        messages = self.dropout(
-            self.edge_mlp(h_nn)
-        )  # [..., nodes, neighbors, output_dim]
-        messages = messages * edge_mask[..., None]
-        node_message = utils.masked_mean(messages, mask=edge_mask[..., None], axes=-2)
-        node_emb = node_emb + node_message
-
-        # Node update
-        node_emb = node_emb + self.dropout(self.node_transition(node_emb))
-        node_emb = node_emb * node_mask[..., None]
-
-        return node_emb
+    def sample():
+        """Sample protein sequence autoregressively from the model."""
+        pass

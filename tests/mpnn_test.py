@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-from protenix.model.modules.mpnn import (
+from protenix.model.modules.mpnn_layers import (
     BaseMPNNLayer,
     MPNNDecoderLayer,
     MPNNEncoderLayer,

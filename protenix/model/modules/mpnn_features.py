@@ -7,9 +7,67 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor, nn
 
-from protenix.model.modules.primitives import LinearNoBias
-from protenix.model.utils import average_atom_to_token
+import protenix.model.modules.message_passing as mp
+from protenix.model.modules.primitives import LayerNorm, LinearNoBias
+from protenix.model.utils import average_atom_to_token, flatten_final_dims
 from protenix.utils.torch_utils import cdist
+
+
+class GaussianRBF(nn.Module):
+    """Gaussian Radial Basis Function for distance encoding.
+
+    Encodes distances using Gaussian kernels centered at regular intervals.
+    """
+
+    def __init__(
+        self,
+        num_kernels: int = 16,
+        min_distance: float = 2.0,
+        max_distance: float = 22.0,
+    ):
+        """Initialize Gaussian RBF.
+
+        Args:
+            num_kernels: Number of Gaussian kernels
+            min_distance: Minimum distance for RBF centers (Angstroms)
+            max_distance: Maximum distance for RBF centers (Angstroms)
+        """
+        super().__init__()
+
+        self.num_kernels = num_kernels
+        self.min_distance = min_distance
+        self.max_distance = max_distance
+
+        # Centers are evenly spaced between min and max distance
+        centers = torch.linspace(min_distance, max_distance, num_kernels)
+        self.register_buffer("centers", centers)
+
+        # Gamma controls the width of the Gaussians
+        # Use spacing between centers to determine width
+        spacing = (max_distance - min_distance) / (num_kernels - 1)
+        gamma = 1.0 / (spacing**2)
+        self.register_buffer("gamma", torch.tensor(gamma))
+
+    def forward(
+        self,
+        distances: Float[Tensor, "... distance_pairs"],
+    ) -> Float[Tensor, "... distance_pairs num_kernels"]:
+        """Apply RBF encoding to distances.
+
+        Args:
+            distances: Pairwise distances [..., distance_pairs]
+
+        Returns:
+            RBF encoded distances [..., distance_pairs, num_kernels]
+        """
+        # Expand distances for broadcasting: [..., distance_pairs, 1]
+        distances = distances.unsqueeze(-1)
+
+        # Compute Gaussian: exp(-gamma * (d - center)^2)
+        # centers shape: [num_kernels]
+        rbf = torch.exp(-self.gamma * (distances - self.centers) ** 2)
+
+        return rbf
 
 
 class BaseEdgeFeaturizer(nn.Module, ABC):
@@ -80,7 +138,6 @@ class MPNNFeaturizer(nn.Module):
             "ref_charge": 1,
             "ref_mask": 1,
             "ref_element": 128,
-            # "ref_atom_name_chars": 4 * 64,
         }
         self.ligand_condition_embed = LinearNoBias(
             sum(self.ligand_input_feature.values()), node_dim
@@ -88,9 +145,15 @@ class MPNNFeaturizer(nn.Module):
 
         self.positional_encoder = None
 
-        # TODO: the input dimensions of these will change.
-        self.node_embedder = LinearNoBias(node_dim, node_dim)
-        self.edge_embedder = LinearNoBias(edge_dim, edge_dim)
+        # RBF encoding for backbone distances
+        self.rbf = GaussianRBF(num_kernels=num_rbf, min_distance=2.0, max_distance=22.0)
+
+        # Project RBF features to edge dimension
+        # 25 backbone pairs * num_rbf kernels -> edge_dim
+        self.embed_edge = LinearNoBias(25 * num_rbf, edge_dim)
+
+        self.edge_norm = LayerNorm(edge_dim)
+        self.node_norm = LayerNorm(node_dim)
 
     def _compute_neighbour_graph(
         self,
@@ -110,7 +173,9 @@ class MPNNFeaturizer(nn.Module):
             neighbour_dists: distances to k-nearest neighbour tokens
             edge_index: indices of the k-nearest neighbour tokens
         """
-        mask_2d = centre_atom_mask[..., :, None] * centre_atom_mask[..., None, :]
+        mask_2d = (
+            centre_atom_mask[..., :, None] * centre_atom_mask[..., None, :]
+        ).float()
 
         pairwise_dist = cdist(centre_atom_coords, centre_atom_coords) * mask_2d
 
@@ -128,9 +193,8 @@ class MPNNFeaturizer(nn.Module):
         return neighbor_dists, edge_index
 
     def _compute_node_features(self, input_feature_dict: Dict[str, Tensor]):
-        """
-        Compute node features with ligand and
-        """
+        """Compute node features with ligand and entity features."""
+        # Grab data about the input
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
         atom_mask = input_feature_dict["atom_mask"]
         n_token = input_feature_dict["residue_index"].shape[-1]
@@ -170,41 +234,109 @@ class MPNNFeaturizer(nn.Module):
             )
         )  # [..., n_token, node_dim]
         node_feats = ligand_feats + entity_feats
-        return node_feats
+        return self.node_norm(node_feats)
+
+    def _compute_backbone_distance_features(
+        self,
+        backbone_coords: Float[Tensor, "... n_token 5 3"],
+        backbone_mask: Float[Tensor, "... n_token 5"],
+        edge_index: Int[Tensor, "... n_token neighbors"],
+    ) -> Float[Tensor, "... n_token neighbors edge_dim"]:
+        """Compute edge features from backbone atom distances.
+
+        Args:
+            backbone_coords: Backbone atom coordinates [..., n_token, 5, 3]
+            backbone_mask: Mask for valid backbone atoms [..., n_token, 5]
+            edge_index: Neighbor indices [..., n_token, neighbors]
+
+        Returns:
+            Edge features from backbone distances [..., n_token, neighbors, edge_dim]
+        """
+        # Gather neighbor backbone coordinates and masks
+        # Flatten for gather [..., n_token, 15]
+        backbone_coords_flat = flatten_final_dims(backbone_coords, num_dims=2)
+        neighbor_backbone_flat = mp.gather_nodes(backbone_coords_flat, edge_index)
+        neighbor_backbone_coords = neighbor_backbone_flat.unflatten(-1, (5, 3))
+
+        # Gather neighbor masks [..., n_token, neighbors, 5]
+        neighbor_backbone_mask = mp.gather_nodes(backbone_mask, edge_index)
+
+        # Compute pairwise distances between all backbone atoms
+        bb_self = backbone_coords[..., None, :, None, :]
+        bb_neighbor = neighbor_backbone_coords[..., None, :, :]
+
+        # Distances [..., n_token, neighbors, 5, 5]
+        distances = torch.norm(bb_self - bb_neighbor, dim=-1)
+
+        # Create distance mask using broadcasting
+        # [..., n_token, 1, 5, 1] * [..., n_token, neighbors, 1, 5]
+        distance_mask = (
+            neighbor_backbone_mask[..., :, None, :] * backbone_mask[..., None, :, None]
+        )
+
+        # Apply mask and flatten pairs [..., n_token, neighbors, 25]
+        masked_distances = distances * distance_mask
+        flat_distances = flatten_final_dims(masked_distances, 2)
+        flat_mask = flatten_final_dims(distance_mask, 2)
+
+        # Apply RBF encoding [..., n_token, neighbors, 25, num_rbf]
+        rbf_features = self.rbf(flat_distances) * flat_mask[..., None]
+        rbf_flat = flatten_final_dims(rbf_features, 2)
+
+        # Concatenate and project [..., n_token, neighbors, edge_dim]
+        edge_feats = self.embed_edge(rbf_flat)
+
+        return self.edge_norm(edge_feats)
 
     def forward(
         self,
         input_feature_dict: Dict[str, Tensor],
-        coordinate: Float[Tensor, "batch n_atom 3"],
-        centre_atom_coord: Float[
-            Tensor, "batch n_token 3"
-        ],  # NOTE: will sort out later
+        centre_atom_coord: Float[Tensor, "batch n_token 3"],
         centre_atom_mask: Float[Tensor, "batch n_token"],
-    ):
+        backbone_coords: Float[Tensor, "batch n_token 5 3"],
+        backbone_mask: Float[Tensor, "batch n_token 5"],
+    ) -> Tuple[
+        Float[Tensor, "batch n_token node_dim"],
+        Float[Tensor, "batch n_token neighbours edge_dim"],
+        Int[Tensor, "batch n_token neighbours"],
+    ]:
         """
         Compute MPNN features and connectivity for general biomolecular graphs.
+
         Args:
             input_feature_dict: Input feature dict with the following tensors:
-                - asym_id:
-                - residue_index:
-                - entity_id:
-                - sym_id:
+                - asym_id, residue_index, entity_id, sym_id, etc.
+            centre_atom_coord: Centre atom coordinates per token
+            centre_atom_mask: Mask for valid centre atoms
+            backbone_coords: Backbone atom coordinates per token [..., n_token, 5, 3]
+            backbone_mask: Mask for valid backbone atoms [..., n_token, 5]
 
         Returns:
-            Relative position encoding
+            node_feats: Node features with entity and ligand information
+            edge_feats: Edge features from backbone distances
+            edge_index: Graph edge connectivity index
         """
-        # Optionally add coordinate noise
-        coordinate = coordinate + torch.randn_like(coordinate) * self.coord_noise
+        # Add coordinate noise during training
+        if self.training:
+            backbone_coords = (
+                backbone_coords + torch.randn_like(backbone_coords) * self.coord_noise
+            )
 
+        # Compute k-nearest neighbor graph
         _, edge_index = self._compute_neighbour_graph(
             centre_atom_coords=centre_atom_coord, centre_atom_mask=centre_atom_mask
         )
 
-        # Compute RBF features
+        # Compute backbone distance edge features
+        edge_feats = self._compute_backbone_distance_features(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            edge_index=edge_index,
+        )
 
-        # Relpos encoding
+        # TODO: Add relpos encoding here when needed
 
         # Compute node features
         node_feats = self._compute_node_features(input_feature_dict)
 
-        return node_feats, edge_index
+        return node_feats, edge_feats, edge_index

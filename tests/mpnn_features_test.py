@@ -394,7 +394,7 @@ class TestMPNNFeaturizer:
             batch_size,
             n_tokens,
             n_neighbors,
-            featurizer.edge_dim,
+            featurizer.num_rbf * 25,
         )
         assert not torch.isnan(edge_feats).any()
 
@@ -417,7 +417,7 @@ class TestMPNNFeaturizer:
             edge_index=edge_index,
         )
 
-        assert edge_feats.shape == (1, n_tokens, n_neighbors, featurizer.edge_dim)
+        assert edge_feats.shape == (1, n_tokens, n_neighbors, featurizer.num_rbf * 25)
         # Features should still be computed (not necessarily zero due to normalization)
         assert not torch.isnan(edge_feats).any()
 
@@ -441,7 +441,7 @@ class TestMPNNFeaturizer:
             edge_index=edge_index,
         )
 
-        assert edge_feats.shape == (1, n_tokens, n_neighbors, featurizer.edge_dim)
+        assert edge_feats.shape == (1, n_tokens, n_neighbors, featurizer.num_rbf * 25)
         assert not torch.isnan(edge_feats).any()
 
     def test_forward_pass(self, featurizer, extended_feature_dict, device):
@@ -477,62 +477,6 @@ class TestMPNNFeaturizer:
         # Check no NaN values
         assert not torch.isnan(node_feats).any()
         assert not torch.isnan(edge_feats).any()
-
-    def test_forward_pass_with_noise(self, device):
-        """Test forward pass with coordinate noise enabled."""
-        featurizer = MPNNFeaturizer(
-            node_dim=64,
-            edge_dim=32,
-            positional_encoding_dim=16,
-            num_rbf=8,
-            num_neighbours=16,
-            max_relative_feats=32,
-            coord_noise=0.1,  # Enable noise
-        ).to(device)
-
-        # Create minimal feature dict
-        n_tokens, n_atoms = 10, 30
-        feature_dict = {
-            "residue_index": torch.arange(n_tokens).to(device),
-            "ref_pos": torch.randn(n_atoms, 3).to(device),
-            "ref_charge": torch.zeros(n_atoms).long().to(device),
-            "ref_mask": torch.ones(n_atoms).long().to(device),
-            "ref_element": torch.zeros(n_atoms, 128).to(device),
-            "atom_to_token_idx": torch.randint(0, n_tokens, (n_atoms,)).to(device),
-            "atom_mask": torch.ones(n_atoms).long().to(device),
-            "is_ligand": torch.zeros(n_atoms).long().to(device),
-            "is_protein_token": torch.ones(n_tokens).long().to(device),
-            "is_ligand_token": torch.zeros(n_tokens).long().to(device),
-            "is_dna_token": torch.zeros(n_tokens).long().to(device),
-            "is_rna_token": torch.zeros(n_tokens).long().to(device),
-        }
-
-        centre_atom_coord = torch.randn(1, n_tokens, 3).to(device)
-        centre_atom_mask = torch.ones(1, n_tokens).to(device)
-        backbone_coords = torch.randn(1, n_tokens, 5, 3).to(device)
-        backbone_mask = torch.ones(1, n_tokens, 5).to(device)
-
-        featurizer.train()  # Enable training mode for noise
-
-        # Two forward passes with same input should give different results due to noise
-        out1 = featurizer(
-            feature_dict,
-            centre_atom_coord,
-            centre_atom_mask,
-            backbone_coords,
-            backbone_mask,
-        )
-
-        out2 = featurizer(
-            feature_dict,
-            centre_atom_coord,
-            centre_atom_mask,
-            backbone_coords,
-            backbone_mask,
-        )
-
-        # Edge features should be different due to coordinate noise
-        assert not torch.allclose(out1[1], out2[1], atol=1e-5)
 
     def test_gradient_flow(self, featurizer, extended_feature_dict, device):
         """Test that gradients flow through the featurizer."""

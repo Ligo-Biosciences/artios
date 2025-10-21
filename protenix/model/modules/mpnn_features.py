@@ -8,9 +8,56 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor, nn
 
 import protenix.model.modules.message_passing as mp
+from protenix.model.modules.embedders import RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.utils import average_atom_to_token, flatten_final_dims
 from protenix.utils.torch_utils import cdist
+
+
+class EdgeRelativePositionalEncoding(nn.Module):
+    def __init__(self, edge_dim: int = 128, r_max: int = 32, s_max: int = 2):
+        """
+        Args:
+            r_max (int, optional): Relative position indices clip value. Defaults to 32.
+            s_max (int, optional): Relative chain indices clip value. Defaults to 2.
+            c_edge_dim (int, optional): hidden dim for edge embedding. Defaults to 128.
+        """
+        super(EdgeRelativePositionalEncoding, self).__init__()
+        self.r_max = r_max
+        self.s_max = s_max
+        self.edge_dim = edge_dim
+        self.relpos = RelativePositionEncoding(r_max=r_max, s_max=s_max, c_z=edge_dim)
+
+    def forward(
+        self,
+        *,
+        asym_id: Int[Tensor, "batch n_token"],
+        residue_index: Int[Tensor, "batch n_token"],
+        entity_id: Int[Tensor, "batch n_token"],
+        sym_id: Int[Tensor, "batch n_token"],
+        token_index: Int[Tensor, "batch n_token"],
+        edge_index: Int[Tensor, "batch n_token neighbours"],
+    ):
+        """
+        Args:
+            asym_id: asymmetric unit IDs
+            residue_index: residue indices
+            entity_id: entity IDs
+            sym_id: symmetry IDs
+            token_index: token indices
+
+        Returns:
+            Tensor: relative position encoding
+                [batch, n_token, n_neighbours, c_z]
+        """
+        p = self.relpos(
+            asym_id=asym_id,
+            residue_index=residue_index,
+            entity_id=entity_id,
+            sym_id=sym_id,
+            token_index=token_index,
+        )
+        return mp.gather_edges(p, edge_idx=edge_index)
 
 
 class GaussianRBF(nn.Module):

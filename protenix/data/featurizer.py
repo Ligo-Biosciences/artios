@@ -290,6 +290,134 @@ class Featurizer(object):
             token.frame_atom_index = frame_atom_index
         return token_array_w_frame
 
+    @staticmethod
+    def compute_virtual_cb(
+        n_coord: np.ndarray,
+        ca_coord: np.ndarray,
+        c_coord: np.ndarray,
+    ) -> np.ndarray:
+        """Compute virtual Cβ position using ideal geometry.
+
+        Places Cβ at idealized position relative to N-CA-C backbone atoms.
+        Uses the approach from AlphaFold: Cβ is placed 1.522 Å from CA
+        along the direction that bisects the N-CA and CA-C bonds.
+
+        Args:
+            n_coord: N atom coordinates [..., 3]
+            ca_coord: CA atom coordinates [..., 3]
+            c_coord: C atom coordinates [..., 3]
+
+        Returns:
+            Virtual Cβ coordinates [..., 3]
+
+        # TODO: there is a simple formula I than this as far as I know.
+        """
+        # Vectors from CA to N and C
+        v1 = n_coord - ca_coord  # CA -> N
+        v2 = c_coord - ca_coord  # CA -> C
+
+        # Normalize vectors
+        v1_norm = v1 / (np.linalg.norm(v1, axis=-1, keepdims=True) + 1e-8)
+        v2_norm = v2 / (np.linalg.norm(v2, axis=-1, keepdims=True) + 1e-8)
+
+        # Bisector direction (average of normalized vectors)
+        bisector = v1_norm + v2_norm
+        bisector_norm = bisector / (
+            np.linalg.norm(bisector, axis=-1, keepdims=True) + 1e-8
+        )
+
+        # Cross product to get perpendicular direction
+        perp = np.cross(v1_norm, v2_norm)
+        perp_norm = perp / (np.linalg.norm(perp, axis=-1, keepdims=True) + 1e-8)
+
+        # Cβ direction is combination of bisector and perpendicular
+        # Standard geometry: ~109.5° tetrahedral angle
+        cb_direction = -bisector_norm + 0.5 * perp_norm
+        cb_direction_norm = cb_direction / (
+            np.linalg.norm(cb_direction, axis=-1, keepdims=True) + 1e-8
+        )
+
+        # Place Cβ at idealized distance (1.522 Å from CA)
+        cb_coord = ca_coord + 1.522 * cb_direction_norm
+
+        return cb_coord
+
+    @staticmethod
+    def get_backbone_atoms_tensor(
+        token_array: TokenArray,
+        atom_array: AtomArray,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extract backbone atom coordinates and masks for all tokens.
+
+        The backbone atoms depend on the chain type:
+        - Proteins: N, CA, C, O, and virtual Cß (computed from N, CA, C)
+        - Nucleic acids: OP1, OP2, C1', C3', C4'
+        - Ligands: Centre atom only (other slots are zero)
+
+        Args:
+            token_array: Array of tokens
+            atom_array: Array of atoms with coordinates
+
+        Returns:
+            backbone_coords: Backbone atom coordinates [n_token, 5, 3]
+            backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
+
+        # TODO: not quite in the spirit of biotite and vectorized ops, fix it.
+        """
+        n_tokens = len(token_array)
+        backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
+        backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
+
+        for token_idx, token in enumerate(token_array):
+            centre_atom = atom_array[token.centre_atom_index]
+
+            # Standard protein or nucleic acid residues
+            if (
+                centre_atom.mol_type != "ligand"
+                and centre_atom.res_name in STD_RESIDUES
+            ):
+                if centre_atom.mol_type == "protein":
+                    # Protein: N, CA, C, O, virtual Cβ
+                    backbone_atom_names = ["N", "CA", "C", "O"]
+                else:
+                    # DNA/RNA: OP1, OP2, C1', C3', C4'
+                    backbone_atom_names = ["OP1", "OP2", "C1'", "C3'", "C4'"]
+
+                # Extract backbone atoms by name
+                atom_coords = {}
+                for bb_idx, atom_name in enumerate(backbone_atom_names):
+                    try:
+                        atom_idx = token.atom_names.index(atom_name)
+                        global_atom_idx = token.atom_indices[atom_idx]
+                        coord = atom_array.coord[global_atom_idx]
+
+                        backbone_coords[token_idx, bb_idx] = coord
+                        backbone_mask[token_idx, bb_idx] = 1.0
+                        atom_coords[atom_name] = coord
+                    except (ValueError, IndexError):
+                        # Atom not found or not resolved
+                        pass
+
+                # Compute virtual Cβ for proteins if we have N, CA, C
+                if centre_atom.mol_type == "protein" and all(
+                    k in atom_coords for k in ["N", "CA", "C"]
+                ):
+                    cb_coord = Featurizer.compute_virtual_cb(
+                        atom_coords["N"],
+                        atom_coords["CA"],
+                        atom_coords["C"],
+                    )
+                    backbone_coords[token_idx, 4] = cb_coord
+                    backbone_mask[token_idx, 4] = 1.0
+
+            else:
+                # Ligands and non-standard residues: use centre atom only
+                centre_coord = atom_array.coord[token.centre_atom_index]
+                backbone_coords[token_idx, 0] = centre_coord
+                backbone_mask[token_idx, 0] = 1.0
+
+        return torch.Tensor(backbone_coords), torch.Tensor(backbone_mask)
+
     def get_token_features(self) -> dict[str, torch.Tensor]:
         """
         Ref: AlphaFold3 SI Chapter 2.8

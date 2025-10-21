@@ -190,14 +190,14 @@ class MPNNFeaturizer(nn.Module):
             sum(self.ligand_input_feature.values()), node_dim
         )
 
-        self.positional_encoder = None
+        self.positional_encoder = EdgeRelativePositionalEncoding(edge_dim=edge_dim)
 
         # RBF encoding for backbone distances
         self.rbf = GaussianRBF(num_kernels=num_rbf, min_distance=2.0, max_distance=22.0)
 
         # Project RBF features to edge dimension
         # 25 backbone pairs * num_rbf kernels -> edge_dim
-        self.embed_edge = LinearNoBias(25 * num_rbf, edge_dim)
+        self.embed_edge = LinearNoBias(25 * num_rbf + edge_dim, edge_dim)
 
         self.edge_norm = LayerNorm(edge_dim)
         self.node_norm = LayerNorm(node_dim)
@@ -329,11 +329,23 @@ class MPNNFeaturizer(nn.Module):
         # Apply RBF encoding [..., n_token, neighbors, 25, num_rbf]
         rbf_features = self.rbf(flat_distances) * flat_mask[..., None]
         rbf_flat = flatten_final_dims(rbf_features, 2)
+        return rbf_flat
 
-        # Concatenate and project [..., n_token, neighbors, edge_dim]
-        edge_feats = self.embed_edge(rbf_flat)
-
-        return self.edge_norm(edge_feats)
+    def _compute_relpos_features(
+        self,
+        input_feature_dict: Dict[str, Tensor],
+        edge_index: Int[Tensor, "batch n_token neighbours"],
+    ) -> Float[Tensor, "batch n_token neighbours edge_dim"]:
+        """Compute edge relpos features."""
+        edge_relpos_feat = self.positional_encoder(
+            asym_id=input_feature_dict["asym_id"],
+            residue_index=input_feature_dict["residue_index"],
+            entity_id=input_feature_dict["entity_id"],
+            sym_id=input_feature_dict["sym_id"],
+            token_index=input_feature_dict["token_index"],
+            edge_index=edge_index,
+        )
+        return edge_relpos_feat
 
     def forward(
         self,
@@ -375,15 +387,19 @@ class MPNNFeaturizer(nn.Module):
         )
 
         # Compute backbone distance edge features
-        edge_feats = self._compute_backbone_distance_features(
+        edge_dist_feats = self._compute_backbone_distance_features(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             edge_index=edge_index,
         )
-
-        # TODO: Add relpos encoding here when needed
-
+        # Relpos
+        edge_relpos_feats = self._compute_relpos_features(
+            input_feature_dict=input_feature_dict, edge_index=edge_index
+        )
+        edge_embedding = self.edge_norm(
+            self.embed_edge(torch.cat([edge_dist_feats, edge_relpos_feats], dim=-1))
+        )
         # Compute node features
-        node_feats = self._compute_node_features(input_feature_dict)
+        node_embedding = self._compute_node_features(input_feature_dict)
 
-        return node_feats, edge_feats, edge_index
+        return node_embedding, edge_embedding, edge_index

@@ -296,11 +296,10 @@ class Featurizer(object):
         ca_coord: np.ndarray,
         c_coord: np.ndarray,
     ) -> np.ndarray:
-        """Compute virtual Cβ position using ideal geometry.
+        """Compute virtual Cβ position using ideal geometry from ProteinMPNN.
 
-        Places Cβ at idealized position relative to N-CA-C backbone atoms.
-        Uses the approach from AlphaFold: Cβ is placed 1.522 Å from CA
-        along the direction that bisects the N-CA and CA-C bonds.
+        Uses idealized bond lengths and angles to place Cβ in the correct
+        tetrahedral position relative to the N-CA-C backbone.
 
         Args:
             n_coord: N atom coordinates [..., 3]
@@ -310,35 +309,18 @@ class Featurizer(object):
         Returns:
             Virtual Cβ coordinates [..., 3]
 
-        # TODO: there is a simple formula I than this as far as I know.
+        Reference:
+            ProteinMPNN implementation of virtual Cβ placement
         """
-        # Vectors from CA to N and C
-        v1 = n_coord - ca_coord  # CA -> N
-        v2 = c_coord - ca_coord  # CA -> C
+        # Backbone bond vectors
+        n_ca = ca_coord - n_coord
+        ca_c = c_coord - ca_coord
 
-        # Normalize vectors
-        v1_norm = v1 / (np.linalg.norm(v1, axis=-1, keepdims=True) + 1e-8)
-        v2_norm = v2 / (np.linalg.norm(v2, axis=-1, keepdims=True) + 1e-8)
+        # Cross product gives direction perpendicular to peptide plane
+        cross = np.cross(n_ca, ca_c)
 
-        # Bisector direction (average of normalized vectors)
-        bisector = v1_norm + v2_norm
-        bisector_norm = bisector / (
-            np.linalg.norm(bisector, axis=-1, keepdims=True) + 1e-8
-        )
-
-        # Cross product to get perpendicular direction
-        perp = np.cross(v1_norm, v2_norm)
-        perp_norm = perp / (np.linalg.norm(perp, axis=-1, keepdims=True) + 1e-8)
-
-        # Cβ direction is combination of bisector and perpendicular
-        # Standard geometry: ~109.5° tetrahedral angle
-        cb_direction = -bisector_norm + 0.5 * perp_norm
-        cb_direction_norm = cb_direction / (
-            np.linalg.norm(cb_direction, axis=-1, keepdims=True) + 1e-8
-        )
-
-        # Place Cβ at idealized distance (1.522 Å from CA)
-        cb_coord = ca_coord + 1.522 * cb_direction_norm
+        # Idealized Cß
+        cb_coord = ca_coord + 0.568 * n_ca - 0.54068 * ca_c - 0.5827 * cross
 
         return cb_coord
 
@@ -371,6 +353,13 @@ class Featurizer(object):
         for token_idx, token in enumerate(token_array):
             centre_atom = atom_array[token.centre_atom_index]
 
+            # If ligand
+            #   centre atom
+            # if protein
+            #   backbone atoms & computed Cß
+            # elif RNA / DNA
+            #
+
             # Standard protein or nucleic acid residues
             if (
                 centre_atom.mol_type != "ligand"
@@ -396,7 +385,7 @@ class Featurizer(object):
                         atom_coords[atom_name] = coord
                     except (ValueError, IndexError):
                         # Atom not found or not resolved
-                        pass
+                        print(f"Atom not found: {atom_name}")
 
                 # Compute virtual Cβ for proteins if we have N, CA, C
                 if centre_atom.mol_type == "protein" and all(

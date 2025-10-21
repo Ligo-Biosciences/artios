@@ -343,67 +343,54 @@ class Featurizer(object):
         Returns:
             backbone_coords: Backbone atom coordinates [n_token, 5, 3]
             backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
-
-        # TODO: not quite in the spirit of biotite and vectorized ops, fix it.
         """
+        # Backbone atom definitions by molecule type
+        BACKBONE_DEFS = {
+            "protein": ["N", "CA", "C", "O"],
+            "dna": ["OP1", "OP2", "C1'", "C3'", "C4'"],
+            "rna": ["OP1", "OP2", "C1'", "C3'", "C4'"],
+        }
+
         n_tokens = len(token_array)
         backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
         backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
 
+        # Get centre atoms for all tokens
+        centre_atom_indices = token_array.get_annotation("centre_atom_index")
+        centre_atoms = atom_array[centre_atom_indices]
+
         for token_idx, token in enumerate(token_array):
-            centre_atom = atom_array[token.centre_atom_index]
+            centre_atom = centre_atoms[token_idx]
+            mol_type = centre_atom.mol_type
+            is_standard = centre_atom.res_name in STD_RESIDUES
 
-            # If ligand
-            #   centre atom
-            # if protein
-            #   backbone atoms & computed Cß
-            # elif RNA / DNA
-            #
-
-            # Standard protein or nucleic acid residues
-            if (
-                centre_atom.mol_type != "ligand"
-                and centre_atom.res_name in STD_RESIDUES
-            ):
-                if centre_atom.mol_type == "protein":
-                    # Protein: N, CA, C, O, virtual Cβ
-                    backbone_atom_names = ["N", "CA", "C", "O"]
-                else:
-                    # DNA/RNA: OP1, OP2, C1', C3', C4'
-                    backbone_atom_names = ["OP1", "OP2", "C1'", "C3'", "C4'"]
-
-                # Extract backbone atoms by name
-                atom_coords = {}
-                for bb_idx, atom_name in enumerate(backbone_atom_names):
-                    try:
-                        atom_idx = token.atom_names.index(atom_name)
-                        global_atom_idx = token.atom_indices[atom_idx]
-                        coord = atom_array.coord[global_atom_idx]
-
-                        backbone_coords[token_idx, bb_idx] = coord
-                        backbone_mask[token_idx, bb_idx] = 1.0
-                        atom_coords[atom_name] = coord
-                    except (ValueError, IndexError):
-                        # Atom not found or not resolved
-                        print(f"Atom not found: {atom_name}")
-
-                # Compute virtual Cβ for proteins if we have N, CA, C
-                if centre_atom.mol_type == "protein" and all(
-                    k in atom_coords for k in ["N", "CA", "C"]
-                ):
-                    cb_coord = Featurizer.compute_virtual_cb(
-                        atom_coords["N"],
-                        atom_coords["CA"],
-                        atom_coords["C"],
-                    )
-                    backbone_coords[token_idx, 4] = cb_coord
-                    backbone_mask[token_idx, 4] = 1.0
-
-            else:
-                # Ligands and non-standard residues: use centre atom only
-                centre_coord = atom_array.coord[token.centre_atom_index]
-                backbone_coords[token_idx, 0] = centre_coord
+            # Ligands or non-standard residues: use centre atom only
+            if mol_type == "ligand" or not is_standard:
+                backbone_coords[token_idx, 0] = centre_atom.coord
                 backbone_mask[token_idx, 0] = 1.0
+                continue
+
+            # Standard protein or nucleic acid
+            backbone_names = BACKBONE_DEFS[mol_type]
+            atom_name_map = {name: idx for idx, name in enumerate(token.atom_names)}
+            atom_coords = {}
+
+            # Extract backbone atoms
+            for bb_idx, atom_name in enumerate(backbone_names):
+                if atom_name in atom_name_map:
+                    local_idx = atom_name_map[atom_name]
+                    global_idx = token.atom_indices[local_idx]
+                    backbone_coords[token_idx, bb_idx] = atom_array.coord[global_idx]
+                    backbone_mask[token_idx, bb_idx] = 1.0
+                    atom_coords[atom_name] = atom_array.coord[global_idx]
+
+            # Compute virtual Cβ for proteins
+            if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):
+                cb_coord = Featurizer.compute_virtual_cb(
+                    atom_coords["N"], atom_coords["CA"], atom_coords["C"]
+                )
+                backbone_coords[token_idx, 4] = cb_coord
+                backbone_mask[token_idx, 4] = 1.0
 
         return torch.Tensor(backbone_coords), torch.Tensor(backbone_mask)
 

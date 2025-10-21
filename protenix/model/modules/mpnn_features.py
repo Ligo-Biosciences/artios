@@ -303,7 +303,9 @@ class MPNNFeaturizer(nn.Module):
         # Flatten for gather [..., n_token, 15]
         backbone_coords_flat = flatten_final_dims(backbone_coords, num_dims=2)
         neighbor_backbone_flat = mp.gather_nodes(backbone_coords_flat, edge_index)
-        neighbor_backbone_coords = neighbor_backbone_flat.unflatten(-1, (5, 3))
+        neighbor_backbone_coords = neighbor_backbone_flat.unflatten(
+            dim=-1, sizes=(5, 3)
+        )
 
         # Gather neighbor masks [..., n_token, neighbors, 5]
         neighbor_backbone_mask = mp.gather_nodes(backbone_mask, edge_index)
@@ -315,7 +317,7 @@ class MPNNFeaturizer(nn.Module):
         # Distances [..., n_token, neighbors, 5, 5]
         distances = torch.norm(bb_self - bb_neighbor, dim=-1)
 
-        # Create distance mask using broadcasting
+        # Create distance mask
         # [..., n_token, 1, 5, 1] * [..., n_token, neighbors, 1, 5]
         distance_mask = (
             neighbor_backbone_mask[..., :, None, :] * backbone_mask[..., None, :, None]
@@ -401,5 +403,11 @@ class MPNNFeaturizer(nn.Module):
         )
         # Compute node features
         node_embedding = self._compute_node_features(input_feature_dict)
+
+        # Apply masks
+        node_embedding = node_embedding * centre_atom_mask[..., None]
+        edge_embedding = edge_embedding * mp.gather_nodes(
+            centre_atom_mask[..., None], edge_index
+        )
 
         return node_embedding, edge_embedding, edge_index

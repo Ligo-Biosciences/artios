@@ -199,7 +199,7 @@ class MPNNDecoderLayer(BaseMPNNLayer):
 
         self.pre_message_node_norm = LayerNorm(node_dim)
         self.pre_message_edge_norm = LayerNorm(edge_input_dim)
-        self.edge_mlp = MLP(c_in=edge_input_dim, c_out=edge_dim, n=2)
+        self.edge_mlp = MLP(c_in=edge_input_dim + node_dim, c_out=edge_dim, n=2)
 
         self.node_transition = Transition(c_in=node_dim, n=4)
 

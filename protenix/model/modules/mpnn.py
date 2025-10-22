@@ -79,7 +79,7 @@ class AllatomMPNN(nn.Module):
                 MPNNDecoderLayer(
                     node_dim=node_dim,
                     edge_dim=edge_dim,
-                    edge_input_dim=edge_dim,  # TODO: this should be different
+                    edge_input_dim=2 * node_dim + edge_dim,
                     dropout=dropout,
                 )
                 for _ in range(num_decoder_layers)
@@ -87,7 +87,7 @@ class AllatomMPNN(nn.Module):
         )
 
         # Projection layers
-        self.embed_restype = LinearNoBias(num_residue_types, edge_dim)
+        self.embed_restype = LinearNoBias(num_residue_types, node_dim)
         self.linear_out = LinearNoBias(node_dim, num_residue_types)
 
     def _generate_random_decoding_order(
@@ -104,9 +104,9 @@ class AllatomMPNN(nn.Module):
 
     def _prepare_decoder_inputs(
         self,
-        node_feats: Float[Tensor, "batch n_token hidden"],
-        edge_feats: Float[Tensor, "batch n_token neighbours hidden"],
-        sequence_embeds: Float[Tensor, "batch n_token hidden"],
+        node_feats: Float[Tensor, "batch n_token node_dim"],
+        edge_feats: Float[Tensor, "batch n_token neighbours edge_dim"],
+        sequence_embeds: Float[Tensor, "batch n_token node_dim"],
         edge_index: Int[Tensor, "batch n_token neighbours"],
     ) -> Tuple[
         Float[Tensor, "batch n_token neighbours hidden"],

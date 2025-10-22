@@ -219,7 +219,7 @@ class AllatomMPNN(nn.Module):
         Returns:
             Raw logits over residue types.
         """
-        sequence_embeds = self.restype_embed(restype)
+        sequence_embeds = self.embed_restype(restype)
 
         encoder_edge_feats, sequence_edge_feats = self._prepare_decoder_inputs(
             node_feats=node_feats,
@@ -370,7 +370,7 @@ class AllatomMPNN(nn.Module):
         logits = self._run_decoder_step(
             node_feats=node_feats,
             edge_feats=edge_feats,
-            restypes=restype,
+            restype=restype,
             edge_index=edge_idx,
             node_mask=centre_atom_mask,
             forward_attn_mask=forward_attn_mask,
@@ -422,15 +422,19 @@ class AllatomMPNN(nn.Module):
         backbone_mask: Float[Tensor, "batch n_token 5"],
         centre_atom_coord: Float[Tensor, "batch n_token 3"],
         centre_atom_mask: Float[Tensor, "batch n_token"],
-        restype: Float[
-            Tensor, "batch n_token num_residue_types"
-        ],  # TODO: instead of a one-hot, this should likely be sequence indices
+        restype: Float[Tensor, "batch n_token num_residue_types"],
         input_feature_dict: Dict[str, Tensor],
         decoding_order: Optional[Float[Tensor, "batch seqlen"]] = None,
         temperature: float = 1.0,
         show_progress: bool = False,
         return_logits: bool = False,
-    ) -> Union[Float[Tensor, "batch n_token "]]:
+    ) -> Union[
+        Float[Tensor, "batch n_token num_residue_types"],
+        Tuple[
+            Float[Tensor, "batch n_token num_residue_types"],
+            Float[Tensor, "batch n_token num_residue_types"],
+        ],
+    ]:
         """Sample protein sequence autoregressively from the model.
 
         Args:

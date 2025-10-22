@@ -78,7 +78,6 @@ class MPNNEncoderLayer(BaseMPNNLayer):
         self,
         node_dim: int,
         edge_dim: int,
-        hidden_dim: int,
         dropout: float = 0.0,
     ):
         """Initialize the PMPNN encoder layer.
@@ -86,14 +85,13 @@ class MPNNEncoderLayer(BaseMPNNLayer):
         Args:
             node_dim (int): node dimensionality
             edge_dim (int): edge dimensionality
-            hidden_dim (int): Hidden dimension for internal transformations
             output_dim (int): Output dimension for the MLP transformation
             dropout (float, optional): Dropout probability. Defaults to 0.0.
             num_heads (int, optional): Number of attention heads. Defaults to 4.
         """
         super().__init__()
-
-        self.hidden_dim = hidden_dim
+        self.node_dim = node_dim
+        self.edge_dim = edge_dim
 
         # Node message
         self.pre_message_node_norm = LayerNorm(node_dim)
@@ -182,7 +180,9 @@ class MPNNDecoderLayer(BaseMPNNLayer):
 
     def __init__(
         self,
-        hidden_dim: int,
+        node_dim: int,
+        edge_dim: int,
+        edge_input_dim: int,
         dropout: float = 0.0,
     ):
         """Initialize the ProteinMPNN decoder layer.
@@ -195,13 +195,13 @@ class MPNNDecoderLayer(BaseMPNNLayer):
         """
         super().__init__()
 
-        self.hidden_dim = hidden_dim
+        self.node_dim = node_dim
 
-        self.pre_message_node_norm = LayerNorm(hidden_dim)
-        self.pre_message_edge_norm = LayerNorm(hidden_dim)
-        self.edge_mlp = MLP(c_in=2 * hidden_dim, c_out=hidden_dim, n=2)
+        self.pre_message_node_norm = LayerNorm(node_dim)
+        self.pre_message_edge_norm = LayerNorm(edge_input_dim)
+        self.edge_mlp = MLP(c_in=edge_input_dim, c_out=edge_dim, n=2)
 
-        self.node_transition = Transition(c_in=hidden_dim, n=4)
+        self.node_transition = Transition(c_in=node_dim, n=4)
 
         self.dropout = nn.Dropout(dropout)
 

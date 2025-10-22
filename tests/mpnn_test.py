@@ -829,3 +829,467 @@ class TestRunDecoderStep:
         assert not torch.allclose(
             logits_1, logits_2, atol=1e-4
         ), "Different restype inputs produce identical outputs"
+
+
+class TestForward:
+    """Tests for the forward method."""
+
+    def test_forward_output_structure(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test that forward returns correct output structure."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        # Create inputs
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        # Run forward
+        output_dict, stats_dict = mpnn_model.forward(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+        )
+
+        # Check output structure
+        assert isinstance(output_dict, dict), "First return value should be a dict"
+        assert isinstance(stats_dict, dict), "Second return value should be a dict"
+        assert "logits" in output_dict, "output_dict should contain 'logits'"
+
+    def test_forward_logits_shape(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that forward produces logits with correct shape."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        output_dict, _ = mpnn_model.forward(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+        )
+
+        logits = output_dict["logits"]
+        expected_shape = (batch_size, n_tokens, num_residue_types)
+        assert (
+            logits.shape == expected_shape
+        ), f"logits shape {logits.shape} != {expected_shape}"
+
+    def test_forward_with_custom_decoding_order(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test forward with custom decoding order."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        # Create custom decoding order
+        decoding_order = torch.randperm(n_tokens).unsqueeze(0)
+
+        output_dict, _ = mpnn_model.forward(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            decoding_order=decoding_order,
+        )
+
+        assert "logits" in output_dict
+        assert not torch.isnan(output_dict["logits"]).any()
+
+    def test_forward_zero_shot_mode(self, mpnn_model, sample_data, input_feature_dict):
+        """Test forward in zero-shot mode."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        # Run in zero-shot mode
+        output_zero_shot, _ = mpnn_model.forward(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            zero_shot=True,
+        )
+
+        # Run in autoregressive mode
+        output_autoregressive, _ = mpnn_model.forward(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            zero_shot=False,
+        )
+
+        # Outputs should be different
+        assert not torch.allclose(
+            output_zero_shot["logits"], output_autoregressive["logits"], atol=1e-3
+        ), "Zero-shot and autoregressive modes produce identical outputs"
+
+    def test_forward_no_nan_or_inf(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that forward doesn't produce NaN or Inf values."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        output_dict, _ = mpnn_model.forward(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+        )
+
+        logits = output_dict["logits"]
+        assert not torch.isnan(logits).any(), "Forward logits contain NaN"
+        assert not torch.isinf(logits).any(), "Forward logits contain Inf"
+
+    def test_forward_gradient_flow(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that gradients flow through forward pass."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3, requires_grad=True)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3, requires_grad=True)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        output_dict, _ = mpnn_model.forward(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+        )
+
+        loss = output_dict["logits"].sum()
+        loss.backward()
+
+        assert backbone_coords.grad is not None, "No gradients for backbone_coords"
+        assert centre_atom_coord.grad is not None, "No gradients for centre_atom_coord"
+        assert not torch.isnan(backbone_coords.grad).any()
+        assert not torch.isnan(centre_atom_coord.grad).any()
+
+
+class TestSample:
+    """Tests for the sample method."""
+
+    def test_sample_output_shape(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that sample returns correct output shape."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        sampled_sequence = mpnn_model.sample(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            temperature=1.0,
+        )
+
+        expected_shape = (batch_size, n_tokens, num_residue_types)
+        assert (
+            sampled_sequence.shape == expected_shape
+        ), f"sampled_sequence shape {sampled_sequence.shape} != {expected_shape}"
+
+    def test_sample_returns_one_hot(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that sample returns valid one-hot encoded sequences."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        sampled_sequence = mpnn_model.sample(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            temperature=1.0,
+        )
+
+        # Check that each position sums to 1 (valid one-hot)
+        position_sums = sampled_sequence.sum(dim=-1)
+        assert torch.allclose(
+            position_sums, torch.ones_like(position_sums), atol=1e-5
+        ), "Sampled sequence is not valid one-hot encoding"
+
+        # Check that all values are 0 or 1
+        assert torch.all(
+            (sampled_sequence == 0) | (sampled_sequence == 1)
+        ), "Sampled sequence contains non-binary values"
+
+    def test_sample_greedy_mode(self, mpnn_model, sample_data, input_feature_dict):
+        """Test greedy sampling (temperature=0)."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        # Greedy sampling should be deterministic
+        sample_1 = mpnn_model.sample(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            temperature=0.0,
+        )
+
+        sample_2 = mpnn_model.sample(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            temperature=0.0,
+        )
+
+        # Greedy sampling should be deterministic
+        assert torch.equal(
+            sample_1, sample_2
+        ), "Greedy sampling (temperature=0) is not deterministic"
+
+    def test_sample_with_custom_decoding_order(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test sampling with custom decoding order."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        # Create two different decoding orders
+        decoding_order_1 = torch.randperm(n_tokens).unsqueeze(0)
+        decoding_order_2 = torch.randperm(n_tokens).unsqueeze(0)
+
+        sample_1 = mpnn_model.sample(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            decoding_order=decoding_order_1,
+            temperature=0.0,
+        )
+
+        sample_2 = mpnn_model.sample(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            decoding_order=decoding_order_2,
+            temperature=0.0,
+        )
+
+        # Different decoding orders may produce different sequences
+        # (not guaranteed, but we test that the method accepts the parameter)
+        assert sample_1.shape == sample_2.shape
+
+    def test_sample_return_logits(self, mpnn_model, sample_data, input_feature_dict):
+        """Test sampling with return_logits=True."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        result = mpnn_model.sample(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            temperature=1.0,
+            return_logits=True,
+        )
+
+        # Should return tuple of (sequence, logits)
+        assert isinstance(result, tuple), "return_logits=True should return tuple"
+        assert len(result) == 2, "Should return tuple of length 2"
+
+        sampled_sequence, logits = result
+        assert sampled_sequence.shape == (batch_size, n_tokens, num_residue_types)
+        assert logits.shape == (batch_size, n_tokens, num_residue_types)
+
+    def test_sample_different_temperatures(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test sampling with different temperature values."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        for temperature in [0.0, 0.5, 1.0, 1.5]:
+            sampled_sequence = mpnn_model.sample(
+                backbone_coords=backbone_coords,
+                backbone_mask=backbone_mask,
+                centre_atom_coord=centre_atom_coord,
+                centre_atom_mask=centre_atom_mask,
+                restype=restype,
+                input_feature_dict=input_feature_dict,
+                temperature=temperature,
+            )
+
+            assert sampled_sequence.shape == (batch_size, n_tokens, num_residue_types)
+            assert not torch.isnan(sampled_sequence).any()
+
+    def test_sample_no_nan_or_inf(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that sample doesn't produce NaN or Inf values."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
+
+        sampled_sequence = mpnn_model.sample(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict,
+            temperature=1.0,
+        )
+
+        assert not torch.isnan(sampled_sequence).any(), "Sampled sequence contains NaN"
+        assert not torch.isinf(sampled_sequence).any(), "Sampled sequence contains Inf"
+
+    def test_sample_device_consistency(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test that sample output is on the same device as inputs."""
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+        num_residue_types = 32
+
+        mpnn_model = mpnn_model.to(device)
+
+        # Move input feature dict to device
+        input_feature_dict_device = {
+            k: v.to(device) if torch.is_tensor(v) else v
+            for k, v in input_feature_dict.items()
+        }
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3).to(device)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5).to(device)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3).to(device)
+        centre_atom_mask = torch.ones(batch_size, n_tokens).to(device)
+        restype = torch.zeros(batch_size, n_tokens, num_residue_types).to(device)
+
+        sampled_sequence = mpnn_model.sample(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            restype=restype,
+            input_feature_dict=input_feature_dict_device,
+            temperature=1.0,
+        )
+
+        assert sampled_sequence.device == device

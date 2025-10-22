@@ -143,12 +143,12 @@ class AllatomMPNN(nn.Module):
 
     def _generate_sequential_masks(
         self,
-        decoding_order: Float[Tensor, "batch seqlen"],
-        edge_index: Float[Tensor, "batch seqlen neighbours"],
-        node_mask: Float[Tensor, "batch seqlen"],
+        decoding_order: Float[Tensor, "batch n_token"],
+        edge_index: Float[Tensor, "batch n_token neighbours"],
+        node_mask: Float[Tensor, "batch n_token"],
     ) -> Tuple[
-        Float[Tensor, "batch seqlen neighbours"],  # forward attention mask
-        Float[Tensor, "batch seqlen neighbours"],  # backward attention mask
+        Float[Tensor, "batch n_token neighbours"],  # forward attention mask
+        Float[Tensor, "batch n_token neighbours"],  # backward attention mask
     ]:
         """Generate autoregressive attention masks based on decoding order.
 
@@ -194,16 +194,16 @@ class AllatomMPNN(nn.Module):
 
     def _run_decoder_step(
         self,
-        node_feats: Float[Tensor, "batch seqlen node_dim"],
-        edge_feats: Float[Tensor, "batch seqlen neighbours edge_dim"],
-        restype: Float[Tensor, "batch seqlen num_residue_types"],
-        edge_index: Float[Tensor, "batch seqlen neighbours"],
-        node_mask: Float[Tensor, "batch seqlen"],
-        forward_attn_mask: Float[Tensor, "batch seqlen neighbours"],
-        backward_attn_mask: Float[Tensor, "batch seqlen neighbours"],
-        edge_mask: Float[Tensor, "batch seqlen neighbours"],
+        node_feats: Float[Tensor, "batch n_token node_dim"],
+        edge_feats: Float[Tensor, "batch n_token neighbours edge_dim"],
+        restype: Float[Tensor, "batch n_token num_residue_types"],
+        edge_index: Float[Tensor, "batch n_token neighbours"],
+        node_mask: Float[Tensor, "batch n_token"],
+        forward_attn_mask: Float[Tensor, "batch n_token neighbours"],
+        backward_attn_mask: Float[Tensor, "batch n_token neighbours"],
+        edge_mask: Float[Tensor, "batch n_token neighbours"],
         zero_shot: bool = False,
-    ) -> Float[Tensor, "batch seqlen num_residue_types"]:
+    ) -> Float[Tensor, "batch n_token num_residue_types"]:
         """Run a single decoder step with attention masking.
 
         Args:
@@ -452,7 +452,12 @@ class AllatomMPNN(nn.Module):
             return_logits: whether to return the logits or not
 
         Returns:
-            ...
+            Union[Tensor, Tuple[Tensor, Tensor]]:
+            If return_logits:
+                sequence_ids: sampled sequence as one-hot encoded tensor
+                logits_at_timestep: sequence probabilities for all residue types
+            else:
+                sequence_ids: sampled sequence as one-hot encoded tensor
         """
         assert temperature >= 0, "Temperature must be non-negative"
 

@@ -1,10 +1,13 @@
 """Tests for All-atom MPNN module.
 
 This module tests the core functionality of the AllatomMPNN class, including:
+- Encoder trunk execution
 - Decoder input preparation
 - Sequential mask generation for autoregressive decoding
 - Decoder step execution
 """
+
+import os
 
 import pytest
 import torch
@@ -81,6 +84,270 @@ def sample_tensors():
         "restype": torch.zeros(batch_size, seq_len, num_residue_types),
         "decoding_order": torch.randperm(seq_len).unsqueeze(0).expand(batch_size, -1),
     }
+
+
+@pytest.fixture
+def sample_data():
+    """Load sample data dict from test data."""
+    test_data_path = os.path.join(
+        os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
+    )
+    return torch.load(test_data_path, weights_only=False)
+
+
+@pytest.fixture
+def input_feature_dict(sample_data):
+    """Create input feature dict following the pattern from diffusion tests.
+
+    Adds batch dimension of 1 to all tensors to match expected input format.
+    """
+    device = torch.device("cpu")
+    input_feature_dict = sample_data["input_feature_dict"]
+    basic = sample_data["basic"]
+    n_tokens = basic["N_token"]
+    n_atoms = basic["N_atom"]
+
+    # Add required features that might be missing
+    extended_dict = {}
+
+    # Add batch dimension to all existing tensors
+    for key, value in input_feature_dict.items():
+        if torch.is_tensor(value):
+            # Add batch dimension (unsqueeze at dim 0)
+            extended_dict[key] = value.unsqueeze(0).to(device)
+        else:
+            extended_dict[key] = value
+
+    # Add entity type binary tensors if not present, with batch dimension
+    if "is_protein_token" not in extended_dict:
+        extended_dict["is_protein_token"] = torch.ones(1, n_tokens).long().to(device)
+    if "is_ligand_token" not in extended_dict:
+        extended_dict["is_ligand_token"] = torch.zeros(1, n_tokens).long().to(device)
+    if "is_dna_token" not in extended_dict:
+        extended_dict["is_dna_token"] = torch.zeros(1, n_tokens).long().to(device)
+    if "is_rna_token" not in extended_dict:
+        extended_dict["is_rna_token"] = torch.zeros(1, n_tokens).long().to(device)
+
+    # Add atom_mask if not present
+    if "atom_mask" not in extended_dict:
+        extended_dict["atom_mask"] = torch.ones(1, n_atoms).bool().to(device)
+
+    return extended_dict
+
+
+class TestRunEncoderTrunk:
+    """Tests for run_encoder_trunk method."""
+
+    def test_output_shapes(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that encoder trunk outputs have correct shapes."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        num_neighbours = 30
+        batch_size = 1
+
+        # Create backbone coordinates and masks with batch dimension
+        # backbone_coords: [batch, n_token, 5, 3] - 5 backbone atoms (N, CA, C, O, CB)
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+
+        # centre_atom_coord: [batch, n_token, 3] - centre atom per token
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        # Run encoder trunk
+        node_feats, edge_feats, edge_index, edge_mask = mpnn_model.run_encoder_trunk(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            input_feature_dict=input_feature_dict,
+        )
+
+        # Check output shapes
+        # node_feats: [batch, n_token, node_dim]
+        assert node_feats.shape == (
+            batch_size,
+            n_tokens,
+            64,
+        ), f"node_feats shape {node_feats.shape} != ({batch_size}, {n_tokens}, 64)"
+
+        # edge_feats: [batch, n_token, neighbours, edge_dim]
+        assert (
+            edge_feats.shape == (batch_size, n_tokens, num_neighbours, 64)
+        ), f"edge_feats shape {edge_feats.shape} != ({batch_size}, {n_tokens}, {num_neighbours}, 64)"
+
+        # edge_index: [batch, n_token, neighbours]
+        assert (
+            edge_index.shape == (batch_size, n_tokens, num_neighbours)
+        ), f"edge_index shape {edge_index.shape} != ({batch_size}, {n_tokens}, {num_neighbours})"
+
+        # edge_mask: [batch, n_token, neighbours]
+        assert (
+            edge_mask.shape == (batch_size, n_tokens, num_neighbours)
+        ), f"edge_mask shape {edge_mask.shape} != ({batch_size}, {n_tokens}, {num_neighbours})"
+
+    def test_output_no_nan_or_inf(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that encoder outputs don't contain NaN or Inf values."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        node_feats, edge_feats, edge_index, _ = mpnn_model.run_encoder_trunk(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            input_feature_dict=input_feature_dict,
+        )
+
+        assert not torch.isnan(node_feats).any(), "node_feats contains NaN"
+        assert not torch.isinf(node_feats).any(), "node_feats contains Inf"
+        assert not torch.isnan(edge_feats).any(), "edge_feats contains NaN"
+        assert not torch.isinf(edge_feats).any(), "edge_feats contains Inf"
+        assert not torch.isnan(edge_index.float()).any(), "edge_index contains NaN"
+        assert not torch.isinf(edge_index.float()).any(), "edge_index contains Inf"
+
+    def test_masking_application(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that masking properly affects the output.
+
+        This is critical to avoid the silent failure mode mentioned in CLAUDE.md
+        where masked coordinates can generate large numbers if not properly handled.
+        """
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        # Mask out first 3 tokens
+        centre_atom_mask[:, :3] = 0
+
+        node_feats, edge_feats, _, edge_mask = mpnn_model.run_encoder_trunk(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            input_feature_dict=input_feature_dict,
+        )
+
+        # Check that edge_mask properly reflects masked tokens
+        # Edges originating from masked tokens should be masked
+        assert torch.all(
+            edge_mask[:, :3] == 0
+        ), "edge_mask not zero for masked source tokens"
+
+        # Check that values are reasonable (no huge numbers from masked operations)
+        assert torch.all(
+            torch.abs(node_feats) < 1e6
+        ), "node_feats contains unreasonably large values - possible masking bug"
+        assert torch.all(
+            torch.abs(edge_feats) < 1e6
+        ), "edge_feats contains unreasonably large values - possible masking bug"
+
+    def test_edge_index_validity(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that edge indices are valid."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        _, _, edge_index, _ = mpnn_model.run_encoder_trunk(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            input_feature_dict=input_feature_dict,
+        )
+
+        # Edge indices should be in valid range [0, n_tokens)
+        assert torch.all(edge_index >= 0), "edge_index contains negative values"
+        assert torch.all(
+            edge_index < n_tokens
+        ), f"edge_index contains values >= n_tokens ({n_tokens})"
+
+    def test_different_backbone_masks(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test that different backbone masks produce different outputs."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        # Full backbone mask
+        backbone_mask_full = torch.ones(batch_size, n_tokens, 5)
+        node_feats_full, _, _, _ = mpnn_model.run_encoder_trunk(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask_full,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            input_feature_dict=input_feature_dict,
+        )
+
+        # Partial backbone mask (mask out CB atoms)
+        backbone_mask_partial = torch.ones(batch_size, n_tokens, 5)
+        backbone_mask_partial[:, :, 4] = 0  # Mask CB
+        node_feats_partial, _, _, _ = mpnn_model.run_encoder_trunk(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask_partial,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            input_feature_dict=input_feature_dict,
+        )
+
+        # Different masks should produce different node features
+        assert not torch.allclose(
+            node_feats_full, node_feats_partial, atol=1e-3
+        ), "Different backbone masks produce identical outputs"
+
+    def test_device_consistency(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that outputs are on the same device as inputs."""
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        mpnn_model = mpnn_model.to(device)
+
+        # Move input feature dict to device
+        input_feature_dict_device = {
+            k: v.to(device) if torch.is_tensor(v) else v
+            for k, v in input_feature_dict.items()
+        }
+
+        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3).to(device)
+        backbone_mask = torch.ones(batch_size, n_tokens, 5).to(device)
+        centre_atom_coord = torch.randn(batch_size, n_tokens, 3).to(device)
+        centre_atom_mask = torch.ones(batch_size, n_tokens).to(device)
+
+        node_feats, edge_feats, edge_index, edge_mask = mpnn_model.run_encoder_trunk(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            input_feature_dict=input_feature_dict_device,
+        )
+
+        assert node_feats.device == device
+        assert edge_feats.device == device
+        assert edge_index.device == device
+        assert edge_mask.device == device
 
 
 class TestPrepareDecoderInputs:

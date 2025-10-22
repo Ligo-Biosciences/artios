@@ -153,7 +153,6 @@ class MPNNFeaturizer(nn.Module):
         positional_encoding_dim: int,
         num_rbf: int,
         num_neighbours: int,
-        max_relative_feats: int,
         coord_noise: float = 0.1,
     ):
         """MPNN featurizer for general biomolecular graphs."""
@@ -166,7 +165,6 @@ class MPNNFeaturizer(nn.Module):
         self.positional_encoding_dim = positional_encoding_dim
         self.num_rbf = num_rbf
         self.num_neighbours = num_neighbours
-        self.max_relative_feats = max_relative_feats
         self.coord_noise = coord_noise
 
         # Entity features
@@ -190,14 +188,16 @@ class MPNNFeaturizer(nn.Module):
             sum(self.ligand_input_feature.values()), node_dim
         )
 
-        self.positional_encoder = EdgeRelativePositionalEncoding(edge_dim=edge_dim)
+        self.positional_encoder = EdgeRelativePositionalEncoding(
+            edge_dim=positional_encoding_dim, r_max=32, s_max=2
+        )
 
         # RBF encoding for backbone distances
         self.rbf = GaussianRBF(num_kernels=num_rbf, min_distance=2.0, max_distance=22.0)
 
         # Project RBF features to edge dimension
         # 25 backbone pairs * num_rbf kernels -> edge_dim
-        self.embed_edge = LinearNoBias(25 * num_rbf + edge_dim, edge_dim)
+        self.embed_edge = LinearNoBias(25 * num_rbf + positional_encoding_dim, edge_dim)
 
         self.edge_norm = LayerNorm(edge_dim)
         self.node_norm = LayerNorm(node_dim)
@@ -373,8 +373,8 @@ class MPNNFeaturizer(nn.Module):
             backbone_mask: Mask for valid backbone atoms [..., n_token, 5]
 
         Returns:
-            node_feats: Node features with entity and ligand information
-            edge_feats: Edge features from backbone distances
+            node_embedding: Node features with entity and ligand information
+            edge_embedding: Edge features from backbone distances
             edge_index: Graph edge connectivity index
         """
         # Add coordinate noise during training

@@ -1,9 +1,10 @@
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
 from jaxtyping import Float, Int
 from torch import Tensor, nn
+from tqdm import tqdm
 
 from protenix.model.modules import message_passing as mp
 from protenix.model.modules.mpnn_features import MPNNFeaturizer
@@ -87,7 +88,7 @@ class AllatomMPNN(nn.Module):
 
         # Projection layers
         self.embed_restype = LinearNoBias(num_residue_types, edge_dim)
-        self.linear_out = LinearNoBias()
+        self.linear_out = LinearNoBias(node_dim, num_residue_types)
 
     def _generate_random_decoding_order(
         self,
@@ -195,7 +196,7 @@ class AllatomMPNN(nn.Module):
         self,
         node_feats: Float[Tensor, "batch seqlen node_dim"],
         edge_feats: Float[Tensor, "batch seqlen neighbours edge_dim"],
-        restype: Float[Tensor, "batch seqlen 32"],
+        restype: Float[Tensor, "batch seqlen num_residue_types"],
         edge_index: Float[Tensor, "batch seqlen neighbours"],
         node_mask: Float[Tensor, "batch seqlen"],
         forward_attn_mask: Float[Tensor, "batch seqlen neighbours"],
@@ -208,7 +209,7 @@ class AllatomMPNN(nn.Module):
         Args:
             node_feats: Node features from encoder
             edge_feats: Base edge features
-            sequence_ids: Current sequence state (residue indices)
+            restype: Current sequence state as one-hot vectors
             edge_index: Graph edge connectivity
             node_mask: Mask indicating valid sequence positions
             forward_attn_mask: Forward attention mask
@@ -333,7 +334,7 @@ class AllatomMPNN(nn.Module):
             backbone_mask: backbone mask for each token (which backbone atoms are valid)
             centre_atom_coord: centre atom coordinate for each token
             centre_atom_mask: centre atom mask is resolved mask
-            restype: residue types
+            restype: one-hot encoded residue types
             input_feature_dict: Input feature dict with the following tensors:
                 - asym_id, residue_index, entity_id, sym_id, etc.
             decoding_order: Permutation defining generation order
@@ -349,6 +350,7 @@ class AllatomMPNN(nn.Module):
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
             centre_atom_mask=centre_atom_mask,
+            input_feature_dict=input_feature_dict,
         )
 
         # Optionally prepare random decoding order
@@ -385,22 +387,131 @@ class AllatomMPNN(nn.Module):
         self,
         logits: Float[Tensor, "batch n_token num_residue_types"],
         temperature: float = 1.0,
-    ) -> Int[Tensor, "batch n_token"]:
+    ) -> Float[Tensor, "batch n_token num_residue_types"]:
         """
         Sample amino acid indices from logits using temperature-controlled sampling.
 
         Args:
             logits: Raw model logits over amino acid types
+                [..., n_token, num_residue_types]
             temperature: Sampling temperature (0 = greedy, >0 = stochastic sampling)
 
+        Returns:
+            one_hot: One-hot encoded sampled residue types
         """
-        assert 0.0 <= temperature <= 1.0
         if temperature == 0:
-            return torch.argmax(logits, dim=-1)
+            # Greedy sampling: take argmax
+            samples = torch.argmax(logits, dim=-1)
         else:
+            # Stochastic sampling with temperature
             probits = F.softmax(logits / temperature, dim=-1)
             batch_size, seq_len, num_classes = probits.shape
             probits_2d = probits.view(-1, num_classes)
             samples = torch.multinomial(probits_2d, num_samples=1).squeeze(-1)
+            samples = samples.view(batch_size, seq_len)
 
-            return samples.view(batch_size, seq_len)
+        # One-hot encode the sampled indices
+        num_residue_types = logits.shape[-1]
+        one_hot = F.one_hot(samples, num_classes=num_residue_types).float()
+
+        return one_hot
+
+    def sample(
+        self,
+        backbone_coords: Float[Tensor, "batch n_token 5 3"],
+        backbone_mask: Float[Tensor, "batch n_token 5"],
+        centre_atom_coord: Float[Tensor, "batch n_token 3"],
+        centre_atom_mask: Float[Tensor, "batch n_token"],
+        restype: Float[
+            Tensor, "batch n_token num_residue_types"
+        ],  # TODO: instead of a one-hot, this should likely be sequence indices
+        input_feature_dict: Dict[str, Tensor],
+        decoding_order: Optional[Float[Tensor, "batch seqlen"]] = None,
+        temperature: float = 1.0,
+        show_progress: bool = False,
+        return_logits: bool = False,
+    ) -> Union[Float[Tensor, "batch n_token "]]:
+        """Sample protein sequence autoregressively from the model.
+
+        Args:
+            backbone_coords: backbone coordinates for each token
+            backbone_mask: backbone mask for each token (which backbone atoms are valid)
+            centre_atom_coord: centre atom coordinate for each token
+            centre_atom_mask: centre atom mask is resolved mask
+            restype: one-hot encoded residue types
+            input_feature_dict: Input feature dict with the following tensors:
+                - asym_id, residue_index, entity_id, sym_id, etc.
+            decoding_order: Permutation defining generation order
+            zero_shot: whether to use zero-shot mode. Defaults to False
+            temperature: sampling temperature
+            show_progress: show progress during sampling
+            return_logits: whether to return the logits or not
+
+        Returns:
+            ...
+        """
+        assert temperature >= 0, "Temperature must be non-negative"
+
+        # Run encoder trunk
+        node_feats, edge_feats, edge_idx, edge_mask = self.run_encoder_trunk(
+            backbone_coords=backbone_coords,
+            backbone_mask=backbone_mask,
+            centre_atom_coord=centre_atom_coord,
+            centre_atom_mask=centre_atom_mask,
+            input_feature_dict=input_feature_dict,
+        )
+
+        # Optionally prepare random decoding order
+        if decoding_order is None:
+            decoding_order = self._generate_random_decoding_order(node_feats)
+
+        # Generate masks
+        forward_attn_mask, backward_attn_mask = self._generate_sequential_masks(
+            decoding_order=decoding_order,
+            edge_index=edge_idx,
+            node_mask=centre_atom_mask,
+        )
+
+        forward_attn_mask = forward_attn_mask[..., None]
+        backward_attn_mask = backward_attn_mask[..., None]
+
+        sequence_ids = torch.zeros(
+            restype.shape,
+            device=backbone_coords.device,
+            dtype=restype.dtype,
+        )
+        logits_at_timestep = torch.zeros(
+            restype.shape,
+            device=backbone_coords.device,
+            dtype=backbone_coords.dtype,
+        )
+
+        timestep_range = range(decoding_order.shape[-1])
+        if show_progress:
+            timestep_range = tqdm(timestep_range, desc="Sampling")
+
+        for timestep in timestep_range:
+            logits = self._run_decoder_step(
+                node_feats=node_feats,
+                edge_feats=edge_feats,
+                restype=restype,
+                edge_index=edge_idx,
+                node_mask=centre_atom_mask,
+                forward_attn_mask=forward_attn_mask,
+                backward_attn_mask=backward_attn_mask,
+                edge_mask=edge_mask,
+                zero_shot=False,
+            )
+
+            # sample from logits and update
+            next_pos_idx = decoding_order[:, timestep]
+            batch_idx = torch.arange(logits.shape[0])
+
+            pred_vals = self._sample_from_logits(logits, temperature=temperature)
+            sequence_ids[batch_idx, next_pos_idx] = pred_vals[batch_idx, next_pos_idx]
+            logits_at_timestep[batch_idx, timestep] = logits[batch_idx, next_pos_idx]
+
+        if return_logits:
+            return sequence_ids, logits_at_timestep
+        else:
+            return sequence_ids

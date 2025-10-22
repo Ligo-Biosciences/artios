@@ -238,6 +238,19 @@ model_configs = {
                 "n_heads": 16,
             },
         },
+        "mpnn_module": {
+            "num_residue_types": 32,
+            "node_dim": 128,  # TODO: make node and edge dims global config values
+            "edge_dim": 128,
+            "num_encoder_layers": 3,
+            "num_decoder_layers": 3,
+            "num_neighbours": 32,
+            "positional_encoding_dim": 16,
+            "positional_encoding_max_relative_feats": 32,
+            "num_rbf_kernels": 16,
+            "dropout": 0.0,
+            "coord_noise": 0.1,
+        },
     },
 }
 

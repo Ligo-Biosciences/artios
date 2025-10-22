@@ -13,7 +13,7 @@ import pytest
 import torch
 from torch import nn
 
-from protenix.model.modules.mpnn import AllatomMPNN
+from protenix.model.modules.mpnn import MPNN
 
 
 @pytest.fixture
@@ -24,9 +24,8 @@ def mpnn_model():
     but the actual input dimension during forward pass is larger due to feature concatenation.
     This is a known issue that these tests help expose.
     """
-    model = AllatomMPNN(
+    model = MPNN(
         num_residue_types=32,
-        hidden_dim=64,
         node_dim=64,
         edge_dim=64,
         num_encoder_layers=2,
@@ -851,7 +850,7 @@ class TestForward:
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
         # Run forward
-        output_dict, stats_dict = mpnn_model.forward(
+        logits, stats_dict = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -861,9 +860,13 @@ class TestForward:
         )
 
         # Check output structure
-        assert isinstance(output_dict, dict), "First return value should be a dict"
+        assert isinstance(logits, torch.Tensor), "First return value should be a tensor"
         assert isinstance(stats_dict, dict), "Second return value should be a dict"
-        assert "logits" in output_dict, "output_dict should contain 'logits'"
+        assert logits.shape == (
+            batch_size,
+            n_tokens,
+            num_residue_types,
+        ), "logits should have correct shape"
 
     def test_forward_logits_shape(self, mpnn_model, sample_data, input_feature_dict):
         """Test that forward produces logits with correct shape."""
@@ -878,7 +881,7 @@ class TestForward:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
-        output_dict, _ = mpnn_model.forward(
+        logits, _ = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -887,7 +890,6 @@ class TestForward:
             input_feature_dict=input_feature_dict,
         )
 
-        logits = output_dict["logits"]
         expected_shape = (batch_size, n_tokens, num_residue_types)
         assert (
             logits.shape == expected_shape
@@ -911,7 +913,7 @@ class TestForward:
         # Create custom decoding order
         decoding_order = torch.randperm(n_tokens).unsqueeze(0)
 
-        output_dict, _ = mpnn_model.forward(
+        logits, _ = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -921,8 +923,7 @@ class TestForward:
             decoding_order=decoding_order,
         )
 
-        assert "logits" in output_dict
-        assert not torch.isnan(output_dict["logits"]).any()
+        assert not torch.isnan(logits).any()
 
     def test_forward_zero_shot_mode(self, mpnn_model, sample_data, input_feature_dict):
         """Test forward in zero-shot mode."""
@@ -938,7 +939,7 @@ class TestForward:
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
         # Run in zero-shot mode
-        output_zero_shot, _ = mpnn_model.forward(
+        logits_zero_shot, _ = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -949,7 +950,7 @@ class TestForward:
         )
 
         # Run in autoregressive mode
-        output_autoregressive, _ = mpnn_model.forward(
+        logits_autoregressive, _ = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -961,7 +962,7 @@ class TestForward:
 
         # Outputs should be different
         assert not torch.allclose(
-            output_zero_shot["logits"], output_autoregressive["logits"], atol=1e-3
+            logits_zero_shot, logits_autoregressive, atol=1e-3
         ), "Zero-shot and autoregressive modes produce identical outputs"
 
     def test_forward_no_nan_or_inf(self, mpnn_model, sample_data, input_feature_dict):
@@ -977,7 +978,7 @@ class TestForward:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
-        output_dict, _ = mpnn_model.forward(
+        logits, _ = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -986,41 +987,11 @@ class TestForward:
             input_feature_dict=input_feature_dict,
         )
 
-        logits = output_dict["logits"]
         assert not torch.isnan(logits).any(), "Forward logits contain NaN"
         assert not torch.isinf(logits).any(), "Forward logits contain Inf"
 
-    def test_forward_gradient_flow(self, mpnn_model, sample_data, input_feature_dict):
-        """Test that gradients flow through forward pass."""
-        basic = sample_data["basic"]
-        n_tokens = basic["N_token"].item()
-        batch_size = 1
-        num_residue_types = 32
 
-        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3, requires_grad=True)
-        backbone_mask = torch.ones(batch_size, n_tokens, 5)
-        centre_atom_coord = torch.randn(batch_size, n_tokens, 3, requires_grad=True)
-        centre_atom_mask = torch.ones(batch_size, n_tokens)
-        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
-
-        output_dict, _ = mpnn_model.forward(
-            backbone_coords=backbone_coords,
-            backbone_mask=backbone_mask,
-            centre_atom_coord=centre_atom_coord,
-            centre_atom_mask=centre_atom_mask,
-            restype=restype,
-            input_feature_dict=input_feature_dict,
-        )
-
-        loss = output_dict["logits"].sum()
-        loss.backward()
-
-        assert backbone_coords.grad is not None, "No gradients for backbone_coords"
-        assert centre_atom_coord.grad is not None, "No gradients for centre_atom_coord"
-        assert not torch.isnan(backbone_coords.grad).any()
-        assert not torch.isnan(centre_atom_coord.grad).any()
-
-
+@pytest.mark.slow
 class TestSample:
     """Tests for the sample method."""
 

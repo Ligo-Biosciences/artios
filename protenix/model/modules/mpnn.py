@@ -15,12 +15,11 @@ from protenix.model.modules.mpnn_layers import (
 from protenix.model.modules.primitives import LinearNoBias
 
 
-class AllatomMPNN(nn.Module):
-    """All-atom message passing neural network for sequence design.
+class MPNN(nn.Module):
+    """Message passing neural network for sequence design.
 
     Args:
         num_residue_types (int): Number of residue types (32 for all biomolecules)
-        hidden_dim (int): Hidden dimension for all network layers
         num_encoder_layers (int): Number of encoder layers
         num_decoder_layers (int): Number of decoder layers
         num_neighbours (int): Maximum number of neighbors per residue
@@ -34,7 +33,6 @@ class AllatomMPNN(nn.Module):
     def __init__(
         self,
         num_residue_types: int,
-        hidden_dim: int,
         node_dim: int,
         edge_dim: int,
         num_encoder_layers: int,
@@ -49,7 +47,6 @@ class AllatomMPNN(nn.Module):
         super().__init__()
 
         self.num_residue_types = num_residue_types
-        self.hidden_dim = hidden_dim
         self.num_neighbours = num_neighbours
         self.positional_encoding_dim = positional_encoding_dim
         self.num_rbf_kernels = num_rbf_kernels
@@ -93,13 +90,23 @@ class AllatomMPNN(nn.Module):
     def _generate_random_decoding_order(
         self,
         node_feats: Float[Tensor, "batch seqlen hidden_dim"],
+        seed: Optional[int] = None,
     ) -> Float[Tensor, "batch seq_len"]:
         """Generate a random decoding order.
 
         NOTE: we can add spatial smoothing to this later like the one in the Chroma paper.
         """
+        generator = None
+        if seed is not None:
+            generator = torch.Generator(node_feats.device).manual_seed(seed)
+
         return torch.argsort(
-            torch.randn(node_feats.shape[:-1], device=node_feats.device), dim=-1
+            torch.randn(
+                size=node_feats.shape[:-1],
+                device=node_feats.device,
+                generator=generator,
+            ),
+            dim=-1,
         )
 
     def _prepare_decoder_inputs(
@@ -323,8 +330,9 @@ class AllatomMPNN(nn.Module):
         input_feature_dict: Dict[str, Tensor],
         decoding_order: Optional[Float[Tensor, "batch seqlen"]] = None,
         zero_shot: bool = False,
+        seed: Optional[int] = None,
     ) -> Tuple[dict, dict]:
-        """Forward pass for autoregressive protein sequence generation.
+        """Forward pass for autoregressive sequence generation.
 
         Encodes protein structure into node representations, then generates sequence
         probabilities using masked attention.
@@ -339,6 +347,7 @@ class AllatomMPNN(nn.Module):
                 - asym_id, residue_index, entity_id, sym_id, etc.
             decoding_order: Permutation defining generation order
             zero_shot: whether to use zero-shot mode. Defaults to False
+            seed: seed for deterministic sampling
 
         Returns:
             Tuple[dict, dict]: Dictionary with logits and stats dictionary
@@ -355,7 +364,9 @@ class AllatomMPNN(nn.Module):
 
         # Optionally prepare random decoding order
         if decoding_order is None:
-            decoding_order = self._generate_random_decoding_order(node_feats)
+            decoding_order = self._generate_random_decoding_order(
+                node_feats=node_feats, seed=seed
+            )
 
         # Generate masks
         forward_attn_mask, backward_attn_mask = self._generate_sequential_masks(
@@ -381,12 +392,13 @@ class AllatomMPNN(nn.Module):
 
         # Run decoder step
         stats_dict = {}
-        return {"logits": logits}, stats_dict
+        return logits, stats_dict
 
     def _sample_from_logits(
         self,
         logits: Float[Tensor, "batch n_token num_residue_types"],
         temperature: float = 1.0,
+        seed: Optional[int] = None,
     ) -> Float[Tensor, "batch n_token num_residue_types"]:
         """
         Sample amino acid indices from logits using temperature-controlled sampling.
@@ -395,10 +407,15 @@ class AllatomMPNN(nn.Module):
             logits: Raw model logits over amino acid types
                 [..., n_token, num_residue_types]
             temperature: Sampling temperature (0 = greedy, >0 = stochastic sampling)
+            seed: seed for deterministic sampling
 
         Returns:
             one_hot: One-hot encoded sampled residue types
         """
+        generator = None
+        if seed is not None:
+            generator = torch.Generator(logits.device).manual_seed(seed)
+
         if temperature == 0:
             # Greedy sampling: take argmax
             samples = torch.argmax(logits, dim=-1)
@@ -407,7 +424,9 @@ class AllatomMPNN(nn.Module):
             probits = F.softmax(logits / temperature, dim=-1)
             batch_size, seq_len, num_classes = probits.shape
             probits_2d = probits.view(-1, num_classes)
-            samples = torch.multinomial(probits_2d, num_samples=1).squeeze(-1)
+            samples = torch.multinomial(
+                probits_2d, num_samples=1, generator=generator
+            ).squeeze(-1)
             samples = samples.view(batch_size, seq_len)
 
         # One-hot encode the sampled indices
@@ -424,10 +443,11 @@ class AllatomMPNN(nn.Module):
         centre_atom_mask: Float[Tensor, "batch n_token"],
         restype: Float[Tensor, "batch n_token num_residue_types"],
         input_feature_dict: Dict[str, Tensor],
-        decoding_order: Optional[Float[Tensor, "batch seqlen"]] = None,
+        decoding_order: Optional[Float[Tensor, "batch n_token"]] = None,
         temperature: float = 1.0,
         show_progress: bool = False,
         return_logits: bool = False,
+        seed: Optional[int] = None,
     ) -> Union[
         Float[Tensor, "batch n_token num_residue_types"],
         Tuple[
@@ -450,6 +470,7 @@ class AllatomMPNN(nn.Module):
             temperature: sampling temperature
             show_progress: show progress during sampling
             return_logits: whether to return the logits or not
+            seed: seed for deterministic sampling
 
         Returns:
             Union[Tensor, Tuple[Tensor, Tensor]]:
@@ -472,7 +493,7 @@ class AllatomMPNN(nn.Module):
 
         # Optionally prepare random decoding order
         if decoding_order is None:
-            decoding_order = self._generate_random_decoding_order(node_feats)
+            decoding_order = self._generate_random_decoding_order(node_feats, seed)
 
         # Generate masks
         forward_attn_mask, backward_attn_mask = self._generate_sequential_masks(
@@ -516,7 +537,9 @@ class AllatomMPNN(nn.Module):
             next_pos_idx = decoding_order[:, timestep]
             batch_idx = torch.arange(logits.shape[0])
 
-            pred_vals = self._sample_from_logits(logits, temperature=temperature)
+            pred_vals = self._sample_from_logits(
+                logits, temperature=temperature, seed=seed
+            )
             sequence_ids[batch_idx, next_pos_idx] = pred_vals[batch_idx, next_pos_idx]
             logits_at_timestep[batch_idx, timestep] = logits[batch_idx, next_pos_idx]
 

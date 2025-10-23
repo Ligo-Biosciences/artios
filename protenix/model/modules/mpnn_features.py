@@ -326,6 +326,7 @@ class MPNNFeaturizer(nn.Module):
         # Apply mask and flatten pairs [..., n_token, neighbors, 25]
         masked_distances = distances * distance_mask
         flat_distances = flatten_final_dims(masked_distances, 2)
+        # TODO: re-normalize the distances based on num elements in the mask
         flat_mask = flatten_final_dims(distance_mask, 2)
 
         # Apply RBF encoding [..., n_token, neighbors, 25, num_rbf]

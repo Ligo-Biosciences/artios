@@ -881,6 +881,34 @@ class Featurizer(object):
 
         return target_features
 
+    def get_mpnn_features(self):
+        """
+        Features for MPNN sequence design.
+        """
+        mpnn_features = {}
+
+        # Centre coordinates
+        centre_atom_indices = self.cropped_token_array.get_annotation(
+            "centre_atom_index"
+        )
+        centre_atoms = self.cropped_atom_array[centre_atom_indices]
+
+        # Backbone mask and centre atom mask for biomolecules
+        backbone_coords, backbone_mask = Featurizer.get_backbone_atoms_tensor(
+            token_array=self.cropped_token_array, atom_array=self.cropped_atom_array
+        )
+
+        mpnn_features.update(
+            {
+                "mpnn_centre_coordinate": torch.Tensor(centre_atoms.coord),
+                "mpnn_centre_atom_mask": torch.Tensor(centre_atoms.is_resolved),
+                "mpnn_backbone_coords": backbone_coords,
+                "mpnn_backbone_mask": backbone_mask,
+            }
+        )
+
+        return mpnn_features
+
     def get_all_input_features(self):
         """
         Get input features from cropped data.
@@ -909,6 +937,9 @@ class Featurizer(object):
 
         target_features = self.get_target_features()
         features.update(target_features)
+
+        mpnn_features = self.get_mpnn_features()
+        features.update(mpnn_features)
 
         return features
 

@@ -200,7 +200,7 @@ class ArtiosAllAtomTrainer(object):
         logging.info("Finished init ENV.")
 
         # Set torch compile cache limit
-        torch._dynamo.config.cache_size_limit = 16
+        torch._dynamo.config.cache_size_limit = 8
 
     def init_loss(self):
         self.loss = MPNNLoss(self.configs)
@@ -697,11 +697,11 @@ class ArtiosAllAtomTrainer(object):
             ],
             schedule=torch.profiler.schedule(
                 wait=10,
-                warmup=10,
+                warmup=1,
                 active=10,
                 skip_first=50,
                 skip_first_wait=1,
-                repeat=1,
+                repeat=2,
             ),
             on_trace_ready=trace_handler,
         ) as p:

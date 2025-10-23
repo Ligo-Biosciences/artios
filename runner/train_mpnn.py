@@ -770,39 +770,6 @@ class ArtiosAllAtomTrainer(object):
                     step_need_save &= is_update_step
 
                     batch = to_device(batch, self.device)
-
-                    # Log batch characteristics and GPU memory periodically
-                    if self.step % 10 == 0 and torch.cuda.is_available():
-                        allocated = torch.cuda.memory_allocated() / 1e9
-                        reserved = torch.cuda.memory_reserved() / 1e9
-
-                        # Extract batch size info
-                        batch_info = []
-                        if "input_feature_dict" in batch:
-                            feat_dict = batch["input_feature_dict"]
-                            if "token_asym_id" in feat_dict:
-                                n_tokens = (
-                                    feat_dict["token_asym_id"].shape[-1]
-                                    if hasattr(feat_dict["token_asym_id"], "shape")
-                                    else "N/A"
-                                )
-                                batch_info.append(f"n_tokens={n_tokens}")
-                            if "atom_to_token_idx" in feat_dict:
-                                n_atoms = (
-                                    feat_dict["atom_to_token_idx"].shape[-1]
-                                    if hasattr(feat_dict["atom_to_token_idx"], "shape")
-                                    else "N/A"
-                                )
-                                batch_info.append(f"n_atoms={n_atoms}")
-
-                        batch_str = (
-                            ", ".join(batch_info) if batch_info else "no shape info"
-                        )
-                        logging.info(
-                            f"Step {self.step} (rank {DIST_WRAPPER.rank}) - {batch_str}, "
-                            f"GPU mem: {allocated:.2f}GB alloc / {reserved:.2f}GB reserved"
-                        )
-
                     self.progress_bar()
                     self.train_step(batch)
                     if use_ema and is_update_step:

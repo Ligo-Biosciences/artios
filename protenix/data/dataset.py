@@ -46,7 +46,7 @@ from protenix.utils.torch_utils import dict_to_tensor
 logger = get_logger(__name__)
 
 
-SLOW_STEP_THRESHOLD = 1.0  # above this, data step gets logged
+SLOW_STEP_THRESHOLD = 2.0  # seconds
 
 
 class BaseSingleDataset(Dataset):

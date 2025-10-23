@@ -550,6 +550,11 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         # Masks
         "token_mask": (num_token,),
         "atom_mask": (num_atom,),
+        # MPNN features
+        "mpnn_centre_coordinate": (num_token, 3),
+        "mpnn_centre_atom_mask": (num_token,),
+        "mpnn_backbone_coords": (num_token, 5, 3),
+        "mpnn_backbone_mask": (num_token, 5),
     }
 
     # Extra features needed

@@ -516,18 +516,18 @@ class Featurizer(object):
             self.cropped_atom_array.ref_space_uid
         ).long()
 
-        token_array_with_frame = self.get_token_frame(
-            token_array=self.cropped_token_array,
-            atom_array=self.cropped_atom_array,
-            ref_pos=ref_features["ref_pos"],
-            ref_mask=ref_features["ref_mask"],
-        )
-        ref_features["has_frame"] = torch.Tensor(
-            token_array_with_frame.get_annotation("has_frame")
-        ).long()  # [N_token]
-        ref_features["frame_atom_index"] = torch.Tensor(
-            token_array_with_frame.get_annotation("frame_atom_index")
-        ).long()  # [N_token, 3]
+        # token_array_with_frame = self.get_token_frame(
+        #     token_array=self.cropped_token_array,
+        #     atom_array=self.cropped_atom_array,
+        #     ref_pos=ref_features["ref_pos"],
+        #     ref_mask=ref_features["ref_mask"],
+        # )
+        # ref_features["has_frame"] = torch.Tensor(
+        #     token_array_with_frame.get_annotation("has_frame")
+        # ).long()  # [N_token]
+        # ref_features["frame_atom_index"] = torch.Tensor(
+        #     token_array_with_frame.get_annotation("frame_atom_index")
+        # ).long()  # [N_token, 3]
         return ref_features
 
     def get_bond_features(self) -> dict[str, torch.Tensor]:
@@ -920,8 +920,8 @@ class Featurizer(object):
         token_features = self.get_token_features()
         features.update(token_features)
 
-        bond_features = self.get_bond_features()
-        features.update(bond_features)
+        # bond_features = self.get_bond_features()
+        # features.update(bond_features)
 
         reference_features = self.get_reference_features()
         features.update(reference_features)

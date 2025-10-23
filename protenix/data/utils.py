@@ -541,7 +541,7 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         "template_distogram": (num_templ, num_token, num_token, 39),
         "template_unit_vector": (num_templ, num_token, num_token, 3),
         # Bond features
-        "token_bonds": (num_token, num_token),
+        # "token_bonds": (num_token, num_token),
         # Target features
         "target_centre_coordinate": (num_token, 3),
         "target_restype": (num_token, 32),
@@ -591,8 +591,8 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         "is_rna": (num_atom,),
         "is_dna": (num_atom,),
         "is_ligand": (num_atom,),
-        "has_frame": (num_token,),  # move to input_feature_dict?
-        "frame_atom_index": (num_token, 3),  # atom index after crop
+        # "has_frame": (num_token,),  # move to input_feature_dict?
+        # "frame_atom_index": (num_token, 3),  # atom index after crop
         "resolution": (1,),
         # Metrics
         "interested_ligand_mask": (

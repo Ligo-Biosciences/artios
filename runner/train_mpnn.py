@@ -674,7 +674,7 @@ class ArtiosAllAtomTrainer(object):
             if self.configs.eval_only:
                 return
         use_ema = hasattr(self, "ema_wrapper")
-        self.print(f"Using power law ema's: {use_ema}")
+        self.print(f"Using EMA: {use_ema}")
 
         def trace_handler(p):
             output = p.key_averages().table(

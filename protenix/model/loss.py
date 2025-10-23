@@ -484,7 +484,7 @@ class NLLLoss(BaseLoss):
         """Compute the cross-entropy loss with label smoothing"""
         logits = pred_dict["logits"]  # [..., n_token, num_residue_types]
         gt_sequence = feat_dict["restype"]  # [..., n_token, num_residue_types]
-        mask = feat_dict["mpnn_backbone_mask"]  # [..., n_token]
+        mask = feat_dict["mpnn_centre_atom_mask"]  # [..., n_token]
         num_residue_types = gt_sequence.shape[-1]
 
         # Label smoothing

@@ -697,11 +697,11 @@ class ArtiosAllAtomTrainer(object):
             ],
             schedule=torch.profiler.schedule(
                 wait=10,
-                warmup=1,
-                active=10,
+                warmup=10,
+                active=50,
                 skip_first=50,
                 skip_first_wait=1,
-                repeat=2,
+                repeat=1,
             ),
             on_trace_ready=trace_handler,
         ) as p:

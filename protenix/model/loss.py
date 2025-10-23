@@ -493,7 +493,7 @@ class NLLLoss(BaseLoss):
 
         loss = -(gt_sequence * logits).sum(dim=-1)
         loss = masked_mean(loss, mask, axes=-1)  # [...]
-        return loss
+        return loss, {}
 
 
 class KLDivergenceLoss(BaseLoss):

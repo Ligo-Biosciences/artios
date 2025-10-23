@@ -373,7 +373,7 @@ class ArtiosAllAtomTrainer(object):
                 label_full_dict=batch["label_full_dict"],
                 mode=mode,
                 current_step=self.step if mode == "train" else None,
-                symmetric_permutation=self.symmetric_permutation,
+                # symmetric_permutation=self.symmetric_permutation,
                 # seed=seed,
             )
         except Exception as e:

@@ -7,9 +7,10 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 from torch import Tensor
+from torch.nn import functional as F
 
 from protenix.metrics.rmsd import weighted_rigid_align_V2
-from protenix.model.utils import expand_at_dim, masked_mean, softmax_cross_entropy
+from protenix.model.utils import expand_at_dim, masked_mean
 
 
 def loss_reduction(loss: Tensor, method: str = "mean") -> Tensor:
@@ -31,6 +32,26 @@ def loss_reduction(loss: Tensor, method: str = "mean") -> Tensor:
     if method == "add":
         method = "sum"
     return getattr(torch, method)(loss)
+
+
+def softmax_cross_entropy(logits: Tensor, labels: Tensor) -> Tensor:
+    """Softmax cross entropy
+
+    Args:
+        logits (Tensor): classification logits
+            [..., num_class]
+        labels (Tensor): classification labels (value = probability)
+            [..., num_class]
+
+    Returns:
+        Tensor: softmax cross entropy
+            [...]
+    """
+    loss = -1 * torch.sum(
+        labels * F.log_softmax(logits, dim=-1),
+        dim=-1,
+    )
+    return loss
 
 
 class BaseLoss(nn.Module, ABC):
@@ -480,7 +501,7 @@ class NLLLoss(BaseLoss):
         pred_dict: Dict[str, Tensor],
         label_dict: Dict[str, Tensor],
         feat_dict: Dict[str, Tensor],
-    ):
+    ) -> tuple[Tensor, Dict[str, Tensor]]:
         """Compute the cross-entropy loss with label smoothing"""
         logits = pred_dict["logits"]  # [..., n_token, num_residue_types]
         gt_sequence = feat_dict["restype"]  # [..., n_token, num_residue_types]
@@ -491,7 +512,8 @@ class NLLLoss(BaseLoss):
         gt_sequence = gt_sequence + (self.label_smoothing / num_residue_types)
         gt_sequence = gt_sequence / gt_sequence.sum(dim=-1, keepdim=True)
 
-        loss = -(gt_sequence * logits).sum(dim=-1)
+        # Use softmax_cross_entropy which applies log_softmax before computing loss
+        loss = softmax_cross_entropy(logits, gt_sequence)  # [..., n_token]
         loss = masked_mean(loss, mask, axes=-1)  # [...]
         return loss, {}
 

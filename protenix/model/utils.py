@@ -17,7 +17,6 @@ from typing import Optional, Union
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from scipy.spatial.transform import Rotation
 from torch import Tensor
 
@@ -632,26 +631,6 @@ def beta_function(
     normalization = torch.exp(log_norm)
 
     return t ** (alpha - 1) * (1 - t) ** (beta - 1) / normalization
-
-
-def softmax_cross_entropy(logits: Tensor, labels: Tensor) -> Tensor:
-    """Softmax cross entropy
-
-    Args:
-        logits (Tensor): classification logits
-            [..., num_class]
-        labels (Tensor): classification labels (value = probability)
-            [..., num_class]
-
-    Returns:
-        Tensor: softmax cross entropy
-            [...]
-    """
-    loss = -1 * torch.sum(
-        labels * F.log_softmax(logits, dim=-1),
-        dim=-1,
-    )
-    return loss
 
 
 def masked_mean(

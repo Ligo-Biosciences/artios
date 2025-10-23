@@ -46,6 +46,9 @@ from protenix.utils.torch_utils import dict_to_tensor
 logger = get_logger(__name__)
 
 
+SLOW_STEP_THRESHOLD = 1.0  # above this, data step gets logged
+
+
 class BaseSingleDataset(Dataset):
     """
     dataset for a single data source
@@ -322,7 +325,9 @@ class BaseSingleDataset(Dataset):
 
                 # Log if data loading took too long
                 total_time = time.time() - start_time
-                if total_time > 20.0:  # Log slow data loading (> 20 seconds)
+                if (
+                    total_time > SLOW_STEP_THRESHOLD
+                ):  # Log slow data loading (> 1 second)
                     sample_indice = self._get_sample_indice(idx=idx)
                     logger.warning(
                         f"SLOW __getitem__ for idx={idx}, pdb_id={sample_indice.pdb_id}: "
@@ -657,7 +662,7 @@ class BaseSingleDataset(Dataset):
 
         # Log if process_one took too long
         total_time = time.time() - process_start
-        if total_time > 20.0:  # Log slow processing (> 20 seconds)
+        if total_time > SLOW_STEP_THRESHOLD:  # Log slow processing (> 1 second)
             logger.warning(
                 f"SLOW process_one for idx={idx}, pdb_id={sample_indice.pdb_id}: "
                 f"{total_time:.2f}s - "

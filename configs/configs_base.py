@@ -32,9 +32,11 @@ basic_configs = {
     "iters_to_accumulate": 1,
     "eval_only": False,
     "load_flow_checkpoint_path": "",
+    "load_mpnn_checkpoint_path": "",
     "load_vae_checkpoint_path": "",
     "load_ema_flow_checkpoint_path": "",  # TODO: no need!
     "load_ema_vae_checkpoint_path": "",  # TODO: no need
+    "load_ema_mpnn_checkpoint_path": "",  # TODO: likely no need
     "load_strict": True,
     "load_params_only": False,
     "guiding_net_path": ValueMaybeNone(""),

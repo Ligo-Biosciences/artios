@@ -291,8 +291,8 @@ class DistributedDataLoader(DataLoader):
             shuffle=False,
             collate_fn=collate_fn,
             pin_memory=True,
-            persistent_workers=True,
-            prefetch_factor=batch_size,
+            persistent_workers=False,
+            prefetch_factor=2,
         )
         self.counter = 0
 

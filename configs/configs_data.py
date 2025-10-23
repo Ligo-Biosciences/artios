@@ -60,7 +60,7 @@ default_weighted_pdb_configs = {
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
 }
 
-DATA_ROOT_DIR = "/af3-dev/release_data/"
+DATA_ROOT_DIR = "af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -161,7 +161,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            "pdb_list": "",  # ["1s01", "1sr0"],
+            "pdb_list": ["1s01"],  # ["1s01", "1sr0"],
             "random_sample_if_failed": True,
             "max_n_token": -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,

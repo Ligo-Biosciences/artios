@@ -322,9 +322,7 @@ class ArtiosAllAtomTrainer(object):
             self.print(f"Finish loading checkpoint, current step: {self.step}")
 
         # Load EMA model parameters
-        if (
-            self.configs.load_ema_mpnn_checkpoint_path
-        ):  # TODO: different checkpoint paths
+        if self.configs.load_ema_mpnn_checkpoint_path:
             _load_checkpoint(
                 self.configs.load_mpnn_vae_checkpoint_path,
                 load_params_only=True,
@@ -527,6 +525,14 @@ class ArtiosAllAtomTrainer(object):
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
+
+            # Log validation metrics to Neptune/WandB
+            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                # Add test_name prefix to metrics for clarity
+                prefixed_metrics = {
+                    f"val/{test_name}/{k}": v for k, v in metrics.items()
+                }
+                self.neptune_run.log_metrics(prefixed_metrics, step=self.step)
 
     def update(self):
         # Clip the gradient

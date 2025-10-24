@@ -385,7 +385,14 @@ def get_dataloaders(
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             sampler=test_sampler,
-            collate_fn=lambda batch: batch[0],
+            collate_fn=DataCollatorWithPadding(  # TODO: this will currently fail for the VAE or diffusion training.
+                max_n_msa=configs.data.padding.max_n_msa,
+                max_n_template=configs.data.padding.max_n_template,
+                max_n_pocket=configs.data.padding.max_n_pocket,
+                bin_ends=configs.data.padding.bin_ends,
+                crop_size=configs.test_crop_size,
+            ),
+            # lambda batch: batch[0],
         )
     logger.info(
         f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}"

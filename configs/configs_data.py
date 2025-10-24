@@ -28,7 +28,7 @@ default_test_configs = {
             0.0,  # SpatialCropping
             1.0,  # SpatialInterfaceCropping
         ],
-        "crop_size": 256,  # -1
+        "crop_size": GlobalConfigValue("test_crop_size"),  # -1
     },
     "lig_atom_rename": GlobalConfigValue("test_lig_atom_rename"),
     "shuffle_mols": GlobalConfigValue("test_shuffle_mols"),

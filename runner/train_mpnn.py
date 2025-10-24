@@ -487,32 +487,32 @@ class ArtiosAllAtomTrainer(object):
                     simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
                 # TODO: this might not work with batching.
-                if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
-                    coordinate = batch["pred_dict"]["coordinate"]
-                    n_atoms = len(batch["cropped_atom_array"])
-                    batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
-                    saved_files = self.dumper.dump(
-                        dataset_name=test_name,
-                        pdb_id=pid,
-                        seed=0,
-                        pred_dict=batch["pred_dict"],
-                        atom_array=batch["cropped_atom_array"],
-                        entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
-                    )
+                # if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
+                #     coordinate = batch["pred_dict"]["coordinate"]
+                #     n_atoms = len(batch["cropped_atom_array"])
+                #     batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
+                #     saved_files = self.dumper.dump(
+                #         dataset_name=test_name,
+                #         pdb_id=pid,
+                #         seed=0,
+                #         pred_dict=batch["pred_dict"],
+                #         atom_array=batch["cropped_atom_array"],
+                #         entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
+                #     )
 
-                    # Log structure files to Neptune Scale
-                    if self.configs.use_wandb and saved_files:
-                        files_dict = {}
-                        for file_path in saved_files:
-                            # Create a relative key for Neptune using test_name/pdb_id/filename
-                            filename = os.path.basename(file_path)
-                            neptune_key = f"structures/{test_name}/{pid}/{filename}"
-                            files_dict[neptune_key] = file_path
+                #     # Log structure files to Neptune Scale
+                #     if self.configs.use_wandb and saved_files:
+                #         files_dict = {}
+                #         for file_path in saved_files:
+                #             # Create a relative key for Neptune using test_name/pdb_id/filename
+                #             filename = os.path.basename(file_path)
+                #             neptune_key = f"structures/{test_name}/{pid}/{filename}"
+                #             files_dict[neptune_key] = file_path
 
-                        self.neptune_run.log_files(
-                            files=files_dict,
-                            step=self.step,
-                        )
+                #         self.neptune_run.log_files(
+                #             files=files_dict,
+                #             step=self.step,
+                #         )
 
                 # Metrics
                 for key, value in simple_metrics.items():

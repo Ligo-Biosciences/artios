@@ -275,6 +275,7 @@ class DistributedDataLoader(DataLoader):
         drop_last: bool = True,
         shuffle: bool = True,
         sampler: Sampler = None,
+        prefetch_factor: int = 2,
     ):
         if sampler is not None:
             self.sampler = sampler
@@ -292,7 +293,7 @@ class DistributedDataLoader(DataLoader):
             collate_fn=collate_fn,
             pin_memory=True,
             persistent_workers=False,
-            prefetch_factor=2,
+            prefetch_factor=prefetch_factor,
         )
         self.counter = 0
 
@@ -342,6 +343,7 @@ def get_dataloaders(
                 crop_size=configs.train_crop_size,
             ),
             sampler=train_sampler,
+            prefetch_factor=configs.data.prefetch_factor,
         )
     else:
         train_sampler = WeightedSampler(

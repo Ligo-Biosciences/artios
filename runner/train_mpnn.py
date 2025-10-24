@@ -483,8 +483,9 @@ class ArtiosAllAtomTrainer(object):
                     simple_metrics.update(loss_dict)
 
                     # Additional metrics
-                    metrics_dict = self.get_metrics(batch)
-                    simple_metrics.update(self.aggregate_metrics(metrics_dict))
+                    # TODO: the following currently fails
+                    # metrics_dict = self.get_metrics(batch)
+                    # simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
                 # TODO: this might not work with batching.
                 # if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10

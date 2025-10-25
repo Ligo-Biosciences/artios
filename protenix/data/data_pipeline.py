@@ -28,7 +28,7 @@ from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.parser import DistillationMMCIFParser, MMCIFParser
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.utils.cropping import CropData
-from protenix.utils.file_io import load_pickle
+from protenix.utils.file_io import load_lz4_pickle
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -129,7 +129,7 @@ class DataPipeline(object):
         assert os.path.exists(
             bioassembly_dict_fpath
         ), f"File not exists {bioassembly_dict_fpath}"
-        bioassembly_dict = load_pickle(bioassembly_dict_fpath)
+        bioassembly_dict = load_lz4_pickle(bioassembly_dict_fpath)
 
         return bioassembly_dict
 

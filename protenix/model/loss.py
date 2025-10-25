@@ -493,7 +493,7 @@ class NLLLoss(BaseLoss):
     """Negative log likelihood loss for training MPNN (includes label smoothing)"""
 
     def __init__(
-        self, mask_key: str, label_smoothing: float = 0.1, reduction: str = "mean"
+        self, mask_key: str = "", label_smoothing: float = 0.1, reduction: str = "mean"
     ):
         super().__init__(reduction=reduction)
         self.label_smoothing = label_smoothing

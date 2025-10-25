@@ -529,9 +529,7 @@ class ArtiosAllAtomTrainer(object):
             # Log validation metrics to Neptune/WandB
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 # Add test_name prefix to metrics for clarity
-                prefixed_metrics = {
-                    f"val/{test_name}/{k}": v for k, v in metrics.items()
-                }
+                prefixed_metrics = {f"{test_name}/{k}": v for k, v in metrics.items()}
                 self.neptune_run.log_metrics(prefixed_metrics, step=self.step)
 
     def update(self):

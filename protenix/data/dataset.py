@@ -355,7 +355,9 @@ class BaseSingleDataset(Dataset):
         sample_indice = self._get_sample_indice(idx=idx)
         if self.bioassembly_dict_dir is not None:
             bioassembly_dict_fpath = os.path.join(
-                self.bioassembly_dict_dir, sample_indice.pdb_id + ".pkl.gz"
+                self.bioassembly_dict_dir,
+                sample_indice.pdb_id
+                + ".pkl.pkl.lz4",  # .pkl.gz   # TODO: the extra pkl should be deleted
             )
         else:
             bioassembly_dict_fpath = None

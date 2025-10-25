@@ -28,7 +28,9 @@ from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.parser import DistillationMMCIFParser, MMCIFParser
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.utils.cropping import CropData
-from protenix.utils.file_io import load_lz4_pickle  # load_gzip_pickle  #
+from protenix.utils.file_io import (
+    load_lz4_pickle_instrumented as load_lz4_pickle,  # TEMPORARY: using instrumented version for profiling
+)
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 

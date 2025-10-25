@@ -492,9 +492,12 @@ class SequenceLoss(BaseLoss):
 class NLLLoss(BaseLoss):
     """Negative log likelihood loss for training MPNN (includes label smoothing)"""
 
-    def __init__(self, label_smoothing: float = 0.1, reduction: str = "mean"):
+    def __init__(
+        self, mask_key: str, label_smoothing: float = 0.1, reduction: str = "mean"
+    ):
         super().__init__(reduction=reduction)
         self.label_smoothing = label_smoothing
+        self.mask_key = mask_key
 
     def compute_loss(
         self,
@@ -506,6 +509,8 @@ class NLLLoss(BaseLoss):
         logits = pred_dict["logits"]  # [..., n_token, num_residue_types]
         gt_sequence = feat_dict["restype"]  # [..., n_token, num_residue_types]
         mask = feat_dict["mpnn_centre_atom_mask"]  # [..., n_token]
+        if self.mask_key:
+            mask = mask * feat_dict[self.mask_key]  # [..., n_token]
         num_residue_types = gt_sequence.shape[-1]
 
         # Label smoothing
@@ -571,7 +576,35 @@ class MPNNLoss(AggregatedLoss):
                 name="nll_loss",
                 weight=1.0,
                 loss=NLLLoss(label_smoothing=0.1),  # TODO: make configurable
-            )
+            ),
+            LossComponent(
+                name="nll_loss_ligand",
+                weight=0.0,
+                loss=NLLLoss(
+                    mask_key="is_ligand_token", label_smoothing=0.1
+                ),  # TODO: make configurable
+            ),
+            LossComponent(
+                name="nll_loss_rna",
+                weight=0.0,
+                loss=NLLLoss(
+                    mask_key="is_rna_token", label_smoothing=0.1
+                ),  # TODO: make configurable
+            ),
+            LossComponent(
+                name="nll_loss_rna",
+                weight=0.0,
+                loss=NLLLoss(
+                    mask_key="is_dna_token", label_smoothing=0.1
+                ),  # TODO: make configurable
+            ),
+            LossComponent(
+                name="nll_loss_protein",
+                weight=0.0,
+                loss=NLLLoss(
+                    mask_key="is_protein_token", label_smoothing=0.1
+                ),  # TODO: make configurable
+            ),
         ]
         super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
 

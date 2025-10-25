@@ -62,7 +62,7 @@ class MPNN(nn.Module):
             positional_encoding_dim=positional_encoding_dim,
             num_rbf=num_rbf_kernels,
             num_neighbours=num_neighbours,
-            coord_noise=0.1,
+            coord_noise=coord_noise,
         )
 
         self.encoder = nn.ModuleList(

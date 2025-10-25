@@ -15,13 +15,17 @@
 import gzip
 import json
 import pickle
+import time
 from pathlib import Path
 from typing import Any, Union
 
 import lz4.frame
 import pandas as pd
 
+from protenix.utils.logger import get_logger
 from protenix.utils.torch_utils import map_values_to_list
+
+logger = get_logger(__name__)
 
 PANDAS_NA_VALUES = [
     "",
@@ -98,6 +102,57 @@ def load_lz4_pickle(pkl: Union[str, Path]) -> Any:
     """
     with lz4.frame.open(pkl, "rb") as f:
         data = pickle.load(f)
+    return data
+
+
+def load_lz4_pickle_instrumented(
+    pkl: Union[str, Path], slow_threshold: float = 5
+) -> Any:
+    """
+    Load an lz4 compressed pickle file with detailed timing instrumentation.
+
+    TEMPORARY: This is an instrumented version for profiling. Use load_lz4_pickle() normally.
+
+    Args:
+        pkl: An lz4 pickle file path.
+        slow_threshold: Time threshold in seconds for logging (default: 5s).
+
+    Returns:
+        Any: The loaded data.
+    """
+    import os
+
+    start_time = time.perf_counter()
+
+    # Time I/O: reading compressed bytes from disk
+    io_start = time.perf_counter()
+    with open(pkl, "rb") as f:
+        compressed_bytes = f.read()
+    io_time = time.perf_counter() - io_start
+
+    # Time decompression
+    decompress_start = time.perf_counter()
+    decompressed_bytes = lz4.frame.decompress(compressed_bytes)
+    decompress_time = time.perf_counter() - decompress_start
+
+    # Time pickle deserialization
+    deserialize_start = time.perf_counter()
+    data = pickle.loads(decompressed_bytes)
+    deserialize_time = time.perf_counter() - deserialize_start
+
+    total_time = time.perf_counter() - start_time
+
+    # Log slow loads with breakdown
+    if total_time > slow_threshold:
+        file_size_kb = os.path.getsize(pkl) / 1024
+        logger.warning(
+            f"SLOW load_lz4_pickle: {os.path.basename(pkl)} ({file_size_kb:.1f} KB) "
+            f"took {total_time*1000:.1f}ms | "
+            f"I/O: {io_time*1000:.1f}ms ({io_time/total_time*100:.0f}%) | "
+            f"Decompress: {decompress_time*1000:.1f}ms ({decompress_time/total_time*100:.0f}%) | "
+            f"Deserialize: {deserialize_time*1000:.1f}ms ({deserialize_time/total_time*100:.0f}%)"
+        )
+
     return data
 
 

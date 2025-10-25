@@ -63,6 +63,33 @@ def read_indices_csv(csv: Union[str, Path]) -> pd.DataFrame:
     return df
 
 
+def load_pickle(pkl: Union[str, Path]) -> Any:
+    """
+    Load a simple pickle file without compression.
+
+    Args:
+        pkl (Union[str, Path]): A pickle file path.
+
+    Returns:
+        Any: The loaded data.
+    """
+    with open(pkl, "rb") as f:
+        data = pickle.load(f)
+    return data
+
+
+def dump_pickle(data: Any, pkl: Union[str, Path]) -> None:
+    """
+    Dump a simple pickle file without compression.
+
+    Args:
+        data (Any): The data to be dumped.
+        pkl (Union[str, Path]): A pickle file path.
+    """
+    with open(pkl, "wb") as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
 def load_gzip_pickle(pkl: Union[str, Path]) -> Any:
     """
     Load a gzip pickle file.

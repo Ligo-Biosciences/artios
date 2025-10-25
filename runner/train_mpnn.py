@@ -141,7 +141,7 @@ class ArtiosAllAtomTrainer(object):
             #     base_namespace="model_metrics",
             # )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
-        self.train_metric_wrapper = SimpleMetricAggregator(["nan_avg"])
+        self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 
     def init_env(self):
         """Init pytorch/cuda envs."""
@@ -443,12 +443,6 @@ class ArtiosAllAtomTrainer(object):
 
         # Initialize master monitor dict to collect all metrics
         # master_monitor_dict = defaultdict(lambda: defaultdict(list))
-
-        self.latents = (
-            {"mean": [], "restype": []}
-            if self.configs.monitor.latents.track_during_vae_training
-            else None
-        )
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")

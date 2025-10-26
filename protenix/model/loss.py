@@ -515,7 +515,7 @@ class NLLLoss(BaseLoss):
 
         # Label smoothing
         gt_sequence = gt_sequence + (self.label_smoothing / num_residue_types)
-        gt_sequence = gt_sequence / gt_sequence.sum(dim=-1, keepdim=True)
+        gt_sequence = gt_sequence / (gt_sequence.sum(dim=-1, keepdim=True) + 1e-3)
 
         # Use softmax_cross_entropy which applies log_softmax before computing loss
         loss = softmax_cross_entropy(logits, gt_sequence)  # [..., n_token]
@@ -592,7 +592,7 @@ class MPNNLoss(AggregatedLoss):
                 ),  # TODO: make configurable
             ),
             LossComponent(
-                name="nll_loss_rna",
+                name="nll_loss_dna",
                 weight=0.0,
                 loss=NLLLoss(
                     mask_key="is_dna_token", label_smoothing=0.1

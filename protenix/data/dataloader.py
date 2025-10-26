@@ -381,7 +381,8 @@ def get_dataloaders(
         )
         test_dls[test_name] = DataLoader(
             test_dataset,
-            batch_size=1,  # NOTE: simplifies some of the visibility without too much overhead.
+            batch_size=configs.batch_size,  # TODO: switch back to 1
+            # NOTE: simplifies some of the visibility without too much overhead.
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             sampler=test_sampler,

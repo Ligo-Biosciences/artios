@@ -39,6 +39,7 @@ def get_indices_from_bioassembly(
     Returns:
         list: List of indices.
     """
+    # TODO: switch to lz4 compression if using newer version of database.
     bioassembly_dict = load_gzip_pickle(bioassembly_pickle_file)
     parser = MMCIFParser(mmcif_file)
     return parser.make_indices(bioassembly_dict, cluster_file)
@@ -60,12 +61,18 @@ def gen_indices_from_mmcifs(
 
     # Create a remote version of gen_a_bioassembly_data
     @ray.remote
-    def gen_indices_from_bioassembly_remote(mmcif, bioassembly_pickle_file, cluster_file):
-        return get_indices_from_bioassembly(mmcif, bioassembly_pickle_file, cluster_file)
+    def gen_indices_from_bioassembly_remote(
+        mmcif, bioassembly_pickle_file, cluster_file
+    ):
+        return get_indices_from_bioassembly(
+            mmcif, bioassembly_pickle_file, cluster_file
+        )
 
     # Submit tasks to Ray
     futures = [
-        gen_indices_from_bioassembly_remote.remote(mmcif, bioassembly_pickle_file, cluster_file)
+        gen_indices_from_bioassembly_remote.remote(
+            mmcif, bioassembly_pickle_file, cluster_file
+        )
         for mmcif, bioassembly_pickle_file in zip(mmcif_list, bioassembly_list)
     ]
 
@@ -73,7 +80,9 @@ def gen_indices_from_mmcifs(
     all_sample_indices_list = []
     pbar = tqdm(total=len(futures), desc="Processing mmCIF files")
     while futures:
-        done_id, futures = ray.wait(futures, timeout=1.0)  # Add timeout for progress updates
+        done_id, futures = ray.wait(
+            futures, timeout=1.0
+        )  # Add timeout for progress updates
         if done_id:
             result = ray.get(done_id[0])
             if result:

@@ -275,6 +275,7 @@ class DistributedDataLoader(DataLoader):
         drop_last: bool = True,
         shuffle: bool = True,
         sampler: Sampler = None,
+        prefetch_factor: int = 2,
     ):
         if sampler is not None:
             self.sampler = sampler
@@ -291,8 +292,8 @@ class DistributedDataLoader(DataLoader):
             shuffle=False,
             collate_fn=collate_fn,
             pin_memory=True,
-            persistent_workers=True,
-            prefetch_factor=batch_size,
+            persistent_workers=False,
+            prefetch_factor=prefetch_factor,
         )
         self.counter = 0
 
@@ -342,6 +343,7 @@ def get_dataloaders(
                 crop_size=configs.train_crop_size,
             ),
             sampler=train_sampler,
+            prefetch_factor=configs.data.prefetch_factor,
         )
     else:
         train_sampler = WeightedSampler(
@@ -379,11 +381,19 @@ def get_dataloaders(
         )
         test_dls[test_name] = DataLoader(
             test_dataset,
-            batch_size=1,
+            batch_size=configs.batch_size,  # TODO: switch back to 1
+            # NOTE: simplifies some of the visibility without too much overhead.
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             sampler=test_sampler,
-            collate_fn=lambda batch: batch[0],
+            collate_fn=DataCollatorWithPadding(  # TODO: this will currently fail for the VAE or diffusion training.
+                max_n_msa=configs.data.padding.max_n_msa,
+                max_n_template=configs.data.padding.max_n_template,
+                max_n_pocket=configs.data.padding.max_n_pocket,
+                bin_ends=configs.data.padding.bin_ends,
+                crop_size=configs.test_crop_size,
+            ),
+            # lambda batch: batch[0],
         )
     logger.info(
         f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}"

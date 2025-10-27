@@ -489,15 +489,70 @@ class SequenceLoss(BaseLoss):
         return seq_loss, {}
 
 
+# class NLLLoss(BaseLoss):
+#     """Negative log likelihood loss for training MPNN (includes label smoothing)"""
+
+#     def __init__(
+#         self, mask_key: str = "", label_smoothing: float = 0.1, reduction: str = "mean"
+#     ):
+#         super().__init__(reduction=reduction)
+#         self.label_smoothing = label_smoothing
+#         self.mask_key = mask_key
+
+#     def compute_loss(
+#         self,
+#         pred_dict: Dict[str, Tensor],
+#         label_dict: Dict[str, Tensor],
+#         feat_dict: Dict[str, Tensor],
+#     ) -> tuple[Tensor, Dict[str, Tensor]]:
+#         """Compute the cross-entropy loss with label smoothing"""
+#         logits = pred_dict["logits"]  # [..., n_token, num_residue_types]
+#         gt_sequence = feat_dict["restype"]  # [..., n_token, num_residue_types]
+#         mask = feat_dict["mpnn_centre_atom_mask"]  # [..., n_token]
+#         if self.mask_key:
+#             mask = mask * feat_dict[self.mask_key]  # [..., n_token]
+#         num_residue_types = gt_sequence.shape[-1]
+
+#         # Label smoothing
+#         gt_sequence = gt_sequence + (self.label_smoothing / num_residue_types)
+#         gt_sequence = gt_sequence / (gt_sequence.sum(dim=-1, keepdim=True) + 1e-3)
+
+#         # Use softmax_cross_entropy which applies log_softmax before computing loss
+#         loss = softmax_cross_entropy(logits, gt_sequence)  # [..., n_token]
+#         loss = masked_mean(loss, mask, axes=-1)  # [...]
+#         return loss, {}
+
+
 class NLLLoss(BaseLoss):
     """Negative log likelihood loss for training MPNN (includes label smoothing)"""
 
     def __init__(
-        self, mask_key: str = "", label_smoothing: float = 0.1, reduction: str = "mean"
+        self,
+        label_smoothing: float = 0.1,
+        reduction: str = "mean",
+        weight_protein: float = 1.0,
+        weight_dna: float = 1.0,
+        weight_rna: float = 1.0,
+        weight_ligand: float = 1.0,
     ):
         super().__init__(reduction=reduction)
         self.label_smoothing = label_smoothing
-        self.mask_key = mask_key
+
+        self.weight_protein = weight_protein
+        self.weight_dna = weight_dna
+        self.weight_rna = weight_rna
+        self.weight_ligand = weight_ligand
+
+    def _extract_entity_masks(
+        self,
+        feat_dict: Dict[str, Any],
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Retrieves the entity masks."""
+        is_protein = feat_dict["is_protein_token"]
+        is_dna = feat_dict["is_dna_token"]
+        is_rna = feat_dict["is_rna_token"]
+        is_ligand = feat_dict["is_ligand_token"]
+        return is_protein, is_dna, is_rna, is_ligand
 
     def compute_loss(
         self,
@@ -505,22 +560,84 @@ class NLLLoss(BaseLoss):
         label_dict: Dict[str, Tensor],
         feat_dict: Dict[str, Tensor],
     ) -> tuple[Tensor, Dict[str, Tensor]]:
-        """Compute the cross-entropy loss with label smoothing"""
+        """
+        Computes the cross-entropy loss with label smoothing. Loss metrics dict contains
+        per entity-type losses
+        """
         logits = pred_dict["logits"]  # [..., n_token, num_residue_types]
         gt_sequence = feat_dict["restype"]  # [..., n_token, num_residue_types]
         mask = feat_dict["mpnn_centre_atom_mask"]  # [..., n_token]
-        if self.mask_key:
-            mask = mask * feat_dict[self.mask_key]  # [..., n_token]
+
         num_residue_types = gt_sequence.shape[-1]
 
         # Label smoothing
         gt_sequence = gt_sequence + (self.label_smoothing / num_residue_types)
         gt_sequence = gt_sequence / (gt_sequence.sum(dim=-1, keepdim=True) + 1e-3)
 
-        # Use softmax_cross_entropy which applies log_softmax before computing loss
-        loss = softmax_cross_entropy(logits, gt_sequence)  # [..., n_token]
-        loss = masked_mean(loss, mask, axes=-1)  # [...]
-        return loss, {}
+        # Calculate weights
+        is_protein, is_dna, is_rna, is_ligand = self._extract_entity_masks(
+            feat_dict=feat_dict
+        )
+        weight = (
+            self.weight_protein * is_protein
+            + self.weight_dna * is_dna
+            + self.weight_rna * is_rna
+            + self.weight_ligand * is_ligand
+        )  # [..., N]
+        weight = weight * mask  # [..., N]
+
+        # cross entropy loss
+        raw_loss = softmax_cross_entropy(logits, gt_sequence)  # [..., n_token]
+        weighted_loss = masked_mean(
+            raw_loss * weight,
+            mask,
+            axes=-1,
+        )  # [...,]
+
+        ### logging of different molecule types
+        logging_loss = raw_loss.detach().clone()
+
+        def _get_masked_loss_for_type(
+            logging_loss_i: torch.Tensor,
+            valid_mask_i: torch.Tensor,
+            is_type_i: torch.Tensor,
+        ) -> torch.Tensor:
+            """compute masked mean loss for a specific molecule type."""
+            loss = masked_mean(
+                logging_loss_i * is_type_i,
+                valid_mask_i * is_type_i,
+                axes=-1,
+            ).mean()  # [..., N_token] -> [...] -> [1]
+            return torch.nan if loss == 0.0 else loss
+
+        # Define molecule types and their masks
+        molecule_types = {
+            "protein": is_protein,
+            "dna": is_dna,
+            "rna": is_rna,
+            "ligand": is_ligand,
+        }
+
+        # Calculate losses for all molecule types
+        # Each mol type loss is a list of losses for each item in batch
+        mol_type_losses = {
+            mol_type: [
+                _get_masked_loss_for_type(
+                    logging_loss[i],
+                    mask[i],
+                    is_type_mask[i],
+                )
+                for i in range(logging_loss.shape[0])
+            ]
+            for mol_type, is_type_mask in molecule_types.items()
+        }
+
+        loss_metrics = {
+            f"nll_{mol_type}_loss": loss_list
+            for mol_type, loss_list in mol_type_losses.items()
+        }
+
+        return weighted_loss, loss_metrics
 
 
 class KLDivergenceLoss(BaseLoss):
@@ -567,6 +684,48 @@ class KLDivergenceLoss(BaseLoss):
         return per_token_kl, {}
 
 
+# class MPNNLoss(AggregatedLoss):
+#     """MPNN loss."""
+
+#     def __init__(self, configs):
+#         components = [
+#             LossComponent(
+#                 name="nll_loss",
+#                 weight=1.0,
+#                 loss=NLLLoss(label_smoothing=0.1),  # TODO: make configurable
+#             ),
+#             LossComponent(
+#                 name="nll_loss_ligand",
+#                 weight=0.0,
+#                 loss=NLLLoss(
+#                     mask_key="is_ligand_token", label_smoothing=0.1
+#                 ),  # TODO: make configurable
+#             ),
+#             LossComponent(
+#                 name="nll_loss_rna",
+#                 weight=0.0,
+#                 loss=NLLLoss(
+#                     mask_key="is_rna_token", label_smoothing=0.1
+#                 ),  # TODO: make configurable
+#             ),
+#             LossComponent(
+#                 name="nll_loss_dna",
+#                 weight=0.0,
+#                 loss=NLLLoss(
+#                     mask_key="is_dna_token", label_smoothing=0.1
+#                 ),  # TODO: make configurable
+#             ),
+#             LossComponent(
+#                 name="nll_loss_protein",
+#                 weight=0.0,
+#                 loss=NLLLoss(
+#                     mask_key="is_protein_token", label_smoothing=0.1
+#                 ),  # TODO: make configurable
+#             ),
+#         ]
+#         super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
+
+
 class MPNNLoss(AggregatedLoss):
     """MPNN loss."""
 
@@ -575,35 +734,13 @@ class MPNNLoss(AggregatedLoss):
             LossComponent(
                 name="nll_loss",
                 weight=1.0,
-                loss=NLLLoss(label_smoothing=0.1),  # TODO: make configurable
-            ),
-            LossComponent(
-                name="nll_loss_ligand",
-                weight=0.0,
                 loss=NLLLoss(
-                    mask_key="is_ligand_token", label_smoothing=0.1
-                ),  # TODO: make configurable
-            ),
-            LossComponent(
-                name="nll_loss_rna",
-                weight=0.0,
-                loss=NLLLoss(
-                    mask_key="is_rna_token", label_smoothing=0.1
-                ),  # TODO: make configurable
-            ),
-            LossComponent(
-                name="nll_loss_dna",
-                weight=0.0,
-                loss=NLLLoss(
-                    mask_key="is_dna_token", label_smoothing=0.1
-                ),  # TODO: make configurable
-            ),
-            LossComponent(
-                name="nll_loss_protein",
-                weight=0.0,
-                loss=NLLLoss(
-                    mask_key="is_protein_token", label_smoothing=0.1
-                ),  # TODO: make configurable
+                    label_smoothing=configs.loss.mpnn.label_smoothing,
+                    weight_protein=configs.loss.mpnn.weight_protein,
+                    weight_dna=configs.loss.mpnn.weight_dna,
+                    weight_rna=configs.loss.mpnn.weight_rna,
+                    weight_ligand=configs.loss.mpnn.weight_ligand,
+                ),
             ),
         ]
         super().__init__(components, reduction=configs.loss.get("reduction", "mean"))

@@ -393,6 +393,13 @@ loss_configs = {
             "sigma_coord": GlobalConfigValue("sigma_coord"),
             "sigma_latent": GlobalConfigValue("sigma_latent"),
         },
+        "mpnn": {
+            "label_smoothing": 0.1,
+            "weight_protein": 1.0,
+            "weight_dna": 1.0,
+            "weight_rna": 1.0,
+            "weight_ligand": 1.0,
+        },
     },
     "metrics": {
         "lddt": {

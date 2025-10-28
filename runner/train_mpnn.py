@@ -141,7 +141,7 @@ class ArtiosAllAtomTrainer(object):
             #     base_namespace="model_metrics",
             # )  # torchwatcher for model internals
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
-        self.train_metric_wrapper = SimpleMetricAggregator(["nan_avg"])
+        self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 
     def init_env(self):
         """Init pytorch/cuda envs."""

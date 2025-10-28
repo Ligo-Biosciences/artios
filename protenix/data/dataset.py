@@ -30,6 +30,7 @@ from torch.utils.data import Dataset
 from protenix.common.constants import EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
+from protenix.data.motif import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.padding_utils import get_atom_padding_length, pad_features_dict
 from protenix.data.tokenizer import TokenArray
@@ -121,6 +122,9 @@ class BaseSingleDataset(Dataset):
 
         self.msa_featurizer = msa_featurizer
         self.template_featurizer = template_featurizer
+
+        # Motif training configs
+        self.motif_training_configs = kwargs.get("motif_training", {})
 
         # Read data
         self.indices_list = self.read_indices_list(indices_fpath)
@@ -575,6 +579,13 @@ class BaseSingleDataset(Dataset):
         )
         timings["assign_binding_target"] = time.time() - t3
 
+        # TODO: here is where all motif assignment is placed. It is likely we are going to need
+        # an entire class to manage all of this as there will be many different methods required
+        # that generate motifs in different ways.
+        cropped_atom_array = self._get_motif(
+            atom_array=cropped_atom_array, token_array=cropped_token_array
+        )
+
         t4 = time.time()
         feat, label, label_full = self.get_feature_and_label(
             idx=idx,
@@ -778,6 +789,16 @@ class BaseSingleDataset(Dataset):
         chain_2_mask = torch.stack(df["chain_2_mask"].tolist())
 
         return eval_type, cluster_id, chain_1_mask, chain_2_mask
+
+    def _get_motif(self, atom_array: AtomArray, token_array: TokenArray) -> AtomArray:
+        """
+        Adds the is_motif annotation to the atom array. Uses the MotifMaker class to generate
+        the motif according to Ligo's motif algorithm.
+        (Maybe) Also adds an is_indexed annotation to the atom array to indicate whether we are doing
+        indexed or un-indexed motif assigment.
+        """
+        motif_maker = MotifMaker(**self.motif_training_configs)
+        return motif_maker.add_motif_attributes_to_atom_array(atom_array, token_array)
 
     @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(
@@ -1230,6 +1251,7 @@ def get_datasets(
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
+        dataset_param["motif_training"] = data_config.get("motif_training", {})
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
         datapoint_weights.append(

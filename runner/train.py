@@ -161,8 +161,9 @@ class AF3Trainer(object):
                 env is not None
             ), "if use ds4sci, set env as https://www.deepspeed.ai/tutorials/ds4sci_evoformerattention/"
 
-        # Set high precision for tensor core matmul
-        torch.set_float32_matmul_precision("high")
+        # Set high precision for tensor core matmul using new API (PyTorch 2.9+)
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
         logging.info("Finished init ENV.")
 
     def init_loss(self):

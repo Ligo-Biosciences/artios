@@ -8,7 +8,7 @@ from jaxtyping import Float, Int
 from torch import Tensor, nn
 
 import protenix.model.modules.message_passing as mp
-from protenix.model.modules.primitives import LayerNorm
+from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.utils import expand_at_dim
 
 
@@ -82,6 +82,18 @@ class PositionWiseFeedForward(nn.Module):
         return h
 
 
+class SwiGLU_MLP(nn.Module):
+    def __init__(self, num_hidden, n: int = 2) -> None:
+        super().__init__()
+        self.W_in = LinearNoBias(num_hidden, num_hidden * n * 2)
+        self.W_out = LinearNoBias(num_hidden * n, num_hidden)
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        a, b = self.W_in(x).chunk(2, dim=-1)
+        return self.W_out(a * self.act(b))
+
+
 class MPNNEncoderLayer(BaseMPNNLayer):
     """Message Passing Neural Network encoder layer with neighborhood aggregation."""
 
@@ -113,9 +125,10 @@ class MPNNEncoderLayer(BaseMPNNLayer):
         self.norm1 = LayerNorm(node_dim)
 
         # Node feedforward
-        self.dense = PositionWiseFeedForward(
-            node_dim, node_dim * 4
-        )  # Transition(c_in=node_dim, n=4)
+        # self.dense = PositionWiseFeedForward(
+        #     node_dim, node_dim * 4
+        # )  # Transition(c_in=node_dim, n=4)
+        self.dense = SwiGLU_MLP(node_dim, n=2)
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = LayerNorm(node_dim)
 
@@ -219,9 +232,10 @@ class MPNNDecoderLayer(BaseMPNNLayer):
         self.norm1 = LayerNorm(node_dim)
 
         # Node feedforward
-        self.dense = PositionWiseFeedForward(
-            node_dim, node_dim * 4
-        )  # Transition(c_in=node_dim, n=4)
+        # self.dense = PositionWiseFeedForward(
+        #     node_dim, node_dim * 4
+        # )  # Transition(c_in=node_dim, n=4)
+        self.dense = SwiGLU_MLP(node_dim, n=2)
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = LayerNorm(node_dim)
 

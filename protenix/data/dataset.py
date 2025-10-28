@@ -46,6 +46,9 @@ from protenix.utils.torch_utils import dict_to_tensor
 logger = get_logger(__name__)
 
 
+SLOW_STEP_THRESHOLD = 5.0  # seconds
+
+
 class BaseSingleDataset(Dataset):
     """
     dataset for a single data source
@@ -307,6 +310,10 @@ class BaseSingleDataset(Dataset):
         Returns:
             A dictionary containing the processed data sample.
         """
+        import time
+
+        start_time = time.time()
+
         # Try at most 10 times
         for _ in range(10):
             try:
@@ -315,6 +322,18 @@ class BaseSingleDataset(Dataset):
                     # TODO: this needs to be True for training time inference of the VAE
                     return_atom_token_array=True,
                 )
+
+                # Log if data loading took too long
+                total_time = time.time() - start_time
+                if (
+                    total_time > SLOW_STEP_THRESHOLD
+                ):  # Log slow data loading (> 1 second)
+                    sample_indice = self._get_sample_indice(idx=idx)
+                    logger.warning(
+                        f"SLOW __getitem__ for idx={idx}, pdb_id={sample_indice.pdb_id}: "
+                        f"{total_time:.2f}s"
+                    )
+
                 return data
             except Exception as e:
                 error_message = f"{e} at idx {idx}:\n{traceback.format_exc()}"
@@ -336,7 +355,9 @@ class BaseSingleDataset(Dataset):
         sample_indice = self._get_sample_indice(idx=idx)
         if self.bioassembly_dict_dir is not None:
             bioassembly_dict_fpath = os.path.join(
-                self.bioassembly_dict_dir, sample_indice.pdb_id + ".pkl.gz"
+                self.bioassembly_dict_dir,
+                sample_indice.pdb_id
+                + ".pkl.pkl.lz4",  # .pkl.gz   # TODO: the extra pkl should be deleted
             )
         else:
             bioassembly_dict_fpath = None
@@ -471,12 +492,18 @@ class BaseSingleDataset(Dataset):
         Returns:
             A dict containing the input features, labels, basic_info and optionally the processed atom and token arrays.
         """
+        import time
 
+        timings = {}
+        process_start = time.time()
+
+        t0 = time.time()
         (
             sample_indice,
             bioassembly_dict,
             bioassembly_dict_fpath,
         ) = self._get_bioassembly_data(idx=idx)
+        timings["get_bioassembly"] = time.time() - t0
 
         if self.use_reference_chains_only:
             # Get the reference chains
@@ -517,12 +544,15 @@ class BaseSingleDataset(Dataset):
                 bioassembly_dict["atom_array"]
             )
 
+        t1 = time.time()
         if self.reassign_continuous_chain_ids:
             bioassembly_dict["atom_array"] = self._reassign_atom_array_chain_id(
                 bioassembly_dict["atom_array"]
             )
+        timings["preprocessing"] = time.time() - t1
 
         # Crop
+        t2 = time.time()
         (
             crop_method,
             cropped_token_array,
@@ -535,13 +565,17 @@ class BaseSingleDataset(Dataset):
             bioassembly_dict=bioassembly_dict,
             **self.cropping_configs,
         )
+        timings["crop"] = time.time() - t2
 
+        t3 = time.time()
         cropped_atom_array = self._assign_binding_target(
             atom_array=cropped_atom_array,
             train_with_binding_target=self.train_with_binding_target,
             binding_target_train_rate=self.binding_target_train_rate,
         )
+        timings["assign_binding_target"] = time.time() - t3
 
+        t4 = time.time()
         feat, label, label_full = self.get_feature_and_label(
             idx=idx,
             token_array=cropped_token_array,
@@ -551,6 +585,7 @@ class BaseSingleDataset(Dataset):
             full_atom_array=bioassembly_dict["atom_array"],
             is_spatial_crop="spatial" in crop_method.lower(),
         )
+        timings["get_feature_and_label"] = time.time() - t4
 
         # Basic info, e.g. dimension related items
         basic_info = {
@@ -599,6 +634,7 @@ class BaseSingleDataset(Dataset):
         assert current_n_atom > 1, "Crop has <= 1 atom."
         # Pad features and labels
         # TODO: remove padding!!
+        t5 = time.time()
         pad_args = {
             "current_n_atom": current_n_atom,
             "max_n_atom": max_n_atom,
@@ -613,6 +649,7 @@ class BaseSingleDataset(Dataset):
         }
         feat = pad_features_dict(feat, **pad_args)
         label = pad_features_dict(label, **pad_args)
+        timings["padding"] = time.time() - t5
 
         data = {
             "input_feature_dict": feat,
@@ -624,6 +661,20 @@ class BaseSingleDataset(Dataset):
         if return_atom_token_array:
             data["cropped_atom_array"] = cropped_atom_array
             data["cropped_token_array"] = cropped_token_array
+
+        # Log if process_one took too long
+        total_time = time.time() - process_start
+        if total_time > SLOW_STEP_THRESHOLD:  # Log slow processing (> 1 second)
+            logger.warning(
+                f"SLOW process_one for idx={idx}, pdb_id={sample_indice.pdb_id}: "
+                f"{total_time:.2f}s - "
+                f"bioassembly={timings.get('get_bioassembly', 0):.3f}s, "
+                f"preprocess={timings.get('preprocessing', 0):.3f}s, "
+                f"crop={timings.get('crop', 0):.3f}s, "
+                f"features={timings.get('get_feature_and_label', 0):.3f}s, "
+                f"padding={timings.get('padding', 0):.3f}s"
+            )
+
         return data
 
     @profile_function("dataset.crop")

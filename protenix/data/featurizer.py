@@ -290,6 +290,110 @@ class Featurizer(object):
             token.frame_atom_index = frame_atom_index
         return token_array_w_frame
 
+    @staticmethod
+    def compute_virtual_cb(
+        n_coord: np.ndarray,
+        ca_coord: np.ndarray,
+        c_coord: np.ndarray,
+    ) -> np.ndarray:
+        """Compute virtual Cβ position using ideal geometry from ProteinMPNN.
+
+        Uses idealized bond lengths and angles to place Cβ in the correct
+        tetrahedral position relative to the N-CA-C backbone.
+
+        Args:
+            n_coord: N atom coordinates [..., 3]
+            ca_coord: CA atom coordinates [..., 3]
+            c_coord: C atom coordinates [..., 3]
+
+        Returns:
+            Virtual Cβ coordinates [..., 3]
+
+        Reference:
+            ProteinMPNN implementation of virtual Cβ placement
+        """
+        # Backbone bond vectors
+        n_ca = ca_coord - n_coord
+        ca_c = c_coord - ca_coord
+
+        # Cross product gives direction perpendicular to peptide plane
+        cross = np.cross(n_ca, ca_c)
+
+        # Idealized Cß
+        cb_coord = ca_coord + 0.568 * n_ca - 0.54068 * ca_c - 0.5827 * cross
+
+        return cb_coord
+
+    @staticmethod
+    def get_backbone_atoms_tensor(
+        token_array: TokenArray,
+        atom_array: AtomArray,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extract backbone atom coordinates and masks for all tokens.
+
+        The backbone atoms depend on the chain type:
+        - Proteins: N, CA, C, O, and virtual Cß (computed from N, CA, C)
+        - Nucleic acids: OP1, OP2, C1', C3', C4'
+        - Ligands: Centre atom only (other slots are zero)
+
+        Args:
+            token_array: Array of tokens
+            atom_array: Array of atoms with coordinates
+
+        Returns:
+            backbone_coords: Backbone atom coordinates [n_token, 5, 3]
+            backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
+        """
+        # Backbone atom definitions by molecule type
+        BACKBONE_DEFS = {
+            "protein": ["N", "CA", "C", "O"],
+            "dna": ["OP1", "OP2", "C1'", "C3'", "C4'"],
+            "rna": ["OP1", "OP2", "C1'", "C3'", "C4'"],
+        }
+
+        n_tokens = len(token_array)
+        backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
+        backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
+
+        # Get centre atoms for all tokens
+        centre_atom_indices = token_array.get_annotation("centre_atom_index")
+        centre_atoms = atom_array[centre_atom_indices]
+
+        for token_idx, token in enumerate(token_array):
+            centre_atom = centre_atoms[token_idx]
+            mol_type = centre_atom.mol_type
+            is_standard = centre_atom.res_name in STD_RESIDUES
+
+            # Ligands or non-standard residues: use centre atom only
+            if mol_type == "ligand" or not is_standard:
+                backbone_coords[token_idx, 0] = centre_atom.coord
+                backbone_mask[token_idx, 0] = 1.0
+                continue
+
+            # Standard protein or nucleic acid
+            backbone_names = BACKBONE_DEFS[mol_type]
+            atom_name_map = {name: idx for idx, name in enumerate(token.atom_names)}
+            atom_coords = {}
+
+            # Extract backbone atoms
+            for bb_idx, atom_name in enumerate(backbone_names):
+                if atom_name in atom_name_map:
+                    local_idx = atom_name_map[atom_name]
+                    global_idx = token.atom_indices[local_idx]
+                    backbone_coords[token_idx, bb_idx] = atom_array.coord[global_idx]
+                    backbone_mask[token_idx, bb_idx] = 1.0
+                    atom_coords[atom_name] = atom_array.coord[global_idx]
+
+            # Compute virtual Cβ for proteins
+            if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):
+                cb_coord = Featurizer.compute_virtual_cb(
+                    atom_coords["N"], atom_coords["CA"], atom_coords["C"]
+                )
+                backbone_coords[token_idx, 4] = cb_coord
+                backbone_mask[token_idx, 4] = 1.0
+
+        return torch.Tensor(backbone_coords), torch.Tensor(backbone_mask)
+
     def get_token_features(self) -> dict[str, torch.Tensor]:
         """
         Ref: AlphaFold3 SI Chapter 2.8
@@ -412,18 +516,18 @@ class Featurizer(object):
             self.cropped_atom_array.ref_space_uid
         ).long()
 
-        token_array_with_frame = self.get_token_frame(
-            token_array=self.cropped_token_array,
-            atom_array=self.cropped_atom_array,
-            ref_pos=ref_features["ref_pos"],
-            ref_mask=ref_features["ref_mask"],
-        )
-        ref_features["has_frame"] = torch.Tensor(
-            token_array_with_frame.get_annotation("has_frame")
-        ).long()  # [N_token]
-        ref_features["frame_atom_index"] = torch.Tensor(
-            token_array_with_frame.get_annotation("frame_atom_index")
-        ).long()  # [N_token, 3]
+        # token_array_with_frame = self.get_token_frame(
+        #     token_array=self.cropped_token_array,
+        #     atom_array=self.cropped_atom_array,
+        #     ref_pos=ref_features["ref_pos"],
+        #     ref_mask=ref_features["ref_mask"],
+        # )
+        # ref_features["has_frame"] = torch.Tensor(
+        #     token_array_with_frame.get_annotation("has_frame")
+        # ).long()  # [N_token]
+        # ref_features["frame_atom_index"] = torch.Tensor(
+        #     token_array_with_frame.get_annotation("frame_atom_index")
+        # ).long()  # [N_token, 3]
         return ref_features
 
     def get_bond_features(self) -> dict[str, torch.Tensor]:
@@ -777,6 +881,34 @@ class Featurizer(object):
 
         return target_features
 
+    def get_mpnn_features(self):
+        """
+        Features for MPNN sequence design.
+        """
+        mpnn_features = {}
+
+        # Centre coordinates
+        centre_atom_indices = self.cropped_token_array.get_annotation(
+            "centre_atom_index"
+        )
+        centre_atoms = self.cropped_atom_array[centre_atom_indices]
+
+        # Backbone mask and centre atom mask for biomolecules
+        backbone_coords, backbone_mask = Featurizer.get_backbone_atoms_tensor(
+            token_array=self.cropped_token_array, atom_array=self.cropped_atom_array
+        )
+
+        mpnn_features.update(
+            {
+                "mpnn_centre_coordinate": torch.Tensor(centre_atoms.coord),
+                "mpnn_centre_atom_mask": torch.Tensor(centre_atoms.is_resolved),
+                "mpnn_backbone_coords": backbone_coords,
+                "mpnn_backbone_mask": backbone_mask,
+            }
+        )
+
+        return mpnn_features
+
     def get_all_input_features(self):
         """
         Get input features from cropped data.
@@ -788,8 +920,8 @@ class Featurizer(object):
         token_features = self.get_token_features()
         features.update(token_features)
 
-        bond_features = self.get_bond_features()
-        features.update(bond_features)
+        # bond_features = self.get_bond_features()
+        # features.update(bond_features)
 
         reference_features = self.get_reference_features()
         features.update(reference_features)
@@ -805,6 +937,9 @@ class Featurizer(object):
 
         target_features = self.get_target_features()
         features.update(target_features)
+
+        mpnn_features = self.get_mpnn_features()
+        features.update(mpnn_features)
 
         return features
 

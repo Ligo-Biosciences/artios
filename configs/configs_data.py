@@ -28,7 +28,7 @@ default_test_configs = {
             0.0,  # SpatialCropping
             1.0,  # SpatialInterfaceCropping
         ],
-        "crop_size": 256,  # -1
+        "crop_size": GlobalConfigValue("test_crop_size"),  # -1
     },
     "lig_atom_rename": GlobalConfigValue("test_lig_atom_rename"),
     "shuffle_mols": GlobalConfigValue("test_shuffle_mols"),
@@ -60,7 +60,7 @@ default_weighted_pdb_configs = {
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
 }
 
-DATA_ROOT_DIR = "/af3-dev/release_data/"
+DATA_ROOT_DIR = "af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -135,6 +135,7 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
 
 data_configs = {
     "num_dl_workers": 16,
+    "prefetch_factor": 16,
     "epoch_size": 10000,
     "train_ref_pos_augment": True,
     "test_ref_pos_augment": True,

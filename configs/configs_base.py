@@ -32,9 +32,11 @@ basic_configs = {
     "iters_to_accumulate": 1,
     "eval_only": False,
     "load_flow_checkpoint_path": "",
+    "load_mpnn_checkpoint_path": "",
     "load_vae_checkpoint_path": "",
     "load_ema_flow_checkpoint_path": "",  # TODO: no need!
     "load_ema_vae_checkpoint_path": "",  # TODO: no need
+    "load_ema_mpnn_checkpoint_path": "",  # TODO: likely no need
     "load_strict": True,
     "load_params_only": False,
     "guiding_net_path": ValueMaybeNone(""),
@@ -61,6 +63,7 @@ data_configs = {
     # Data
     "batch_size": 8,
     "train_crop_size": 384,
+    "test_crop_size": 256,
     "test_max_n_token": -1,
     "train_lig_atom_rename": False,  # TODO:
     "train_shuffle_mols": False,
@@ -238,6 +241,19 @@ model_configs = {
                 "n_heads": 16,
             },
         },
+        "mpnn_module": {
+            "num_residue_types": 32,
+            "node_dim": 128,  # TODO: make node and edge dims global config values
+            "edge_dim": 128,
+            "num_encoder_layers": 3,
+            "num_decoder_layers": 3,
+            "num_neighbours": 32,
+            "positional_encoding_dim": 16,
+            "positional_encoding_max_relative_feats": 32,
+            "num_rbf_kernels": 16,
+            "dropout": 0.0,
+            "coord_noise": 0.1,
+        },
     },
 }
 
@@ -376,6 +392,13 @@ loss_configs = {
             },
             "sigma_coord": GlobalConfigValue("sigma_coord"),
             "sigma_latent": GlobalConfigValue("sigma_latent"),
+        },
+        "mpnn": {
+            "label_smoothing": 0.1,
+            "weight_protein": 1.0,
+            "weight_dna": 1.0,
+            "weight_rna": 1.0,
+            "weight_ligand": 1.0,
         },
     },
     "metrics": {

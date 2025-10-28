@@ -28,7 +28,7 @@ from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.parser import DistillationMMCIFParser, MMCIFParser
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.utils.cropping import CropData
-from protenix.utils.file_io import load_gzip_pickle
+from protenix.utils.file_io import load_lz4_pickle
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -77,7 +77,9 @@ class DataPipeline(object):
                 return [], bioassembly_dict
 
             atom_array = bioassembly_dict["atom_array"]
-            atom_array.set_annotation("resolution", [parser.resolution] * len(atom_array))
+            atom_array.set_annotation(
+                "resolution", [parser.resolution] * len(atom_array)
+            )
 
             tokenizer = AtomArrayTokenizer(atom_array)
             token_array = tokenizer.get_token_array()
@@ -124,13 +126,17 @@ class DataPipeline(object):
         Raises:
             AssertionError: If the bioassembly dictionary file does not exist.
         """
-        assert os.path.exists(bioassembly_dict_fpath), f"File not exists {bioassembly_dict_fpath}"
-        bioassembly_dict = load_gzip_pickle(bioassembly_dict_fpath)
+        assert os.path.exists(
+            bioassembly_dict_fpath
+        ), f"File not exists {bioassembly_dict_fpath}"
+        bioassembly_dict = load_lz4_pickle(bioassembly_dict_fpath)
 
         return bioassembly_dict
 
     @staticmethod
-    def _map_ref_chain(one_sample: pd.Series, bioassembly_dict: dict[str, Any]) -> list[int]:
+    def _map_ref_chain(
+        one_sample: pd.Series, bioassembly_dict: dict[str, Any]
+    ) -> list[int]:
         """
         Map the chain or interface chain_x_id to the reference chain asym_id.
 
@@ -175,7 +181,9 @@ class DataPipeline(object):
             return None
 
         entity_to_asym_id_int = dict(
-            DataPipeline.get_label_entity_id_to_asym_id_int(bioassembly_dict["atom_array"])
+            DataPipeline.get_label_entity_id_to_asym_id_int(
+                bioassembly_dict["atom_array"]
+            )
         )
 
         msa_feats = msa_featurizer(
@@ -190,7 +198,7 @@ class DataPipeline(object):
     def get_template_raw_features(
         bioassembly_dict: dict[str, Any],
         selected_indices: np.ndarray,
-        template_featurizer: None,
+        template_featurizer=None,
     ) -> Optional[dict[str, np.ndarray]]:
         """
         Get tokenized template features of the bioassembly.
@@ -208,7 +216,9 @@ class DataPipeline(object):
             return None
 
         entity_to_asym_id_int = dict(
-            DataPipeline.get_label_entity_id_to_asym_id_int(bioassembly_dict["atom_array"])
+            DataPipeline.get_label_entity_id_to_asym_id_int(
+                bioassembly_dict["atom_array"]
+            )
         )
 
         template_feats = template_featurizer(
@@ -296,7 +306,9 @@ class DataPipeline(object):
         # Get crop method
         crop_method = crop.random_crop_method()
         # Get crop indices based crop method
-        selected_indices, reference_token_index = crop.get_crop_indices(crop_method=crop_method)
+        selected_indices, reference_token_index = crop.get_crop_indices(
+            crop_method=crop_method
+        )
         # Prepare msa
         msa_features = DataPipeline.get_msa_raw_features(
             bioassembly_dict=bioassembly_dict,
@@ -324,7 +336,9 @@ class DataPipeline(object):
         if crop_method == "ContiguousCropping":
             resovled_atom_num = cropped_atom_array.is_resolved.sum()
             # The criterion of “more than 4 atoms” is chosen arbitrarily.
-            assert resovled_atom_num > 4, f"{resovled_atom_num=} <= 4 after ContiguousCropping"
+            assert (
+                resovled_atom_num > 4
+            ), f"{resovled_atom_num=} <= 4 after ContiguousCropping"
 
         return (
             crop_method,

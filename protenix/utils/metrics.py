@@ -25,8 +25,8 @@ common_aggregator = {
     "pct99": lambda x: np.percentile(x, 99),
     "max": lambda x: np.max(x),
     "min": lambda x: np.min(x),
-    "nonzero_avg": lambda x: np.mean(x[x != 0]) if np.any(x != 0) else np.nan,
-    "nan_avg": lambda x: np.nanmean(x),
+    "nonzero_avg": lambda x: np.nanmean(x[x != 0]) if np.any(x != 0) else np.nan,
+    # "nan_avg": lambda x: np.nanmean(x),
 }
 
 

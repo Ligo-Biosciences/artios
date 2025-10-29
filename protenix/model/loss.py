@@ -592,7 +592,7 @@ class NLLLoss(BaseLoss):
             raw_loss * weight,
             mask,
             axes=-1,
-        )  # [...,]
+        )  # [...]
 
         ### logging of different molecule types
         logging_loss = raw_loss.detach().clone()
@@ -607,7 +607,7 @@ class NLLLoss(BaseLoss):
                 logging_loss_i * is_type_i,
                 valid_mask_i * is_type_i,
                 axes=-1,
-            ).mean()  # [..., N_token] -> [...] -> [1]
+            ).mean()  # [N_token] -> [1] -> scalar
             return torch.nan if loss == 0.0 else loss
 
         # Define molecule types and their masks
@@ -627,7 +627,7 @@ class NLLLoss(BaseLoss):
                     mask[i],
                     is_type_mask[i],
                 )
-                for i in range(logging_loss.shape[0])
+                for i in range(logging_loss.shape[0])  # loop over batch
             ]
             for mol_type, is_type_mask in molecule_types.items()
         }

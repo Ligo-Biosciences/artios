@@ -590,11 +590,9 @@ class NLLLoss(BaseLoss):
 
         # cross entropy loss
         raw_loss = softmax_cross_entropy(logits, gt_sequence_smoothed)  # [..., n_token]
-        weighted_loss = masked_mean(
-            raw_loss * weight,
-            mask,
-            axes=-1,
-        )  # [...]
+        weighted_loss = torch.sum(raw_loss * weight, dim=-1) / 2000  # [...]
+        # mask,
+        # axes=-1,
 
         ### logging of different molecule types
         logging_loss = masked_mean(

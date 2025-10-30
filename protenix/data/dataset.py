@@ -127,7 +127,7 @@ class BaseSingleDataset(Dataset):
         self.motif_maker = motif_maker
 
         # Motif training configs
-        self.motif_training_configs = kwargs.get("motif_training", {})
+        self.motif_configs = kwargs.get("motif_training", {})
 
         # Read data
         self.indices_list = self.read_indices_list(indices_fpath)
@@ -587,7 +587,6 @@ class BaseSingleDataset(Dataset):
         # that generate motifs in different ways.
         motif_atom_array = self._get_motif(
             atom_array=cropped_atom_array,
-            train_rate=self.motif_training_configs["motif_train_rate"],
         )
 
         self._save_motif(
@@ -813,7 +812,7 @@ class BaseSingleDataset(Dataset):
         if self.motif_maker is None:
             return None
 
-        motif_train_rate = self.motif_training_configs.get("motif_train_rate", 0.0)
+        motif_train_rate = self.motif_configs["motif_train_rate"]
         if np.random.rand() < motif_train_rate:
             return self.motif_maker.make_motif(atom_array)
         else:
@@ -1031,6 +1030,7 @@ def get_msa_featurizer(configs, dataset_name: str, stage: str) -> Optional[Calla
 def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMaker]:
     """
     Creates and returns a MotifMaker object based on the provided configurations.
+    Allows for dataset-specfic config overrides.
 
     Args:
         configs: A dictionary containing the configurations for the MotifMaker.
@@ -1041,14 +1041,10 @@ def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMak
     """
     data_config = configs.data
 
-    if "motif_training" not in data_config:
-        return None
-
     motif_config = data_config["motif_training"]
-    motif_train_rate = motif_config.get("motif_train_rate", 0.0)
-
-    if motif_train_rate <= 0:
-        return None
+    motif_train_rate = motif_config["motif_train_rate"]
+    if not 0 <= motif_train_rate <= 1.0:
+        raise ValueError("motif_train_rate must be between 0 and 1")
 
     # Check for dataset-specific overrides
     if dataset_name in data_config and "motif_training" in data_config[dataset_name]:

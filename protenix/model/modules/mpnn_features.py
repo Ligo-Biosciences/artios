@@ -177,6 +177,7 @@ class MPNNFeaturizer(nn.Module):
         self.entity_type_embed = LinearNoBias(
             sum(self.entity_features.values()), node_dim
         )
+        self.non_protein_restype_embed = LinearNoBias(32, node_dim)
 
         # Ligand input features
         self.ligand_input_feature = {
@@ -280,7 +281,16 @@ class MPNNFeaturizer(nn.Module):
                 dim=-1,
             )
         )  # [..., n_token, node_dim]
-        node_feats = ligand_feats + entity_feats
+
+        # Embed non-protein entity restypes
+        not_protein = (1 - input_feature_dict["is_protein_token"].to(dtype)).unsqueeze(
+            -1
+        )
+        non_protein_restypes = not_protein * self.non_protein_restype_embed(
+            input_feature_dict["restype"]
+        )
+
+        node_feats = ligand_feats + entity_feats + non_protein_restypes
         return self.node_norm(node_feats)
 
     def _compute_backbone_distance_features(

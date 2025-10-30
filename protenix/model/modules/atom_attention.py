@@ -1,9 +1,15 @@
+"""
+TODO: switch to jaxtyping for readability.
+"""
+
 from typing import Dict, Optional
 
 import torch
+from jaxtyping import Float
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+from protenix.model.modules.embedders import RelativePositionEncoding
 from protenix.model.modules.layout import (
     broadcast_token_to_local_atom_pair,
     rearrange_to_key_subset,
@@ -438,3 +444,58 @@ class AtomAttentionDecoder(nn.Module):
         r = self.final_linear(self.final_layernorm(q))
         r = r * atom_mask[..., None]  # TODO: PROBLEM!
         return r
+
+
+class SideChainDecoder(nn.Module):
+    """A lightweight non-equivariant sidechain decoder for allatom sequence design."""
+
+    def __init__(
+        self,
+        node_dim,
+        c_atom=128,
+        c_atompair: int = 16,
+        num_blocks: int = 3,
+        num_heads: int = 4,
+        num_queries: int = 32,
+        num_keys: int = 128,
+    ) -> None:
+        super().__init__()
+        self.relpos = RelativePositionEncoding(r_max=32, s_max=2, c_z=32)
+        self.atom_attention_encoder = AtomAttentionEncoder(
+            c_token=node_dim,
+            has_coords=True,
+            has_s=True,
+            c_atom=c_atom,
+            c_atompair=c_atompair,
+            c_s=node_dim,
+            c_z=32,
+            num_blocks=num_blocks,
+            num_heads=num_heads,
+            num_queries=num_queries,
+            num_keys=num_keys,
+        )
+
+    def forward(
+        self,
+        input_feature_dict: Dict[str, Tensor],
+        r_l: Float[Tensor, "... n_atom 3"],
+        s: Float[Tensor, "... n_token c_s"],
+    ):
+        """"""
+        z = self.relpos(
+            asym_id=input_feature_dict["asym_id"],
+            residue_index=input_feature_dict["residue_index"],
+            entity_id=input_feature_dict["entity_id"],
+            sym_id=input_feature_dict["sym_id"],
+            token_index=input_feature_dict["token_index"],
+        )
+
+        # Encode atoms
+        _, q_l, _, _ = self.atom_attention_encoder(
+            input_feature_dict=input_feature_dict,
+            r_l=r_l,
+            s=s,
+            z=z,
+        )
+        # TODO: project denoised atoms
+        pass

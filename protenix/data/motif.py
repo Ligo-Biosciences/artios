@@ -3,7 +3,6 @@ Houses all the logic for generating motifs during model training.
 """
 
 from logging import getLogger
-from typing import Any
 
 import networkx as nx
 import numpy as np
@@ -134,8 +133,13 @@ class MotifMaker:
             ligand_array = atom_array[atom_array.label_asym_id == ligand_motif_asym_id]
             ligand_graph = ligand_array.bonds.as_graph()
 
-            graph_nodes = list[Any](ligand_graph.nodes())
-            seed_ligand = np.random.choice(graph_nodes)
+            graph_nodes = list(ligand_graph.nodes())
+            try:
+                seed_ligand = np.random.choice(graph_nodes)
+            except ValueError:
+                logger.warning("No nodes in ligand graph. Returning None for motif.")
+                logger.warning(f"Got the following nodes: {graph_nodes}")
+                return None
 
             ligand_proportion = np.random.rand()
             num_lig_atoms_in_motif = int(ligand_proportion * len(ligand_graph))
@@ -178,7 +182,15 @@ class MotifMaker:
             return None
 
         # Pick a chain uniformly at random
-        chain_id = np.random.choice(np.unique(atom_array.label_asym_id))
+        try:
+            chain_id = np.random.choice(np.unique(atom_array.label_asym_id))
+        except ValueError:
+            logger.warning("No chains in the atom array. Returning None for motif.")
+            logger.warning(
+                f"Got the following unique asym_ids: {np.unique(atom_array.label_asym_id)}"
+            )
+            return None
+
         chain_array = atom_array[atom_array.label_asym_id == chain_id]
 
         # Pocket heuristic

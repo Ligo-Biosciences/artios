@@ -293,7 +293,7 @@ class DistributedDataLoader(DataLoader):
             collate_fn=collate_fn,
             pin_memory=True,
             persistent_workers=False,
-            prefetch_factor=prefetch_factor,
+            # prefetch_factor=prefetch_factor,
         )
         self.counter = 0
 

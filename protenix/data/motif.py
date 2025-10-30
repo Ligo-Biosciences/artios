@@ -140,7 +140,9 @@ class MotifMaker:
             graph_nodes = list(ligand_graph.nodes())
 
             if len(graph_nodes) == 0:
-                logger.warning("No nodes in ligand graph. Returning None for motif.")
+                logger.warning(
+                    f"No nodes in ligand graph, but {len(ligand_array)} atoms in array. Returning None for motif."
+                )
                 return None
 
             seed_ligand = np.random.choice(graph_nodes)

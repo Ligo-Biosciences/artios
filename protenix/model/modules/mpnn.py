@@ -331,7 +331,11 @@ class MPNN(nn.Module):
         decoding_order: Optional[Float[Tensor, "batch seqlen"]] = None,
         zero_shot: bool = False,
         seed: Optional[int] = None,
-    ) -> Tuple[dict, dict]:
+    ) -> Tuple[
+        Float[Tensor, "batch n_token num_residue_types"],
+        Float[Tensor, "batch n_token node_dim"],
+        Float[Tensor, "batch n_token edge_dim"],
+    ]:
         """Forward pass for autoregressive sequence generation.
 
         Encodes protein structure into node representations, then generates sequence
@@ -350,7 +354,7 @@ class MPNN(nn.Module):
             seed: seed for deterministic sampling
 
         Returns:
-            Tuple[dict, dict]: Dictionary with logits and stats dictionary
+            Output dictionary
         """
 
         # Run encoder trunk
@@ -378,6 +382,7 @@ class MPNN(nn.Module):
         forward_attn_mask = forward_attn_mask[..., None]
         backward_attn_mask = backward_attn_mask[..., None]
 
+        # Run decoder step
         logits = self._run_decoder_step(
             node_feats=node_feats,
             edge_feats=edge_feats,
@@ -390,9 +395,7 @@ class MPNN(nn.Module):
             zero_shot=zero_shot,
         )
 
-        # Run decoder step
-        stats_dict = {}
-        return logits, stats_dict
+        return logits, node_feats, edge_feats
 
     def _sample_from_logits(
         self,

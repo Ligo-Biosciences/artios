@@ -17,6 +17,7 @@ import os
 import random
 import traceback
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
@@ -824,17 +825,24 @@ class BaseSingleDataset(Dataset):
         """
         Saves the motif to the motif directory.
         """
-        if isinstance(self.mmcif_dir, str):
-            mmcif_dir = Path(self.mmcif_dir)
-        else:
-            mmcif_dir = self.mmcif_dir
-        motif_dir = mmcif_dir.parent.parent.parent / "motifs"
+        # Skip if no motif was generated
+        if motif_atom_array is None or len(motif_atom_array) == 0:
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        mmcif_path = (
+            Path(self.mmcif_dir) if isinstance(self.mmcif_dir, str) else self.mmcif_dir
+        )
+
+        motif_dir = mmcif_path.parent.parent.parent / f"motifs_{timestamp}"
         os.makedirs(motif_dir, exist_ok=True)
+
         motif_fpath = motif_dir / f"{pdb_id}_motif.cif"
         structure_fpath = motif_dir / f"{pdb_id}.cif"
-        if motif_atom_array is not None and len(motif_atom_array) > 0:
-            save_structure(motif_fpath, motif_atom_array)
-            save_structure(structure_fpath, full_atom_array)
+
+        save_structure(motif_fpath, motif_atom_array)
+        save_structure(structure_fpath, full_atom_array)
 
     @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(

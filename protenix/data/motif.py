@@ -248,7 +248,9 @@ class MotifMaker:
         polymer_atoms_in_sphere = atoms_in_sphere[polymer_mask]
 
         if len(polymer_atoms_in_sphere) == 0:
-            logger.warning("No polymer atoms close to ligand. Using empty motif.")
+            logger.warning(
+                "No polymer atoms close to ligand. Returning None for motif."
+            )
             return motif_array
 
         unique_ref_space_uids_in_sphere = np.unique(

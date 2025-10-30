@@ -138,6 +138,10 @@ class MotifMaker:
                 seed_ligand = np.random.choice(graph_nodes)
             except ValueError:
                 logger.warning("No nodes in ligand graph. Returning None for motif.")
+                logger.warning(
+                    "No nodes because we generated graph with the following bonds:"
+                )
+                print(ligand_array.bonds)
                 logger.warning(f"Got the following nodes: {graph_nodes}")
                 return None
 

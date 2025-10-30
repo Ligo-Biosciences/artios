@@ -137,7 +137,7 @@ class MotifMaker:
             ligand_array = atom_array[atom_array.label_asym_id == ligand_motif_asym_id]
             ligand_graph = ligand_array.bonds.as_graph()
 
-            seed_ligand = np.random.choice(len(ligand_array) - 1)
+            seed_ligand = np.random.choice(len(ligand_array))
 
             ligand_proportion = np.random.rand()
             num_lig_atoms_in_motif = int(ligand_proportion * len(ligand_graph))
@@ -272,7 +272,7 @@ class MotifMaker:
             tip_atom_id = len(residue_atom_array) - 1
         else:
             # seed is picked uniformly at random
-            tip_atom_id = np.random.choice(len(residue_atom_array) - 1)
+            tip_atom_id = np.random.choice(len(residue_atom_array))
 
         # number of bonds to extend out from seed picked with geo(p)
         num_bonds = np.random.geometric(self.sidechain_bfs_depth_prob) - 1

@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import torch
 from biotite.structure.atoms import AtomArray
+from biotite.structure.io import save_structure
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import Dataset
 
@@ -65,6 +66,7 @@ class BaseSingleDataset(Dataset):
         cropping_configs: dict[str, Any],
         msa_featurizer: Optional[MSAFeaturizer] = None,
         template_featurizer: Optional[Any] = None,
+        motif_maker: Optional[MotifMaker] = None,
         name: str = None,
         **kwargs,
     ) -> None:
@@ -122,6 +124,7 @@ class BaseSingleDataset(Dataset):
 
         self.msa_featurizer = msa_featurizer
         self.template_featurizer = template_featurizer
+        self.motif_maker = motif_maker
 
         # Motif training configs
         self.motif_training_configs = kwargs.get("motif_training", {})
@@ -582,9 +585,15 @@ class BaseSingleDataset(Dataset):
         # TODO: here is where all motif assignment is placed. It is likely we are going to need
         # an entire class to manage all of this as there will be many different methods required
         # that generate motifs in different ways.
-        _ = self._get_motif(
+        motif_atom_array = self._get_motif(
             atom_array=cropped_atom_array,
             train_rate=self.motif_training_configs["motif_train_rate"],
+        )
+
+        self._save_motif(
+            full_atom_array=cropped_atom_array,
+            motif_atom_array=motif_atom_array,
+            pdb_id=bioassembly_dict["pdb_id"],
         )
 
         t4 = time.time()
@@ -791,19 +800,42 @@ class BaseSingleDataset(Dataset):
 
         return eval_type, cluster_id, chain_1_mask, chain_2_mask
 
-    def _get_motif(self, atom_array: AtomArray) -> AtomArray:
+    def _get_motif(self, atom_array: AtomArray) -> Optional[AtomArray]:
         """
-        Adds the is_motif annotation to the atom array. Uses the MotifMaker class to generate
-        the motif according to Ligo's motif algorithm.
-        (Maybe) Also adds an is_indexed annotation to the atom array to indicate whether we are doing
-        indexed or un-indexed motif assigment.
+        Generates a motif from the atom array using the MotifMaker if enabled.
+
+        Args:
+            atom_array (AtomArray): Input atom array from which to generate motif
+
+        Returns:
+            Optional[AtomArray]: Motif atom array if generated, None otherwise
         """
-        if np.random.rand() < self.motif_training_configs["motif_train_rate"]:
-            motif_maker = MotifMaker(**self.motif_training_configs)
-            motif_atom_array = motif_maker.make_motif(atom_array)
-            return motif_atom_array
+        if self.motif_maker is None:
+            return None
+
+        motif_train_rate = self.motif_training_configs.get("motif_train_rate", 0.0)
+        if np.random.rand() < motif_train_rate:
+            return self.motif_maker.make_motif(atom_array)
         else:
             return None
+
+    def _save_motif(
+        self, full_atom_array: AtomArray, motif_atom_array: AtomArray, pdb_id: str
+    ) -> None:
+        """
+        Saves the motif to the motif directory.
+        """
+        if isinstance(self.mmcif_dir, str):
+            mmcif_dir = Path(self.mmcif_dir)
+        else:
+            mmcif_dir = self.mmcif_dir
+        motif_dir = mmcif_dir.parent.parent / "motifs"
+        os.makedirs(motif_dir, exist_ok=True)
+        motif_fpath = motif_dir / f"{pdb_id}_motif.cif"
+        structure_fpath = motif_dir / f"{pdb_id}.cif"
+        if motif_atom_array is not None and len(motif_atom_array) > 0:
+            save_structure(motif_fpath, motif_atom_array)
+            save_structure(structure_fpath, full_atom_array)
 
     @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(
@@ -994,6 +1026,40 @@ def get_msa_featurizer(configs, dataset_name: str, stage: str) -> Optional[Calla
 
     else:
         return None
+
+
+def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMaker]:
+    """
+    Creates and returns a MotifMaker object based on the provided configurations.
+
+    Args:
+        configs: A dictionary containing the configurations for the MotifMaker.
+        dataset_name: The name of the dataset.
+
+    Returns:
+        A MotifMaker object if motif training is enabled, otherwise None.
+    """
+    data_config = configs.data
+
+    if "motif_training" not in data_config:
+        return None
+
+    motif_config = data_config["motif_training"]
+    motif_train_rate = motif_config.get("motif_train_rate", 0.0)
+
+    if motif_train_rate <= 0:
+        return None
+
+    # Check for dataset-specific overrides
+    if dataset_name in data_config and "motif_training" in data_config[dataset_name]:
+        # Merge dataset-specific config with global config
+        dataset_motif_config = {
+            **motif_config,
+            **data_config[dataset_name]["motif_training"],
+        }
+        return MotifMaker(**dataset_motif_config)
+
+    return MotifMaker(**motif_config)
 
 
 class WeightedMultiDataset(Dataset):
@@ -1229,6 +1295,7 @@ def get_datasets(
             "cropping_configs": config_dict["cropping_configs"],
             "error_dir": error_dir,
             "msa_featurizer": get_msa_featurizer(configs, dataset_name, stage),
+            "motif_maker": get_motif_maker(configs, dataset_name),
             "template_featurizer": None,
             "lig_atom_rename": config_dict.get("lig_atom_rename", False),
             "shuffle_mols": config_dict.get("shuffle_mols", False),

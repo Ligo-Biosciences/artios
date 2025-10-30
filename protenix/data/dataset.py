@@ -582,8 +582,9 @@ class BaseSingleDataset(Dataset):
         # TODO: here is where all motif assignment is placed. It is likely we are going to need
         # an entire class to manage all of this as there will be many different methods required
         # that generate motifs in different ways.
-        cropped_atom_array = self._get_motif(
-            atom_array=cropped_atom_array, token_array=cropped_token_array
+        _ = self._get_motif(
+            atom_array=cropped_atom_array,
+            train_rate=self.motif_training_configs["motif_train_rate"],
         )
 
         t4 = time.time()
@@ -790,15 +791,19 @@ class BaseSingleDataset(Dataset):
 
         return eval_type, cluster_id, chain_1_mask, chain_2_mask
 
-    def _get_motif(self, atom_array: AtomArray, token_array: TokenArray) -> AtomArray:
+    def _get_motif(self, atom_array: AtomArray) -> AtomArray:
         """
         Adds the is_motif annotation to the atom array. Uses the MotifMaker class to generate
         the motif according to Ligo's motif algorithm.
         (Maybe) Also adds an is_indexed annotation to the atom array to indicate whether we are doing
         indexed or un-indexed motif assigment.
         """
-        motif_maker = MotifMaker(**self.motif_training_configs)
-        return motif_maker.add_motif_attributes_to_atom_array(atom_array, token_array)
+        if np.random.rand() < self.motif_training_configs["motif_train_rate"]:
+            motif_maker = MotifMaker(**self.motif_training_configs)
+            motif_atom_array = motif_maker.make_motif(atom_array)
+            return motif_atom_array
+        else:
+            return None
 
     @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(

@@ -175,7 +175,16 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            "pdb_list": ["138l"],
+            "pdb_list": [
+                "138l",
+                "12gs",
+                "121p",
+                "106m",
+                "102m",
+                "111d",
+                "110m",
+                "118l",
+            ],
             "random_sample_if_failed": True,
             "max_n_token": -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,

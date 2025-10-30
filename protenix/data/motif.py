@@ -121,22 +121,18 @@ class MotifMaker:
         ligand_mask = atom_array.chain_mol_type == "ligand"
         ligand_asym_ids = np.unique(atom_array.label_asym_id[ligand_mask])
         ligand_motif_asym_id = np.random.choice(ligand_asym_ids)
+        ligand_array = atom_array[atom_array.label_asym_id == ligand_motif_asym_id]
 
-        if np.random.rand() < self.whole_ligand_prob:
+        if np.random.rand() < self.whole_ligand_prob or len(ligand_array) == 1:
             # Add whole ligand to motif
-            ligand_motif_array = atom_array[
-                atom_array.label_asym_id == ligand_motif_asym_id
-            ]
-            motif_atom_array += ligand_motif_array
+            motif_atom_array += ligand_array
             motif_atom_array += self._generate_motif_around_point(
-                point_coord=get_seed_atom_from_array(ligand_motif_array),
+                point_coord=get_seed_atom_from_array(ligand_array),
                 atom_array=atom_array,
             )
         else:
             # Add partial ligand to motif
-            ligand_array = atom_array[atom_array.label_asym_id == ligand_motif_asym_id]
             ligand_graph = ligand_array.bonds.as_graph()
-
             graph_nodes = list(ligand_graph.nodes())
 
             if len(graph_nodes) == 0:

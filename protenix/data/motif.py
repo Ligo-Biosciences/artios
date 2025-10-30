@@ -3,6 +3,7 @@ Houses all the logic for generating motifs during model training.
 """
 
 from logging import getLogger
+from typing import Any
 
 import networkx as nx
 import numpy as np
@@ -112,10 +113,6 @@ class MotifMaker:
         Returns:
             AtomArray: Motif atom array centered around a ligand
         """
-        assert (
-            atom_array.is_ligand.any()
-        ), "Complex atom array has no ligand atom. Cannot get a ligand motif."
-
         motif_atom_array = AtomArray(0)
 
         ligand_mask = atom_array.chain_mol_type == "ligand"
@@ -137,7 +134,8 @@ class MotifMaker:
             ligand_array = atom_array[atom_array.label_asym_id == ligand_motif_asym_id]
             ligand_graph = ligand_array.bonds.as_graph()
 
-            seed_ligand = np.random.choice(len(ligand_array))
+            graph_nodes = list[Any](ligand_graph.nodes())
+            seed_ligand = np.random.choice(graph_nodes)
 
             ligand_proportion = np.random.rand()
             num_lig_atoms_in_motif = int(ligand_proportion * len(ligand_graph))
@@ -173,6 +171,11 @@ class MotifMaker:
         atom_array = atom_array[
             np.isin(atom_array.chain_mol_type, ["protein", "RNA", "DNA"])
         ]
+        if len(atom_array) == 0:
+            logger.warning(
+                "No polymer chains in the atom array. Returning None for motif."
+            )
+            return None
 
         # Pick a chain uniformly at random
         chain_id = np.random.choice(np.unique(atom_array.label_asym_id))
@@ -183,6 +186,9 @@ class MotifMaker:
             chain_array, n_neighbors=self.pocket_n_neighbours
         )
         pocket_atoms = chain_array[(pocket_scores <= self.pocket_score_threshold)]
+        if len(pocket_atoms) == 0:
+            logger.warning("No pocket atoms found. Returning None for motif.")
+            return None
 
         # Generate motif
         motif_array = self._generate_motif_around_point(
@@ -232,14 +238,20 @@ class MotifMaker:
             logger.warning("No polymer atoms close to ligand. Using empty motif.")
             return motif_array
 
-        unique_ref_space_uids = np.unique(polymer_atoms_in_sphere.ref_space_uid)
+        unique_ref_space_uids_in_sphere = np.unique(
+            polymer_atoms_in_sphere.ref_space_uid
+        )
         motif_residues = []
 
-        for uid in unique_ref_space_uids:
+        for uid in unique_ref_space_uids_in_sphere:
             residue = atom_array[atom_array.ref_space_uid == uid]
             motif_residues.append(residue)
 
         # Add residues in sphere to motif
+        if len(motif_residues) == 0:
+            logger.warning("No residues in sphere. Returning None for motif.")
+            return None
+
         for residue in motif_residues:
             if np.random.rand() > self.residue_inclusion_prob:
                 # Skip residue

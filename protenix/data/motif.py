@@ -8,7 +8,11 @@ import networkx as nx
 import numpy as np
 from biotite.structure import AtomArray
 
-from protenix.data.motif_utils import compute_pocket_scores, get_seed_atom_from_array
+from protenix.data.motif_utils import (
+    bfs_nodes_by_count,
+    compute_pocket_scores,
+    get_seed_atom_from_array,
+)
 
 logger = getLogger(__name__)
 
@@ -134,25 +138,20 @@ class MotifMaker:
             ligand_graph = ligand_array.bonds.as_graph()
 
             graph_nodes = list(ligand_graph.nodes())
-            try:
-                seed_ligand = np.random.choice(graph_nodes)
-            except ValueError:
+
+            if len(graph_nodes) == 0:
                 logger.warning("No nodes in ligand graph. Returning None for motif.")
-                logger.warning(
-                    "No nodes because we generated graph with the following bonds:"
-                )
-                print(ligand_array.bonds)
-                logger.warning(f"Got the following nodes: {graph_nodes}")
                 return None
 
-            ligand_proportion = np.random.rand()
-            num_lig_atoms_in_motif = int(ligand_proportion * len(ligand_graph))
+            seed_ligand = np.random.choice(graph_nodes)
 
-            # TODO: incorrect usage of depth_limit.  Return to this.
-            edges = nx.bfs_edges(
-                ligand_graph, source=seed_ligand, depth_limit=num_lig_atoms_in_motif
+            ligand_proportion = np.random.rand()
+            num_lig_atoms_in_motif = max(1, int(ligand_proportion * len(ligand_graph)))
+
+            # Get nodes via BFS up to the target count
+            nodes = bfs_nodes_by_count(
+                ligand_graph, seed_ligand, num_lig_atoms_in_motif
             )
-            nodes = [seed_ligand] + [v for u, v in edges]
             ligand_motif_array = ligand_array[nodes]
 
             motif_atom_array += ligand_motif_array

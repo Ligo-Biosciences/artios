@@ -828,7 +828,7 @@ class BaseSingleDataset(Dataset):
             mmcif_dir = Path(self.mmcif_dir)
         else:
             mmcif_dir = self.mmcif_dir
-        motif_dir = mmcif_dir.parent.parent / "motifs"
+        motif_dir = mmcif_dir.parent.parent.parent / "motifs"
         os.makedirs(motif_dir, exist_ok=True)
         motif_fpath = motif_dir / f"{pdb_id}_motif.cif"
         structure_fpath = motif_dir / f"{pdb_id}.cif"

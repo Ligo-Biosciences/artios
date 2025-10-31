@@ -102,9 +102,18 @@ class MotifMaker:
             AtomArray: Motif atom array extracted from the input
         """
         if atom_array.is_ligand.any() and np.random.rand() < self.ligand_motif_prob:
-            return self._generate_ligand_motif(atom_array)
+            motif = self._generate_ligand_motif(atom_array)
         else:
-            return self._generate_chain_motif(atom_array)
+            motif = self._generate_chain_motif(atom_array)
+
+        num_residues_in_motif = len(np.unique(motif.res_id))
+        if num_residues_in_motif > 20:
+            logger.warning(
+                f"Motif has too many residues:{num_residues_in_motif} . Returning None for motif."
+            )
+            return None
+
+        return motif
 
     def _generate_ligand_motif(self, atom_array: AtomArray) -> AtomArray:
         """

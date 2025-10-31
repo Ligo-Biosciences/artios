@@ -513,6 +513,8 @@ class SidechainDecoder(nn.Module):
         self.layernorm_s = LayerNorm(2 * node_dim)
         self.proj_s = LinearNoBias(2 * node_dim, node_dim)
 
+        self.layernorm_a = LayerNorm(node_dim)
+
         # Decoder
         self.atom_attention_decoder = AtomAttentionDecoder(
             c_token=node_dim,
@@ -569,6 +571,7 @@ class SidechainDecoder(nn.Module):
             z=z,
             return_trunked_pair_mask=True,
         )
+        a = self.layernorm_a(a)
 
         # Decode atoms
         # TODO: the atom attention encoder and decoder have different signatures.

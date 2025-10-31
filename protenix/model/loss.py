@@ -745,7 +745,7 @@ class MPNNLoss(AggregatedLoss):
             ),
             LossComponent(
                 name="mse_loss",
-                weight=0.1,
+                weight=1.0,
                 loss=MSELoss(
                     # Tensor keys
                     pred_key="coordinate",

@@ -92,28 +92,73 @@ class MotifMaker:
 
     def make_motif(self, atom_array: AtomArray) -> AtomArray:
         """
-        Makes the motif for the given atom array. This is the main public function generating
-        the motif. It returns the motif atom array rather than changing the original atom array.
+        Annotates the input atom array with is_motif attribute.
 
         Args:
             atom_array (AtomArray): Input Biotite AtomArray
 
         Returns:
-            AtomArray: Motif atom array extracted from the input
+            AtomArray: The same atom array with is_motif annotation added
         """
+        # Generate motif
         if atom_array.is_ligand.any() and np.random.rand() < self.ligand_motif_prob:
             motif = self._generate_ligand_motif(atom_array)
         else:
             motif = self._generate_chain_motif(atom_array)
 
-        num_residues_in_motif = len(np.unique(motif.res_id)) if motif is not None else 0
+        # Check motif size
+        if motif is None:
+            # No motif - mark all atoms as non-motif
+            atom_array.set_annotation("is_motif", np.zeros(len(atom_array), dtype=bool))
+            return atom_array
+
+        num_residues_in_motif = len(np.unique(motif.res_id))
         if num_residues_in_motif > 20:
             logger.warning(
-                f"Motif has too many residues: {num_residues_in_motif}. Returning None for motif."
+                f"Motif has too many residues: {num_residues_in_motif}. Setting all is_motif to False."
             )
-            return None
+            atom_array.set_annotation("is_motif", np.zeros(len(atom_array), dtype=bool))
+            return atom_array
 
-        return motif
+        # Create is_motif mask by matching atoms in subset to original array
+        is_motif_mask = self._create_motif_mask(atom_array, motif)
+        atom_array.set_annotation("is_motif", is_motif_mask)
+
+        return atom_array
+
+    def _create_motif_mask(self, full_array: AtomArray, motif: AtomArray) -> np.ndarray:
+        """
+        Creates a boolean mask indicating which atoms in full_array are in the motif.
+
+        Args:
+            full_array (AtomArray): Full atom array
+            motif (AtomArray): Subset of atoms that form the motif
+
+        Returns:
+            np.ndarray: Boolean mask of shape (len(full_array),)
+        """
+        is_motif = np.zeros(len(full_array), dtype=bool)
+
+        # Use array indices to match if we can
+        motif_indices = motif.array_index() if hasattr(motif, "array_index") else None
+        print("motif_indices")
+
+        if motif_indices is not None:
+            print("Using array indices to match")
+            is_motif[motif_indices] = True
+        else:
+            print("Using atom properties to match")
+            # Match by comparing all atom properties
+            for motif_atom in motif:
+                # Find matching atoms in full array
+                match_mask = (
+                    (full_array.res_id == motif_atom.res_id)
+                    & (full_array.label_asym_id == motif_atom.label_asym_id)
+                    & (full_array.atom_name == motif_atom.atom_name)
+                )
+                is_motif[match_mask] = True
+
+        return is_motif
 
     def _generate_ligand_motif(self, atom_array: AtomArray) -> AtomArray:
         """

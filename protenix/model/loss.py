@@ -742,6 +742,31 @@ class MPNNLoss(AggregatedLoss):
                     weight_ligand=configs.loss.mpnn.weight_ligand,
                 ),
             ),
+            LossComponent(
+                name="mse_loss",
+                weight=0.1,
+                loss=MSELoss(
+                    # Tensor keys
+                    pred_key="coordinate",
+                    true_key="coordinate",
+                    mask_key="atom_loss_mask",
+                    # Entity mask keys
+                    protein_mask_key="is_protein",
+                    dna_mask_key="is_dna",
+                    rna_mask_key="is_rna",
+                    ligand_mask_key="is_ligand",
+                    # Weights
+                    weight_protein=1.0,
+                    weight_dna=1.0,
+                    weight_rna=1.0,
+                    weight_ligand=1.0,
+                    # Behaviour
+                    enable_alignment=True,
+                    expand_ground_truth=True,
+                    timestep_key="timestep",
+                    sigma=4.0,  # TODO: make configurable
+                ),
+            ),
         ]
         super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
 

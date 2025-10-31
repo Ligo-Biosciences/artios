@@ -637,7 +637,7 @@ def sample_noising(
     timestep_sampler: TrainingTimestepSampler,
     num_sample: int,
     scale: float,
-    generator: torch.Generator,
+    generator: Optional[torch.Generator] = None,
     input_feature_dict: Optional[dict[str, Any]] = None,
     encoder: Optional[nn.Module] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:

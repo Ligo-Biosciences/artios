@@ -12,82 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from protenix.model.modules.atom_attention import AtomAttentionEncoder
+# from protenix.model.modules.atom_attention import AtomAttentionEncoder
 from protenix.model.modules.primitives import LinearNoBias
-
-
-class InputFeatureEmbedder(nn.Module):
-    """
-    Implements Algorithm 2 in AF3
-    """
-
-    def __init__(
-        self,
-        c_atom: int = 128,
-        c_atompair: int = 16,
-        c_token: int = 384,
-        n_blocks: int = 3,
-    ) -> None:
-        """
-        Args:
-            c_atom (int, optional): atom embedding dim. Defaults to 128.
-            c_atompair (int, optional): atom pair embedding dim. Defaults to 16.
-            c_token (int, optional): token embedding dim. Defaults to 384.
-        """
-        super(InputFeatureEmbedder, self).__init__()
-        self.c_atom = c_atom
-        self.c_atompair = c_atompair
-        self.c_token = c_token
-        self.atom_attention_encoder = AtomAttentionEncoder(
-            c_atom=c_atom,
-            c_atompair=c_atompair,
-            c_token=c_token,
-            num_blocks=n_blocks,
-            has_coords=False,
-            has_s=False,
-            has_z=False,
-        )
-        # Line2
-        # self.input_feature = {"restype": 32} # {"restype": 32, "profile": 32, "deletion_mean": 1}
-
-    def forward(
-        self,
-        input_feature_dict: dict[str, Any],
-        inplace_safe: bool = False,
-        chunk_size: Optional[int] = None,
-    ) -> Tensor:
-        """
-        Args:
-            input_feature_dict (Dict[str, Any]): dict of input features
-            inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
-            chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
-
-        Returns:
-            Tensor: token embedding
-                [..., N_token, 384 (c_token) + 32 (c_atompair) := 416]
-        """
-        # Embed per-atom features.
-        a, _, _, _ = self.atom_attention_encoder(
-            input_feature_dict=input_feature_dict,
-        )  # [..., N_token, c_token]
-        # Concatenate the per-token features.
-        # batch_shape = input_feature_dict["restype"].shape[:-1]
-        # s_inputs = torch.cat(
-        #    [a]
-        #    + [
-        #        input_feature_dict[name].reshape(*batch_shape, d)
-        #        for name, d in self.input_feature.items()
-        #    ],
-        #    dim=-1,
-        # )
-
-        return a
 
 
 class RelativePositionEncoding(nn.Module):
@@ -218,3 +149,73 @@ class FourierEmbedding(nn.Module):
         return torch.cos(
             input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w + self.b)
         )
+
+
+'''
+class InputFeatureEmbedder(nn.Module):
+    """
+    Implements Algorithm 2 in AF3
+    """
+
+    def __init__(
+        self,
+        c_atom: int = 128,
+        c_atompair: int = 16,
+        c_token: int = 384,
+        n_blocks: int = 3,
+    ) -> None:
+        """
+        Args:
+            c_atom (int, optional): atom embedding dim. Defaults to 128.
+            c_atompair (int, optional): atom pair embedding dim. Defaults to 16.
+            c_token (int, optional): token embedding dim. Defaults to 384.
+        """
+        super(InputFeatureEmbedder, self).__init__()
+        self.c_atom = c_atom
+        self.c_atompair = c_atompair
+        self.c_token = c_token
+        self.atom_attention_encoder = AtomAttentionEncoder(
+            c_atom=c_atom,
+            c_atompair=c_atompair,
+            c_token=c_token,
+            num_blocks=n_blocks,
+            has_coords=False,
+            has_s=False,
+            has_z=False,
+        )
+        # Line2
+        # self.input_feature = {"restype": 32} # {"restype": 32, "profile": 32, "deletion_mean": 1}
+
+    def forward(
+        self,
+        input_feature_dict: dict[str, Any],
+        inplace_safe: bool = False,
+        chunk_size: Optional[int] = None,
+    ) -> Tensor:
+        """
+        Args:
+            input_feature_dict (Dict[str, Any]): dict of input features
+            inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
+            chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
+
+        Returns:
+            Tensor: token embedding
+                [..., N_token, 384 (c_token) + 32 (c_atompair) := 416]
+        """
+        # Embed per-atom features.
+        a, _, _, _ = self.atom_attention_encoder(
+            input_feature_dict=input_feature_dict,
+        )  # [..., N_token, c_token]
+        # Concatenate the per-token features.
+        # batch_shape = input_feature_dict["restype"].shape[:-1]
+        # s_inputs = torch.cat(
+        #    [a]
+        #    + [
+        #        input_feature_dict[name].reshape(*batch_shape, d)
+        #        for name, d in self.input_feature.items()
+        #    ],
+        #    dim=-1,
+        # )
+
+        return a
+'''

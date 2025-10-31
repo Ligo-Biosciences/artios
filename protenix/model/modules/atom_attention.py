@@ -9,7 +9,7 @@ from jaxtyping import Float
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from protenix.model.modules.embedders import RelativePositionEncoding
+from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.layout import (
     broadcast_token_to_local_atom_pair,
     rearrange_to_key_subset,
@@ -505,10 +505,15 @@ class SidechainDecoder(nn.Module):
             num_queries=num_queries,
             num_keys=num_keys,
         )
+
+        # Single conditioning embedding
         self.embed_restype = LinearNoBias(32, node_dim)
-        self.embed_centre_atom = LinearNoBias()
+        self.fourier_embedding = FourierEmbedding(c=node_dim)
+        self.embed_timestep = LinearNoBias(node_dim, node_dim)
         self.layernorm_s = LayerNorm(2 * node_dim)
         self.proj_s = LinearNoBias(2 * node_dim, node_dim)
+
+        # Decoder
         self.atom_attention_decoder = AtomAttentionDecoder(
             c_token=node_dim,
             c_atom=c_atom,
@@ -531,6 +536,7 @@ class SidechainDecoder(nn.Module):
         # Grab mask and indices
         atom_mask = input_feature_dict["atom_mask"]
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
+        n_token = node_emb.shape[-2]
 
         z = self.relpos(
             asym_id=input_feature_dict["asym_id"],
@@ -544,13 +550,19 @@ class SidechainDecoder(nn.Module):
         # Compute sequence and node embeddings
         seq_emb = self.embed_restype(input_feature_dict["restype"])
         s = torch.cat([seq_emb, node_emb], dim=-1)
-        s = self.proj_s(s)
+        s = self.proj_s(s)  # [..., n_token, node_dim]
+
+        # Add timestep embedding
+        timestep_emb = self.embed_timestep(
+            self.fourier_embedding(t_hat_timestep=2 * timestep - 1)
+        ).to(z.dtype)  # [..., n_sample, node_dim]
+        s = s.unsqueeze(-3) + expand_at_dim(timestep_emb, dim=-2, n=n_token)
 
         # Encode atoms
         a, q_l, c_l, p_lm, trunked_pair_mask = self.atom_attention_encoder(
             input_feature_dict=input_feature_dict,
             r_l=r_l,
-            s=s.unsqueeze(-3),
+            s=s,
             z=z,
             return_trunked_pair_mask=True,
         )

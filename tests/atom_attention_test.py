@@ -475,11 +475,7 @@ class TestSidechainDecoder:
     def test_sidechain_decoder_forward_pass(
         self, sidechain_decoder, sample_data, device
     ):
-        """Test the complete forward pass of SidechainDecoder.
-
-        Note: This test patches a bug in SidechainDecoder where z is not
-        unsqueezed before passing to AtomAttentionEncoder.
-        """
+        """Test the complete forward pass of SidechainDecoder."""
         input_feature_dict = sample_data["input_feature_dict"]
         basic = sample_data["basic"]
         n_atoms = basic["N_atom"]
@@ -495,12 +491,16 @@ class TestSidechainDecoder:
         # Create input tensors
         r_l = torch.randn(n_samples, n_atoms, 3, device=device)
         node_emb = torch.randn(n_tokens, 384, device=device)
+        timestep = torch.rand(n_samples, device=device)
+        residual_centre_atoms = torch.randn(n_samples, n_atoms, 3, device=device)
 
         # Forward pass
         denoised_atoms = sidechain_decoder(
             input_feature_dict=input_feature_dict,
             r_l=r_l,
             node_emb=node_emb,
+            timestep=timestep,
+            residual_centre_atoms=residual_centre_atoms,
         )
 
         # Check output shape

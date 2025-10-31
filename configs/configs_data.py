@@ -175,7 +175,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            "pdb_list": "",
+            "pdb_list": ["138l"],
             # [
             #     "138l",
             #     "12gs",

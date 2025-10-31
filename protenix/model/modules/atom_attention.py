@@ -5,11 +5,9 @@ TODO: switch to jaxtyping for readability.
 from typing import Dict, Optional
 
 import torch
-from jaxtyping import Float
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.layout import (
     broadcast_token_to_local_atom_pair,
     rearrange_to_key_subset,
@@ -475,119 +473,3 @@ class AtomAttentionDecoder(nn.Module):
         r = self.final_linear(self.final_layernorm(q))
         r = r * atom_mask[..., None]
         return r
-
-
-class SidechainDecoder(nn.Module):
-    """A lightweight non-equivariant sidechain decoder for allatom sequence design."""
-
-    def __init__(
-        self,
-        node_dim,
-        c_atom: int = 128,
-        c_atompair: int = 16,
-        num_blocks: int = 2,
-        num_heads: int = 4,
-        num_queries: int = 32,
-        num_keys: int = 128,
-    ) -> None:
-        super().__init__()
-        self.relpos = RelativePositionEncoding(r_max=32, s_max=2, c_z=32)
-        self.atom_attention_encoder = AtomAttentionEncoder(
-            c_token=node_dim,
-            has_coords=True,
-            has_s=True,
-            c_atom=c_atom,
-            c_atompair=c_atompair,
-            c_s=node_dim,
-            c_z=32,
-            num_blocks=num_blocks,
-            num_heads=num_heads,
-            num_queries=num_queries,
-            num_keys=num_keys,
-        )
-
-        # Single conditioning embedding
-        self.embed_restype = LinearNoBias(32, node_dim)
-        self.fourier_embedding = FourierEmbedding(c=node_dim)
-        self.embed_timestep = LinearNoBias(node_dim, node_dim)
-        self.layernorm_s = LayerNorm(2 * node_dim)
-        self.proj_s = LinearNoBias(2 * node_dim, node_dim)
-
-        self.layernorm_a = LayerNorm(node_dim)
-
-        # Decoder
-        self.atom_attention_decoder = AtomAttentionDecoder(
-            c_token=node_dim,
-            c_atom=c_atom,
-            c_atompair=c_atompair,
-            num_blocks=num_blocks,
-            num_heads=num_heads,
-            num_queries=num_queries,
-            num_keys=num_keys,
-        )
-
-    def c_out(self, timestep) -> Tensor:
-        return 1 - timestep
-
-    def forward(
-        self,
-        input_feature_dict: Dict[str, Tensor],
-        r_l: Float[Tensor, "... n_sample n_atom 3"],
-        node_emb: Float[Tensor, "... n_token node_dim"],
-        timestep: Float[Tensor, "... n_sample"],
-        residual_centre_atoms: Float[Tensor, "... n_sample n_atom 3"],
-    ) -> Float[Tensor, "... n_sample n_atom 3"]:
-        """All-atom denoiser forward pass."""
-        # Grab mask and indices
-        atom_mask = input_feature_dict["atom_mask"]
-        atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
-        n_token = node_emb.shape[-2]
-
-        z = self.relpos(
-            asym_id=input_feature_dict["asym_id"],
-            residue_index=input_feature_dict["residue_index"],
-            entity_id=input_feature_dict["entity_id"],
-            sym_id=input_feature_dict["sym_id"],
-            token_index=input_feature_dict["token_index"],
-        )  # [..., n_token, n_token, c_z]
-        z = z.unsqueeze(-4)  # N_sample dim
-
-        # Compute sequence and node embeddings
-        seq_emb = self.embed_restype(input_feature_dict["restype"])
-        s = torch.cat([seq_emb, node_emb], dim=-1)
-        s = self.proj_s(s)  # [..., n_token, node_dim]
-
-        # Add timestep embedding
-        timestep_emb = self.embed_timestep(
-            self.fourier_embedding(t_hat_timestep=2 * timestep - 1)
-        ).to(z.dtype)  # [..., n_sample, node_dim]
-        s = s.unsqueeze(-3) + expand_at_dim(timestep_emb, dim=-2, n=n_token)
-
-        # Encode atoms
-        a, q_l, c_l, p_lm, trunked_pair_mask = self.atom_attention_encoder(
-            input_feature_dict=input_feature_dict,
-            r_l=r_l,
-            s=s,
-            z=z,
-            return_trunked_pair_mask=True,
-        )
-        a = self.layernorm_a(a)
-
-        # Decode atoms
-        # TODO: the atom attention encoder and decoder have different signatures.
-        # This is resulting in a lot of shape wrangling which I don't like.
-        r_update = self.atom_attention_decoder(
-            a=a,
-            q_skip=q_l,
-            c_skip=c_l,
-            p_skip=p_lm,
-            atom_to_token_idx=atom_to_token_idx,
-            atom_mask=atom_mask,
-            trunked_pair_mask=trunked_pair_mask.squeeze(-4),
-        )  # [..., n_sample, n_atom, 3]
-
-        denoised_atoms = residual_centre_atoms + r_update * self.c_out(
-            timestep[..., None, None]
-        )
-
-        return denoised_atoms

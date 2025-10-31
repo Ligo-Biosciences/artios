@@ -6,7 +6,6 @@ import torch
 from protenix.model.modules.atom_attention import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
-    SidechainDecoder,
 )
 from protenix.model.modules.layout import (
     rearrange_to_key_subset,
@@ -437,82 +436,6 @@ class TestAtomAttentionDecoder:
 
         # Check for finite values
         assert torch.isfinite(r_update).all(), "r_update contains non-finite values"
-
-
-class TestSidechainDecoder:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    @pytest.fixture
-    def sample_data(self):
-        test_data_path = os.path.join(
-            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
-        )
-        sample_data = torch.load(test_data_path, weights_only=False)
-
-        # Add atom_mask if not present
-        atom_mask = torch.randint(
-            low=0, high=2, size=(sample_data["input_feature_dict"]["ref_mask"].shape)
-        )
-        sample_data["input_feature_dict"]["atom_mask"] = atom_mask
-        return sample_data
-
-    @pytest.fixture
-    def sidechain_decoder(self, device):
-        """Create SidechainDecoder with default parameters."""
-        decoder = SidechainDecoder(
-            node_dim=384,
-            c_atom=128,
-            c_atompair=16,
-            num_blocks=2,
-            num_heads=4,
-            num_queries=32,
-            num_keys=128,
-        )
-        return decoder.to(device)
-
-    def test_sidechain_decoder_forward_pass(
-        self, sidechain_decoder, sample_data, device
-    ):
-        """Test the complete forward pass of SidechainDecoder."""
-        input_feature_dict = sample_data["input_feature_dict"]
-        basic = sample_data["basic"]
-        n_atoms = basic["N_atom"]
-        n_tokens = basic["N_token"]
-        n_samples = 2
-
-        # Move input data to device
-        input_feature_dict = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
-            for k, v in input_feature_dict.items()
-        }
-
-        # Create input tensors
-        r_l = torch.randn(n_samples, n_atoms, 3, device=device)
-        node_emb = torch.randn(n_tokens, 384, device=device)
-        timestep = torch.rand(n_samples, device=device)
-        residual_centre_atoms = torch.randn(n_samples, n_atoms, 3, device=device)
-
-        # Forward pass
-        denoised_atoms = sidechain_decoder(
-            input_feature_dict=input_feature_dict,
-            r_l=r_l,
-            node_emb=node_emb,
-            timestep=timestep,
-            residual_centre_atoms=residual_centre_atoms,
-        )
-
-        # Check output shape
-        expected_shape = (n_samples, n_atoms, 3)
-        assert (
-            denoised_atoms.shape == expected_shape
-        ), f"Expected denoised_atoms shape {expected_shape}, got {denoised_atoms.shape}"
-
-        # Check for finite values
-        assert torch.isfinite(
-            denoised_atoms
-        ).all(), "denoised_atoms contains non-finite values"
 
 
 if __name__ == "__main__":

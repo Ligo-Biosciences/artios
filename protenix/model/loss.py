@@ -261,6 +261,7 @@ class MSELoss(BaseLoss):
         """Calculates the per-sample scale."""
         sqrt2 = 1.414
         timestep = pred_dict[self.timestep_key]
+        timestep = torch.clamp(timestep, max=0.95)  # TODO: hardcoded
         return 1 / (sqrt2 * (self.sigma * (1 - timestep)) ** 2)
 
     def weighted_rigid_align(

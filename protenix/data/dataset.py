@@ -127,6 +127,13 @@ class BaseSingleDataset(Dataset):
         self.template_featurizer = template_featurizer
         self.motif_maker = motif_maker
 
+        # temp motif dir
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.motif_dir = (
+            Path(self.mmcif_dir).parent.parent.parent / f"motifs_{timestamp}"
+        )
+        os.makedirs(self.motif_dir, exist_ok=True)
+
         # Motif training configs
         self.motif_configs = kwargs.get("motif_training", {})
 
@@ -829,17 +836,8 @@ class BaseSingleDataset(Dataset):
         if motif_atom_array is None or len(motif_atom_array) == 0:
             return
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        mmcif_path = (
-            Path(self.mmcif_dir) if isinstance(self.mmcif_dir, str) else self.mmcif_dir
-        )
-
-        motif_dir = mmcif_path.parent.parent.parent / f"motifs_{timestamp}"
-        os.makedirs(motif_dir, exist_ok=True)
-
-        motif_fpath = motif_dir / f"{pdb_id}_motif.cif"
-        structure_fpath = motif_dir / f"{pdb_id}.cif"
+        motif_fpath = self.motif_dir / f"{pdb_id}_motif.cif"
+        structure_fpath = self.motif_dir / f"{pdb_id}.cif"
 
         save_structure(motif_fpath, motif_atom_array)
         save_structure(structure_fpath, full_atom_array)

@@ -106,10 +106,10 @@ class MotifMaker:
         else:
             motif = self._generate_chain_motif(atom_array)
 
-        num_residues_in_motif = len(np.unique(motif.res_id))
+        num_residues_in_motif = len(np.unique(motif.res_id)) if motif is not None else 0
         if num_residues_in_motif > 20:
             logger.warning(
-                f"Motif has too many residues:{num_residues_in_motif} . Returning None for motif."
+                f"Motif has too many residues: {num_residues_in_motif}. Returning None for motif."
             )
             return None
 

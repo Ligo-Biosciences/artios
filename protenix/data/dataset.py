@@ -593,13 +593,12 @@ class BaseSingleDataset(Dataset):
         # TODO: here is where all motif assignment is placed. It is likely we are going to need
         # an entire class to manage all of this as there will be many different methods required
         # that generate motifs in different ways.
-        motif_atom_array = self._get_motif(
+        cropped_atom_array = self._get_motif(
             atom_array=cropped_atom_array,
         )
 
         self._save_motif(
-            full_atom_array=cropped_atom_array,
-            motif_atom_array=motif_atom_array,
+            atom_array=cropped_atom_array,
             pdb_id=bioassembly_dict["pdb_id"],
         )
 
@@ -807,7 +806,7 @@ class BaseSingleDataset(Dataset):
 
         return eval_type, cluster_id, chain_1_mask, chain_2_mask
 
-    def _get_motif(self, atom_array: AtomArray) -> Optional[AtomArray]:
+    def _get_motif(self, atom_array: AtomArray) -> AtomArray:
         """
         Generates a motif from the atom array using the MotifMaker if enabled.
 
@@ -824,23 +823,24 @@ class BaseSingleDataset(Dataset):
         if np.random.rand() < motif_train_rate:
             return self.motif_maker.make_motif(atom_array)
         else:
-            return None
+            is_motif_mask = np.zeros(len(atom_array), dtype=bool)
+            atom_array.set_annotation("is_motif", is_motif_mask)
+            return atom_array
 
-    def _save_motif(
-        self, full_atom_array: AtomArray, motif_atom_array: AtomArray, pdb_id: str
-    ) -> None:
+    def _save_motif(self, atom_array: AtomArray, pdb_id: str) -> None:
         """
         Saves the motif to the motif directory.
         """
         # Skip if no motif was generated
-        if motif_atom_array is None or len(motif_atom_array) == 0:
+        if atom_array.is_motif.sum() == 0:
             return
 
         motif_fpath = self.motif_dir / f"{pdb_id}_motif.cif"
         structure_fpath = self.motif_dir / f"{pdb_id}.cif"
 
+        motif_atom_array = atom_array[atom_array.is_motif]
         save_structure(motif_fpath, motif_atom_array)
-        save_structure(structure_fpath, full_atom_array)
+        save_structure(structure_fpath, atom_array)
 
     @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(

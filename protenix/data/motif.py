@@ -11,7 +11,7 @@ from biotite.structure import AtomArray
 from protenix.data.motif_utils import (
     bfs_nodes_by_count,
     compute_pocket_scores,
-    get_seed_atom_from_array,
+    get_random_seed_atom_from_array,
 )
 
 logger = getLogger(__name__)
@@ -111,9 +111,38 @@ class MotifMaker:
             # No motif generated
             is_motif_mask = np.zeros(len(atom_array), dtype=bool)
 
-        # Add annotation to atom array
+        # Add is_motif annotation to atom array
         atom_array.set_annotation("is_motif", is_motif_mask)
+
+        # Add is_motif_related annotation to atom array
+        is_motif_related = self._get_is_motif_related_mask(atom_array)
+        atom_array.set_annotation("is_motif_related", is_motif_related)
+
         return atom_array
+
+    def _get_is_motif_related_mask(self, atom_array: AtomArray) -> np.ndarray:
+        """
+        Generates a mask indicating which atoms are related to the motif. This includes the motif
+        atoms themselves and the rest of the atoms which lie in a residue (determined by ref_space_uid)
+        that contains at least one motif atom.
+
+        Args:
+            atom_array (AtomArray): Input Biotite AtomArray
+
+        Returns:
+            np.ndarray: Boolean mask indicating which atoms are related to the motif
+        """
+        is_motif_related = np.zeros(len(atom_array), dtype=bool)
+
+        # Get unique residues in motif
+        unique_ref_space_uids = np.unique(atom_array[atom_array.is_motif].ref_space_uid)
+
+        # Mark all atoms in these residues as related to the motif
+        is_motif_related[np.isin(atom_array.ref_space_uid, unique_ref_space_uids)] = (
+            True
+        )
+
+        return is_motif_related
 
     def _generate_ligand_motif_mask(self, atom_array: AtomArray) -> np.ndarray:
         """
@@ -142,7 +171,7 @@ class MotifMaker:
 
             # Get seed point from ligand
             ligand_atoms = atom_array[ligand_atom_mask]
-            seed_coord = get_seed_atom_from_array(ligand_atoms)
+            seed_coord = get_random_seed_atom_from_array(ligand_atoms)
 
             # Add surrounding residues
             surrounding_mask = self._generate_motif_around_point_mask(
@@ -171,13 +200,13 @@ class MotifMaker:
             )
 
             # Mark these ligand atoms as motif
-            ligand_indices = np.where(ligand_atom_mask)[0]
-            selected_ligand_indices = ligand_indices[nodes]
-            is_motif[selected_ligand_indices] = True
+            full_ligand_indices = np.where(ligand_atom_mask)[0]
+            partial_ligand_indices = full_ligand_indices[nodes]
+            is_motif[partial_ligand_indices] = True
 
             # Get seed point from partial ligand
-            partial_ligand_atoms = atom_array[selected_ligand_indices]
-            seed_coord = get_seed_atom_from_array(partial_ligand_atoms)
+            partial_ligand_atoms = atom_array[partial_ligand_indices]
+            seed_coord = get_random_seed_atom_from_array(partial_ligand_atoms)
 
             # Add surrounding residues
             surrounding_mask = self._generate_motif_around_point_mask(
@@ -211,13 +240,9 @@ class MotifMaker:
 
         # Pick a random polymer chain
         polymer_atoms = atom_array[polymer_mask]
-        try:
-            chain_id = np.random.choice(np.unique(polymer_atoms.label_asym_id))
-        except ValueError:
-            logger.warning("No chains in polymer atoms. Returning empty motif mask.")
-            return is_motif
+        chain_id = np.random.choice(np.unique(polymer_atoms.label_asym_id))
 
-        chain_mask = (atom_array.label_asym_id == chain_id) & polymer_mask
+        chain_mask = atom_array.label_asym_id == chain_id
         chain_array = atom_array[chain_mask]
 
         # Compute pocket scores
@@ -225,7 +250,7 @@ class MotifMaker:
             chain_array, n_neighbors=self.pocket_n_neighbours
         )
 
-        # Get pocket atoms (within chain)
+        # Identify pocket atoms in chain
         pocket_atom_indices_in_chain = np.where(
             pocket_scores <= self.pocket_score_threshold
         )[0]
@@ -236,9 +261,9 @@ class MotifMaker:
 
         # Get seed point from pocket
         pocket_atoms = chain_array[pocket_atom_indices_in_chain]
-        seed_coord = get_seed_atom_from_array(pocket_atoms)
+        seed_coord = get_random_seed_atom_from_array(pocket_atoms)
 
-        # Generate motif around seed (only within this chain)
+        # Generate motif around seed
         motif_mask = self._generate_motif_around_point_mask(
             point_coord=seed_coord,
             atom_array=chain_array,

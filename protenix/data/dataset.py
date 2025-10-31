@@ -32,6 +32,7 @@ from torch.utils.data import Dataset
 from protenix.common.constants import EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
+from protenix.data.filter import Filter
 from protenix.data.motif import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.padding_utils import get_atom_padding_length, pad_features_dict
@@ -602,6 +603,19 @@ class BaseSingleDataset(Dataset):
             pdb_id=bioassembly_dict["pdb_id"],
         )
 
+        # TODO: filter non motif residue sidechains using Filter
+        cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
+            cropped_atom_array
+        )
+
+        # temp: save filtered structure
+        save_structure(
+            self.motif_dir / f"{bioassembly_dict['pdb_id']}_filtered.cif",
+            cropped_atom_array,
+        )
+
+        # TODO: retokenize atom array
+
         t4 = time.time()
         feat, label, label_full = self.get_feature_and_label(
             idx=idx,
@@ -841,6 +855,12 @@ class BaseSingleDataset(Dataset):
         motif_atom_array = atom_array[atom_array.is_motif]
         save_structure(motif_fpath, motif_atom_array)
         save_structure(structure_fpath, atom_array)
+
+    def _retokenize_atom_array(self, atom_array: AtomArray) -> TokenArray:
+        """
+        Retokenizes the atom array after generating the motif.
+        """
+        raise NotImplementedError("Not implemented yet.")
 
     @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(

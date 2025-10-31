@@ -716,7 +716,10 @@ class Filter(object):
             atom_array.is_motif_related
             | (atom_array.mol_type == "ligand")
             | ((atom_array.mol_type == "protein") & (atom_array.atom_name == "CA"))
-            | ((atom_array.mol_type in ["RNA", "DNA"]) & (atom_array.atom_name == "P"))
+            | (
+                np.isin(atom_array.mol_type, ["RNA", "DNA"])
+                & (atom_array.atom_name == "P")
+            )
         )
 
         return atom_array[mask]

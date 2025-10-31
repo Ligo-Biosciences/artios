@@ -718,7 +718,7 @@ class Filter(object):
             | ((atom_array.mol_type == "protein") & (atom_array.atom_name == "CA"))
             | (
                 np.isin(atom_array.mol_type, ["RNA", "DNA"])
-                & (atom_array.atom_name == "P")
+                & (atom_array.atom_name == "C1'")
             )
         )
 

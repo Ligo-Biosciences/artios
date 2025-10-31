@@ -36,7 +36,7 @@ from protenix.data.filter import Filter
 from protenix.data.motif import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.padding_utils import get_atom_padding_length, pad_features_dict
-from protenix.data.tokenizer import TokenArray
+from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.data.utils import (
     data_type_transform,
     make_dummy_feature,
@@ -603,18 +603,28 @@ class BaseSingleDataset(Dataset):
             pdb_id=bioassembly_dict["pdb_id"],
         )
 
-        # TODO: filter non motif residue sidechains using Filter
+        # Duplicate backbone atoms of motif-related residues
+        cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
+
+        # Filter non motif residue sidechains
         cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
             cropped_atom_array
         )
 
-        # temp: save filtered structure
-        save_structure(
-            self.motif_dir / f"{bioassembly_dict['pdb_id']}_filtered.cif",
-            cropped_atom_array,
+        # Update ID's to un-index the sidechains
+        cropped_atom_array = self._update_ids_to_unindex_motif_residues(
+            cropped_atom_array
         )
 
-        # TODO: retokenize atom array
+        # Retokenize atom array
+        tokenizer = AtomArrayTokenizer(cropped_atom_array)
+        cropped_token_array = tokenizer.get_token_array()
+
+        # temp: save filtered structure
+        # save_structure(
+        #     self.motif_dir / f"{bioassembly_dict['pdb_id']}_filtered.cif",
+        #     cropped_atom_array,
+        # )
 
         t4 = time.time()
         feat, label, label_full = self.get_feature_and_label(
@@ -855,6 +865,99 @@ class BaseSingleDataset(Dataset):
         motif_atom_array = atom_array[atom_array.is_motif]
         save_structure(motif_fpath, motif_atom_array)
         save_structure(structure_fpath, atom_array)
+
+    @staticmethod
+    def _duplicate_motif_backbone_atoms(atom_array: AtomArray) -> AtomArray:
+        """
+        Duplicates backbone atoms of motif-related residues with is_motif and
+        is_motif_related annotations set to False. This allows us to un-index
+        the motif sidechains without breaking the backbone.
+
+        Args:
+            atom_array (AtomArray): AtomArray with is_motif and is_motif_related annotations.
+
+        Returns:
+            AtomArray: AtomArray with duplicated backbone atoms of motif-related residues.
+        """
+        is_motif_related = atom_array.is_motif_related
+        is_backbone = (atom_array.mol_type == "protein") & (
+            atom_array.atom_name == "CA"
+        ) | (
+            np.isin(atom_array.mol_type, ["RNA", "DNA"])
+            & (atom_array.atom_name == "C1'")
+        )
+
+        duplicate_mask = is_backbone & is_motif_related
+
+        if not duplicate_mask.any():
+            return atom_array
+
+        duplicated_atoms = atom_array[duplicate_mask].copy()
+        duplicated_atoms.is_motif = np.zeros(len(duplicated_atoms), dtype=bool)
+        duplicated_atoms.is_motif_related = np.zeros(len(duplicated_atoms), dtype=bool)
+
+        return atom_array + duplicated_atoms
+
+    @staticmethod
+    def _update_ids_to_unindex_motif_residues(atom_array: AtomArray) -> AtomArray:
+        """
+        Updates entity_id_int, sym_id_int, asym_id_int, and res_id to un-index
+        the sidechains of motif residues. Motif-related residues are grouped by
+        residue identity into new entities, with each residue instance
+        becoming its own chain. Each atom within a residue gets a unique res_id.
+
+        Args:
+            atom_array (AtomArray): AtomArray with is_motif_related annotation
+
+        Returns:
+            AtomArray: AtomArray with updated IDs for motif-related residues
+        """
+        new_array = atom_array.copy()
+
+        is_motif_related = new_array.is_motif_related
+
+        if not is_motif_related.any():
+            return new_array
+
+        max_entity_id = new_array.entity_id_int.max()
+        max_asym_id = new_array.asym_id_int.max()
+
+        entity_counter = max_entity_id + 1
+        asym_counter = max_asym_id + 1
+
+        motif_restypes = np.unique(new_array.cano_seq_resname[is_motif_related])
+
+        for restype in motif_restypes:
+            restype_mask = (is_motif_related) & (new_array.cano_seq_resname == restype)
+
+            current_entity_id = entity_counter
+            new_array.entity_id_int[restype_mask] = current_entity_id
+            entity_counter += 1
+
+            # Within this restype, group by individual residue instances
+            unique_residue_uids = np.unique(new_array.ref_space_uid[restype_mask])
+
+            # Assign unique sym_id and asym_id for each residue instance
+            sym_id_counter = 0
+
+            for residue_uid in unique_residue_uids:
+                residue_instance_mask = restype_mask & (
+                    new_array.ref_space_uid == residue_uid
+                )
+
+                new_array.asym_id_int[residue_instance_mask] = asym_counter
+                asym_counter += 1
+
+                new_array.sym_id_int[residue_instance_mask] = sym_id_counter
+                sym_id_counter += 1
+
+                # Assign unique res_id for each atom in this residue instance
+                num_atoms_in_residue = residue_instance_mask.sum()
+                new_array.res_id[residue_instance_mask] = np.arange(
+                    num_atoms_in_residue
+                )
+
+        return new_array
 
     def _retokenize_atom_array(self, atom_array: AtomArray) -> TokenArray:
         """

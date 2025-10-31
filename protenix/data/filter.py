@@ -694,3 +694,29 @@ class Filter(object):
         backbone_array.res_name[protein_mask] = "GLY"
 
         return backbone_array
+
+    @staticmethod
+    def remove_non_motif_residue_sidechains(atom_array: AtomArray) -> AtomArray:
+        """
+        Removes side chain atoms only from residues that aren't part of the motif.
+
+        Args:
+            atom_array (AtomArray): Input atom array containing protein structure
+
+        Returns:
+            AtomArray: Modified atom array with the non-motif residue protein side chains removed.
+        """
+        assert hasattr(
+            atom_array, "is_motif"
+        ), "Atom array must have is_motif annotation."
+        assert hasattr(
+            atom_array, "is_motif_related"
+        ), "Atom array must have is_motif_related annotation."
+        mask = (
+            atom_array.is_motif_related
+            | (atom_array.mol_type == "ligand")
+            | ((atom_array.mol_type == "protein") & (atom_array.atom_name == "CA"))
+            | ((atom_array.mol_type in ["RNA", "DNA"]) & (atom_array.atom_name == "P"))
+        )
+
+        return atom_array[mask]

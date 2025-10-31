@@ -524,6 +524,9 @@ class SidechainDecoder(nn.Module):
             num_keys=num_keys,
         )
 
+    def c_out(self, timestep) -> Tensor:
+        return 1 - timestep
+
     def forward(
         self,
         input_feature_dict: Dict[str, Tensor],
@@ -580,6 +583,8 @@ class SidechainDecoder(nn.Module):
             trunked_pair_mask=trunked_pair_mask.squeeze(-4),
         )  # [..., n_sample, n_atom, 3]
 
-        denoised_atoms = residual_centre_atoms + r_update
+        denoised_atoms = residual_centre_atoms + r_update * self.c_out(
+            timestep[..., None, None]
+        )
 
         return denoised_atoms

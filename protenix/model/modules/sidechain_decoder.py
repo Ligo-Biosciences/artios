@@ -10,6 +10,7 @@ from protenix.model.modules.atom_attention import (
 )
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
+from protenix.model.modules.transformer import DiffusionTransformer
 from protenix.model.utils import centre_random_augmentation, expand_at_dim
 
 
@@ -51,6 +52,10 @@ class SidechainDecoder(nn.Module):
 
         self.layernorm_a = LayerNorm(node_dim)
 
+        self.diffusion_transformer = DiffusionTransformer(
+            num_blocks=2, c_token=node_dim, c_s=node_dim, c_z=32, num_heads=4
+        )
+
         # Decoder
         self.atom_attention_decoder = AtomAttentionDecoder(
             c_token=node_dim,
@@ -79,6 +84,12 @@ class SidechainDecoder(nn.Module):
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
         n_token = node_emb.shape[-2]
 
+        # Compute pair mask
+        token_mask = input_feature_dict["token_mask"]  # [..., n_token]
+        token_mask = token_mask.unsqueeze(-2)  # add N_sample dim
+        pair_mask = token_mask[..., :, None] * token_mask[..., None, :]
+        # [..., 1, n_token, n_token]
+
         z = self.relpos(
             asym_id=input_feature_dict["asym_id"],
             residue_index=input_feature_dict["residue_index"],
@@ -98,6 +109,7 @@ class SidechainDecoder(nn.Module):
             self.fourier_embedding(t_hat_timestep=2 * timestep - 1)
         ).to(z.dtype)  # [..., n_sample, node_dim]
         s = s.unsqueeze(-3) + expand_at_dim(timestep_emb, dim=-2, n=n_token)
+        # [..., n_sample, n_token, node_dim]
 
         # Encode atoms
         a, q_l, c_l, p_lm, trunked_pair_mask = self.atom_attention_encoder(
@@ -107,6 +119,8 @@ class SidechainDecoder(nn.Module):
             z=z,
             return_trunked_pair_mask=True,
         )
+
+        a = self.diffusion_transformer(a=a, s=s, z=z, pair_mask=pair_mask)
         a = self.layernorm_a(a)
 
         # Decode atoms

@@ -713,7 +713,7 @@ class Filter(object):
             atom_array, "is_motif_related"
         ), "Atom array must have is_motif_related annotation."
         mask = (
-            atom_array.is_motif_related
+            (atom_array.is_motif_related > 0)
             | (atom_array.mol_type == "ligand")
             | ((atom_array.mol_type == "protein") & (atom_array.atom_name == "CA"))
             | (

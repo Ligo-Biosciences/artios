@@ -101,7 +101,7 @@ class MotifMaker:
 
         # Validate motif size
         if is_motif_mask is not None and is_motif_mask.any():
-            num_residues_in_motif = len(np.unique(atom_array[is_motif_mask].res_id))
+            num_residues_in_motif = len(np.unique(atom_array[is_motif_mask > 0].res_id))
             if num_residues_in_motif > self.max_motif_residues:
                 logger.warning(
                     f"Motif has too many residues: {num_residues_in_motif}. "
@@ -136,7 +136,9 @@ class MotifMaker:
         is_motif_related = np.zeros(len(atom_array), dtype=int)
 
         # Get unique residues in motif
-        unique_ref_space_uids = np.unique(atom_array[atom_array.is_motif].ref_space_uid)
+        unique_ref_space_uids = np.unique(
+            atom_array[atom_array.is_motif > 0].ref_space_uid
+        )
 
         # Mark all atoms in these residues as related to the motif
         is_motif_related[np.isin(atom_array.ref_space_uid, unique_ref_space_uids)] = 1
@@ -177,7 +179,7 @@ class MotifMaker:
                 point_coord=seed_coord,
                 atom_array=atom_array,
             )
-            is_motif[surrounding_mask] = 1
+            is_motif[surrounding_mask > 0] = 1
 
         else:
             # Add partial ligand to motif
@@ -212,7 +214,7 @@ class MotifMaker:
                 point_coord=seed_coord,
                 atom_array=atom_array,
             )
-            is_motif[surrounding_mask] = 1
+            is_motif[surrounding_mask > 0] = 1
 
         return is_motif
 
@@ -271,7 +273,7 @@ class MotifMaker:
         # Map back to full array indices
         chain_indices = np.where(chain_mask)[0]
         full_motif_mask = np.zeros(len(atom_array), dtype=int)
-        full_motif_mask[chain_indices[motif_mask]] = 1
+        full_motif_mask[chain_indices[motif_mask > 0]] = 1
 
         return full_motif_mask
 
@@ -331,10 +333,10 @@ class MotifMaker:
                 partial_mask = self._get_partial_residue_motif_mask(
                     atom_array, residue_mask
                 )
-                is_motif[partial_mask] = 1
+                is_motif[partial_mask > 0] = 1
             else:
                 # Whole residue
-                is_motif[residue_mask] = 1
+                is_motif[residue_mask > 0] = 1
 
         return is_motif
 

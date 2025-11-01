@@ -861,7 +861,7 @@ class BaseSingleDataset(Dataset):
         motif_fpath = self.motif_dir / f"{pdb_id}_motif.cif"
         structure_fpath = self.motif_dir / f"{pdb_id}.cif"
 
-        motif_atom_array = atom_array[atom_array.is_motif]
+        motif_atom_array = atom_array[atom_array.is_motif > 0]
         save_structure(motif_fpath, motif_atom_array)
         save_structure(structure_fpath, atom_array)
 
@@ -886,7 +886,7 @@ class BaseSingleDataset(Dataset):
             & (atom_array.atom_name == "C1'")
         )
 
-        duplicate_mask = is_backbone & is_motif_related
+        duplicate_mask = is_backbone & (is_motif_related > 0)
 
         if not duplicate_mask.any():
             return atom_array
@@ -913,7 +913,7 @@ class BaseSingleDataset(Dataset):
         """
         new_array = atom_array.copy()
 
-        is_motif_related = new_array.is_motif_related
+        is_motif_related = new_array.is_motif_related > 0
 
         if not is_motif_related.any():
             return new_array

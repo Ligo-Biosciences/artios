@@ -235,7 +235,7 @@ class MotifMaker:
 
         if not polymer_mask.any():
             logger.warning(
-                "No polymer chains in the atom array. Returning empty motif mask."
+                "No polymer chains in the atom array. Setting all is_motif to 0."
             )
             return is_motif
 
@@ -257,7 +257,7 @@ class MotifMaker:
         )[0]
 
         if len(pocket_atom_indices_in_chain) == 0:
-            logger.warning("No pocket atoms found. Returning empty motif mask.")
+            logger.warning("No pocket atoms found. Setting all is_motif to 0.")
             return is_motif
 
         # Get seed point from pocket
@@ -307,7 +307,7 @@ class MotifMaker:
 
         if not atoms_in_sphere_mask.any():
             logger.warning(
-                "No polymer atoms close to seed point. Returning empty mask."
+                "No polymer atoms close to seed point. Setting all is_motif to 0."
             )
             return is_motif
 
@@ -316,7 +316,7 @@ class MotifMaker:
         unique_ref_space_uids = np.unique(atoms_in_sphere.ref_space_uid)
 
         if len(unique_ref_space_uids) == 0:
-            logger.warning("No residues in sphere. Returning empty mask.")
+            logger.warning("No residues in sphere. Setting all is_motif to 0.")
             return is_motif
 
         # Process each residue
@@ -365,7 +365,7 @@ class MotifMaker:
         graph_nodes = list(G_res.nodes())
 
         if len(graph_nodes) == 0:
-            logger.warning("No nodes in residue graph. Returning empty motif mask.")
+            logger.warning("No nodes in residue graph. Setting all is_motif to 0.")
             return partial_motif_mask
 
         # Pick seed atom

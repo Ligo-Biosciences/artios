@@ -911,11 +911,42 @@ class Featurizer(object):
 
     def get_motif_features(self):
         """
-        Features for motif training.
+        Features for motif training. When training the motif scaffolding model, note that N_atom = N_token
+        (since the backbone is tokenzied per atom as well as the ligands and the motif residues).
+        We will use N_token in most places to not confuse with an all-atom model (since we only use
+        one atom for non-motif residues). All these features are therefore token-level features.
+        We extract coordinates from the centre atoms to avoid creating heavy N_atom features when this
+        method is called for all-atom models.
         """
         motif_features = {}
 
-        # TODO: implement me!
+        centre_atom_indices = self.cropped_token_array.get_annotation(
+            "centre_atom_index"
+        )
+        centre_atoms = self.cropped_atom_array[centre_atom_indices]
+
+        token_resolved = centre_atoms.is_resolved  # [N_token]
+        is_motif_token = centre_atoms.is_motif  # [N_token]
+        is_motif_related_token = centre_atoms.is_motif_related  # [N_token]
+
+        restype = centre_atoms.cano_seq_resname
+        restype_onehot = self.restype_onehot_encoded(restype)
+        motif_restype = restype_onehot * torch.Tensor(
+            is_motif_related_token * token_resolved
+        ).unsqueeze(-1)  # [N_token, 32]
+
+        motif_coordinate = centre_atoms.coord * is_motif_token.reshape(
+            -1, 1
+        )  # [N_token, 3]
+
+        motif_features.update(
+            {
+                "is_motif_token": torch.Tensor(is_motif_token).long(),
+                "is_motif_related_token": torch.Tensor(is_motif_related_token).long(),
+                "motif_restype": torch.Tensor(motif_restype),
+                "motif_coordinate": torch.Tensor(motif_coordinate),
+            }
+        )
 
         return motif_features
 

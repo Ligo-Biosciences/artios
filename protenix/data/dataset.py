@@ -36,6 +36,7 @@ from protenix.data.filter import Filter
 from protenix.data.motif import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.padding_utils import get_atom_padding_length, pad_features_dict
+from protenix.data.parser import AddAtomArrayAnnot
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.data.utils import (
     data_type_transform,
@@ -591,9 +592,7 @@ class BaseSingleDataset(Dataset):
         )
         timings["assign_binding_target"] = time.time() - t3
 
-        # TODO: here is where all motif assignment is placed. It is likely we are going to need
-        # an entire class to manage all of this as there will be many different methods required
-        # that generate motifs in different ways.
+        # motif work
         cropped_atom_array = self._get_motif(
             atom_array=cropped_atom_array,
         )
@@ -603,20 +602,20 @@ class BaseSingleDataset(Dataset):
             pdb_id=bioassembly_dict["pdb_id"],
         )
 
-        # Duplicate backbone atoms of motif-related residues
         cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
 
-        # Filter non motif residue sidechains
         cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
             cropped_atom_array
         )
 
-        # Update ID's to un-index the sidechains
         cropped_atom_array = self._update_ids_to_unindex_motif_residues(
             cropped_atom_array
         )
 
-        # Retokenize atom array
+        cropped_atom_array = self._update_centre_atom_mask_to_include_motif(
+            cropped_atom_array
+        )
+
         tokenizer = AtomArrayTokenizer(cropped_atom_array)
         cropped_token_array = tokenizer.get_token_array()
 
@@ -838,18 +837,18 @@ class BaseSingleDataset(Dataset):
             atom_array (AtomArray): Input atom array from which to generate motif
 
         Returns:
-            Optional[AtomArray]: Motif atom array if generated, None otherwise
+            AtomArray: Atom array with is_motif and is_motif_related annotations (int masks)
         """
-        if self.motif_maker is None:
-            return None
-
         motif_train_rate = self.motif_configs["motif_train_rate"]
-        if np.random.rand() < motif_train_rate:
+
+        if self.motif_maker is not None and np.random.rand() < motif_train_rate:
             return self.motif_maker.make_motif(atom_array)
-        else:
-            is_motif_mask = np.zeros(len(atom_array), dtype=bool)
-            atom_array.set_annotation("is_motif", is_motif_mask)
-            return atom_array
+
+        atom_array.set_annotation("is_motif", np.zeros(len(atom_array), dtype=int))
+        atom_array.set_annotation(
+            "is_motif_related", np.zeros(len(atom_array), dtype=int)
+        )
+        return atom_array
 
     def _save_motif(self, atom_array: AtomArray, pdb_id: str) -> None:
         """
@@ -893,18 +892,18 @@ class BaseSingleDataset(Dataset):
             return atom_array
 
         duplicated_atoms = atom_array[duplicate_mask].copy()
-        duplicated_atoms.is_motif = np.zeros(len(duplicated_atoms), dtype=bool)
-        duplicated_atoms.is_motif_related = np.zeros(len(duplicated_atoms), dtype=bool)
+        duplicated_atoms.is_motif = np.zeros(len(duplicated_atoms), dtype=int)
+        duplicated_atoms.is_motif_related = np.zeros(len(duplicated_atoms), dtype=int)
 
         return atom_array + duplicated_atoms
 
     @staticmethod
     def _update_ids_to_unindex_motif_residues(atom_array: AtomArray) -> AtomArray:
         """
-        Updates entity_id_int, sym_id_int, asym_id_int, and res_id to un-index
+        Updates entity_id_int, sym_id_int, asym_id_int, res_id and ref_space_uid to un-index
         the sidechains of motif residues. Motif-related residues are grouped by
         residue identity into new entities, with each residue instance
-        becoming its own chain. Each atom within a residue gets a unique res_id.
+        becoming its own chain. Each atom within a motif residue gets a unique res_id.
 
         Args:
             atom_array (AtomArray): AtomArray with is_motif_related annotation
@@ -928,7 +927,7 @@ class BaseSingleDataset(Dataset):
         motif_restypes = np.unique(new_array.cano_seq_resname[is_motif_related])
 
         for restype in motif_restypes:
-            restype_mask = (is_motif_related) & (new_array.cano_seq_resname == restype)
+            restype_mask = is_motif_related & (new_array.cano_seq_resname == restype)
 
             current_entity_id = entity_counter
             new_array.entity_id_int[restype_mask] = current_entity_id
@@ -957,13 +956,20 @@ class BaseSingleDataset(Dataset):
                     num_atoms_in_residue
                 )
 
+        # Update ref_space_uid
+        new_array = AddAtomArrayAnnot.add_ref_space_uid(new_array)
+
         return new_array
 
-    def _retokenize_atom_array(self, atom_array: AtomArray) -> TokenArray:
+    @staticmethod
+    def _update_centre_atom_mask_to_include_motif(atom_array: AtomArray) -> AtomArray:
         """
-        Retokenizes the atom array after generating the motif.
+        Updates the centre_atom_mask of the atom array to include all motif
+        related atoms. This is important as the Featurizer looks at the
+        centre atom indices to retrieve the correct chain, res IDs etc.
         """
-        raise NotImplementedError("Not implemented yet.")
+        atom_array.centre_atom_mask[atom_array.is_motif_related] = 1
+        return atom_array
 
     @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(

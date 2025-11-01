@@ -20,7 +20,8 @@ logger = getLogger(__name__)
 class MotifMaker:
     """
     Main class for generating motifs during model training. All methods work with
-    boolean masks to mark which atoms are part of the motif, rather than creating subsets.
+    integer masks (0/1) to mark which atoms are part of the motif, consistent with
+    other masks like is_protein.
 
     The different motif selection methods are as follows:
 
@@ -90,7 +91,7 @@ class MotifMaker:
             atom_array (AtomArray): Input Biotite AtomArray
 
         Returns:
-            AtomArray: The same atom array with is_motif annotation added
+            AtomArray: The same atom array with is_motif annotation added (int mask)
         """
         # Generate motif mask
         if atom_array.is_ligand.any() and np.random.rand() < self.ligand_motif_prob:
@@ -104,12 +105,12 @@ class MotifMaker:
             if num_residues_in_motif > self.max_motif_residues:
                 logger.warning(
                     f"Motif has too many residues: {num_residues_in_motif}. "
-                    f"Setting all is_motif to False."
+                    f"Setting all is_motif to 0."
                 )
-                is_motif_mask = np.zeros(len(atom_array), dtype=bool)
+                is_motif_mask = np.zeros(len(atom_array), dtype=int)
         else:
             # No motif generated
-            is_motif_mask = np.zeros(len(atom_array), dtype=bool)
+            is_motif_mask = np.zeros(len(atom_array), dtype=int)
 
         # Add is_motif annotation to atom array
         atom_array.set_annotation("is_motif", is_motif_mask)
@@ -130,17 +131,15 @@ class MotifMaker:
             atom_array (AtomArray): Input Biotite AtomArray
 
         Returns:
-            np.ndarray: Boolean mask indicating which atoms are related to the motif
+            np.ndarray: Integer mask (0/1) indicating which atoms are related to the motif
         """
-        is_motif_related = np.zeros(len(atom_array), dtype=bool)
+        is_motif_related = np.zeros(len(atom_array), dtype=int)
 
         # Get unique residues in motif
         unique_ref_space_uids = np.unique(atom_array[atom_array.is_motif].ref_space_uid)
 
         # Mark all atoms in these residues as related to the motif
-        is_motif_related[np.isin(atom_array.ref_space_uid, unique_ref_space_uids)] = (
-            True
-        )
+        is_motif_related[np.isin(atom_array.ref_space_uid, unique_ref_space_uids)] = 1
 
         return is_motif_related
 
@@ -152,9 +151,9 @@ class MotifMaker:
             atom_array (AtomArray): Input Biotite AtomArray
 
         Returns:
-            np.ndarray: Boolean mask indicating motif atoms
+            np.ndarray: Integer mask (0/1) indicating motif atoms
         """
-        is_motif = np.zeros(len(atom_array), dtype=bool)
+        is_motif = np.zeros(len(atom_array), dtype=int)
 
         # Select a random ligand
         ligand_mask = atom_array.chain_mol_type == "ligand"
@@ -167,7 +166,7 @@ class MotifMaker:
 
         if np.random.rand() < self.whole_ligand_prob or ligand_atom_mask.sum() == 1:
             # Add whole ligand to motif
-            is_motif |= ligand_atom_mask
+            is_motif[ligand_atom_mask] = 1
 
             # Get seed point from ligand
             ligand_atoms = atom_array[ligand_atom_mask]
@@ -178,7 +177,7 @@ class MotifMaker:
                 point_coord=seed_coord,
                 atom_array=atom_array,
             )
-            is_motif |= surrounding_mask
+            is_motif[surrounding_mask] = 1
 
         else:
             # Add partial ligand to motif
@@ -202,7 +201,7 @@ class MotifMaker:
             # Mark these ligand atoms as motif
             full_ligand_indices = np.where(ligand_atom_mask)[0]
             partial_ligand_indices = full_ligand_indices[nodes]
-            is_motif[partial_ligand_indices] = True
+            is_motif[partial_ligand_indices] = 1
 
             # Get seed point from partial ligand
             partial_ligand_atoms = atom_array[partial_ligand_indices]
@@ -213,7 +212,7 @@ class MotifMaker:
                 point_coord=seed_coord,
                 atom_array=atom_array,
             )
-            is_motif |= surrounding_mask
+            is_motif[surrounding_mask] = 1
 
         return is_motif
 
@@ -225,9 +224,9 @@ class MotifMaker:
             atom_array (AtomArray): Input Biotite AtomArray
 
         Returns:
-            np.ndarray: Boolean mask indicating motif atoms
+            np.ndarray: Integer mask (0/1) indicating motif atoms
         """
-        is_motif = np.zeros(len(atom_array), dtype=bool)
+        is_motif = np.zeros(len(atom_array), dtype=int)
 
         # Filter for polymer chains
         polymer_mask = np.isin(atom_array.chain_mol_type, ["protein", "RNA", "DNA"])
@@ -271,8 +270,8 @@ class MotifMaker:
 
         # Map back to full array indices
         chain_indices = np.where(chain_mask)[0]
-        full_motif_mask = np.zeros(len(atom_array), dtype=bool)
-        full_motif_mask[chain_indices[motif_mask]] = True
+        full_motif_mask = np.zeros(len(atom_array), dtype=int)
+        full_motif_mask[chain_indices[motif_mask]] = 1
 
         return full_motif_mask
 
@@ -289,9 +288,9 @@ class MotifMaker:
             atom_array (AtomArray): AtomArray to generate motif from
 
         Returns:
-            np.ndarray: Boolean mask indicating motif atoms
+            np.ndarray: Integer mask (0/1) indicating motif atoms
         """
-        is_motif = np.zeros(len(atom_array), dtype=bool)
+        is_motif = np.zeros(len(atom_array), dtype=int)
 
         # Pick radius
         r = np.random.uniform(self.r_min, self.r_max)
@@ -332,10 +331,10 @@ class MotifMaker:
                 partial_mask = self._get_partial_residue_motif_mask(
                     atom_array, residue_mask
                 )
-                is_motif |= partial_mask
+                is_motif[partial_mask] = 1
             else:
                 # Whole residue
-                is_motif |= residue_mask
+                is_motif[residue_mask] = 1
 
         return is_motif
 
@@ -350,9 +349,9 @@ class MotifMaker:
             residue_mask (np.ndarray): Boolean mask indicating which atoms belong to the residue
 
         Returns:
-            np.ndarray: Boolean mask indicating which atoms of the residue are in the motif
+            np.ndarray: Integer mask (0/1) indicating which atoms of the residue are in the motif
         """
-        partial_motif_mask = np.zeros(len(atom_array), dtype=bool)
+        partial_motif_mask = np.zeros(len(atom_array), dtype=int)
 
         residue_array = atom_array[residue_mask]
         if len(residue_array) == 0:
@@ -378,6 +377,6 @@ class MotifMaker:
         # Map back to full array
         residue_indices = np.where(residue_mask)[0]
         selected_indices = residue_indices[motif_atom_ids]
-        partial_motif_mask[selected_indices] = True
+        partial_motif_mask[selected_indices] = 1
 
         return partial_motif_mask

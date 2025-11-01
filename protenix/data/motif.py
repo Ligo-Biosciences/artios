@@ -362,6 +362,10 @@ class MotifMaker:
         G_res = residue_array.bonds.as_graph()
         graph_nodes = list(G_res.nodes())
 
+        if len(graph_nodes) == 0:
+            logger.warning("No nodes in residue graph. Returning empty motif mask.")
+            return partial_motif_mask
+
         # Pick seed atom
         if np.random.rand() < self.sidechain_seed_is_tip_prob:
             tip_atom = graph_nodes[-1]  # TODO: is the tip atom even the last node?

@@ -360,19 +360,20 @@ class MotifMaker:
             return partial_motif_mask
 
         G_res = residue_array.bonds.as_graph()
+        graph_nodes = list(G_res.nodes())
 
         # Pick seed atom
         if np.random.rand() < self.sidechain_seed_is_tip_prob:
-            tip_atom_id = len(residue_array) - 1
+            tip_atom = graph_nodes[-1]  # TODO: is the tip atom even the last node?
         else:
-            tip_atom_id = np.random.choice(len(residue_array))
+            tip_atom = np.random.choice(graph_nodes)
 
         # Pick depth
         num_bonds = np.random.geometric(self.sidechain_bfs_depth_prob) - 1
 
         # Get atoms within num_bonds of seed
         motif_atom_ids = nx.single_source_shortest_path_length(
-            G_res, tip_atom_id, cutoff=num_bonds
+            G_res, tip_atom, cutoff=num_bonds
         )
         motif_atom_ids = list(motif_atom_ids.keys())
 

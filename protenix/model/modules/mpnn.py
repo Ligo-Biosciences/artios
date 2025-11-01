@@ -547,6 +547,6 @@ class MPNN(nn.Module):
             logits_at_timestep[batch_idx, timestep] = logits[batch_idx, next_pos_idx]
 
         if return_logits:
-            return sequence_ids, logits_at_timestep
+            return sequence_ids, node_feats, logits_at_timestep
         else:
-            return sequence_ids
+            return sequence_ids, node_feats

@@ -416,16 +416,19 @@ class ArtiosAllAtomTrainer(object):
         return simple_metrics
 
     @torch.no_grad()
-    def evaluate(self, mode: str = "eval"):
+    def evaluate(self):
         if not self.configs.eval_ema_only:
             self._evaluate(ema_suffix="none-EMA")
         if hasattr(self, "ema_wrapper"):
             self.ema_wrapper.apply_shadow()
-            self._evaluate(ema_suffix=f"ema_{self.ema_wrapper.decay}", mode=mode)
+            self._evaluate(ema_suffix=f"ema_{self.ema_wrapper.decay}")
             self.ema_wrapper.restore()
 
     @torch.no_grad()
-    def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):
+    def _evaluate(
+        self,
+        ema_suffix: str = "",
+    ):
         # NOTE: currently, the test datasets are not being batched.
         # Init Metric Aggregator
         simple_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
@@ -446,28 +449,17 @@ class ArtiosAllAtomTrainer(object):
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
-            # evaluated_pids = []
-            # total_batch_num = len(test_dl)
 
             for index, batch in enumerate(tqdm(test_dl)):
                 batch = to_device(batch, self.device)
-                # pid = batch["basic"]["pdb_id"]
-
-                # if index + 1 == total_batch_num and DIST_WRAPPER.world_size > 1:
-                #     # Gather all pids across ranks for avoiding duplicated evaluations when drop_last = False
-                #     all_data_ids = DIST_WRAPPER.all_gather_object(evaluated_pids)
-                #     dedup_ids = set(sum(all_data_ids, []))
-                #     if pid in dedup_ids:
-                #         print(
-                #             f"Rank {DIST_WRAPPER.rank}: Drop data_id {pid} as it is already evaluated."
-                #         )
-                #         break
-                # evaluated_pids.append(pid)
+                pids = batch["basic"]["pdb_id"]
+                assert len(pids) == 1, "More than 1 element in the batch."
+                pid = pids[0]  # first element (batch size=1)
 
                 simple_metrics = {}
                 with enable_amp:
                     # Model forward - adds the pred_dict and label_dict to batch
-                    batch, _ = self.model_forward(batch, mode=mode, seed=index)
+                    batch, _ = self.model_forward(batch, mode="eval", seed=index)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict = self.get_loss(
                         batch, mode="train"
@@ -481,32 +473,32 @@ class ArtiosAllAtomTrainer(object):
                     # simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
                 # TODO: this might not work with batching.
-                # if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
-                #     coordinate = batch["pred_dict"]["coordinate"]
-                #     n_atoms = len(batch["cropped_atom_array"])
-                #     batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
-                #     saved_files = self.dumper.dump(
-                #         dataset_name=test_name,
-                #         pdb_id=pid,
-                #         seed=0,
-                #         pred_dict=batch["pred_dict"],
-                #         atom_array=batch["cropped_atom_array"],
-                #         entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
-                #     )
+                if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
+                    coordinate = batch["pred_dict"]["coordinate"]
+                    n_atoms = len(batch["cropped_atom_array"])
+                    batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
+                    saved_files = self.dumper.dump(
+                        dataset_name=test_name,
+                        pdb_id=pid,
+                        seed=0,
+                        pred_dict=batch["pred_dict"],
+                        atom_array=batch["cropped_atom_array"],
+                        entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
+                    )
 
-                #     # Log structure files to Neptune Scale
-                #     if self.configs.use_wandb and saved_files:
-                #         files_dict = {}
-                #         for file_path in saved_files:
-                #             # Create a relative key for Neptune using test_name/pdb_id/filename
-                #             filename = os.path.basename(file_path)
-                #             neptune_key = f"structures/{test_name}/{pid}/{filename}"
-                #             files_dict[neptune_key] = file_path
+                    # Log structure files to Neptune Scale
+                    if self.configs.use_wandb and saved_files:
+                        files_dict = {}
+                        for file_path in saved_files:
+                            # Create a relative key for Neptune using test_name/pdb_id/filename
+                            filename = os.path.basename(file_path)
+                            neptune_key = f"structures/{test_name}/{pid}/{filename}"
+                            files_dict[neptune_key] = file_path
 
-                #         self.neptune_run.log_files(
-                #             files=files_dict,
-                #             step=self.step,
-                #         )
+                        self.neptune_run.log_files(
+                            files=files_dict,
+                            step=self.step,
+                        )
 
                 # Metrics
                 for key, value in simple_metrics.items():

@@ -35,7 +35,6 @@ from protenix.data.featurizer import Featurizer
 from protenix.data.filter import Filter
 from protenix.data.motif import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
-from protenix.data.padding_utils import get_atom_padding_length, pad_features_dict
 from protenix.data.parser import AddAtomArrayAnnot
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.data.utils import (
@@ -676,30 +675,30 @@ class BaseSingleDataset(Dataset):
 
         # Get padding length
         # TODO: to be moved to collate_fn()
-        current_n_atom = feat["atom_to_token_idx"].shape[0]
-        max_n_atom = get_atom_padding_length(
-            current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
-        )
+        # current_n_atom = feat["atom_to_token_idx"].shape[0]
+        # max_n_atom = get_atom_padding_length(
+        #     current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
+        # )
 
-        assert current_n_atom > 1, "Crop has <= 1 atom."
-        # Pad features and labels
-        # TODO: remove padding!!
-        t5 = time.time()
-        pad_args = {
-            "current_n_atom": current_n_atom,
-            "max_n_atom": max_n_atom,
-            "current_n_token": feat["token_index"].shape[0],
-            "max_n_token": self.cropping_configs["crop_size"],
-            "current_n_msa": feat["msa"].shape[0],
-            "max_n_msa": self.padding["max_n_msa"],
-            "current_n_template": feat.get("template_restype", np.array([1])).shape[0],
-            "max_n_template": self.padding["max_n_template"],
-            "current_n_pocket": 1,
-            "max_n_pocket": self.padding["max_n_pocket"],
-        }
-        feat = pad_features_dict(feat, **pad_args)
-        label = pad_features_dict(label, **pad_args)
-        timings["padding"] = time.time() - t5
+        # assert current_n_atom > 1, "Crop has <= 1 atom."
+        # # Pad features and labels
+        # # TODO: remove padding!!
+        # t5 = time.time()
+        # pad_args = {
+        #     "current_n_atom": current_n_atom,
+        #     "max_n_atom": max_n_atom,
+        #     "current_n_token": feat["token_index"].shape[0],
+        #     "max_n_token": self.cropping_configs["crop_size"],
+        #     "current_n_msa": feat["msa"].shape[0],
+        #     "max_n_msa": self.padding["max_n_msa"],
+        #     "current_n_template": feat.get("template_restype", np.array([1])).shape[0],
+        #     "max_n_template": self.padding["max_n_template"],
+        #     "current_n_pocket": 1,
+        #     "max_n_pocket": self.padding["max_n_pocket"],
+        # }
+        # feat = pad_features_dict(feat, **pad_args)
+        # label = pad_features_dict(label, **pad_args)
+        # timings["padding"] = time.time() - t5
 
         data = {
             "input_feature_dict": feat,
@@ -903,7 +902,8 @@ class BaseSingleDataset(Dataset):
         Updates entity_id_int, sym_id_int, asym_id_int, res_id and ref_space_uid to un-index
         the sidechains of motif residues. Motif-related residues are grouped by
         residue identity into new entities, with each residue instance
-        becoming its own chain. Each atom within a motif residue gets a unique res_id.
+        becoming its own chain. Each atom within a motif residue gets a unique res_id since we
+        are going to be tokenizing the sidechains per-atom.
 
         Args:
             atom_array (AtomArray): AtomArray with is_motif_related annotation

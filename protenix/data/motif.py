@@ -345,6 +345,8 @@ class MotifMaker:
     ) -> np.ndarray:
         """
         Gets partial residue motif mask using BFS on the residue bond graph.
+        TODO: I need to double check if this method even works at all. Some minor evidence
+        suggests that we are just getting the warning every time (i.e do we ever even have the bond information?)
 
         Args:
             atom_array (AtomArray): Full atom array

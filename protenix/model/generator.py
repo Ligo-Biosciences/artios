@@ -135,7 +135,7 @@ class VariableLinQuadScheduler:
 
 class LaProteinaCoordScheduler:
     """
-    This scheduler is the same as the shceduler in the La-Proteina paper.
+    This scheduler is the same as the scheduler in the La-Proteina paper.
     """
 
     def __init__(self, scale: float = 1.0) -> None:

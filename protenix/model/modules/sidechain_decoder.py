@@ -163,13 +163,13 @@ class SidechainDecoder(nn.Module):
         self,
         input_feature_dict: Dict[str, Tensor],
         node_emb: Float[Tensor, "... n_token node_dim"],
-        timesteps: Float[Tensor, "... n_sample"],
+        timesteps: Float[Tensor, "n_steps"],
         residual_centre_atoms: Float[Tensor, "... n_sample n_atom 3"],
         stoch_type: str = "deterministic",
         alpha: float = 1.0,
         gamma: float = 1.0,
         n_sample: int = 1,
-        sigma_data: float = 4.0,
+        sigma_data: float = 1.0,
         eps: float = 1e-8,
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
         """All-atom denoising sampling using diffusion process.
@@ -245,6 +245,7 @@ class SidechainDecoder(nn.Module):
         x_0 = sigma_data * torch.randn(
             size=(*batch_shape, n_sample, N_atom, 3), device=device, dtype=dtype
         )  # [..., N_sample, N_atom, 3]
+        x_0 = x_0 + residual_centre_atoms  # move noise to around centre atoms
 
         # Initialise Euler/Euler-Maruyama
         x = x_0

@@ -909,6 +909,16 @@ class Featurizer(object):
 
         return mpnn_features
 
+    def get_motif_features(self):
+        """
+        Features for motif training.
+        """
+        motif_features = {}
+
+        # TODO: implement me!
+
+        return motif_features
+
     def get_all_input_features(self):
         """
         Get input features from cropped data.
@@ -940,6 +950,9 @@ class Featurizer(object):
 
         mpnn_features = self.get_mpnn_features()
         features.update(mpnn_features)
+
+        motif_features = self.get_motif_features()
+        features.update(motif_features)
 
         return features
 

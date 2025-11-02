@@ -486,15 +486,16 @@ class ArtiosAllAtomTrainer(object):
                     )
 
                     if DIST_WRAPPER.rank == 0:
-                        coordinate = batch["pred_dict"]["coordinate"]
-                        n_atoms = len(batch["cropped_atom_array"])
+                        coordinate = batch["pred_dict"]["coordinate"][0]
+                        atom_array = batch["cropped_atom_arrays"][0]
+                        n_atoms = len(atom_array)
                         batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
                         saved_files = self.dumper.dump(
                             dataset_name=test_name,
                             pdb_id=pid,
                             seed=0,
                             pred_dict=batch["pred_dict"],
-                            atom_array=batch["cropped_atom_array"],
+                            atom_array=atom_array,
                             entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
                         )
 

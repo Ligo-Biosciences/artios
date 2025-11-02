@@ -455,11 +455,16 @@ class ArtiosAllAtomTrainer(object):
                 pids = batch["basic"]["pdb_id"]
                 assert len(pids) == 1, "More than 1 element in the batch."
                 pid = pids[0]  # first element (batch size=1)
+                is_logging_element = (index + 1) % 10 == 0
 
                 simple_metrics = {}
                 with enable_amp:
                     # Model forward - adds the pred_dict and label_dict to batch
-                    batch, _ = self.model_forward(batch, mode="eval", seed=index)
+                    batch, _ = self.model_forward(
+                        batch,
+                        mode="eval" if is_logging_element else "train",
+                        seed=index,
+                    )
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict = self.get_loss(
                         batch, mode="train"
@@ -473,7 +478,7 @@ class ArtiosAllAtomTrainer(object):
                     # simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
                 # TODO: this might not work with batching.
-                if (index + 1) % 10 == 0 and DIST_WRAPPER.rank == 0:  # one in 10
+                if is_logging_element and DIST_WRAPPER.rank == 0:  # one in 10
                     coordinate = batch["pred_dict"]["coordinate"]
                     n_atoms = len(batch["cropped_atom_array"])
                     batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]

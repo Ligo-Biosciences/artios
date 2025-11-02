@@ -462,7 +462,7 @@ class ArtiosAllAtomTrainer(object):
                     # Model forward - adds the pred_dict and label_dict to batch
                     batch, _ = self.model_forward(
                         batch,
-                        mode="eval" if is_logging_element else "train",
+                        mode="train",
                         seed=index,
                     )
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
@@ -478,32 +478,39 @@ class ArtiosAllAtomTrainer(object):
                     # simple_metrics.update(self.aggregate_metrics(metrics_dict))
 
                 # TODO: this might not work with batching.
-                if is_logging_element and DIST_WRAPPER.rank == 0:  # one in 10
-                    coordinate = batch["pred_dict"]["coordinate"]
-                    n_atoms = len(batch["cropped_atom_array"])
-                    batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
-                    saved_files = self.dumper.dump(
-                        dataset_name=test_name,
-                        pdb_id=pid,
-                        seed=0,
-                        pred_dict=batch["pred_dict"],
-                        atom_array=batch["cropped_atom_array"],
-                        entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
+                if is_logging_element:  # one in 10
+                    batch, _ = self.model_forward(  # do sampling
+                        batch,
+                        mode="eval",
+                        seed=index,
                     )
 
-                    # Log structure files to Neptune Scale
-                    if self.configs.use_wandb and saved_files:
-                        files_dict = {}
-                        for file_path in saved_files:
-                            # Create a relative key for Neptune using test_name/pdb_id/filename
-                            filename = os.path.basename(file_path)
-                            neptune_key = f"structures/{test_name}/{pid}/{filename}"
-                            files_dict[neptune_key] = file_path
-
-                        self.neptune_run.log_files(
-                            files=files_dict,
-                            step=self.step,
+                    if DIST_WRAPPER.rank == 0:
+                        coordinate = batch["pred_dict"]["coordinate"]
+                        n_atoms = len(batch["cropped_atom_array"])
+                        batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
+                        saved_files = self.dumper.dump(
+                            dataset_name=test_name,
+                            pdb_id=pid,
+                            seed=0,
+                            pred_dict=batch["pred_dict"],
+                            atom_array=batch["cropped_atom_array"],
+                            entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
                         )
+
+                        # Log structure files to Neptune Scale
+                        if self.configs.use_wandb and saved_files:
+                            files_dict = {}
+                            for file_path in saved_files:
+                                # Create a relative key for Neptune using test_name/pdb_id/filename
+                                filename = os.path.basename(file_path)
+                                neptune_key = f"structures/{test_name}/{pid}/{filename}"
+                                files_dict[neptune_key] = file_path
+
+                            self.neptune_run.log_files(
+                                files=files_dict,
+                                step=self.step,
+                            )
 
                 # Metrics
                 for key, value in simple_metrics.items():

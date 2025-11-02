@@ -769,7 +769,7 @@ class MPNNLoss(AggregatedLoss):
                     enable_alignment=True,
                     expand_ground_truth=True,
                     timestep_key="timestep",
-                    sigma=4.0,  # TODO: make configurable
+                    sigma=1.0,
                 ),
             ),
         ]

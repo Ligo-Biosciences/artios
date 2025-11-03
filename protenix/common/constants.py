@@ -1005,3 +1005,11 @@ MAX_ASA = {
     "TYR": 255.0,
     "VAL": 165.0,
 }
+
+
+### Backbone atoms
+BACKBONE_DEFS = {
+    "protein": ["N", "CA", "C", "O"],
+    "dna": ["OP1", "OP2", "C1'", "C3'", "C4'"],
+    "rna": ["OP1", "OP2", "C1'", "C3'", "C4'"],
+}

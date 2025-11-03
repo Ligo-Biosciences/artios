@@ -23,7 +23,12 @@ from scipy.spatial.distance import cdist
 from sklearn.neighbors import KDTree
 
 from protenix.common.atom_types import DENSE_ATOM_NUM
-from protenix.common.constants import STD_RESIDUES, STD_RESIDUES_AND_GAP, get_all_elems
+from protenix.common.constants import (
+    BACKBONE_DEFS,
+    STD_RESIDUES,
+    STD_RESIDUES_AND_GAP,
+    get_all_elems,
+)
 from protenix.data.tokenizer import Token, TokenArray
 from protenix.utils.geometry import angle_3p, random_transform
 
@@ -345,12 +350,6 @@ class Featurizer(object):
             backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
         """
         # Backbone atom definitions by molecule type
-        BACKBONE_DEFS = {
-            "protein": ["N", "CA", "C", "O"],
-            "dna": ["OP1", "OP2", "C1'", "C3'", "C4'"],
-            "rna": ["OP1", "OP2", "C1'", "C3'", "C4'"],
-        }
-
         n_tokens = len(token_array)
         backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
         backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
@@ -911,15 +910,17 @@ class Featurizer(object):
 
     def get_motif_features(self):
         """
-        Features for motif training. When training the motif scaffolding model, note that N_atom = N_token
-        (since the backbone is tokenzied per atom as well as the ligands and the motif residues).
-        We will use N_token in most places to not confuse with an all-atom model (since we only use
-        one atom for non-motif residues). All these features are therefore token-level features.
+        Features for motif training.
         We extract coordinates from the centre atoms to avoid creating heavy N_atom features when this
         method is called for all-atom models.
         """
         motif_features = {}
 
+        # Atom features
+        is_motif = self.cropped_atom_array.is_motif
+        is_motif_related = self.cropped_atom_array.is_motif_related
+
+        # Token features
         centre_atom_indices = self.cropped_token_array.get_annotation(
             "centre_atom_index"
         )
@@ -941,6 +942,8 @@ class Featurizer(object):
 
         motif_features.update(
             {
+                "is_motif": torch.Tensor(is_motif).long(),
+                "is_motif_related": torch.Tensor(is_motif_related).long(),
                 "is_motif_token": torch.Tensor(is_motif_token).long(),
                 "is_motif_related_token": torch.Tensor(is_motif_related_token).long(),
                 "motif_restype": torch.Tensor(motif_restype),

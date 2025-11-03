@@ -12,7 +12,6 @@ from protenix.model.modules.embedders import FourierEmbedding, RelativePositionE
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.modules.transformer import DiffusionTransformer
 from protenix.model.utils import (
-    average_atom_to_token,
     centre_random_augmentation,
     expand_at_dim,
 )
@@ -57,7 +56,7 @@ class SidechainDecoder(nn.Module):
         self.layernorm_a = LayerNorm(node_dim)
 
         # Embed centre atoms
-        self.embed_centre_atoms = LinearNoBias(3, node_dim)
+        # self.embed_centre_atoms = LinearNoBias(3, node_dim)
 
         self.diffusion_transformer = DiffusionTransformer(
             num_blocks=2, c_token=node_dim, c_s=node_dim, c_z=32, num_heads=4
@@ -80,17 +79,17 @@ class SidechainDecoder(nn.Module):
     def forward(
         self,
         input_feature_dict: Dict[str, Tensor],
-        r_l: Float[Tensor, "... n_sample n_atom 3"],
+        x_noisy: Float[Tensor, "... n_sample n_atom 3"],
         node_emb: Float[Tensor, "... n_token node_dim"],
         timestep: Float[Tensor, "... n_sample"],
-        residual_centre_atoms: Float[Tensor, "... n_sample n_atom 3"],
+        # residual_centre_atoms: Float[Tensor, "... n_sample n_atom 3"],
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
         """All-atom denoiser forward pass."""
         # Grab mask and indices
         atom_mask = input_feature_dict["atom_mask"]
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
         n_token = node_emb.shape[-2]
-        n_sample = r_l.shape[-3]
+        # n_sample = x_noisy.shape[-3]
 
         # Compute pair mask
         token_mask = input_feature_dict["token_mask"]  # [..., n_token]
@@ -122,7 +121,7 @@ class SidechainDecoder(nn.Module):
         # Encode atoms
         a, q_l, c_l, p_lm, trunked_pair_mask = self.atom_attention_encoder(
             input_feature_dict=input_feature_dict,
-            r_l=r_l,
+            r_l=x_noisy / 10.0,  # TODO: hardcoded
             s=s,
             z=z,
             return_trunked_pair_mask=True,
@@ -130,13 +129,13 @@ class SidechainDecoder(nn.Module):
         # q_l = q_l + self.embed_centre_atoms(residual_centre_atoms / 10.0)  # TODO: hardcoded
 
         # TODO: janky
-        centre_atoms = average_atom_to_token(
-            x_atom=residual_centre_atoms,
-            atom_mask=expand_at_dim(atom_mask, dim=-2, n=n_sample),
-            atom_to_token_idx=expand_at_dim(atom_to_token_idx, dim=-2, n=n_sample),
-            n_token=n_token,
-        )
-        a = a + self.embed_centre_atoms(centre_atoms / 10.0)  # TODO: hardcoded
+        # centre_atoms = average_atom_to_token(
+        #     x_atom=residual_centre_atoms,
+        #     atom_mask=expand_at_dim(atom_mask, dim=-2, n=n_sample),
+        #     atom_to_token_idx=expand_at_dim(atom_to_token_idx, dim=-2, n=n_sample),
+        #     n_token=n_token,
+        # )
+        # a = a + self.embed_centre_atoms(centre_atoms / 10.0)  # TODO: hardcoded
         a = self.diffusion_transformer(a=a, s=s, z=z, pair_mask=pair_mask)
         a = self.layernorm_a(a)
 
@@ -153,9 +152,7 @@ class SidechainDecoder(nn.Module):
             trunked_pair_mask=trunked_pair_mask.squeeze(-4),
         )  # [..., n_sample, n_atom, 3]
 
-        denoised_atoms = residual_centre_atoms + r_update * self.c_out(
-            timestep[..., None, None]
-        )
+        denoised_atoms = x_noisy + r_update * self.c_out(timestep[..., None, None])
 
         return denoised_atoms
 
@@ -200,10 +197,9 @@ class SidechainDecoder(nn.Module):
             """Calculate velocity and scaled score for the diffusion process for a single timestep."""
             coords_pred = self.forward(
                 input_feature_dict=input_feature_dict,
-                r_l=x_noisy,
+                x_noisy=x_noisy,
                 node_emb=node_emb,
                 timestep=t_cur,  # [..., n_sample]
-                residual_centre_atoms=residual_centre_atoms,
             )
 
             # Calculate velocity

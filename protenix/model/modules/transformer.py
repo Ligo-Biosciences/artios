@@ -361,7 +361,7 @@ class DiffusionTransformer(nn.Module):
         c_s: int,
         c_z: int,
         num_heads: int,
-        checkpoint_grads: bool = False,
+        checkpoint_grads: bool = True,
     ):
         """
         Args:
@@ -739,7 +739,7 @@ class LocalAttnTransformer(nn.Module):
         num_heads: int,
         num_queries: int = 32,
         num_keys: int = 128,
-        checkpoint_grads: bool = False,
+        checkpoint_grads: bool = True,
     ):
         """
         Args:

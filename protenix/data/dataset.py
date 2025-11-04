@@ -17,7 +17,6 @@ import os
 import random
 import traceback
 from copy import deepcopy
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
@@ -127,13 +126,6 @@ class BaseSingleDataset(Dataset):
         self.msa_featurizer = msa_featurizer
         self.template_featurizer = template_featurizer
         self.motif_maker = motif_maker
-
-        # temp motif dir
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.motif_dir = (
-            Path(self.mmcif_dir).parent.parent.parent / f"motifs_{timestamp}"
-        )
-        os.makedirs(self.motif_dir, exist_ok=True)
 
         # Motif training configs
         self.motif_configs = kwargs.get("motif_training", {})
@@ -854,6 +846,10 @@ class BaseSingleDataset(Dataset):
         Saves the motif to the motif directory. Mainly used for debugging/visualising
         changes to motif generation algorithm.
         """
+        # temp motif dir
+        self.motif_dir = Path(self.mmcif_dir).parent.parent.parent / "motifs"
+        os.makedirs(self.motif_dir, exist_ok=True)
+
         if (
             atom_array.is_motif.sum() == 0
             or not self.motif_configs["save_motifs_for_debugging"]

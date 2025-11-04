@@ -985,8 +985,8 @@ class Featurizer(object):
         mpnn_features = self.get_mpnn_features()
         features.update(mpnn_features)
 
-        motif_features = self.get_motif_features()
-        features.update(motif_features)
+        # motif_features = self.get_motif_features()
+        # features.update(motif_features)
 
         return features
 

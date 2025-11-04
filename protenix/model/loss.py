@@ -571,8 +571,10 @@ class NLLLoss(BaseLoss):
         num_residue_types = gt_sequence.shape[-1]
 
         # Label smoothing
-        gt_sequence = gt_sequence + (self.label_smoothing / num_residue_types)
-        gt_sequence = gt_sequence / (gt_sequence.sum(dim=-1, keepdim=True) + 1e-3)
+        gt_sequence_smoothed = gt_sequence + (self.label_smoothing / num_residue_types)
+        gt_sequence_smoothed = gt_sequence / (
+            gt_sequence.sum(dim=-1, keepdim=True) + 1e-3
+        )
 
         # Calculate weights
         is_protein, is_dna, is_rna, is_ligand = self._extract_entity_masks(
@@ -587,15 +589,15 @@ class NLLLoss(BaseLoss):
         weight = weight * mask  # [..., N]
 
         # cross entropy loss
-        raw_loss = softmax_cross_entropy(logits, gt_sequence)  # [..., n_token]
-        weighted_loss = masked_mean(
-            raw_loss * weight,
-            mask,
-            axes=-1,
-        )  # [...,]
+        raw_loss = softmax_cross_entropy(logits, gt_sequence_smoothed)  # [..., n_token]
+        weighted_loss = torch.sum(raw_loss * weight, dim=-1) / 2000  # [...]
+        # mask,
+        # axes=-1,
 
         ### logging of different molecule types
-        logging_loss = raw_loss.detach().clone()
+        logging_loss = masked_mean(
+            softmax_cross_entropy(logits, gt_sequence), mask, axes=-1
+        ).detach()  # [...]
 
         def _get_masked_loss_for_type(
             logging_loss_i: torch.Tensor,
@@ -607,7 +609,7 @@ class NLLLoss(BaseLoss):
                 logging_loss_i * is_type_i,
                 valid_mask_i * is_type_i,
                 axes=-1,
-            ).mean()  # [..., N_token] -> [...] -> [1]
+            ).mean()  # [N_token] -> [1] -> scalar
             return torch.nan if loss == 0.0 else loss
 
         # Define molecule types and their masks
@@ -627,7 +629,7 @@ class NLLLoss(BaseLoss):
                     mask[i],
                     is_type_mask[i],
                 )
-                for i in range(logging_loss.shape[0])
+                for i in range(logging_loss.shape[0])  # loop over batch
             ]
             for mol_type, is_type_mask in molecule_types.items()
         }

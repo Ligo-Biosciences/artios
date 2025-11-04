@@ -489,6 +489,19 @@ class ArtiosAllAtomTrainer(object):
                         coordinate = batch["pred_dict"]["coordinate"][0]
                         atom_array = batch["cropped_atom_arrays"][0]
                         n_atoms = len(atom_array)
+                        # NOTE: this will include the atoms of unresolved residues.
+                        # These were masked when passed through to MPNN so the output
+                        # will be nonsensical. Filtering for these will:
+                        #   1. leave breaks in the backbone if unresolved residues lie
+                        # within the main structure
+                        #   2. remove the "blobs" found in inference outputs caused
+                        # by the inputted PDB data not having any crystallographic data
+                        # and consequently being labelled as is_resolved=False
+                        # NOTE: the above will not be a problem when performing this model
+                        # is placed in our full eval pipeline as our design model will
+                        # not be designing unresolved residues.
+                        # NOTE: I think we still have the age-old problem of attending to
+                        # unresolved residues during training though...
                         batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
                         saved_files = self.dumper.dump(
                             dataset_name=test_name,

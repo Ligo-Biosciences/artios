@@ -135,7 +135,7 @@ class VariableLinQuadScheduler:
 
 class LaProteinaCoordScheduler:
     """
-    This scheduler is the same as the shceduler in the La-Proteina paper.
+    This scheduler is the same as the scheduler in the La-Proteina paper.
     """
 
     def __init__(self, scale: float = 1.0) -> None:
@@ -637,7 +637,7 @@ def sample_noising(
     timestep_sampler: TrainingTimestepSampler,
     num_sample: int,
     scale: float,
-    generator: torch.Generator,
+    generator: Optional[torch.Generator] = None,
     input_feature_dict: Optional[dict[str, Any]] = None,
     encoder: Optional[nn.Module] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:

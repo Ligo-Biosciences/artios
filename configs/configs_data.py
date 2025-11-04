@@ -153,6 +153,7 @@ data_configs = {
         "residue_inclusion_prob": 0.7,
         "r_min": 5.0,
         "r_max": 6.0,
+        "save_motifs_for_debugging": False,
     },
     "bin_ends": ListValue([2112, 3008, 4000]),
     "padding": {

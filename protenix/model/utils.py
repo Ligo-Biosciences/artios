@@ -270,8 +270,8 @@ def broadcast_token_to_atom(x_token: Tensor, atom_to_token_idx: Tensor) -> Tenso
             [..., N_atom, d]
     """
     assert (
-        len(x_token.shape[:-2]) == len(atom_to_token_idx[:-1])
-    ), f"got x_token.shape[:-2] = {x_token.shape[:-2]}, atom_to_token_idx[:-1] = {atom_to_token_idx[:-1]}"
+        len(x_token.shape[:-2]) == len(atom_to_token_idx.shape[:-1])
+    ), f"got x_token.shape[:-2] = {x_token.shape[:-2]}, atom_to_token_idx.shape[:-1] = {atom_to_token_idx.shape[:-1]}"
 
     if len(atom_to_token_idx.shape) == 1:
         # shape = [N_atom], easy index

@@ -555,6 +555,13 @@ def get_data_shape_dict(num_token, num_atom, num_msa, num_templ, num_pocket):
         "mpnn_centre_atom_mask": (num_token,),
         "mpnn_backbone_coords": (num_token, 5, 3),
         "mpnn_backbone_mask": (num_token, 5),
+        # Motif features
+        "is_motif": (num_atom,),
+        "is_motif_related": (num_atom,),
+        "is_motif_token": (num_token,),
+        "is_motif_related_token": (num_token,),
+        "motif_restype": (num_token, 32),
+        "motif_coordinate": (num_token, 3),
     }
 
     # Extra features needed

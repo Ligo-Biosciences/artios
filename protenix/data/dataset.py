@@ -29,7 +29,7 @@ from biotite.structure.io import save_structure
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import Dataset
 
-from protenix.common.constants import EvaluationChainInterface
+from protenix.common.constants import BACKBONE_DEFS, EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
 from protenix.data.filter import Filter
@@ -851,10 +851,13 @@ class BaseSingleDataset(Dataset):
 
     def _save_motif(self, atom_array: AtomArray, pdb_id: str) -> None:
         """
-        Saves the motif to the motif directory.
+        Saves the motif to the motif directory. Mainly used for debugging/visualising
+        changes to motif generation algorithm.
         """
-        # Skip if no motif was generated
-        if atom_array.is_motif.sum() == 0:
+        if (
+            atom_array.is_motif.sum() == 0
+            or not self.motif_configs["save_motifs_for_debugging"]
+        ):
             return
 
         motif_fpath = self.motif_dir / f"{pdb_id}_motif.cif"
@@ -867,8 +870,8 @@ class BaseSingleDataset(Dataset):
     @staticmethod
     def _duplicate_motif_backbone_atoms(atom_array: AtomArray) -> AtomArray:
         """
-        Duplicates backbone atoms of motif-related residues with is_motif and
-        is_motif_related annotations set to False. This allows us to un-index
+        Duplicates backbone atoms of motif-related residues, setting their is_motif and
+        is_motif_related annotations to False. This allows us to un-index
         the motif sidechains without breaking the backbone.
 
         Args:
@@ -878,11 +881,19 @@ class BaseSingleDataset(Dataset):
             AtomArray: AtomArray with duplicated backbone atoms of motif-related residues.
         """
         is_motif_related = atom_array.is_motif_related
-        is_backbone = (atom_array.mol_type == "protein") & (
-            atom_array.atom_name == "CA"
-        ) | (
-            np.isin(atom_array.mol_type, ["RNA", "DNA"])
-            & (atom_array.atom_name == "C1'")
+        is_backbone = (
+            (
+                (atom_array.mol_type == "protein")
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["protein"]))
+            )
+            | (
+                (atom_array.mol_type == "DNA")
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["dna"]))
+            )
+            | (
+                (atom_array.mol_type == "RNA")
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["rna"]))
+            )
         )
 
         duplicate_mask = is_backbone & (is_motif_related > 0)

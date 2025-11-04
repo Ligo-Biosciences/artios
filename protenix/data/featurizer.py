@@ -23,7 +23,12 @@ from scipy.spatial.distance import cdist
 from sklearn.neighbors import KDTree
 
 from protenix.common.atom_types import DENSE_ATOM_NUM
-from protenix.common.constants import STD_RESIDUES, STD_RESIDUES_AND_GAP, get_all_elems
+from protenix.common.constants import (
+    BACKBONE_DEFS,
+    STD_RESIDUES,
+    STD_RESIDUES_AND_GAP,
+    get_all_elems,
+)
 from protenix.data.tokenizer import Token, TokenArray
 from protenix.utils.geometry import angle_3p, random_transform
 
@@ -345,12 +350,6 @@ class Featurizer(object):
             backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
         """
         # Backbone atom definitions by molecule type
-        BACKBONE_DEFS = {
-            "protein": ["N", "CA", "C", "O"],
-            "dna": ["OP1", "OP2", "C1'", "C3'", "C4'"],
-            "rna": ["OP1", "OP2", "C1'", "C3'", "C4'"],
-        }
-
         n_tokens = len(token_array)
         backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
         backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
@@ -909,6 +908,51 @@ class Featurizer(object):
 
         return mpnn_features
 
+    def get_motif_features(self):
+        """
+        Features for motif training.
+        We extract coordinates from the centre atoms to avoid creating heavy N_atom features when this
+        method is called for all-atom models.
+        """
+        motif_features = {}
+
+        # Atom features
+        is_motif = self.cropped_atom_array.is_motif
+        is_motif_related = self.cropped_atom_array.is_motif_related
+
+        # Token features
+        centre_atom_indices = self.cropped_token_array.get_annotation(
+            "centre_atom_index"
+        )
+        centre_atoms = self.cropped_atom_array[centre_atom_indices]
+
+        token_resolved = centre_atoms.is_resolved  # [N_token]
+        is_motif_token = centre_atoms.is_motif  # [N_token]
+        is_motif_related_token = centre_atoms.is_motif_related  # [N_token]
+
+        restype = centre_atoms.cano_seq_resname
+        restype_onehot = self.restype_onehot_encoded(restype)
+        motif_restype = restype_onehot * torch.Tensor(
+            is_motif_related_token * token_resolved
+        ).unsqueeze(-1)  # [N_token, 32]
+
+        motif_coordinate = centre_atoms.coord * is_motif_token.reshape(
+            -1, 1
+        )  # [N_token, 3]
+
+        motif_features.update(
+            {
+                "is_motif": torch.Tensor(is_motif).long(),
+                "is_motif_related": torch.Tensor(is_motif_related).long(),
+                "is_motif_token": torch.Tensor(is_motif_token).long(),
+                "is_motif_related_token": torch.Tensor(is_motif_related_token).long(),
+                "motif_restype": torch.Tensor(motif_restype),
+                "motif_coordinate": torch.Tensor(motif_coordinate),
+            }
+        )
+
+        return motif_features
+
     def get_all_input_features(self):
         """
         Get input features from cropped data.
@@ -940,6 +984,9 @@ class Featurizer(object):
 
         mpnn_features = self.get_mpnn_features()
         features.update(mpnn_features)
+
+        motif_features = self.get_motif_features()
+        features.update(motif_features)
 
         return features
 

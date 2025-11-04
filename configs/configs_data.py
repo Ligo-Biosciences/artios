@@ -141,7 +141,21 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": True,
     "binding_target_train_rate": 0.75,
-    "bin_ends": ListValue([7168, 6016, 4096]),  # [2112, 3008, 4000]
+    "motif_training": {
+        "motif_train_rate": 1.0,
+        "ligand_motif_prob": 0.8,
+        "whole_ligand_prob": 0.7,
+        "whole_sidechain_prob": 0.2,
+        "pocket_score_threshold": 0.18,
+        "pocket_n_neighbours": 100,
+        "sidechain_seed_is_tip_prob": 0.8,
+        "sidechain_bfs_depth_prob": 0.5,
+        "residue_inclusion_prob": 0.8,
+        "r_min": 4.0,
+        "r_max": 5.0,
+        "save_motifs_for_debugging": False,
+    },
+    "bin_ends": ListValue([2112, 3008, 4000]),
     "padding": {
         "max_n_msa": 1,
         "max_n_template": 4,

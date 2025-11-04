@@ -1494,6 +1494,7 @@ def get_datasets(
         )
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
+        dataset_param["motif_training"] = data_config.get("motif_training", {})
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

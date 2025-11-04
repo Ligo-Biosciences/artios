@@ -345,8 +345,6 @@ class MotifMaker:
     ) -> np.ndarray:
         """
         Gets partial residue motif mask using BFS on the residue bond graph.
-        TODO: I need to double check if this method even works at all. Some minor evidence
-        suggests that we are just getting the warning every time (i.e do we ever even have the bond information?)
 
         Args:
             atom_array (AtomArray): Full atom array
@@ -370,7 +368,9 @@ class MotifMaker:
 
         # Pick seed atom
         if np.random.rand() < self.sidechain_seed_is_tip_prob:
-            tip_atom = graph_nodes[-1]  # TODO: is the tip atom even the last node?
+            tip_atom = graph_nodes[
+                -1
+            ]  # TODO: I don't think the last node in the graph is neccessarily the tip
         else:
             tip_atom = np.random.choice(graph_nodes)
 

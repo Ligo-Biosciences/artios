@@ -522,12 +522,23 @@ class ArtiosAllAtomTrainer(object):
                                 files_dict[neptune_key] = file_path
 
                             # Suppress verbose output from Neptune file logging
-                            with open(os.devnull, "w") as devnull:
-                                with redirect_stdout(devnull), redirect_stderr(devnull):
-                                    self.neptune_run.log_files(
-                                        files=files_dict,
-                                        step=self.step,
-                                    )
+                            # Temporarily disable Azure SDK logging
+                            azure_logger = logging.getLogger("azure")
+                            original_level = azure_logger.level
+                            azure_logger.setLevel(logging.WARNING)
+
+                            try:
+                                with open(os.devnull, "w") as devnull:
+                                    with redirect_stdout(devnull), redirect_stderr(
+                                        devnull
+                                    ):
+                                        self.neptune_run.log_files(
+                                            files=files_dict,
+                                            step=self.step,
+                                        )
+                            finally:
+                                # Restore original logging level
+                                azure_logger.setLevel(original_level)
 
                 # Metrics
                 for key, value in simple_metrics.items():

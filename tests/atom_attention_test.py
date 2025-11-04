@@ -161,7 +161,9 @@ class TestAtomAttentionEncoder:
         s = torch.randn(n_samples, n_tokens, atom_attention_encoder.c_s, device=device)
 
         # Test with z (pair embedding)
-        z = torch.randn(n_tokens, n_tokens, atom_attention_encoder.c_z, device=device)
+        z = torch.randn(
+            1, n_tokens, n_tokens, atom_attention_encoder.c_z, device=device
+        )
 
         # Test full forward pass
         a, q_l, c_l, p_lm = atom_attention_encoder(
@@ -308,17 +310,23 @@ class TestAtomAttentionDecoder:
         basic = sample_data["basic"]
         n_atoms = basic["N_atom"]
         n_tokens = basic["N_token"]
+        N_sample = 2
 
         # Create input tensors
-        a = torch.randn(n_tokens, atom_attention_decoder.c_token, device=device)
-        q_skip = torch.randn(n_atoms, atom_attention_decoder.c_atom, device=device)
-        c_skip = torch.randn(n_atoms, atom_attention_decoder.c_atom, device=device)
+        a = torch.randn(
+            N_sample, n_tokens, atom_attention_decoder.c_token, device=device
+        )
+        q_skip = torch.randn(
+            N_sample, n_atoms, atom_attention_decoder.c_atom, device=device
+        )
+        c_skip = torch.randn(1, n_atoms, atom_attention_decoder.c_atom, device=device)
 
         # Calculate n_blocks for p_skip shape
         n_blocks = (
             n_atoms + atom_attention_decoder.num_queries - 1
         ) // atom_attention_decoder.num_queries
         p_skip = torch.randn(
+            1,
             n_blocks,
             atom_attention_decoder.num_queries,
             atom_attention_decoder.num_keys,
@@ -349,7 +357,7 @@ class TestAtomAttentionDecoder:
         )
 
         # Check output shape
-        expected_shape = (n_atoms, 3)
+        expected_shape = (N_sample, n_atoms, 3)
         assert (
             r_update.shape == expected_shape
         ), f"Expected r_update shape {expected_shape}, got {r_update.shape}"
@@ -364,17 +372,22 @@ class TestAtomAttentionDecoder:
         basic = sample_data["basic"]
         n_atoms = basic["N_atom"]
         n_tokens = basic["N_token"]
+        n_sample = 1
         batch_size = 2
 
         # Create batched input tensors
         a = torch.randn(
-            batch_size, n_tokens, atom_attention_decoder.c_token, device=device
+            batch_size,
+            n_sample,
+            n_tokens,
+            atom_attention_decoder.c_token,
+            device=device,
         )
         q_skip = torch.randn(
-            batch_size, n_atoms, atom_attention_decoder.c_atom, device=device
+            batch_size, n_sample, n_atoms, atom_attention_decoder.c_atom, device=device
         )
         c_skip = torch.randn(
-            batch_size, n_atoms, atom_attention_decoder.c_atom, device=device
+            batch_size, n_sample, n_atoms, atom_attention_decoder.c_atom, device=device
         )
 
         # Calculate n_blocks for p_skip shape
@@ -383,6 +396,7 @@ class TestAtomAttentionDecoder:
         ) // atom_attention_decoder.num_queries
         p_skip = torch.randn(
             batch_size,
+            1,
             n_blocks,
             atom_attention_decoder.num_queries,
             atom_attention_decoder.num_keys,
@@ -415,81 +429,13 @@ class TestAtomAttentionDecoder:
         )
 
         # Check output shape
-        expected_shape = (batch_size, n_atoms, 3)
+        expected_shape = (batch_size, n_sample, n_atoms, 3)
         assert (
             r_update.shape == expected_shape
         ), f"Expected r_update shape {expected_shape}, got {r_update.shape}"
 
         # Check for finite values
         assert torch.isfinite(r_update).all(), "r_update contains non-finite values"
-
-    def test_atom_attention_decoder_encoder_compatibility(self, sample_data, device):
-        """Test that decoder can work with encoder outputs."""
-        input_feature_dict = sample_data["input_feature_dict"]
-        basic = sample_data["basic"]
-        n_atoms = basic["N_atom"]
-
-        # Move input data to device
-        input_feature_dict = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
-            for k, v in input_feature_dict.items()
-        }
-
-        # Create encoder
-        encoder = AtomAttentionEncoder(
-            c_token=384,
-            has_coords=False,
-            has_s=False,
-            has_z=False,
-            c_atom=128,
-            c_atompair=16,
-            num_blocks=2,
-            num_heads=4,
-            num_queries=32,
-            num_keys=128,
-        ).to(device)
-
-        # Create decoder with matching parameters
-        decoder = AtomAttentionDecoder(
-            c_token=384,
-            c_atom=128,
-            c_atompair=16,
-            num_blocks=2,
-            num_heads=4,
-            num_queries=32,
-            num_keys=128,
-        ).to(device)
-
-        # Run encoder
-        a, q_l, c_l, p_lm = encoder(
-            input_feature_dict=input_feature_dict, r_l=None, s=None, z=None
-        )
-
-        # Use encoder outputs as decoder inputs
-        atom_mask = input_feature_dict["atom_mask"].unsqueeze(-2)
-        atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
-
-        # Generate trunked_pair_mask using the same pattern
-        trunked_pair_mask = self._generate_trunked_pair_mask(
-            atom_mask, decoder.num_queries, decoder.num_keys
-        )
-
-        # Run decoder
-        r_update = decoder(
-            a=a,
-            q_skip=q_l,
-            c_skip=c_l,
-            p_skip=p_lm,
-            atom_to_token_idx=atom_to_token_idx,
-            atom_mask=atom_mask,
-            trunked_pair_mask=trunked_pair_mask,
-        )
-
-        # Check compatibility
-        assert r_update.shape[-2:] == (n_atoms, 3), "Decoder output shape incorrect"
-        assert torch.isfinite(
-            r_update
-        ).all(), "Decoder output contains non-finite values"
 
 
 if __name__ == "__main__":

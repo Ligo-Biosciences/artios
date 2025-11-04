@@ -261,7 +261,7 @@ class MSELoss(BaseLoss):
         """Calculates the per-sample scale."""
         sqrt2 = 1.414
         timestep = pred_dict[self.timestep_key]
-        timestep = torch.clamp(timestep, max=0.95)  # TODO: hardcoded
+        timestep = torch.clamp(timestep, max=0.99)
         return 1 / (sqrt2 * (self.sigma * (1 - timestep)) ** 2)
 
     def weighted_rigid_align(
@@ -762,7 +762,7 @@ class MPNNLoss(AggregatedLoss):
                     weight_protein=1.0,
                     weight_dna=1.0,
                     weight_rna=1.0,
-                    weight_ligand=1.0,
+                    weight_ligand=10.0,
                     # Behaviour
                     enable_alignment=True,
                     expand_ground_truth=True,

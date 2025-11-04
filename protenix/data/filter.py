@@ -718,15 +718,15 @@ class Filter(object):
             | (atom_array.mol_type == "ligand")
             | (
                 (atom_array.mol_type == "protein")
-                & (atom_array.atom_name in BACKBONE_DEFS["protein"])
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["protein"]))
             )
             | (
                 (atom_array.mol_type == "DNA")
-                & (atom_array.atom_name in BACKBONE_DEFS["dna"])
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["dna"]))
             )
             | (
                 (atom_array.mol_type == "RNA")
-                & (atom_array.atom_name in BACKBONE_DEFS["rna"])
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["rna"]))
             )
         )
 

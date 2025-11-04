@@ -261,6 +261,7 @@ class MSELoss(BaseLoss):
         """Calculates the per-sample scale."""
         sqrt2 = 1.414
         timestep = pred_dict[self.timestep_key]
+        timestep = torch.clamp(timestep, max=0.95)  # TODO: hardcoded
         return 1 / (sqrt2 * (self.sigma * (1 - timestep)) ** 2)
 
     def weighted_rigid_align(
@@ -742,6 +743,31 @@ class MPNNLoss(AggregatedLoss):
                     weight_dna=configs.loss.mpnn.weight_dna,
                     weight_rna=configs.loss.mpnn.weight_rna,
                     weight_ligand=configs.loss.mpnn.weight_ligand,
+                ),
+            ),
+            LossComponent(
+                name="mse_loss",
+                weight=1.0,
+                loss=MSELoss(
+                    # Tensor keys
+                    pred_key="coordinate",
+                    true_key="coordinate",
+                    mask_key="atom_loss_mask",
+                    # Entity mask keys
+                    protein_mask_key="is_protein",
+                    dna_mask_key="is_dna",
+                    rna_mask_key="is_rna",
+                    ligand_mask_key="is_ligand",
+                    # Weights
+                    weight_protein=1.0,
+                    weight_dna=1.0,
+                    weight_rna=1.0,
+                    weight_ligand=1.0,
+                    # Behaviour
+                    enable_alignment=True,
+                    expand_ground_truth=True,
+                    timestep_key="timestep",
+                    sigma=1.0,
                 ),
             ),
         ]

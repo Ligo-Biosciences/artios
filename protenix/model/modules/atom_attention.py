@@ -1,3 +1,7 @@
+"""
+TODO: switch to jaxtyping for readability.
+"""
+
 from typing import Dict, Optional
 
 import torch
@@ -14,6 +18,7 @@ from protenix.model.modules.transformer import LocalAttnTransformer
 from protenix.model.utils import (
     average_atom_to_token,
     broadcast_token_to_atom,
+    expand_at_dim,
     flatten_final_dims,
 )
 
@@ -232,6 +237,7 @@ class AtomAttentionEncoder(nn.Module):
         r_l: Tensor = None,
         s: Tensor = None,
         z: Tensor = None,
+        return_trunked_pair_mask: bool = False,
     ):
         """
         Args:
@@ -254,7 +260,19 @@ class AtomAttentionEncoder(nn.Module):
             p_lm:
                 [..., N_sample | 1, N_atom, N_atom, c_atompair]
         """
-        # TODO: add input asserts here
+        # Validate input dimensions
+        if s is not None:
+            if s.shape[-3] != 1:
+                assert (
+                    s.shape[-3] == r_l.shape[-3]
+                ), f"s sample dimension {s.shape[-3]} must match r_l sample dimension {r_l.shape[-3]}"
+            assert len(r_l.shape[:-3]) == len(s.shape[:-3])  # batch dims
+        if z is not None:
+            if z.shape[-4] != 1:
+                assert (
+                    z.shape[-4] == r_l.shape[-3]
+                ), f"z sample dimension {z.shape[-4]} must match r_l sample dimension {r_l.shape[-3]}"
+            assert len(r_l.shape[:-3]) == len(z.shape[:-4])
 
         atom_mask = input_feature_dict["atom_mask"]
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
@@ -290,7 +308,11 @@ class AtomAttentionEncoder(nn.Module):
         if self.has_s:
             c_l = c_l + broadcast_token_to_atom(
                 x_token=self.linear_no_bias_s(self.layernorm_s(s)),
-                atom_to_token_idx=atom_to_token_idx,
+                atom_to_token_idx=expand_at_dim(
+                    atom_to_token_idx,
+                    dim=-2,
+                    n=s.shape[-3],  # N_sample | 1
+                ),
             )  # [..., N_sample | 1, N_atom, c_atom], depending on s shape
             c_l = c_l * atom_mask[..., None]
 
@@ -298,7 +320,11 @@ class AtomAttentionEncoder(nn.Module):
             # Broadcast token pair vectors to local atom pairs
             z_local_pairs = broadcast_token_to_local_atom_pair(
                 z_token=self.linear_no_bias_z(self.layernorm_z(z)),
-                atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
+                atom_to_token_idx=expand_at_dim(
+                    atom_to_token_idx,
+                    dim=-2,
+                    n=z.shape[-4],  # N_sample | 1
+                ),
                 num_queries=self.num_queries,
                 num_keys=self.num_keys,
             )  # [..., N_sample | 1, n_blocks, n_queries, n_keys, c_atompair]
@@ -342,7 +368,10 @@ class AtomAttentionEncoder(nn.Module):
             atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),
             n_token=n_token,
         )
-        return a, q_l, c_l, p_lm
+        if return_trunked_pair_mask:
+            return a, q_l, c_l, p_lm, trunked_pair_mask
+        else:
+            return a, q_l, c_l, p_lm
 
 
 class AtomAttentionDecoder(nn.Module):
@@ -406,13 +435,13 @@ class AtomAttentionDecoder(nn.Module):
         """
         Args:
             a (Tensor): the single feature aggregate per-atom representation
-                [..., N_token, c_token]
+                [..., N_sample, N_token, c_token]
             q_skip (Tensor): atom single embedding
-                [..., N_atom, c_atom]
+                [..., N_sample, N_atom, c_atom]
             c_skip (Tensor): atom single embedding
-                [..., N_atom, c_atom]
+                [..., 1, N_atom, c_atom]
             p_skip (Tensor): atompair single embedding
-                [..., n_blocks, n_queries, n_keys, c_atompair]
+                [..., 1, n_blocks, n_queries, n_keys, c_atompair]
             atom_to_token_idx (Tensor): atom to token index for broadcasting.
                 [..., N_atom]
             atom_mask (Tensor): per-atom mask indicating valid atoms
@@ -422,12 +451,18 @@ class AtomAttentionDecoder(nn.Module):
         Returns:
             Tensor: the updated noisy coordinates
                 [..., N_atom, 3]
+        # TODO: atom attention decoder has a different input signature than the decoder. Is this optimal?
         """
-        # Broadcast per-token activiations to per-atom activations and add the skip connection
+        # Add N_sample dims
+        atom_mask = atom_mask.unsqueeze(-2)
+        trunked_pair_mask = trunked_pair_mask.unsqueeze(-4)
+
+        # Broadcast per-token activations to per-atom activations and add the skip connection
         q = q_skip + broadcast_token_to_atom(
-            x_token=self.broadcast_linear(a), atom_to_token_idx=atom_to_token_idx
+            x_token=self.broadcast_linear(a),
+            atom_to_token_idx=expand_at_dim(atom_to_token_idx, dim=-2, n=a.shape[-3]),
         )
-        q = q * atom_mask[..., None]  # TODO: PROBLEM!
+        q = q * atom_mask[..., None]
 
         # Cross attention transformer
         q = self.atom_transformer(
@@ -436,5 +471,5 @@ class AtomAttentionDecoder(nn.Module):
 
         # Map to positions update
         r = self.final_linear(self.final_layernorm(q))
-        r = r * atom_mask[..., None]  # TODO: PROBLEM!
+        r = r * atom_mask[..., None]
         return r

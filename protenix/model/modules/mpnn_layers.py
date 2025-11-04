@@ -8,7 +8,7 @@ from jaxtyping import Float, Int
 from torch import Tensor, nn
 
 import protenix.model.modules.message_passing as mp
-from protenix.model.modules.primitives import LayerNorm
+from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.utils import expand_at_dim
 
 
@@ -82,6 +82,18 @@ class PositionWiseFeedForward(nn.Module):
         return h
 
 
+class SwiGLU_MLP(nn.Module):
+    def __init__(self, num_in: int, num_hidden, n: int = 2) -> None:
+        super().__init__()
+        self.W_in = LinearNoBias(num_in, num_hidden * n * 2)
+        self.W_out = LinearNoBias(num_hidden * n, num_hidden)
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        a, b = self.W_in(x).chunk(2, dim=-1)
+        return self.W_out(a * self.act(b))
+
+
 class MPNNEncoderLayer(BaseMPNNLayer):
     """Message Passing Neural Network encoder layer with neighborhood aggregation."""
 
@@ -106,23 +118,30 @@ class MPNNEncoderLayer(BaseMPNNLayer):
         self.scale = scale
 
         # Node message - 3-layer MLP
-        self.W1 = nn.Linear(2 * node_dim + edge_dim, node_dim, bias=True)
-        self.W2 = nn.Linear(node_dim, node_dim, bias=True)
-        self.W3 = nn.Linear(node_dim, node_dim, bias=True)
+        # self.W1 = nn.Linear(2 * node_dim + edge_dim, node_dim, bias=True)
+        # self.W2 = nn.Linear(node_dim, node_dim, bias=True)
+        # self.W3 = nn.Linear(node_dim, node_dim, bias=True)
         self.dropout1 = nn.Dropout(dropout)
         self.norm1 = LayerNorm(node_dim)
+        self.node_message_mlp = SwiGLU_MLP(
+            num_in=2 * node_dim + edge_dim, num_hidden=node_dim, n=1
+        )
 
         # Node feedforward
-        self.dense = PositionWiseFeedForward(
-            node_dim, node_dim * 4
-        )  # Transition(c_in=node_dim, n=4)
+        # self.dense = PositionWiseFeedForward(
+        #     node_dim, node_dim * 4
+        # )  # Transition(c_in=node_dim, n=4)
+        self.dense = SwiGLU_MLP(num_in=node_dim, num_hidden=node_dim, n=2)
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = LayerNorm(node_dim)
 
         # Edge update - 3-layer MLP
-        self.W11 = nn.Linear(2 * node_dim + edge_dim, edge_dim, bias=True)
-        self.W12 = nn.Linear(edge_dim, edge_dim, bias=True)
-        self.W13 = nn.Linear(edge_dim, edge_dim, bias=True)
+        # self.W11 = nn.Linear(2 * node_dim + edge_dim, edge_dim, bias=True)
+        # self.W12 = nn.Linear(edge_dim, edge_dim, bias=True)
+        # self.W13 = nn.Linear(edge_dim, edge_dim, bias=True)
+        self.edge_update_mlp = SwiGLU_MLP(
+            num_in=2 * node_dim + edge_dim, num_hidden=edge_dim, n=1
+        )
         self.dropout3 = nn.Dropout(dropout)
         self.norm3 = LayerNorm(edge_dim)
 
@@ -164,7 +183,8 @@ class MPNNEncoderLayer(BaseMPNNLayer):
             edge_index=edge_index,
         )  # [..., nodes, neighbors, 2*node_dim + edge_dim]
 
-        h_message = self.W3(self.act(self.W2(self.act(self.W1(h_nn)))))
+        h_message = self.node_message_mlp(h_nn)
+        # self.W3(self.act(self.W2(self.act(self.W1(h_nn)))))
         h_message = h_message * edge_mask[..., None]
         dh = torch.sum(h_message, dim=-2) / self.scale
         node_emb = self.norm1(node_emb + self.dropout1(dh))
@@ -179,7 +199,8 @@ class MPNNEncoderLayer(BaseMPNNLayer):
             node_emb, edge_emb, edge_index
         )  # [..., nodes, neighbors, 2*node_dim + edge_dim]
 
-        h_message = self.W13(self.act(self.W12(self.act(self.W11(h_nn)))))
+        h_message = self.edge_update_mlp(h_nn)
+        # self.W13(self.act(self.W12(self.act(self.W11(h_nn)))))
         edge_emb = self.norm3(edge_emb + self.dropout3(h_message))
         edge_emb = edge_emb * edge_mask[..., None]
 
@@ -212,16 +233,20 @@ class MPNNDecoderLayer(BaseMPNNLayer):
         self.scale = scale
 
         # Node message from edges - 3-layer MLP
-        self.W1 = nn.Linear(node_dim + edge_input_dim, node_dim, bias=True)
-        self.W2 = nn.Linear(node_dim, node_dim, bias=True)
-        self.W3 = nn.Linear(node_dim, node_dim, bias=True)
+        # self.W1 = nn.Linear(node_dim + edge_input_dim, node_dim, bias=True)
+        # self.W2 = nn.Linear(node_dim, node_dim, bias=True)
+        # self.W3 = nn.Linear(node_dim, node_dim, bias=True)
+        self.node_message_mlp = SwiGLU_MLP(
+            num_in=node_dim + edge_input_dim, num_hidden=node_dim, n=1
+        )
         self.dropout1 = nn.Dropout(dropout)
         self.norm1 = LayerNorm(node_dim)
 
         # Node feedforward
-        self.dense = PositionWiseFeedForward(
-            node_dim, node_dim * 4
-        )  # Transition(c_in=node_dim, n=4)
+        # self.dense = PositionWiseFeedForward(
+        #     node_dim, node_dim * 4
+        # )  # Transition(c_in=node_dim, n=4)
+        self.dense = SwiGLU_MLP(num_in=node_dim, num_hidden=node_dim, n=2)
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = LayerNorm(node_dim)
 
@@ -259,7 +284,8 @@ class MPNNDecoderLayer(BaseMPNNLayer):
         h_EV = torch.cat([nodes_self, edge_emb], dim=-1)
 
         # Node message computation
-        h_message = self.W3(self.act(self.W2(self.act(self.W1(h_EV)))))
+        h_message = self.node_message_mlp(h_EV)
+        # self.W3(self.act(self.W2(self.act(self.W1(h_EV)))))
         h_message = h_message * edge_mask[..., None]
         dh = torch.sum(h_message, dim=-2) / self.scale
         node_emb = self.norm1(node_emb + self.dropout1(dh))

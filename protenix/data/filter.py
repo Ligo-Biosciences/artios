@@ -17,7 +17,7 @@ import numpy as np
 from biotite.structure import AtomArray, get_molecule_indices
 from scipy.spatial.distance import cdist
 
-from protenix.common.constants import CRYSTALLIZATION_AIDS
+from protenix.common.constants import BACKBONE_DEFS, CRYSTALLIZATION_AIDS
 
 
 class Filter(object):
@@ -694,3 +694,40 @@ class Filter(object):
         backbone_array.res_name[protein_mask] = "GLY"
 
         return backbone_array
+
+    @staticmethod
+    def remove_non_motif_residue_sidechains(atom_array: AtomArray) -> AtomArray:
+        """
+        Removes side chain atoms only from residues that aren't part of the motif.
+
+        Args:
+            atom_array (AtomArray): Input atom array containing protein structure
+
+        Returns:
+            AtomArray: Modified atom array with the non-motif residue protein side chains removed.
+        """
+        assert hasattr(
+            atom_array, "is_motif"
+        ), "Atom array must have is_motif annotation."
+        assert hasattr(
+            atom_array, "is_motif_related"
+        ), "Atom array must have is_motif_related annotation."
+
+        mask = (
+            (atom_array.is_motif_related > 0)
+            | (atom_array.mol_type == "ligand")
+            | (
+                (atom_array.mol_type == "protein")
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["protein"]))
+            )
+            | (
+                (atom_array.mol_type == "DNA")
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["dna"]))
+            )
+            | (
+                (atom_array.mol_type == "RNA")
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["rna"]))
+            )
+        )
+
+        return atom_array[mask]

@@ -17,6 +17,7 @@ import os
 import random
 import traceback
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
@@ -24,15 +25,18 @@ import numpy as np
 import pandas as pd
 import torch
 from biotite.structure.atoms import AtomArray
+from biotite.structure.io import save_structure
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import Dataset
 
-from protenix.common.constants import EvaluationChainInterface
+from protenix.common.constants import BACKBONE_DEFS, EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
+from protenix.data.filter import Filter
+from protenix.data.motif import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
-from protenix.data.padding_utils import get_atom_padding_length, pad_features_dict
-from protenix.data.tokenizer import TokenArray
+from protenix.data.parser import AddAtomArrayAnnot
+from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.data.utils import (
     data_type_transform,
     make_dummy_feature,
@@ -64,6 +68,7 @@ class BaseSingleDataset(Dataset):
         cropping_configs: dict[str, Any],
         msa_featurizer: Optional[MSAFeaturizer] = None,
         template_featurizer: Optional[Any] = None,
+        motif_maker: Optional[MotifMaker] = None,
         name: str = None,
         **kwargs,
     ) -> None:
@@ -121,6 +126,17 @@ class BaseSingleDataset(Dataset):
 
         self.msa_featurizer = msa_featurizer
         self.template_featurizer = template_featurizer
+        self.motif_maker = motif_maker
+
+        # temp motif dir
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.motif_dir = (
+            Path(self.mmcif_dir).parent.parent.parent / f"motifs_{timestamp}"
+        )
+        os.makedirs(self.motif_dir, exist_ok=True)
+
+        # Motif training configs
+        self.motif_configs = kwargs.get("motif_training", {})
 
         # Read data
         self.indices_list = self.read_indices_list(indices_fpath)
@@ -575,6 +591,39 @@ class BaseSingleDataset(Dataset):
         )
         timings["assign_binding_target"] = time.time() - t3
 
+        # motif work
+        cropped_atom_array = self._get_motif(
+            atom_array=cropped_atom_array,
+        )
+
+        self._save_motif(
+            atom_array=cropped_atom_array,
+            pdb_id=bioassembly_dict["pdb_id"],
+        )
+
+        cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
+
+        cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
+            cropped_atom_array
+        )
+
+        cropped_atom_array = self._update_ids_to_unindex_motif_residues(
+            cropped_atom_array
+        )
+
+        cropped_atom_array = self._update_centre_atom_mask_to_include_motif(
+            cropped_atom_array
+        )
+
+        tokenizer = AtomArrayTokenizer(cropped_atom_array)
+        cropped_token_array = tokenizer.get_token_array()
+
+        # temp: save filtered structure
+        # save_structure(
+        #     self.motif_dir / f"{bioassembly_dict['pdb_id']}_filtered.cif",
+        #     cropped_atom_array,
+        # )
+
         t4 = time.time()
         feat, label, label_full = self.get_feature_and_label(
             idx=idx,
@@ -626,30 +675,30 @@ class BaseSingleDataset(Dataset):
 
         # Get padding length
         # TODO: to be moved to collate_fn()
-        current_n_atom = feat["atom_to_token_idx"].shape[0]
-        max_n_atom = get_atom_padding_length(
-            current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
-        )
+        # current_n_atom = feat["atom_to_token_idx"].shape[0]
+        # max_n_atom = get_atom_padding_length(
+        #     current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
+        # )
 
-        assert current_n_atom > 1, "Crop has <= 1 atom."
-        # Pad features and labels
-        # TODO: remove padding!!
-        t5 = time.time()
-        pad_args = {
-            "current_n_atom": current_n_atom,
-            "max_n_atom": max_n_atom,
-            "current_n_token": feat["token_index"].shape[0],
-            "max_n_token": self.cropping_configs["crop_size"],
-            "current_n_msa": feat["msa"].shape[0],
-            "max_n_msa": self.padding["max_n_msa"],
-            "current_n_template": feat.get("template_restype", np.array([1])).shape[0],
-            "max_n_template": self.padding["max_n_template"],
-            "current_n_pocket": 1,
-            "max_n_pocket": self.padding["max_n_pocket"],
-        }
-        feat = pad_features_dict(feat, **pad_args)
-        label = pad_features_dict(label, **pad_args)
-        timings["padding"] = time.time() - t5
+        # assert current_n_atom > 1, "Crop has <= 1 atom."
+        # # Pad features and labels
+        # # TODO: remove padding!!
+        # t5 = time.time()
+        # pad_args = {
+        #     "current_n_atom": current_n_atom,
+        #     "max_n_atom": max_n_atom,
+        #     "current_n_token": feat["token_index"].shape[0],
+        #     "max_n_token": self.cropping_configs["crop_size"],
+        #     "current_n_msa": feat["msa"].shape[0],
+        #     "max_n_msa": self.padding["max_n_msa"],
+        #     "current_n_template": feat.get("template_restype", np.array([1])).shape[0],
+        #     "max_n_template": self.padding["max_n_template"],
+        #     "current_n_pocket": 1,
+        #     "max_n_pocket": self.padding["max_n_pocket"],
+        # }
+        # feat = pad_features_dict(feat, **pad_args)
+        # label = pad_features_dict(label, **pad_args)
+        # timings["padding"] = time.time() - t5
 
         data = {
             "input_feature_dict": feat,
@@ -778,6 +827,160 @@ class BaseSingleDataset(Dataset):
         chain_2_mask = torch.stack(df["chain_2_mask"].tolist())
 
         return eval_type, cluster_id, chain_1_mask, chain_2_mask
+
+    def _get_motif(self, atom_array: AtomArray) -> AtomArray:
+        """
+        Generates a motif from the atom array using the MotifMaker if enabled.
+
+        Args:
+            atom_array (AtomArray): Input atom array from which to generate motif
+
+        Returns:
+            AtomArray: Atom array with is_motif and is_motif_related annotations (int masks)
+        """
+        motif_train_rate = self.motif_configs["motif_train_rate"]
+
+        if self.motif_maker is not None and np.random.rand() < motif_train_rate:
+            return self.motif_maker.make_motif(atom_array)
+
+        atom_array.set_annotation("is_motif", np.zeros(len(atom_array), dtype=int))
+        atom_array.set_annotation(
+            "is_motif_related", np.zeros(len(atom_array), dtype=int)
+        )
+        return atom_array
+
+    def _save_motif(self, atom_array: AtomArray, pdb_id: str) -> None:
+        """
+        Saves the motif to the motif directory. Mainly used for debugging/visualising
+        changes to motif generation algorithm.
+        """
+        if (
+            atom_array.is_motif.sum() == 0
+            or not self.motif_configs["save_motifs_for_debugging"]
+        ):
+            return
+
+        motif_fpath = self.motif_dir / f"{pdb_id}_motif.cif"
+        structure_fpath = self.motif_dir / f"{pdb_id}.cif"
+
+        motif_atom_array = atom_array[atom_array.is_motif > 0]
+        save_structure(motif_fpath, motif_atom_array)
+        save_structure(structure_fpath, atom_array)
+
+    @staticmethod
+    def _duplicate_motif_backbone_atoms(atom_array: AtomArray) -> AtomArray:
+        """
+        Duplicates backbone atoms of motif-related residues, setting their is_motif and
+        is_motif_related annotations to False. This allows us to un-index
+        the motif sidechains without breaking the backbone.
+
+        Args:
+            atom_array (AtomArray): AtomArray with is_motif and is_motif_related annotations.
+
+        Returns:
+            AtomArray: AtomArray with duplicated backbone atoms of motif-related residues.
+        """
+        is_motif_related = atom_array.is_motif_related
+        is_backbone = (
+            (
+                (atom_array.mol_type == "protein")
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["protein"]))
+            )
+            | (
+                (atom_array.mol_type == "DNA")
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["dna"]))
+            )
+            | (
+                (atom_array.mol_type == "RNA")
+                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["rna"]))
+            )
+        )
+
+        duplicate_mask = is_backbone & (is_motif_related > 0)
+
+        if not duplicate_mask.any():
+            return atom_array
+
+        duplicated_atoms = atom_array[duplicate_mask].copy()
+        duplicated_atoms.is_motif = np.zeros(len(duplicated_atoms), dtype=int)
+        duplicated_atoms.is_motif_related = np.zeros(len(duplicated_atoms), dtype=int)
+
+        return atom_array + duplicated_atoms
+
+    @staticmethod
+    def _update_ids_to_unindex_motif_residues(atom_array: AtomArray) -> AtomArray:
+        """
+        Updates entity_id_int, sym_id_int, asym_id_int, res_id and ref_space_uid to un-index
+        the sidechains of motif residues. Motif-related residues are grouped by
+        residue identity into new entities, with each residue instance
+        becoming its own chain. Each atom within a motif residue gets a unique res_id since we
+        are going to be tokenizing the sidechains per-atom.
+
+        Args:
+            atom_array (AtomArray): AtomArray with is_motif_related annotation
+
+        Returns:
+            AtomArray: AtomArray with updated IDs for motif-related residues
+        """
+        new_array = atom_array.copy()
+
+        is_motif_related = new_array.is_motif_related > 0
+
+        if not is_motif_related.any():
+            return new_array
+
+        max_entity_id = new_array.entity_id_int.max()
+        max_asym_id = new_array.asym_id_int.max()
+
+        entity_counter = max_entity_id + 1
+        asym_counter = max_asym_id + 1
+
+        motif_restypes = np.unique(new_array.cano_seq_resname[is_motif_related])
+
+        for restype in motif_restypes:
+            restype_mask = is_motif_related & (new_array.cano_seq_resname == restype)
+
+            current_entity_id = entity_counter
+            new_array.entity_id_int[restype_mask] = current_entity_id
+            entity_counter += 1
+
+            # Within this restype, group by individual residue instances
+            unique_residue_uids = np.unique(new_array.ref_space_uid[restype_mask])
+
+            # Assign unique sym_id and asym_id for each residue instance
+            sym_id_counter = 0
+
+            for residue_uid in unique_residue_uids:
+                residue_instance_mask = restype_mask & (
+                    new_array.ref_space_uid == residue_uid
+                )
+
+                new_array.asym_id_int[residue_instance_mask] = asym_counter
+                asym_counter += 1
+
+                new_array.sym_id_int[residue_instance_mask] = sym_id_counter
+                sym_id_counter += 1
+
+                # Assign unique res_id for each atom in this residue instance
+                num_atoms_in_residue = residue_instance_mask.sum()
+                new_array.res_id[residue_instance_mask] = np.arange(
+                    num_atoms_in_residue
+                )
+
+        # Update ref_space_uid
+        new_array = AddAtomArrayAnnot.add_ref_space_uid(new_array)
+
+        return new_array
+
+    @staticmethod
+    def _update_centre_atom_mask_to_include_motif(atom_array: AtomArray) -> AtomArray:
+        """
+        Updates the centre_atom_mask of the atom array to include all motif
+        related atoms. This is important as the Featurizer looks at the
+        centre atom indices to retrieve the correct chain, res IDs etc.
+        """
+        atom_array.centre_atom_mask[atom_array.is_motif_related > 0] = 1
+        return atom_array
 
     @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(
@@ -968,6 +1171,37 @@ def get_msa_featurizer(configs, dataset_name: str, stage: str) -> Optional[Calla
 
     else:
         return None
+
+
+def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMaker]:
+    """
+    Creates and returns a MotifMaker object based on the provided configurations.
+    Allows for dataset-specfic config overrides.
+
+    Args:
+        configs: A dictionary containing the configurations for the MotifMaker.
+        dataset_name: The name of the dataset.
+
+    Returns:
+        A MotifMaker object if motif training is enabled, otherwise None.
+    """
+    data_config = configs.data
+
+    motif_config = data_config["motif_training"]
+    motif_train_rate = motif_config["motif_train_rate"]
+    if not 0 <= motif_train_rate <= 1.0:
+        raise ValueError("motif_train_rate must be between 0 and 1")
+
+    # Check for dataset-specific overrides
+    if dataset_name in data_config and "motif_training" in data_config[dataset_name]:
+        # Merge dataset-specific config with global config
+        dataset_motif_config = {
+            **motif_config,
+            **data_config[dataset_name]["motif_training"],
+        }
+        return MotifMaker(**dataset_motif_config)
+
+    return MotifMaker(**motif_config)
 
 
 class WeightedMultiDataset(Dataset):
@@ -1203,6 +1437,7 @@ def get_datasets(
             "cropping_configs": config_dict["cropping_configs"],
             "error_dir": error_dir,
             "msa_featurizer": get_msa_featurizer(configs, dataset_name, stage),
+            "motif_maker": get_motif_maker(configs, dataset_name),
             "template_featurizer": None,
             "lig_atom_rename": config_dict.get("lig_atom_rename", False),
             "shuffle_mols": config_dict.get("shuffle_mols", False),
@@ -1230,6 +1465,7 @@ def get_datasets(
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
+        dataset_param["motif_training"] = data_config.get("motif_training", {})
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
         datapoint_weights.append(

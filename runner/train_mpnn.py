@@ -17,7 +17,7 @@ import hashlib
 import logging
 import os
 import time
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from typing import Optional
 
 import numpy as np
@@ -521,10 +521,13 @@ class ArtiosAllAtomTrainer(object):
                                 neptune_key = f"structures/{test_name}/{pid}/{filename}"
                                 files_dict[neptune_key] = file_path
 
-                            self.neptune_run.log_files(
-                                files=files_dict,
-                                step=self.step,
-                            )
+                            # Suppress verbose output from Neptune file logging
+                            with open(os.devnull, "w") as devnull:
+                                with redirect_stdout(devnull), redirect_stderr(devnull):
+                                    self.neptune_run.log_files(
+                                        files=files_dict,
+                                        step=self.step,
+                                    )
 
                 # Metrics
                 for key, value in simple_metrics.items():

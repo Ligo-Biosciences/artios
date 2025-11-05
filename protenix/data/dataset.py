@@ -604,7 +604,8 @@ class BaseSingleDataset(Dataset):
         cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
 
         cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
-            cropped_atom_array
+            cropped_atom_array,
+            motif_training=self.motif_configs["motif_train_rate"] > 0.0,
         )
 
         cropped_atom_array = self._update_ids_to_unindex_motif_residues(
@@ -1492,6 +1493,7 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
+        dataset_param["motif_training"] = data_config.get("motif_training", {})
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         test_dataset = BaseSingleDataset(**dataset_param)

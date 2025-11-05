@@ -276,8 +276,8 @@ def broadcast_token_to_atom(x_token: Tensor, atom_to_token_idx: Tensor) -> Tenso
     if len(atom_to_token_idx.shape) == 1:
         # shape = [N_atom], easy index
         return x_token[..., atom_to_token_idx, :]
-    # else:  # TODO:  not quite sure about this one
-    #    assert atom_to_token_idx.shape[:-1] == x_token.shape[:-2]
+    else:
+        assert atom_to_token_idx.shape[:-1] == x_token.shape[:-2]
 
     return batched_gather(
         data=x_token,

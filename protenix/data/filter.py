@@ -696,16 +696,27 @@ class Filter(object):
         return backbone_array
 
     @staticmethod
-    def remove_non_motif_residue_sidechains(atom_array: AtomArray) -> AtomArray:
+    def remove_non_motif_residue_sidechains(
+        atom_array: AtomArray, motif_training: bool = False
+    ) -> AtomArray:
         """
-        Removes side chain atoms only from residues that aren't part of the motif.
+        Removes side chain atoms only from residues that aren't part of the motif. This is only performed
+        during motif training.
 
         Args:
             atom_array (AtomArray): Input atom array containing protein structure
 
         Returns:
             AtomArray: Modified atom array with the non-motif residue protein side chains removed.
+
+        Notes:
+        I don't really like the if logic to begin this function. Especially as in other contexts we also might not need all the sidechains
+        (say in binder design), so it feels like we're repeating filtering logic. It would be nice if this could be completely
+        unified.
         """
+        if not motif_training:
+            return atom_array
+
         assert hasattr(
             atom_array, "is_motif"
         ), "Atom array must have is_motif annotation."

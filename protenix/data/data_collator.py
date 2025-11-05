@@ -119,7 +119,8 @@ class DataCollatorWithPadding:
             padded_data = pad_data(
                 data,
                 max_n_atom=atom_padding_length,
-                max_n_token=self.crop_size,
+                max_n_token=self.crop_size
+                + 150,  # TODO: need to pad to max number of tokens. this should be crop size + max tokens you can get from the motif
                 max_n_msa=self.max_n_msa,
                 max_n_template=self.max_n_template,
                 max_n_pocket=self.max_n_pocket,

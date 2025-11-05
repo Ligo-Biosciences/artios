@@ -591,7 +591,7 @@ class NLLLoss(BaseLoss):
 
         # cross entropy loss
         raw_loss = softmax_cross_entropy(logits, gt_sequence_smoothed)  # [..., n_token]
-        weighted_loss = torch.sum(raw_loss * weight, dim=-1) / 2000  # [...]
+        weighted_loss = torch.sum(raw_loss * weight, dim=-1) / 384  # [...]
         # mask,
         # axes=-1,
 

@@ -255,7 +255,7 @@ model_configs = {
             "coord_noise": 0.1,
         },
         "sidechain_decoder": {
-            "diffusion_batch_size": 16,
+            "diffusion_batch_size": 8,
         },
     },
 }

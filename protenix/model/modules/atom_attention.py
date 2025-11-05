@@ -324,11 +324,11 @@ class AtomAttentionEncoder(nn.Module):
         if self.has_s:
             c_l = c_l + broadcast_token_to_atom(
                 x_token=self.linear_no_bias_s(self.layernorm_s(s)),
-                atom_to_token_idx=expand_at_dim(
-                    atom_to_token_idx,
-                    dim=-2,
-                    n=s.shape[-3],  # N_sample | 1
-                ),
+                atom_to_token_idx=atom_to_token_idx.unsqueeze(-2),  # expand_at_dim(
+                #     atom_to_token_idx,
+                #     dim=-2,
+                #     n=s.shape[-3],  # N_sample | 1
+                # ),
             )  # [..., N_sample | 1, N_atom, c_atom], depending on s shape
             c_l = c_l * atom_mask[..., None]
 
@@ -461,7 +461,9 @@ class AtomAttentionDecoder(nn.Module):
         # Broadcast per-token activations to per-atom activations and add the skip connection
         q = q_skip + broadcast_token_to_atom(
             x_token=self.broadcast_linear(a),
-            atom_to_token_idx=expand_at_dim(atom_to_token_idx, dim=-2, n=a.shape[-3]),
+            atom_to_token_idx=atom_to_token_idx.unsqueeze(
+                -2
+            ),  # expand_at_dim(atom_to_token_idx, dim=-2, n=a.shape[-3]),
         )
         q = q * atom_mask[..., None]
 

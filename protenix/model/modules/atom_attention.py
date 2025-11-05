@@ -280,6 +280,7 @@ class AtomAttentionEncoder(nn.Module):
 
         # Per-atom conditioning
         c_l, p_lm = self._per_atom_conditioning(input_feature_dict)
+        # [..., N_atom, c_atom]
 
         # Compute the trunked pair mask
         # [..., N_atom]
@@ -297,6 +298,21 @@ class AtomAttentionEncoder(nn.Module):
         # Mask the representations
         p_lm = p_lm * trunked_pair_mask[..., None]
         c_l = c_l * atom_mask[..., None]
+
+        # Embed single features into the pair conditioning
+        queries_c_l = rearrange_to_query_subset(
+            q_x=self.linear_no_bias_cl(F.relu(c_l)),
+            rearrange_dim=-2,
+            num_queries=self.num_queries,
+        )
+        keys_c_m = rearrange_to_key_subset(
+            k_x=self.linear_no_bias_cm(F.relu(c_l)),
+            rearrange_dim=-2,
+            num_keys=self.num_keys,
+            num_queries=self.num_queries,
+        )
+        p_lm = p_lm + queries_c_l[..., :, None, :] + keys_c_m[..., None, :, :]
+        # [..., n_blocks, n_queries, n_keys, c_atompair]
 
         # N_sample dimension gets added
         c_l = c_l.unsqueeze(-3)
@@ -337,21 +353,6 @@ class AtomAttentionEncoder(nn.Module):
             q_l = q_l * atom_mask[..., None]
         else:
             q_l = c_l.clone()
-
-        # Embed single features into the pair conditioning
-        queries_c_l = rearrange_to_query_subset(
-            q_x=self.linear_no_bias_cl(F.relu(c_l)),
-            rearrange_dim=-2,
-            num_queries=self.num_queries,
-        )
-        keys_c_m = rearrange_to_key_subset(
-            k_x=self.linear_no_bias_cm(F.relu(c_l)),
-            rearrange_dim=-2,
-            num_keys=self.num_keys,
-            num_queries=self.num_queries,
-        )
-        p_lm = p_lm + queries_c_l[..., :, None, :] + keys_c_m[..., None, :, :]
-        # [..., N_sample | 1, n_blocks, n_queries, n_keys, c_atompair]
 
         # Small MLP on the pair activations
         p_lm = p_lm + self.small_mlp(p_lm)

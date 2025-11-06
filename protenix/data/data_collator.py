@@ -205,11 +205,6 @@ class DataCollatorWithPadding:
         sample_dict = padded_batch[0][dict_key]
 
         for feature_key in sample_dict.keys():
-            print("feature_key", feature_key)
-            for i, data_point in enumerate(padded_batch):
-                print(
-                    f"data_point {i} shape: {data_point[dict_key][feature_key].shape}"
-                )
             feature_values = [data[dict_key][feature_key] for data in padded_batch]
             # Assert all values for feature have same type
             assert all(

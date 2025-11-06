@@ -222,7 +222,10 @@ class DataCollatorWithPadding:
                     print(f"Error stacking feature {feature_key}: {e}")
                     for i, data_point in enumerate(padded_batch):
                         print(
-                            f"data_point {i} {feature_key} shape: {data_point[dict_key][feature_key].shape}"
+                            f"""
+                            data_point {i} {feature_key} shape: {data_point[dict_key][feature_key].shape}
+                            and value: {data_point[dict_key][feature_key]}
+                            """
                         )
                     raise e
             # Raise error for other types

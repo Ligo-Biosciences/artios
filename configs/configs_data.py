@@ -161,11 +161,11 @@ data_configs = {
         "max_n_template": 4,
         "max_n_pocket": 16,
         # all-atom mpnn training:
-        "atom_bin_ends": ListValue([2112, 3008, 4000]),
-        "token_bin_ends": ListValue([384]),
+        # "atom_bin_ends": ListValue([2112, 3008, 4000]),
+        # "token_bin_ends": ListValue([384]),
         # motif scaffolding training: NOTE: values chosen looking at quartiles of num atoms and tokens coming out of the ds
-        # "atom_bin_ends": ListValue([1376, 1728]),
-        # "token_bin_ends": ListValue([384, 480])
+        "atom_bin_ends": ListValue([1540, 1728]),
+        "token_bin_ends": ListValue([440, 600]),
     },
     "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925"]),
     "train_sampler": {

@@ -595,7 +595,6 @@ class BaseSingleDataset(Dataset):
         cropped_atom_array = self._get_motif(
             atom_array=cropped_atom_array,
         )
-        length_after_motif = len(cropped_atom_array)
 
         self._save_motif(
             atom_array=cropped_atom_array,
@@ -603,49 +602,22 @@ class BaseSingleDataset(Dataset):
         )
 
         cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
-        length_after_duplicate = len(cropped_atom_array)
 
         cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
             cropped_atom_array,
             motif_training=self.motif_configs["motif_train_rate"] > 0.0,
         )
-        length_after_remove_non_motif_residue_sidechains = len(cropped_atom_array)
 
         cropped_atom_array = self._update_ids_to_unindex_motif_residues(
             cropped_atom_array
         )
-        length_after_update_ids_to_unindex_motif_residues = len(cropped_atom_array)
 
         cropped_atom_array = self._update_centre_atom_mask_to_include_motif(
             cropped_atom_array
         )
-        length_after_update_centre_atom_mask_to_include_motif = len(cropped_atom_array)
 
         tokenizer = AtomArrayTokenizer(cropped_atom_array)
         cropped_token_array = tokenizer.get_token_array()
-        num_tokens_after_tokenization = len(cropped_token_array)
-
-        if (
-            num_tokens_after_tokenization == 0
-            or length_after_update_centre_atom_mask_to_include_motif == 0
-        ):
-            print("Error during motif processing")
-            print("num_tokens_after_tokenization", num_tokens_after_tokenization)
-            print(
-                "length_after_update_centre_atom_mask_to_include_motif",
-                length_after_update_centre_atom_mask_to_include_motif,
-            )
-            print("length_after_motif", length_after_motif)
-            print("length_after_duplicate", length_after_duplicate)
-            print(
-                "length_after_remove_non_motif_residue_sidechains",
-                length_after_remove_non_motif_residue_sidechains,
-            )
-            print(
-                "length_after_update_ids_to_unindex_motif_residues",
-                length_after_update_ids_to_unindex_motif_residues,
-            )
-            raise ValueError("Error during motif processing")
 
         # temp: save filtered structure
         # save_structure(

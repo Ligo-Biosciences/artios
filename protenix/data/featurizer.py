@@ -482,29 +482,6 @@ class Featurizer(object):
             Dict[str, torch.Tensor]: a dict of reference features.
         """
         ref_pos = []
-        unique_ref_space_uids = np.unique(self.cropped_atom_array.ref_space_uid)
-        if len(unique_ref_space_uids) == 0:
-            print(
-                "No reference space uids found for this complex. We have the following atoms:"
-            )
-            print("length of atom array: ", len(self.cropped_atom_array))
-            print("length of token array: ", len(self.cropped_token_array))
-            print(
-                "number of unique chains: ",
-                len(np.unique(self.cropped_atom_array.asym_id_int)),
-            )
-            print(
-                "number of unique residues: ",
-                len(np.unique(self.cropped_atom_array.res_id)),
-            )
-            print(
-                "number of is_motif atoms: ",
-                (self.cropped_atom_array.is_motif > 0).sum(),
-            )
-            print(
-                "number of is_motif_related atoms: ",
-                (self.cropped_atom_array.is_motif_related > 0).sum(),
-            )
         for ref_space_uid in np.unique(self.cropped_atom_array.ref_space_uid):
             res_ref_pos = random_transform(
                 self.cropped_atom_array.ref_pos[

@@ -142,7 +142,7 @@ data_configs = {
     "train_with_binding_target": True,
     "binding_target_train_rate": 0.75,
     "motif_training": {
-        "motif_train_rate": 1.0,
+        "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,
         "whole_ligand_prob": 0.7,
         "whole_sidechain_prob": 0.2,
@@ -161,11 +161,11 @@ data_configs = {
         "max_n_template": 4,
         "max_n_pocket": 16,
         # all-atom mpnn training:
-        # "atom_bin_ends": ListValue([2112, 3008, 4000]),
-        # "token_bin_ends": ListValue([384]),
-        # motif scaffolding training: NOTE: values chosen looking at quartiles of num atoms and tokens coming out of the ds
-        "atom_bin_ends": ListValue([1536, 1728]),
-        "token_bin_ends": ListValue([440, 600]),
+        "atom_bin_ends": ListValue([2112, 3008, 4000]),
+        "token_bin_ends": ListValue([384]),
+        # motif scaffolding training:
+        # "atom_bin_ends": ListValue([1536, 1728]),
+        # "token_bin_ends": ListValue([440, 600]),
     },
     "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925"]),
     "train_sampler": {

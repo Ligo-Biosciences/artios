@@ -740,5 +740,14 @@ class Filter(object):
                 & (np.isin(atom_array.atom_name, BACKBONE_DEFS["rna"]))
             )
         )
+        if not mask.any():
+            print("Got no atoms after filtering the non-motif residue sidechains")
+            print("here is the mol type annotation")
+            print(atom_array.mol_type)
+            print("here is the is_motif annotation")
+            print(atom_array.is_motif)
+            print("here is the is_motif_related annotation")
+            print(atom_array.is_motif_related)
+            raise ValueError("Error during motif processing")
 
         return atom_array[mask]

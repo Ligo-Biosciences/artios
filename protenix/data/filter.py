@@ -726,17 +726,17 @@ class Filter(object):
 
         mask = (
             (atom_array.is_motif_related > 0)
-            | (atom_array.mol_type == "ligand")
+            | (atom_array.chain_mol_type == "ligand")
             | (
-                (atom_array.mol_type == "protein")
+                (atom_array.chain_mol_type == "protein")
                 & (np.isin(atom_array.atom_name, BACKBONE_DEFS["protein"]))
             )
             | (
-                (atom_array.mol_type == "DNA")
+                (atom_array.chain_mol_type == "dna")
                 & (np.isin(atom_array.atom_name, BACKBONE_DEFS["dna"]))
             )
             | (
-                (atom_array.mol_type == "RNA")
+                (atom_array.chain_mol_type == "rna")
                 & (np.isin(atom_array.atom_name, BACKBONE_DEFS["rna"]))
             )
         )

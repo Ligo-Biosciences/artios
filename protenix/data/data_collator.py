@@ -2,7 +2,8 @@ from typing import Any, Dict, List, Union
 
 import torch
 
-from protenix.data.padding_utils import get_atom_padding_length, pad_data
+from protenix.common.atom_types import DENSE_ATOM_NUM
+from protenix.data.padding_utils import get_padding_length, pad_data
 
 
 class DataCollatorWithPadding:
@@ -22,8 +23,11 @@ class DataCollatorWithPadding:
         max_n_msa: int = 512,
         max_n_template: int = 4,
         max_n_pocket: int = 30,
-        bin_ends: List[int] = None,
+        atom_bin_ends: List[int] = None,
+        token_bin_ends: List[int] = None,
         crop_size: int = 384,
+        motif_training: bool = False,
+        max_motif_residues: int = 150,
         return_atom_token_arrays: bool = True,
         list_features: List[str] = [
             "pdb_id",
@@ -38,8 +42,11 @@ class DataCollatorWithPadding:
             max_n_msa: Maximum number of MSA sequences
             max_n_template: Maximum number of templates
             max_n_pocket: Maximum number of pockets
-            bin_ends: List of bin endpoints for atom padding
+            atom_bin_ends: List of bin endpoints for atom padding
+            token_bin_ends: List of bin endpoints for token padding
             crop_size: Maximum number of tokens (used to calculate max atoms)
+            motif_training: Whether to include motif training
+            max_motif_residues: Maximum number of motif residues
             return_atom_token_arrays: Whether to include cropped_atom_array and
                 cropped_token_array in the output batch.
             list_features: List of features which will be collated into a list.
@@ -47,8 +54,11 @@ class DataCollatorWithPadding:
         self.max_n_msa = max_n_msa
         self.max_n_template = max_n_template
         self.max_n_pocket = max_n_pocket
-        self.bin_ends = bin_ends
+        self.atom_bin_ends = atom_bin_ends
+        self.token_bin_ends = token_bin_ends
         self.crop_size = crop_size
+        self.motif_training = motif_training
+        self.max_motif_residues = max_motif_residues
         self.return_atom_token_arrays = return_atom_token_arrays
 
         self.list_features = list_features
@@ -80,8 +90,11 @@ class DataCollatorWithPadding:
         # Get max atom padding length for the batch
         atom_padding_length = self._get_atom_padding_length(batch)
 
+        # Get max token padding length for the batch
+        token_padding_length = self._get_token_padding_length(batch)
+
         # Pad all samples to the maximum dimensions
-        padded_batch = self._pad_batch(batch, atom_padding_length)
+        padded_batch = self._pad_batch(batch, atom_padding_length, token_padding_length)
 
         # Collate dicts
         collated = {}
@@ -100,16 +113,45 @@ class DataCollatorWithPadding:
     def _get_atom_padding_length(self, batch: List[Dict[str, Any]]) -> int:
         """
         Get the maximum atom padding length for a batch.
+        For all-atom training, the max bin end is inuitively crop_size * DENSE_ATOM_NUM.
+        For motif training, max atoms come from the four atoms in the backbone + atoms in the
+        sidechains, giving 4 * crop_size + DENSE_ATOM_NUM * max_motif_residues.
         """
         max_atom_in_batch = max(
             data["input_feature_dict"]["atom_to_token_idx"].shape[0] for data in batch
         )
-        return get_atom_padding_length(max_atom_in_batch, self.bin_ends, self.crop_size)
+
+        if self.motif_training:
+            max_bin_end = 4 * self.crop_size + DENSE_ATOM_NUM * self.max_motif_residues
+        else:
+            # suitable for all-atom training
+            max_bin_end = self.crop_size * DENSE_ATOM_NUM
+
+        return get_padding_length(max_atom_in_batch, self.atom_bin_ends + [max_bin_end])
+
+    def _get_token_padding_length(self, batch: List[Dict[str, Any]]) -> int:
+        """
+        Get the maximum token padding length for a batch.
+        """
+        max_token_in_batch = max(
+            data["input_feature_dict"]["token_index"].shape[0] for data in batch
+        )
+
+        if self.motif_training:
+            max_bin_end = self.crop_size + DENSE_ATOM_NUM * self.max_motif_residues
+        else:
+            # suitable for all-atom training
+            max_bin_end = self.crop_size
+
+        return get_padding_length(
+            max_token_in_batch, self.token_bin_ends + [max_bin_end]
+        )
 
     def _pad_batch(
         self,
         batch: List[Dict[str, Any]],
         atom_padding_length: int,
+        token_padding_length: int,
     ) -> List[Dict[str, Any]]:
         """
         Pad a batch of samples to the maximum dimensions.
@@ -119,8 +161,7 @@ class DataCollatorWithPadding:
             padded_data = pad_data(
                 data,
                 max_n_atom=atom_padding_length,
-                max_n_token=self.crop_size
-                + 150,  # TODO: need to pad to max number of tokens. this should be crop size + max tokens you can get from the motif
+                max_n_token=token_padding_length,
                 max_n_msa=self.max_n_msa,
                 max_n_template=self.max_n_template,
                 max_n_pocket=self.max_n_pocket,

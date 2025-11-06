@@ -142,7 +142,7 @@ data_configs = {
     "train_with_binding_target": True,
     "binding_target_train_rate": 0.75,
     "motif_training": {
-        "motif_train_rate": 1.0,
+        "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,
         "whole_ligand_prob": 0.7,
         "whole_sidechain_prob": 0.2,

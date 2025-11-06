@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from jaxtyping import Float, Int
 from torch import Tensor, nn
+from torch.utils.checkpoint import checkpoint
 from tqdm import tqdm
 
 from protenix.model.modules import message_passing as mp
@@ -252,11 +253,13 @@ class MPNN(nn.Module):
                     + encoder_edge_feats * forward_attn_mask
                 )
 
-            node_feats = layer(
-                node_emb=node_feats,
-                edge_emb=combined_input_edge_feats,
-                node_mask=node_mask,
-                edge_mask=edge_mask,
+            node_feats = checkpoint(
+                layer,
+                node_feats,
+                combined_input_edge_feats,
+                node_mask,
+                edge_mask,
+                use_reentrant=False,
             )
 
         logits = self.linear_out(node_feats)
@@ -310,12 +313,14 @@ class MPNN(nn.Module):
 
         # Encode
         for layer in self.encoder:
-            node_feats, edge_feats = layer(
-                node_emb=node_feats,
-                edge_emb=edge_feats,
-                edge_index=edge_index,
-                node_mask=centre_atom_mask,
-                edge_mask=edge_mask,
+            node_feats, edge_feats = checkpoint(
+                layer,
+                node_feats,
+                edge_feats,
+                edge_index,
+                centre_atom_mask,
+                edge_mask,
+                use_reentrant=False,
             )
 
         return node_feats, edge_feats, edge_index, edge_mask

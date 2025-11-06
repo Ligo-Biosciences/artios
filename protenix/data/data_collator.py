@@ -221,7 +221,15 @@ class DataCollatorWithPadding:
                 collated_dict[feature_key] = feature_values
             # torch tensors get stacked along batch dimension
             elif isinstance(feature_values[0], torch.Tensor):
-                collated_dict[feature_key] = torch.stack(feature_values, dim=0)
+                try:
+                    collated_dict[feature_key] = torch.stack(feature_values, dim=0)
+                except Exception as e:
+                    print(f"Error stacking feature {feature_key}: {e}")
+                    for i, data_point in enumerate(padded_batch):
+                        print(
+                            f"data_point {i} {feature_key} shape: {data_point[dict_key][feature_key].shape}"
+                        )
+                    raise e
             # Raise error for other types
             else:
                 raise ValueError(

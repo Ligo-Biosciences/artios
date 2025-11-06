@@ -254,6 +254,9 @@ model_configs = {
             "dropout": 0.0,
             "coord_noise": 0.1,
         },
+        "sidechain_decoder": {
+            "diffusion_batch_size": 8,
+        },
     },
 }
 

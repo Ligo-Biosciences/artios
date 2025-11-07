@@ -23,6 +23,7 @@ class SidechainDecoder(nn.Module):
     def __init__(
         self,
         node_dim,
+        c_token: int = 384,
         c_atom: int = 128,
         c_atompair: int = 16,
         num_blocks: int = 2,
@@ -33,7 +34,7 @@ class SidechainDecoder(nn.Module):
         super().__init__()
         self.relpos = RelativePositionEncoding(r_max=32, s_max=2, c_z=32)
         self.atom_attention_encoder = AtomAttentionEncoder(
-            c_token=node_dim,
+            c_token=c_token,
             has_coords=True,
             has_s=True,
             c_atom=c_atom,
@@ -48,23 +49,23 @@ class SidechainDecoder(nn.Module):
 
         # Single conditioning embedding
         self.embed_restype = LinearNoBias(32, node_dim)
-        self.fourier_embedding = FourierEmbedding(c=node_dim)
-        self.embed_timestep = LinearNoBias(node_dim, node_dim)
+        self.fourier_embedding = FourierEmbedding(c=c_token)
+        self.embed_timestep = LinearNoBias(c_token, c_token)
         self.layernorm_s = LayerNorm(2 * node_dim)
-        self.proj_s = LinearNoBias(2 * node_dim, node_dim)
+        self.proj_s = LinearNoBias(2 * node_dim, c_token)
 
-        self.layernorm_a = LayerNorm(node_dim)
+        self.layernorm_a = LayerNorm(c_token)
 
         # Embed centre atoms
         # self.embed_centre_atoms = LinearNoBias(3, node_dim)
 
         self.diffusion_transformer = DiffusionTransformer(
-            num_blocks=2, c_token=node_dim, c_s=node_dim, c_z=32, num_heads=4
+            num_blocks=6, c_token=c_token, c_s=node_dim, c_z=32, num_heads=12
         )
 
         # Decoder
         self.atom_attention_decoder = AtomAttentionDecoder(
-            c_token=node_dim,
+            c_token=c_token,
             c_atom=c_atom,
             c_atompair=c_atompair,
             num_blocks=num_blocks,
@@ -110,14 +111,14 @@ class SidechainDecoder(nn.Module):
         # Compute sequence and node embeddings
         seq_emb = self.embed_restype(input_feature_dict["restype"])
         s = torch.cat([seq_emb, node_emb], dim=-1)
-        s = self.proj_s(s)  # [..., n_token, node_dim]
+        s = self.proj_s(s)  # [..., n_token, c_token]
 
         # Add timestep embedding
         timestep_emb = self.embed_timestep(
             self.fourier_embedding(t_hat_timestep=2 * timestep - 1)
         ).to(z.dtype)  # [..., n_sample, node_dim]
         s = s.unsqueeze(-3) + expand_at_dim(timestep_emb, dim=-2, n=n_token)
-        # [..., n_sample, n_token, node_dim]
+        # [..., n_sample, n_token, c_token]
 
         # Encode atoms
         a, q_l, c_l, p_lm, trunked_pair_mask = self.atom_attention_encoder(

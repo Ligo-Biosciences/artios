@@ -49,8 +49,8 @@ class SidechainDecoder(nn.Module):
 
         # Single conditioning embedding
         self.embed_restype = LinearNoBias(32, node_dim)
-        self.fourier_embedding = FourierEmbedding(c=c_token)
-        self.embed_timestep = LinearNoBias(c_token, c_token)
+        self.fourier_embedding = FourierEmbedding(c=node_dim)
+        self.embed_timestep = LinearNoBias(node_dim, node_dim)
         self.layernorm_s = LayerNorm(2 * node_dim)
         self.proj_s = LinearNoBias(2 * node_dim, node_dim)
 

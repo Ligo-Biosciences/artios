@@ -52,7 +52,7 @@ class SidechainDecoder(nn.Module):
         self.fourier_embedding = FourierEmbedding(c=c_token)
         self.embed_timestep = LinearNoBias(c_token, c_token)
         self.layernorm_s = LayerNorm(2 * node_dim)
-        self.proj_s = LinearNoBias(2 * node_dim, c_token)
+        self.proj_s = LinearNoBias(2 * node_dim, node_dim)
 
         self.layernorm_a = LayerNorm(c_token)
 
@@ -111,6 +111,7 @@ class SidechainDecoder(nn.Module):
         # Compute sequence and node embeddings
         seq_emb = self.embed_restype(input_feature_dict["restype"])
         s = torch.cat([seq_emb, node_emb], dim=-1)
+        s = self.layernorm_s(s)
         s = self.proj_s(s)  # [..., n_token, c_token]
 
         # Add timestep embedding

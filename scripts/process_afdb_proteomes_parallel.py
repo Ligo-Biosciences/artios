@@ -20,16 +20,15 @@ python process_afdb_proteomes_parallel.py \
 --parquet clustered_afdb.parquet \
 --downloads-dir downloads/ \
 --output-dir cifs/ \
---workers 128
+--workers 256
 """
 
 import argparse
-import gzip
 import logging
 import shutil
 import tarfile
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor  # , as_completed, TimeoutError
 from pathlib import Path
 from typing import Set
 
@@ -77,20 +76,23 @@ def process_tar_file(
         # Extract tar (only .cif.gz files)
         proteome_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(tar_path, "r") as tar:
-            cif_members = [m for m in tar.getmembers() if m.name.endswith(".cif.gz")]
+            cif_members = [
+                m
+                for m in tar.getmembers()
+                if m.name.endswith(".cif.gz")
+                and extract_uniprot_id(m.name) in uniprot_ids
+            ]
             for member in cif_members:
                 tar.extract(member, path=proteome_dir)
                 stats["extracted"] += 1
 
-        # Process CIF files: filter by UniProt ID, ungzip, copy to output
+        # Process CIF files: filter by UniProt ID, move to output (keep compressed)
         for cif_gz_path in proteome_dir.rglob("*.cif.gz"):
-            uniprot_id = extract_uniprot_id(cif_gz_path.name)
-            if uniprot_id in uniprot_ids:
-                output_path = cif_output_dir / cif_gz_path.name.replace(".gz", "")
-                with gzip.open(cif_gz_path, "rb") as f_in:
-                    with open(output_path, "wb") as f_out:
-                        shutil.copyfileobj(f_in, f_out)
-                stats["kept"] += 1
+            # uniprot_id = extract_uniprot_id(cif_gz_path.name)
+            # if uniprot_id in uniprot_ids:
+            output_path = cif_output_dir / cif_gz_path.name
+            shutil.move(cif_gz_path, output_path)
+            stats["kept"] += 1
 
     except Exception as e:
         stats["error"] = str(e)

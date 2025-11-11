@@ -20,7 +20,7 @@ python process_afdb_proteomes_parallel.py \
 --parquet clustered_afdb.parquet \
 --downloads-dir downloads/ \
 --output-dir cifs/ \
---workers 256
+--workers 512
 """
 
 import argparse
@@ -28,7 +28,7 @@ import logging
 import shutil
 import tarfile
 import time
-from concurrent.futures import ThreadPoolExecutor  # , as_completed, TimeoutError
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Set
 
@@ -138,7 +138,8 @@ def main():
     )
     parser.add_argument(
         "--wait-for-new",
-        action="store_true",
+        default=True,
+        # action="store_true",
         help="Keep running and wait for new files (default: exit when no files remain)",
     )
     args = parser.parse_args()
@@ -159,9 +160,12 @@ def main():
     logging.info(f"Monitoring {args.downloads_dir} for .tar files")
     logging.info(f"Processing with {args.workers} workers")
 
-    stats_list = []
     processed_files = set()
     no_new_files_count = 0
+
+    # Running totals to avoid O(n) iterations
+    total_success = 0
+    total_kept = 0
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {}
@@ -187,28 +191,19 @@ def main():
                     )
                     futures[future] = tar_path.name
 
-                # Collect completed jobs
-                done_futures = [f for f in futures if f.done()]
-                for future in done_futures:
-                    filename = futures.pop(future)
-                    try:
+                # Process completed jobs as they finish
+                if futures:
+                    for future in as_completed(futures.keys()):
+                        # filename = futures.pop(future)
                         stats = future.result()
-                        stats_list.append(stats)
+                        if not stats["error"]:
+                            total_success += 1
+                        total_kept += stats["kept"]
                         pbar.update(1)
                         pbar.set_postfix(
                             {
-                                "success": sum(1 for s in stats_list if not s["error"]),
-                                "kept": sum(s["kept"] for s in stats_list),
-                            }
-                        )
-                    except Exception as e:
-                        logging.error(f"Processing error for {filename}: {e}")
-                        stats_list.append(
-                            {
-                                "proteome": filename,
-                                "kept": 0,
-                                "extracted": 0,
-                                "error": str(e),
+                                "success": total_success,
+                                "kept": total_kept,
                             }
                         )
 
@@ -222,29 +217,12 @@ def main():
                                 "continuing to wait..."
                             )
                             no_new_files_count = 0
+                        time.sleep(args.check_interval)
                     else:
                         logging.info("No more files to process, exiting")
                         break
                 else:
                     no_new_files_count = 0
-
-                time.sleep(args.check_interval)
-
-    # Summary
-    success = sum(1 for s in stats_list if not s["error"])
-    total_kept = sum(s["kept"] for s in stats_list)
-    total_extracted = sum(s["extracted"] for s in stats_list)
-
-    logging.info(
-        f"Complete: {success}/{len(stats_list)} successful, "
-        f"{total_kept:,} CIFs kept from {total_extracted:,} extracted"
-    )
-
-    failures = [s for s in stats_list if s["error"]]
-    if failures:
-        logging.warning(f"{len(failures)} failures:")
-        for s in failures[:10]:  # Show first 10
-            logging.warning(f"  {s['proteome']}: {s['error']}")
 
 
 if __name__ == "__main__":

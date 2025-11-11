@@ -194,7 +194,7 @@ def main():
                 # Process completed jobs as they finish
                 if futures:
                     for future in as_completed(futures.keys()):
-                        # filename = futures.pop(future)
+                        futures.pop(future)
                         stats = future.result()
                         if not stats["error"]:
                             total_success += 1

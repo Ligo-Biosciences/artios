@@ -456,8 +456,13 @@ class MPNN(nn.Module):
 
         # Optionally prepare random decoding order
         if decoding_order is None:
-            decoding_order = self._generate_random_decoding_order(
-                node_feats=node_feats, seed=seed
+            # decoding_order = self._generate_random_decoding_order(
+            #     node_feats=node_feats, seed=seed
+            # )
+            decoding_order = self._generate_random_spatially_smooth_decoding_order(
+                centre_atom_coords=centre_atom_coord,
+                centre_atom_mask=centre_atom_mask,
+                seed=seed,
             )
 
         # Generate masks

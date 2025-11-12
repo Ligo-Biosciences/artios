@@ -7,6 +7,7 @@ from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint
 from tqdm import tqdm
 
+from protenix.model import utils
 from protenix.model.modules import message_passing as mp
 from protenix.model.modules.mpnn_features import MPNNFeaturizer
 from protenix.model.modules.mpnn_layers import (
@@ -90,13 +91,10 @@ class MPNN(nn.Module):
 
     def _generate_random_decoding_order(
         self,
-        node_feats: Float[Tensor, "batch seqlen hidden_dim"],
+        node_feats: Float[Tensor, "batch n_token hidden_dim"],
         seed: Optional[int] = None,
-    ) -> Float[Tensor, "batch seq_len"]:
-        """Generate a random decoding order.
-
-        NOTE: we can add spatial smoothing to this later like the one in the Chroma paper.
-        """
+    ) -> Int[Tensor, "batch n_token"]:
+        """Generate a random decoding order."""
         generator = None
         if seed is not None:
             generator = torch.Generator(node_feats.device).manual_seed(seed)
@@ -109,6 +107,91 @@ class MPNN(nn.Module):
             ),
             dim=-1,
         )
+
+    def _generate_random_spatially_smooth_decoding_order(
+        self,
+        centre_atom_coords: Float[Tensor, "batch n_token 3"],
+        centre_atom_mask: Float[Tensor, "batch n_token"],
+        seed: Optional[int] = None,
+        smoothing_factor: Optional[float] = None,
+        seed_token_index: Optional[int] = None,
+    ) -> Int[Tensor, "batch n_token"]:
+        """Generate a random decoding order with spatial smoothing.
+
+        The algorithm interpolates between ProteinMPNN-style random decoding order and
+        fully spatial decoding order. In the fully spatial decoding order, a random token
+        is selected as the centre and expands outward based on token centre atom proximity.
+
+        The two methods are interpolated between using intermediate normalized noise and
+        normalized distances, followed by argsort.
+
+        Args:
+            centre_atom_coords: centre atom coordinates
+            centre_atom_mask: centre atom mask
+            seed: random seed for reproducibility
+            smoothing_factor: pre-determined smoothing factor
+            seed_token_index: token index for spatial smoothing
+
+        Returns:
+            Decoding order
+        """
+        generator = None
+        if seed is not None:
+            generator = torch.Generator(centre_atom_mask.device).manual_seed(seed)
+
+        # Select seed residue
+        seed_token_rand = torch.rand(
+            size=centre_atom_coords.shape[:-1],
+            device=centre_atom_coords.device,
+            generator=generator,
+        )  # [..., n_token]
+        seed_token_rand += centre_atom_mask - 1  # mask out from index selection
+        seed_token_indices = torch.argmax(seed_token_rand, dim=-1, keepdim=True)
+
+        if seed_token_index is not None:
+            seed_token_indices = torch.full_like(
+                seed_token_indices,
+                fill_value=seed_token_index,  # same index across batches
+            )  # [..., 1]
+
+        # Compute distances from the seed residue
+        spatial_seed_coord = utils.batched_gather(
+            data=centre_atom_coords,
+            inds=seed_token_indices,
+            dim=-2,
+            no_batch_dims=len(centre_atom_coords.shape[:-2]),
+        )  # [..., 1, 3]
+
+        dists = torch.sqrt(
+            torch.sum((spatial_seed_coord - centre_atom_coords) ** 2, axis=-1)
+        )  # [..., n_token]
+
+        # Compute normalized distances for interpolation
+        norm_dist = dists / torch.sum(dists, axis=-1, keepdim=True)
+
+        # Sample random uniform noise
+        noise = torch.rand(
+            centre_atom_coords.shape[:-1],
+            device=centre_atom_coords.device,
+            generator=generator,
+        )
+        norm_noise = noise / torch.sum(noise, dim=-1, keepdim=True)
+
+        # Interpolate between normalized noise and normalized distances
+        mu = torch.rand(
+            centre_atom_mask.shape[:-1],
+            device=centre_atom_coords.device,
+            generator=generator,
+        )
+        if smoothing_factor is not None:
+            mu = torch.full_like(mu, fill_value=smoothing_factor)
+
+        # Interpolate and get decoding order
+        mu = mu[..., None]  # [..., 1]
+        smoothed = mu * norm_dist + (1 - mu) * norm_noise
+        decoding_order = torch.argsort(smoothed, dim=-1)
+
+        return decoding_order
 
     def _prepare_decoder_inputs(
         self,

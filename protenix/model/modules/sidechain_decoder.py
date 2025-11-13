@@ -78,7 +78,7 @@ class SidechainDecoder(nn.Module):
     def c_out(self, timestep) -> Tensor:
         return 1 - timestep
 
-    # @torch.compile
+    @torch.compile
     def forward(
         self,
         input_feature_dict: Dict[str, Tensor],

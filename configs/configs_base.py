@@ -255,7 +255,6 @@ model_configs = {
             "coord_noise": 0.1,
         },
         "sidechain_decoder": {
-            "diffusion_batch_size": 8,
             "c_token": 768,
             "atom_encoder": {
                 "num_blocks": 3,

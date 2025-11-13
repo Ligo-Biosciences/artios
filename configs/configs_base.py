@@ -256,6 +256,19 @@ model_configs = {
         },
         "sidechain_decoder": {
             "diffusion_batch_size": 8,
+            "num_blocks": 8,
+            "atom_encoder": {
+                "num_blocks": 3,
+                "num_heads": 4,
+            },
+            "transformer": {
+                "num_blocks": 10,
+                "num_heads": 12,
+            },
+            "atom_decoder": {
+                "num_blocks": 3,
+                "num_heads": 4,
+            },
         },
     },
 }

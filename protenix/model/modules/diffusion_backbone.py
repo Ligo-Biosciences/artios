@@ -198,6 +198,8 @@ class DiffusionConditioning(nn.Module):
         ### Create ligand pair conditioning
         # 1. Get token-wise ligand reference positions
         # [..., N_atom, 3]
+        # TODO: is_atom is wrong. Remember that is_ligand and is_motif_related intersect, so some value
+        # here are 2, which is not what you want!!
         is_atom = (is_ligand + is_motif_related).unsqueeze(-1)  # [..., n_atom, 1]
         ref_pos = (
             input_feature_dict["ref_pos"] * is_atom

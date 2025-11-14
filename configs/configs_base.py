@@ -255,7 +255,19 @@ model_configs = {
             "coord_noise": 0.1,
         },
         "sidechain_decoder": {
-            "diffusion_batch_size": 8,
+            "c_token": 768,
+            "atom_encoder": {
+                "num_blocks": 3,
+                "num_heads": 4,
+            },
+            "transformer": {
+                "num_blocks": 10,
+                "num_heads": 16,
+            },
+            "atom_decoder": {
+                "num_blocks": 3,
+                "num_heads": 4,
+            },
         },
     },
 }

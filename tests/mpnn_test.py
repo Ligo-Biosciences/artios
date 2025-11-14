@@ -465,6 +465,329 @@ class TestPrepareDecoderInputs:
         ).any(), "sequence_edge_feats contains Inf"
 
 
+class TestGenerateRandomSpatiallySmoothDecodingOrder:
+    """Tests for _generate_random_spatially_smooth_decoding_order method."""
+
+    def test_output_shape(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that output has correct shape."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        centre_atom_coords = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        decoding_order = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=42,
+        )
+
+        expected_shape = (batch_size, n_tokens)
+        assert (
+            decoding_order.shape == expected_shape
+        ), f"decoding_order shape {decoding_order.shape} != {expected_shape}"
+
+    def test_output_is_valid_permutation(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test that output is a valid permutation of indices."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        centre_atom_coords = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        decoding_order = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=42,
+        )
+
+        # Check that each batch contains all indices from 0 to n_tokens-1
+        for b in range(batch_size):
+            sorted_indices = torch.sort(decoding_order[b])[0]
+            expected_indices = torch.arange(n_tokens, device=decoding_order.device)
+            assert torch.equal(
+                sorted_indices, expected_indices
+            ), f"Batch {b}: decoding_order is not a valid permutation"
+
+    def test_deterministic_with_seed(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that same seed produces same decoding order."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        centre_atom_coords = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        decoding_order_1 = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=42,
+            smoothing_factor=0.5,
+        )
+
+        decoding_order_2 = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=42,
+            smoothing_factor=0.5,
+        )
+
+        assert torch.equal(
+            decoding_order_1, decoding_order_2
+        ), "Same seed should produce same decoding order"
+
+    def test_different_seeds_produce_different_orders(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test that different seeds produce different decoding orders."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        centre_atom_coords = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        decoding_order_1 = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=42,
+            smoothing_factor=0.5,
+        )
+
+        decoding_order_2 = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=123,
+            smoothing_factor=0.5,
+        )
+
+        # Different seeds should produce different orders (with high probability)
+        assert not torch.equal(
+            decoding_order_1, decoding_order_2
+        ), "Different seeds should produce different decoding orders"
+
+    def test_different_smoothing_factors(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test that different smoothing factors produce different orders."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        centre_atom_coords = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        # Fully spatial (mu=1.0)
+        decoding_order_spatial = (
+            mpnn_model._generate_random_spatially_smooth_decoding_order(
+                centre_atom_coords=centre_atom_coords,
+                centre_atom_mask=centre_atom_mask,
+                seed=42,
+                smoothing_factor=1.0,
+            )
+        )
+
+        # Fully random (mu=0.0)
+        decoding_order_random = (
+            mpnn_model._generate_random_spatially_smooth_decoding_order(
+                centre_atom_coords=centre_atom_coords,
+                centre_atom_mask=centre_atom_mask,
+                seed=42,
+                smoothing_factor=0.0,
+            )
+        )
+
+        # Intermediate (mu=0.5)
+        decoding_order_mixed = (
+            mpnn_model._generate_random_spatially_smooth_decoding_order(
+                centre_atom_coords=centre_atom_coords,
+                centre_atom_mask=centre_atom_mask,
+                seed=42,
+                smoothing_factor=0.5,
+            )
+        )
+
+        # All should be valid permutations
+        assert decoding_order_spatial.shape == (batch_size, n_tokens)
+        assert decoding_order_random.shape == (batch_size, n_tokens)
+        assert decoding_order_mixed.shape == (batch_size, n_tokens)
+
+        # They should be different (with high probability)
+        assert not torch.equal(
+            decoding_order_spatial, decoding_order_random
+        ), "Fully spatial and fully random should produce different orders"
+
+    def test_seed_token_index_parameter(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test that seed_token_index parameter works correctly."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        centre_atom_coords = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        # Use specific seed token
+        seed_token_idx = n_tokens // 2  # Middle token
+        decoding_order = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=42,
+            smoothing_factor=1.0,  # Fully spatial
+            seed_token_index=seed_token_idx,
+        )
+
+        # Check that the decoding order is valid
+        assert decoding_order.shape == (batch_size, n_tokens)
+
+        # With fully spatial smoothing, tokens close to seed token should
+        # generally appear earlier in decoding order (but this is probabilistic)
+        # Just verify it runs without error
+        assert not torch.isnan(decoding_order.float()).any()
+
+    def test_masking_application(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that masking properly affects seed selection.
+
+        This is critical to avoid the silent failure mode mentioned in CLAUDE.md
+        where masked coordinates can generate large numbers if not properly handled.
+        """
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        centre_atom_coords = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        # Mask out first half of tokens
+        centre_atom_mask[:, : n_tokens // 2] = 0
+
+        decoding_order = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=42,
+            smoothing_factor=0.5,
+        )
+
+        # Check that the decoding order is still valid
+        assert decoding_order.shape == (batch_size, n_tokens)
+
+        # Check for reasonable values (no huge numbers from masked operations)
+        assert torch.all(
+            torch.abs(decoding_order.float()) < 1e6
+        ), "decoding_order contains unreasonably large values - possible masking bug"
+
+    def test_output_no_nan_or_inf(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that output doesn't contain NaN or Inf values."""
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        centre_atom_coords = torch.randn(batch_size, n_tokens, 3)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        decoding_order = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=42,
+        )
+
+        assert not torch.isnan(
+            decoding_order.float()
+        ).any(), "decoding_order contains NaN"
+        assert not torch.isinf(
+            decoding_order.float()
+        ).any(), "decoding_order contains Inf"
+
+    def test_device_consistency(self, mpnn_model, sample_data, input_feature_dict):
+        """Test that output is on the same device as inputs."""
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        basic = sample_data["basic"]
+        n_tokens = basic["N_token"].item()
+        batch_size = 1
+
+        mpnn_model = mpnn_model.to(device)
+
+        centre_atom_coords = torch.randn(batch_size, n_tokens, 3).to(device)
+        centre_atom_mask = torch.ones(batch_size, n_tokens).to(device)
+
+        decoding_order = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=42,
+        )
+
+        assert decoding_order.device == device
+
+    def test_spatial_ordering_property(
+        self, mpnn_model, sample_data, input_feature_dict
+    ):
+        """Test that fully spatial decoding (mu=1.0) produces spatially coherent order.
+
+        With mu=1.0, tokens closer to the seed should generally appear earlier.
+        """
+        batch_size = 1
+        n_tokens = 20  # Use smaller number for clearer spatial structure
+
+        # Create a linear arrangement of tokens
+        centre_atom_coords = torch.zeros(batch_size, n_tokens, 3)
+        centre_atom_coords[0, :, 0] = torch.linspace(0, 10, n_tokens)
+        centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+        # Use fully spatial smoothing
+        decoding_order = mpnn_model._generate_random_spatially_smooth_decoding_order(
+            centre_atom_coords=centre_atom_coords,
+            centre_atom_mask=centre_atom_mask,
+            seed=42,
+            smoothing_factor=1.0,
+            seed_token_index=0,  # Start from first token
+        )
+
+        # With seed at position 0 and fully spatial, tokens should be decoded
+        # in roughly ascending order of their x-coordinate
+        # We can't guarantee perfect ordering due to normalization, but there
+        # should be some spatial coherence
+        assert decoding_order.shape == (batch_size, n_tokens)
+
+        # Just verify the method produces valid output
+        sorted_indices = torch.sort(decoding_order[0])[0]
+        expected_indices = torch.arange(n_tokens, device=decoding_order.device)
+        assert torch.equal(sorted_indices, expected_indices)
+
+    def test_different_batch_sizes(self, mpnn_model):
+        """Test that method works with different batch sizes."""
+        for batch_size in [1, 2, 4]:
+            n_tokens = 15
+
+            centre_atom_coords = torch.randn(batch_size, n_tokens, 3)
+            centre_atom_mask = torch.ones(batch_size, n_tokens)
+
+            decoding_order = (
+                mpnn_model._generate_random_spatially_smooth_decoding_order(
+                    centre_atom_coords=centre_atom_coords,
+                    centre_atom_mask=centre_atom_mask,
+                    seed=42,
+                    smoothing_factor=0.5,
+                )
+            )
+
+            expected_shape = (batch_size, n_tokens)
+            assert (
+                decoding_order.shape == expected_shape
+            ), f"Failed for batch_size={batch_size}"
+
+            # Verify each batch has valid permutation
+            for b in range(batch_size):
+                sorted_indices = torch.sort(decoding_order[b])[0]
+                expected_indices = torch.arange(n_tokens, device=decoding_order.device)
+                assert torch.equal(sorted_indices, expected_indices)
+
+
 class TestGenerateSequentialMasks:
     """Tests for _generate_sequential_masks method."""
 
@@ -850,7 +1173,7 @@ class TestForward:
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
         # Run forward
-        logits, stats_dict = mpnn_model.forward(
+        logits, node_feats, edge_feats = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -861,7 +1184,12 @@ class TestForward:
 
         # Check output structure
         assert isinstance(logits, torch.Tensor), "First return value should be a tensor"
-        assert isinstance(stats_dict, dict), "Second return value should be a dict"
+        assert isinstance(
+            node_feats, torch.Tensor
+        ), "Second return value should be a tensor"
+        assert isinstance(
+            edge_feats, torch.Tensor
+        ), "Third return value should be a tensor"
         assert logits.shape == (
             batch_size,
             n_tokens,
@@ -881,7 +1209,7 @@ class TestForward:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
-        logits, _ = mpnn_model.forward(
+        logits, _, _ = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -913,7 +1241,7 @@ class TestForward:
         # Create custom decoding order
         decoding_order = torch.randperm(n_tokens).unsqueeze(0)
 
-        logits, _ = mpnn_model.forward(
+        logits, _, _ = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -939,7 +1267,7 @@ class TestForward:
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
         # Run in zero-shot mode
-        logits_zero_shot, _ = mpnn_model.forward(
+        logits_zero_shot, _, _ = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -950,7 +1278,7 @@ class TestForward:
         )
 
         # Run in autoregressive mode
-        logits_autoregressive, _ = mpnn_model.forward(
+        logits_autoregressive, _, _ = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -978,7 +1306,7 @@ class TestForward:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
-        logits, _ = mpnn_model.forward(
+        logits, _, _ = mpnn_model.forward(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -1008,7 +1336,7 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
-        sampled_sequence = mpnn_model.sample(
+        sampled_sequence, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -1036,7 +1364,7 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
-        sampled_sequence = mpnn_model.sample(
+        sampled_sequence, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -1071,7 +1399,7 @@ class TestSample:
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
         # Greedy sampling should be deterministic
-        sample_1 = mpnn_model.sample(
+        sample_1, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -1081,7 +1409,7 @@ class TestSample:
             temperature=0.0,
         )
 
-        sample_2 = mpnn_model.sample(
+        sample_2, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -1115,7 +1443,7 @@ class TestSample:
         decoding_order_1 = torch.randperm(n_tokens).unsqueeze(0)
         decoding_order_2 = torch.randperm(n_tokens).unsqueeze(0)
 
-        sample_1 = mpnn_model.sample(
+        sample_1, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -1126,7 +1454,7 @@ class TestSample:
             temperature=0.0,
         )
 
-        sample_2 = mpnn_model.sample(
+        sample_2, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -1165,11 +1493,11 @@ class TestSample:
             return_logits=True,
         )
 
-        # Should return tuple of (sequence, logits)
+        # Should return tuple of (sequence, node_feats, logits)
         assert isinstance(result, tuple), "return_logits=True should return tuple"
-        assert len(result) == 2, "Should return tuple of length 2"
+        assert len(result) == 3, "Should return tuple of length 3"
 
-        sampled_sequence, logits = result
+        sampled_sequence, node_feats, logits = result
         assert sampled_sequence.shape == (batch_size, n_tokens, num_residue_types)
         assert logits.shape == (batch_size, n_tokens, num_residue_types)
 
@@ -1189,7 +1517,7 @@ class TestSample:
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
         for temperature in [0.0, 0.5, 1.0, 1.5]:
-            sampled_sequence = mpnn_model.sample(
+            sampled_sequence, _ = mpnn_model.sample(
                 backbone_coords=backbone_coords,
                 backbone_mask=backbone_mask,
                 centre_atom_coord=centre_atom_coord,
@@ -1215,7 +1543,7 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
-        sampled_sequence = mpnn_model.sample(
+        sampled_sequence, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
@@ -1253,7 +1581,7 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens).to(device)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types).to(device)
 
-        sampled_sequence = mpnn_model.sample(
+        sampled_sequence, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,

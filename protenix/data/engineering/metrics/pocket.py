@@ -17,12 +17,6 @@ from pocketeer.core import (
     filter_surface_spheres,
     # label_polarity,
 )
-
-# import numpy.typing as npt
-# from scipy.spatial import (
-#     Delaunay,
-#     cKDTree,  # type: ignore
-# )
 from pocketeer.core.types import AlphaSphere
 from pocketeer.utils.constants import MIN_ATOMS_FOR_TESSELLATION
 from pocketeer.utils.exceptions import ValidationError
@@ -65,6 +59,52 @@ def label_polarity(
     return spheres
 
 
+def label_confidence(
+    spheres: list[AlphaSphere],
+    atomarray: struc.AtomArray,
+    plddt_cutoff: float = 70.0,
+) -> list[AlphaSphere]:
+    """Label spheres as confident or not based on pLDDT scores.
+
+    Uses predicted local distance difference test (pLDDT) scores from the
+    b_factor field to determine if atoms defining each sphere are confidently
+    predicted.
+
+    Modifies spheres in place.
+
+    Args:
+        spheres: list of alpha-spheres
+        atomarray: Biotite AtomArray with structure data containing b_factor (pLDDT)
+        plddt_cutoff: Minimum pLDDT score for confident prediction. Default: 70.0
+
+    Returns:
+        list[AlphaSphere]: Input spheres with is_confident attribute set
+    """
+    # Get pLDDT scores from b_factor field for all atoms
+    atom_plddt = atomarray.b_factor
+
+    # Label each sphere based on pLDDT of its defining atoms
+    for sphere in spheres:
+        defining_atom_plddt = atom_plddt[sphere.atom_indices]
+        sphere.is_confident = np.mean(defining_atom_plddt) >= plddt_cutoff
+
+    return spheres
+
+
+def filter_low_confidence_spheres(
+    spheres: list[AlphaSphere],
+) -> list[AlphaSphere]:
+    """Filter to keep only confident (high pLDDT) spheres for pocket detection.
+
+    Args:
+        spheres: list of all alpha-spheres
+
+    Returns:
+        List of confident spheres only
+    """
+    return [s for s in spheres if s.is_confident]
+
+
 def find_pockets(
     atomarray: struc.AtomArray,
     *,
@@ -72,6 +112,7 @@ def find_pockets(
     r_max: float = 6.0,
     polar_probe_radius: float = 1.8,
     sasa_cutoff: float = 1.0,
+    plddt_cutoff: float | None = None,
     merge_distance: float = 1.75,
     min_spheres: int = 35,
     ignore_hydrogens: bool = True,
@@ -94,6 +135,7 @@ def find_pockets(
         r_max: Maximum alpha-sphere radius (Å). Default: 6.0
         polar_probe_radius: Radius to test atom contact for polarity (Å). Default: 1.8
         sasa_cutoff: Solvent accessible surface area cutoff for a buried spheres. Default: 1.0
+        plddt_cutoff: AlphaFold pLDDT cutoff for confident spheres. If None, no confidence filtering is applied. Default: None
         merge_distance: Distance threshold for merging nearby sphere clusters (Å). Default: 1.75
         min_spheres: Minimum number of spheres per pocket cluster. Default: 35
         ignore_hydrogens: Ignore hydrogen atoms (recommended). Default: True
@@ -156,9 +198,21 @@ def find_pockets(
         logger.warning("No buried spheres found. Returning empty pocket list.")
         return []
 
-    # 3. Cluster buried spheres into pockets
+    # 3. Label spheres as confident or non-confident and filter (if plddt_cutoff provided)
+    spheres_to_cluster = buried_spheres
+    if plddt_cutoff is not None:
+        buried_spheres = label_confidence(
+            buried_spheres, atomarray, plddt_cutoff=plddt_cutoff
+        )
+        spheres_to_cluster = filter_low_confidence_spheres(buried_spheres)
+        logger.info(f"Found {len(spheres_to_cluster)} confident spheres")
+        if not spheres_to_cluster:
+            logger.warning("No confident spheres found. Returning empty pocket list.")
+            return []
+
+    # 4. Cluster spheres into pockets
     pocket_clusters = cluster_spheres(
-        buried_spheres, merge_distance=merge_distance, min_spheres=min_spheres
+        spheres_to_cluster, merge_distance=merge_distance, min_spheres=min_spheres
     )
     logger.info(f"Found {len(pocket_clusters)} clusters (potential pockets)")
 
@@ -177,3 +231,64 @@ def find_pockets(
     logger.info(f"Pocket detection complete. {len(pockets)} pockets found")
 
     return pockets
+
+
+def find_confident_pockets(
+    atomarray: struc.AtomArray,
+    *,
+    r_min: float = 3.0,
+    r_max: float = 6.0,
+    polar_probe_radius: float = 1.8,
+    sasa_cutoff: float = 1.0,
+    plddt_cutoff: float = 70.0,
+    merge_distance: float = 1.75,
+    min_spheres: int = 35,
+    ignore_hydrogens: bool = True,
+    ignore_water: bool = True,
+    ignore_hetero: bool = True,
+) -> list[Pocket]:
+    """Detect binding pockets in a protein structure with pLDDT-based confidence filtering.
+
+    Convenience wrapper around find_pockets() that applies pLDDT-based confidence filtering.
+
+    Args:
+        atomarray: Biotite AtomArray with structure data
+        r_min: Minimum alpha-sphere radius (Å). Default: 3.0
+        r_max: Maximum alpha-sphere radius (Å). Default: 6.0
+        polar_probe_radius: Radius to test atom contact for polarity (Å). Default: 1.8
+        sasa_cutoff: Solvent accessible surface area cutoff for a buried spheres. Default: 1.0
+        plddt_cutoff: AlphaFold pLDDT cutoff for confident spheres. Default: 70.0
+        merge_distance: Distance threshold for merging nearby sphere clusters (Å). Default: 1.75
+        min_spheres: Minimum number of spheres per pocket cluster. Default: 35
+        ignore_hydrogens: Ignore hydrogen atoms (recommended). Default: True
+        ignore_water: Ignore water molecules (recommended). Default: True
+        ignore_hetero: Ignore hetero atoms i.e. ligands (recommended). Default: True
+
+    Returns:
+        pockets: list of detected Pocket objects, sorted by score (highest first)
+
+    Raises:
+        ValidationError: if atomarray is invalid or empty
+        ValueError: if parameters are invalid
+
+    Examples:
+        >>> import pocketeer as pt
+        >>> atomarray = pt.load_structure("protein.pdb")
+        >>> pockets = pt.find_confident_pockets(atomarray)
+
+        >>> # With custom parameters
+        >>> pockets = pt.find_confident_pockets(atomarray, r_min=2.5, r_max=7.0, min_spheres=25)
+    """
+    return find_pockets(
+        atomarray,
+        r_min=r_min,
+        r_max=r_max,
+        polar_probe_radius=polar_probe_radius,
+        sasa_cutoff=sasa_cutoff,
+        plddt_cutoff=plddt_cutoff,
+        merge_distance=merge_distance,
+        min_spheres=min_spheres,
+        ignore_hydrogens=ignore_hydrogens,
+        ignore_water=ignore_water,
+        ignore_hetero=ignore_hetero,
+    )

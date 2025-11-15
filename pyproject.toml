@@ -60,6 +60,7 @@ dependencies = [
     "jaxtyping",
     "pocketeer[dev,vis]>=0.0.2",
     "atomworks>=1.0.3",
+    "ray>=2.48.0",
 ]
 
 [project.optional-dependencies]

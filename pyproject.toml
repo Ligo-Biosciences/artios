@@ -22,12 +22,12 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "PyYaml",
     "scipy",
@@ -41,7 +41,7 @@ dependencies = [
     "rootutils",
     "posebusters",
     "modelcif==0.7",
-    "biotite>=1.2.0,<1.3.0",
+    "biotite>=1.2.0",
     "protobuf==3.20.2",
     "seaborn",
     "icecream",
@@ -57,7 +57,9 @@ dependencies = [
     "modal==1.1.4",
     "boto3",
     "lz4",
-    "jaxtyping"
+    "jaxtyping",
+    "pocketeer[dev,vis]>=0.0.2",
+    "atomworks>=1.0.3",
 ]
 
 [project.optional-dependencies]
@@ -87,7 +89,7 @@ exclude = ["assets*", "benchmark*", "*.egg-info*", "tests*"]
 
 [tool.black]
 line-length = 88
-target-version = ['py310']
+target-version = ['py311']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -126,7 +128,7 @@ markers = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -150,3 +152,8 @@ module = [
     "deepspeed.*",
 ]
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.30.1",
+]

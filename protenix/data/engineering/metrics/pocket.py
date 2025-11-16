@@ -86,7 +86,7 @@ def label_confidence(
     # Label each sphere based on pLDDT of its defining atoms
     for sphere in spheres:
         defining_atom_plddt = atom_plddt[sphere.atom_indices]
-        sphere.is_confident = np.mean(defining_atom_plddt) >= plddt_cutoff
+        sphere.is_confident = np.all(defining_atom_plddt >= plddt_cutoff)
 
     return spheres
 

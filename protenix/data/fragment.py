@@ -1,0 +1,354 @@
+"""
+Houses all the logic for generating fragments from protein structures.
+"""
+
+from logging import getLogger
+
+import biotite.structure as struc
+import numpy as np
+from biotite.structure import AtomArray
+
+logger = getLogger(__name__)
+
+
+class FragmentMaker:
+    """
+    Main class for generating fragments when prepping the dataset in parser.py.
+    The AtomArray of a .cif file is handed to the `FragmentMaker`, which will then
+    remove un-confident residues (according to pLDDT). The remaining 'fragmented'
+    structure undergoes fragment specfic processing, filtering fragments that do
+    not favour the training-relevant criteria (i.e for motif scaffolding, fragments
+    with a high `Rg` are filtered out). The exact workflow is as follows:
+
+    - filter_low_plddt_residues
+        Filters the residues of the input AtomArray according to residue-level
+        pLDDT (gotten from the .b_factor annotation). Returns a (modified) AtomArray. The pLDDT threshold is class attribute.
+    - assign_fragment_ids
+        Detects fragments in the AtomArray left by the filtering. This detects the contiguous
+        windows of residues. Each window gets a unique fragment ID. Fragment ID is assigned
+        using an AtomArray annotation (starting from 0).
+    - spatially_cluster_fragments
+        This identifies which fragments are spatially close. 'Close' is determined by the centroids
+        of two fragments being within a certain distance threshold (class attribute). Fragments
+        that are 'close' are assigned the same fragment ID. That is, one of the fragments in a pair
+        of close fragment is assigned the other fragment's ID. Care needs to be taken here to ensure
+        that if A is close to B, and B is close to C, then A and C have the same fragment ID.
+    - calculate_fragment_metrics
+        This calculates the avg pLDDT, length and Rg of each fragment. This is stored in a dictionary
+        of fragment_id -> metric.
+    - filter_fragments
+        This filters the fragments based on the calculated metrics as well as whether or not the fragment
+        contains a pocket (using a .pocket annotation the AtomArray has). Filter values are class attributes.
+        Fragments that do not meet the criteria are filtered out.
+    - correct_fragment_ids
+        This corrects the remaining fragment ID's to ensure that they start from 0 and are contiguous.
+        This is required as filtering fragments will results in gaps in the fragment ID's.
+    """
+
+    def __init__(
+        self,
+        plddt_residue_threshold: float = 50,
+        spatial_cluster_distance_threshold: float = 10.0,
+        min_fragment_length: int = 100,
+        min_fragment_plddt: float = 50,
+        max_fragment_rg: float = 25.0,
+    ):
+        """
+        Initialize FragmentMaker with filtering and clustering thresholds.
+
+        Args:
+            plddt_residue_threshold (float): Threshold for pLDDT to filter residues. Defaults to 50.
+            spatial_cluster_distance_threshold (float): Threshold for spatial clustering of fragments. Defaults to 10.0 Angstroms.
+            min_fragment_length (int): Minimum length of a fragment. Defaults to 100.
+            min_fragment_plddt (float): Minimum pLDDT of a fragment. Defaults to 50.
+            max_fragment_rg (float): Maximum Rg of a fragment. Defaults to 25.0 Angstroms.
+        """
+        self.plddt_residue_threshold = plddt_residue_threshold
+        self.spatial_cluster_distance_threshold = spatial_cluster_distance_threshold
+        self.min_fragment_length = min_fragment_length
+        self.min_fragment_plddt = min_fragment_plddt
+        self.max_fragment_rg = max_fragment_rg
+
+    def filter_low_plddt_residues(self, atom_array: AtomArray) -> AtomArray:
+        """
+        Filter residues based on pLDDT threshold and initialize fragment_id annotation.
+
+        Residues with mean pLDDT below threshold are marked with fragment_id = -1.
+        All other residues are initialized with fragment_id = 0 (to be reassigned later).
+
+        Args:
+            atom_array (AtomArray): Biotite AtomArray object with b_factor annotation.
+
+        Returns:
+            AtomArray: AtomArray with fragment_id annotation added.
+        """
+        # Initialize all atoms with fragment_id = 0
+        fragment_ids = np.zeros(len(atom_array), dtype=np.int32)
+
+        # Iterate through residues and filter by pLDDT
+        res_starts = struc.get_residue_starts(atom_array, add_exclusive_stop=True)
+        for start, stop in zip(res_starts[:-1], res_starts[1:]):
+            # Calculate mean pLDDT for this residue
+            residue_plddt = np.mean(atom_array.b_factor[start:stop])
+
+            # Mark low pLDDT residues with -1
+            if residue_plddt < self.plddt_residue_threshold:
+                fragment_ids[start:stop] = -1
+
+        atom_array.set_annotation("fragment_id", fragment_ids)
+        return atom_array
+
+    def assign_fragment_ids(self, atom_array: AtomArray) -> AtomArray:
+        """
+        Assign unique fragment IDs to contiguous windows of residues.
+
+        Consecutive residues (by res_id) within the same chain that are not marked
+        as -1 are assigned the same fragment_id.
+
+        Args:
+            atom_array (AtomArray): AtomArray with fragment_id annotation initialized.
+
+        Returns:
+            AtomArray: AtomArray with fragment_id annotation updated.
+        """
+        fragment_ids = atom_array.fragment_id.copy()
+        current_fragment_id = 0
+
+        res_starts = struc.get_residue_starts(atom_array, add_exclusive_stop=True)
+        prev_chain_id = None
+        prev_res_id = None
+        prev_fragment_valid = False
+
+        for start, stop in zip(res_starts[:-1], res_starts[1:]):
+            chain_id = atom_array.chain_id[start]
+            res_id = atom_array.res_id[start]
+            current_fragment_valid = fragment_ids[start] != -1
+
+            if not current_fragment_valid:
+                # Skip residues marked as -1
+                prev_chain_id = chain_id
+                prev_res_id = res_id
+                prev_fragment_valid = False
+                continue
+
+            # Check if this is contiguous with previous residue
+            is_contiguous = (
+                prev_chain_id == chain_id
+                and prev_fragment_valid
+                and prev_res_id is not None
+                and res_id == prev_res_id + 1
+            )
+
+            if is_contiguous:
+                # Continue current fragment
+                fragment_ids[start:stop] = current_fragment_id
+            else:
+                # Start new fragment
+                current_fragment_id += 1
+                fragment_ids[start:stop] = current_fragment_id
+
+            prev_chain_id = chain_id
+            prev_res_id = res_id
+            prev_fragment_valid = True
+
+        atom_array.set_annotation("fragment_id", fragment_ids)
+        return atom_array
+
+    def spatially_cluster_fragments(self, atom_array: AtomArray) -> AtomArray:
+        """
+        Cluster spatially close fragments by merging their fragment IDs.
+
+        Uses Union-Find algorithm to ensure transitivity: if A is close to B
+        and B is close to C, then A and C get the same fragment_id.
+
+        Args:
+            atom_array (AtomArray): AtomArray with fragment_id annotation.
+
+        Returns:
+            AtomArray: AtomArray with merged fragment_id annotation.
+        """
+        # Get unique fragment IDs (excluding -1)
+        unique_frag_ids = np.unique(atom_array.fragment_id)
+        unique_frag_ids = unique_frag_ids[unique_frag_ids != -1]
+
+        if len(unique_frag_ids) == 0:
+            return atom_array
+
+        # Calculate centroid for each fragment
+        centroids = {}
+        for frag_id in unique_frag_ids:
+            mask = atom_array.fragment_id == frag_id
+            centroids[frag_id] = np.mean(atom_array.coord[mask], axis=0)
+
+        # Union-Find data structure
+        parent = {frag_id: frag_id for frag_id in unique_frag_ids}
+
+        def find(x):
+            """Find root parent with path compression."""
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+
+        def union(x, y):
+            """Union two sets."""
+            root_x = find(x)
+            root_y = find(y)
+            if root_x != root_y:
+                parent[root_y] = root_x
+
+        # Find close pairs and union them
+        frag_ids_list = list(unique_frag_ids)
+        for i in range(len(frag_ids_list)):
+            for j in range(i + 1, len(frag_ids_list)):
+                frag_i = frag_ids_list[i]
+                frag_j = frag_ids_list[j]
+
+                # Calculate distance between centroids
+                distance = np.linalg.norm(centroids[frag_i] - centroids[frag_j])
+
+                if distance < self.spatial_cluster_distance_threshold:
+                    union(frag_i, frag_j)
+
+        # Remap all fragment IDs to their root parent
+        fragment_ids = atom_array.fragment_id.copy()
+        for frag_id in unique_frag_ids:
+            root = find(frag_id)
+            mask = atom_array.fragment_id == frag_id
+            fragment_ids[mask] = root
+
+        atom_array.set_annotation("fragment_id", fragment_ids)
+        return atom_array
+
+    def calculate_fragment_metrics(self, atom_array: AtomArray) -> dict:
+        """
+        Calculate metrics for each fragment: average pLDDT, length, and radius of gyration.
+
+        Args:
+            atom_array (AtomArray): AtomArray with fragment_id annotation.
+
+        Returns:
+            dict: Dictionary mapping fragment_id to metrics dict with keys:
+                - avg_plddt (float): Average pLDDT of fragment
+                - length (int): Number of unique residues in fragment
+                - rg (float): Radius of gyration in Angstroms
+        """
+        metrics = {}
+
+        # Get unique fragment IDs (excluding -1)
+        unique_frag_ids = np.unique(atom_array.fragment_id)
+        unique_frag_ids = unique_frag_ids[unique_frag_ids != -1]
+
+        for frag_id in unique_frag_ids:
+            mask = atom_array.fragment_id == frag_id
+            frag_atoms = atom_array[mask]
+
+            # Calculate average pLDDT
+            avg_plddt = np.mean(frag_atoms.b_factor)
+
+            # Calculate length (number of unique residues)
+            unique_res_ids = np.unique(frag_atoms.res_id)
+            length = len(unique_res_ids)
+
+            # Calculate radius of gyration
+            centroid = np.mean(frag_atoms.coord, axis=0)
+            squared_distances = np.sum((frag_atoms.coord - centroid) ** 2, axis=1)
+            rg = np.sqrt(np.mean(squared_distances))
+
+            metrics[frag_id] = {
+                "avg_plddt": avg_plddt,
+                "length": length,
+                "rg": rg,
+            }
+
+        return metrics
+
+    def filter_fragments(self, atom_array: AtomArray, metrics: dict) -> AtomArray:
+        """
+        Filter fragments based on calculated metrics.
+
+        Fragments that do not meet all criteria are marked with fragment_id = -1.
+        Criteria:
+        - length >= min_fragment_length
+        - avg_plddt >= min_fragment_plddt
+        - rg <= max_fragment_rg
+
+        Args:
+            atom_array (AtomArray): AtomArray with fragment_id annotation.
+            metrics (dict): Dictionary of fragment_id to metrics.
+
+        Returns:
+            AtomArray: AtomArray with filtered fragments marked as -1.
+        """
+        fragment_ids = atom_array.fragment_id.copy()
+
+        for frag_id, frag_metrics in metrics.items():
+            # Check if fragment meets all criteria
+            passes_length = frag_metrics["length"] >= self.min_fragment_length
+            passes_plddt = frag_metrics["avg_plddt"] >= self.min_fragment_plddt
+            passes_rg = frag_metrics["rg"] <= self.max_fragment_rg
+
+            if not (passes_length and passes_plddt and passes_rg):
+                # Mark this fragment as filtered
+                mask = atom_array.fragment_id == frag_id
+                fragment_ids[mask] = -1
+
+        atom_array.set_annotation("fragment_id", fragment_ids)
+        return atom_array
+
+    def correct_fragment_ids(self, atom_array: AtomArray) -> AtomArray:
+        """
+        Renumber fragment IDs to be contiguous starting from 0.
+
+        After filtering, fragment IDs may have gaps. This method renumbers
+        remaining fragments to be 0, 1, 2, ... while keeping -1 as -1.
+
+        Args:
+            atom_array (AtomArray): AtomArray with fragment_id annotation.
+
+        Returns:
+            AtomArray: AtomArray with corrected fragment_id annotation.
+        """
+        # Get unique remaining fragment IDs (excluding -1), sorted
+        unique_frag_ids = np.unique(atom_array.fragment_id)
+        unique_frag_ids = unique_frag_ids[unique_frag_ids != -1]
+        unique_frag_ids = np.sort(unique_frag_ids)
+
+        # Create mapping from old to new IDs
+        id_mapping = {old_id: new_id for new_id, old_id in enumerate(unique_frag_ids)}
+        id_mapping[-1] = -1  # Keep -1 as -1
+
+        # Apply mapping
+        fragment_ids = atom_array.fragment_id.copy()
+        for old_id, new_id in id_mapping.items():
+            mask = atom_array.fragment_id == old_id
+            fragment_ids[mask] = new_id
+
+        atom_array.set_annotation("fragment_id", fragment_ids)
+        return atom_array
+
+    def get_fragment_annotation(self, atom_array: AtomArray) -> AtomArray:
+        """
+        Calculate and assign fragment_id annotation to the input AtomArray.
+
+        This orchestrates the complete workflow:
+        1. Filter low pLDDT residues
+        2. Assign initial fragment IDs to contiguous regions
+        3. Spatially cluster fragments
+        4. Calculate fragment metrics
+        5. Filter fragments based on metrics
+        6. Correct fragment IDs to be contiguous
+
+        Args:
+            atom_array (AtomArray): Input AtomArray with b_factor annotation.
+
+        Returns:
+            AtomArray: AtomArray with fragment_id annotation added.
+                fragment_id = -1 for filtered atoms, otherwise 0, 1, 2, ...
+        """
+        atom_array = self.filter_low_plddt_residues(atom_array)
+        atom_array = self.assign_fragment_ids(atom_array)
+        atom_array = self.spatially_cluster_fragments(atom_array)
+        metrics = self.calculate_fragment_metrics(atom_array)
+        atom_array = self.filter_fragments(atom_array, metrics)
+        atom_array = self.correct_fragment_ids(atom_array)
+        return atom_array

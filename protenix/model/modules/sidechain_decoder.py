@@ -23,25 +23,28 @@ class SidechainDecoder(nn.Module):
     def __init__(
         self,
         node_dim,
+        c_token: int = 384,
         c_atom: int = 128,
         c_atompair: int = 16,
-        num_blocks: int = 2,
-        num_heads: int = 4,
+        atom_encoder: dict[str, int] = {"num_blocks": 3, "num_heads": 4},
+        transformer: dict[str, int] = {"num_blocks": 10, "num_heads": 12},
+        atom_decoder: dict[str, int] = {"num_blocks": 3, "num_heads": 4},
         num_queries: int = 32,
         num_keys: int = 128,
     ) -> None:
         super().__init__()
         self.relpos = RelativePositionEncoding(r_max=32, s_max=2, c_z=32)
+
+        # Encoder
         self.atom_attention_encoder = AtomAttentionEncoder(
-            c_token=node_dim,
+            **atom_encoder,
+            c_token=c_token,
             has_coords=True,
             has_s=True,
             c_atom=c_atom,
             c_atompair=c_atompair,
             c_s=node_dim,
             c_z=32,
-            num_blocks=num_blocks,
-            num_heads=num_heads,
             num_queries=num_queries,
             num_keys=num_keys,
         )
@@ -53,22 +56,21 @@ class SidechainDecoder(nn.Module):
         self.layernorm_s = LayerNorm(2 * node_dim)
         self.proj_s = LinearNoBias(2 * node_dim, node_dim)
 
-        self.layernorm_a = LayerNorm(node_dim)
-
-        # Embed centre atoms
-        # self.embed_centre_atoms = LinearNoBias(3, node_dim)
-
+        # DiT
         self.diffusion_transformer = DiffusionTransformer(
-            num_blocks=2, c_token=node_dim, c_s=node_dim, c_z=32, num_heads=4
+            **transformer,
+            c_token=c_token,
+            c_s=node_dim,
+            c_z=32,
         )
+        self.layernorm_a = LayerNorm(c_token)
 
         # Decoder
         self.atom_attention_decoder = AtomAttentionDecoder(
-            c_token=node_dim,
+            **atom_decoder,
+            c_token=c_token,
             c_atom=c_atom,
             c_atompair=c_atompair,
-            num_blocks=num_blocks,
-            num_heads=num_heads,
             num_queries=num_queries,
             num_keys=num_keys,
         )
@@ -90,7 +92,6 @@ class SidechainDecoder(nn.Module):
         atom_mask = input_feature_dict["atom_mask"]
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
         n_token = node_emb.shape[-2]
-        # n_sample = x_noisy.shape[-3]
 
         # Compute pair mask
         token_mask = input_feature_dict["token_mask"]  # [..., n_token]
@@ -110,14 +111,15 @@ class SidechainDecoder(nn.Module):
         # Compute sequence and node embeddings
         seq_emb = self.embed_restype(input_feature_dict["restype"])
         s = torch.cat([seq_emb, node_emb], dim=-1)
-        s = self.proj_s(s)  # [..., n_token, node_dim]
+        s = self.layernorm_s(s)
+        s = self.proj_s(s)  # [..., n_token, c_token]
 
         # Add timestep embedding
         timestep_emb = self.embed_timestep(
             self.fourier_embedding(t_hat_timestep=2 * timestep - 1)
         ).to(z.dtype)  # [..., n_sample, node_dim]
         s = s.unsqueeze(-3) + expand_at_dim(timestep_emb, dim=-2, n=n_token)
-        # [..., n_sample, n_token, node_dim]
+        # [..., n_sample, n_token, c_token]
 
         # Encode atoms
         a, q_l, c_l, p_lm, trunked_pair_mask = self.atom_attention_encoder(
@@ -127,16 +129,7 @@ class SidechainDecoder(nn.Module):
             z=z,
             return_trunked_pair_mask=True,
         )
-        # q_l = q_l + self.embed_centre_atoms(residual_centre_atoms / 10.0)  # TODO: hardcoded
 
-        # TODO: janky
-        # centre_atoms = average_atom_to_token(
-        #     x_atom=residual_centre_atoms,
-        #     atom_mask=expand_at_dim(atom_mask, dim=-2, n=n_sample),
-        #     atom_to_token_idx=expand_at_dim(atom_to_token_idx, dim=-2, n=n_sample),
-        #     n_token=n_token,
-        # )
-        # a = a + self.embed_centre_atoms(centre_atoms / 10.0)  # TODO: hardcoded
         a = self.diffusion_transformer(a=a, s=s, z=z, pair_mask=pair_mask)
         a = self.layernorm_a(a)
 

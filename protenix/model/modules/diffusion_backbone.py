@@ -13,6 +13,7 @@ from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.modules.transformer import DiffusionTransformer
 from protenix.model.utils import (
     average_atom_to_token,
+    broadcast_token_to_atom,
     centre_random_augmentation,
     expand_at_dim,
     one_hot,
@@ -198,9 +199,7 @@ class DiffusionConditioning(nn.Module):
         ### Create ligand pair conditioning
         # 1. Get token-wise ligand reference positions
         # [..., N_atom, 3]
-        # TODO: is_atom is wrong. Remember that is_ligand and is_motif_related intersect, so some value
-        # here are 2, which is not what you want!!
-        is_atom = (is_ligand + is_motif_related).unsqueeze(-1)  # [..., n_atom, 1]
+        is_atom = (is_ligand | is_motif_related).unsqueeze(-1)  # [..., n_atom, 1]
         ref_pos = (
             input_feature_dict["ref_pos"] * is_atom
         )  # (zero out out that are non-atomized)
@@ -459,7 +458,7 @@ class DiffusionConditioning(nn.Module):
         # 2. Normalise and embed both timesteps
         s = s.unsqueeze(-3)
         s = s + expand_at_dim(
-            self.linear_t(self.layernomr_t(timestep_embed)),
+            self.linear_t(self.layernorm_t(timestep_embed)),
             dim=-2,
             n=n_token,
         )  # [..., N_sample, N_token, c_s]
@@ -494,6 +493,7 @@ class DiffusionModule(nn.Module):
         sigma_coord: float = 12.0,
         c_z: int = 128,
         c_token: int = 768,
+        c_atom: int = 128,
         c_s: int = 384,
         c_s_inputs: int = 449,
         transformer: dict[str, int] = {"num_blocks": 24, "num_heads": 16},
@@ -505,6 +505,7 @@ class DiffusionModule(nn.Module):
         Args:
             sigma_coord (torch.float, optional): the standard deviation of the coordinates. Defaults to 12.0.
             c_token (int, optional): feature channel of token (single a). Defaults to 768.
+            c_atom (int, optional): feature channel of atom. Defaults to 128.
             c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
             c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128.
             c_s_inputs (int, optional): hidden dim [for single input embedding]. Defaults to 449.
@@ -520,23 +521,35 @@ class DiffusionModule(nn.Module):
         super(DiffusionModule, self).__init__()
         self.sigma_coord = sigma_coord
         self.c_token = c_token
+        self.c_atom = c_atom
         self.c_s_inputs = c_s_inputs
         self.c_s = c_s
         self.c_z = c_z
+
+        self.atom_input_feature = {
+            "ref_charge": 1,
+            "ref_element": 128,
+            "ref_atom_name_chars": 4 * 64,
+        }
 
         # Grad checkpoint setting
         self.blocks_per_ckpt = blocks_per_ckpt
         self.use_fine_grained_checkpoint = use_fine_grained_checkpoint
 
+        # Coordinate embedding layer
+        self.linear_no_bias_r_embed = LinearNoBias(
+            3,
+            c_atom,  # init="lecun"
+        )
+        self.linear_no_bias_q_skip = LinearNoBias(
+            c_atom,
+            c_token,
+        )
+
         self.diffusion_conditioning = DiffusionConditioning(
             sigma_coord=sigma_coord,
             c_z=c_z,
             c_s=c_s,
-        )
-        # Coordinate embedding layer
-        self.linear_no_bias_r_embed = LinearNoBias(
-            3,
-            c_token,  # init="lecun"
         )
 
         # Alg20: line4
@@ -549,14 +562,19 @@ class DiffusionModule(nn.Module):
         )
         self.layernorm_a = LayerNorm(c_token)
 
-        self.readout_transition = Transition(c_in=c_token, n=2)
-        self.readout_layernorm = LayerNorm(c_token)
-        self.readout_linear = LinearNoBias(c_token, 3, init="zeros")
+        self.linear_no_bias_a = LinearNoBias(
+            c_token,
+            c_atom,
+        )
 
-    def readout(self, a_token: torch.Tensor):
+        self.readout_transition = Transition(c_in=c_atom, n=2)
+        self.readout_layernorm = LayerNorm(c_atom)
+        self.readout_linear = LinearNoBias(c_atom, 3, init="zeros")
+
+    def readout(self, q_atom: torch.Tensor):
         """Readout layer."""
-        a_token = a_token + self.readout_transition(a_token)
-        return self.readout_linear(self.readout_layernorm(a_token))
+        q_atom = q_atom + self.readout_transition(q_atom)
+        return self.readout_linear(self.readout_layernorm(q_atom))
 
     def f_forward(
         self,
@@ -587,11 +605,30 @@ class DiffusionModule(nn.Module):
         N_sample = r_noisy.size(-3)
         assert timestep.size(-1) == N_sample
 
+        atom_mask = input_feature_dict["atom_mask"]
+        n_token = input_feature_dict["residue_index"].shape[-1]
+        atom_to_token_idx = expand_at_dim(
+            input_feature_dict["atom_to_token_idx"], dim=-2, n=N_sample
+        )
+
         # Compute pair mask
         token_mask = input_feature_dict["token_mask"]  # [..., N_token]
         token_mask = token_mask.unsqueeze(-2)  # add N_sample dim
         pair_mask = token_mask[..., :, None] * token_mask[..., None, :]
         # [..., 1, N_token, N_token]
+
+        # Average coordinates per token
+        # TODO: let's break symmetry here with some very minor atom level information instead
+        # of using a q_skip with coordinates.
+        q_skip = self.linear_no_bias_r_embed(r_noisy)  # [..., N_sample, N_atom, c_atom]
+        a_token = self.linear_no_bias_q_skip(
+            average_atom_to_token(
+                x_atom=q_skip,
+                atom_mask=atom_mask,
+                atom_to_token_idx=atom_to_token_idx,
+                n_token=n_token,
+            )
+        )  # [..., N_sample, N_token, c_token]
 
         s, z = self.diffusion_conditioning(
             r_noisy=r_noisy,
@@ -600,17 +637,13 @@ class DiffusionModule(nn.Module):
             inplace_safe=inplace_safe,
         )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
 
-        # Embed noisy coordinates into token space
-        a_token = self.linear_no_bias_r_embed(r_noisy)
-
-        # TODO: reduce the atoms to tokens using average_atom_to_token
-
         # Mix single conditioning into token representation
         a_token = a_token + self.linear_no_bias_s(self.layernorm_s(s))
+        a_token = a_token * token_mask[..., None]
+
+        q_skip = a_token.clone()
         # [..., N_sample, N_token, c_token]
 
-        # Apply diffusion transformer on token representations
-        a_token = a_token * token_mask[..., None]
         z = z.unsqueeze(-4)
         z = z * pair_mask[..., None]
 
@@ -618,11 +651,16 @@ class DiffusionModule(nn.Module):
         a_token = a_token * token_mask[..., None]
         a_token = self.layernorm_a(a_token)
 
-        # TODO: currently we are not reading out an atom rep.
-        # Need to convert token to atom. This just means copying four ways and adding
-        # a distinguisher.
+        # Convert back to atom space
+        q_atom = self.linear_no_bias_a(
+            broadcast_token_to_atom(
+                x_token=a_token, atom_to_token_idx=atom_to_token_idx
+            )
+        )  # [..., N_sample, N_atom, c_atom]
 
-        return self.readout(a_token)
+        q_atom = q_atom + q_skip
+
+        return self.readout(q_atom)
 
     def c_in(self, timestep: torch.Tensor) -> torch.Tensor:
         return 1 / (timestep**2 + (1 - timestep) ** 2).sqrt()

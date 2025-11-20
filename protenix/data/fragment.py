@@ -298,7 +298,6 @@ class FragmentMaker:
                     segment_start = res_id
                 prev_res_id = res_id
 
-            # Add the last segment
             segments.append(f"{segment_start}-{prev_res_id}")
             boundaries = "_".join(segments)
 
@@ -394,9 +393,7 @@ class FragmentMaker:
 
         fragment_ids = sorted(metrics.keys())
 
-        # Organize fragment metrics and pocket data by metric name
         metrics_by_name = {
-            # Fragment-level metrics
             "fragment_avg_plddt": [
                 metrics[frag_id]["avg_plddt"] for frag_id in fragment_ids
             ],

@@ -3,40 +3,20 @@ from collections import Counter
 import biotite.structure as struc
 import numpy as np
 
-from protenix.common.constants import MAX_ASA
-
 
 def compute_mean_sasa(atom_array: struc.AtomArray) -> float:
     """
-    Calculate mean relative solvent accessible surface area (RASA) per residue.
+    Calculate mean solvent accessible surface area (SASA) per residue.
 
     Args:
         atom_array: Biotite AtomArray structure
 
     Returns:
-        Mean relative RASA across all residues (0-1 scale)
+        Mean SASA across all residues
     """
     # Calculate atom-level SASA
     atom_sasa = struc.sasa(atom_array, vdw_radii="Single")
-
-    # Get residue information
-    n_res = struc.get_residue_count(atom_array)
-    residue_starts = struc.get_residue_starts(atom_array)
-
-    # Calculate per-residue relative SASA
-    residue_rel_sasa = np.zeros(n_res)
-
-    for i in range(n_res):
-        start = residue_starts[i]
-        end = residue_starts[i + 1] if i + 1 < n_res else atom_array.array_length()
-
-        res_name = atom_array.res_name[start]
-        residue_sasa = np.sum(atom_sasa[start:end])
-
-        # Normalize by max ASA for this residue type
-        residue_rel_sasa[i] = residue_sasa / MAX_ASA.get(res_name, np.nan)
-
-    return np.nanmean(residue_rel_sasa)
+    return np.nanmean(atom_sasa)
 
 
 def compute_radius_of_gyration(atom_array: struc.AtomArray) -> float:

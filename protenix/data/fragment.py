@@ -7,7 +7,9 @@ from logging import getLogger
 import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
+
+from protenix.data.pocket import find_confident_pockets
 
 logger = getLogger(__name__)
 
@@ -49,9 +51,8 @@ class FragmentMaker:
         plddt_disorder_threshold: float = 50,
         contact_distance_threshold: float = 4.0,
         min_contact_residues: int = 4,
-        min_fragment_length: int = 100,
-        min_fragment_plddt: float = 50,
-        max_fragment_rg: float = 25.0,
+        min_fragment_length: int = 150,
+        min_fragment_plddt: float = 70,
     ):
         """
         Initialize FragmentMaker with filtering and clustering thresholds.
@@ -60,16 +61,20 @@ class FragmentMaker:
             plddt_disorder_threshold (float): Threshold for pLDDT to filter residues. Defaults to 50.
             contact_distance_threshold (float): Distance threshold for atom-atom contacts in spatial clustering. Defaults to 4.0 Angstroms.
             min_contact_residues (int): Minimum number of residues with contacts to merge fragments. Defaults to 4.
-            min_fragment_length (int): Minimum length of a fragment. Defaults to 100.
-            min_fragment_plddt (float): Minimum pLDDT of a fragment. Defaults to 50.
-            max_fragment_rg (float): Maximum Rg of a fragment. Defaults to 25.0 Angstroms.
+            min_fragment_length (int): Minimum length of a fragment. Defaults to 150.
+            min_fragment_plddt (float): Minimum pLDDT of a fragment. Defaults to 70.
         """
         self.plddt_residue_threshold = plddt_disorder_threshold
         self.contact_distance_threshold = contact_distance_threshold
         self.min_contact_residues = min_contact_residues
         self.min_fragment_length = min_fragment_length
         self.min_fragment_plddt = min_fragment_plddt
-        self.max_fragment_rg = max_fragment_rg
+
+        # Create length-dependent Rg upper bound
+        self.rg_upper_bound_line = (
+            0.03457943925233645,
+            12.813084112149532,
+        )  # slope and y-intercept w.r.t length
 
     def filter_low_plddt_residues(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -145,7 +150,7 @@ class FragmentMaker:
         atom_array.set_annotation("fragment_id", fragment_ids)
         return atom_array
 
-    def _has_sufficient_contacts(
+    def _have_sufficient_contacts(
         self, atom_array: AtomArray, frag_id_i: int, frag_id_j: int
     ) -> bool:
         """
@@ -167,8 +172,8 @@ class FragmentMaker:
         atoms_j = atom_array[atom_array.fragment_id == frag_id_j]
 
         # Find atoms within contact distance
-        tree_i = cKDTree(atoms_i.coord)
-        tree_j = cKDTree(atoms_j.coord)
+        tree_i = KDTree(atoms_i.coord)
+        tree_j = KDTree(atoms_j.coord)
         close_pairs = tree_i.query_ball_tree(tree_j, r=self.contact_distance_threshold)
 
         # Find atoms from frag_i that have close contacts
@@ -229,7 +234,7 @@ class FragmentMaker:
                 frag_i = frag_ids_list[i]
                 frag_j = frag_ids_list[j]
 
-                if self._has_sufficient_contacts(atom_array, frag_i, frag_j):
+                if self._have_sufficient_contacts(atom_array, frag_i, frag_j):
                     union(frag_i, frag_j)
 
         # Remap fragment IDs to their root parent (cluster ID)
@@ -238,7 +243,9 @@ class FragmentMaker:
             mask = atom_array.fragment_id == frag_id
             fragment_cluster_id[mask] = root
 
-        atom_array.set_annotation("fragment_cluster_id", fragment_cluster_id)
+        # Replace fragment id annotation with cluster ids
+        atom_array.del_annotation("fragment_id")
+        atom_array.set_annotation("fragment_id", fragment_cluster_id)
         return atom_array
 
     def calculate_fragment_metrics(self, atom_array: AtomArray) -> dict:
@@ -276,15 +283,82 @@ class FragmentMaker:
             squared_distances = np.sum((frag_atoms.coord - centroid) ** 2, axis=1)
             rg = np.sqrt(np.mean(squared_distances))
 
+            # Calculate mean atom SASA
+            atom_sasa = struc.sasa(frag_atoms, vdw_radii="Single")
+            sasa = np.nanmean(atom_sasa)
+
             metrics[frag_id] = {
                 "avg_plddt": avg_plddt,
                 "length": length,
                 "rg": rg,
+                "sasa": sasa,
             }
 
         return metrics
 
-    def filter_fragments(self, atom_array: AtomArray, metrics: dict) -> AtomArray:
+    def find_pockets_in_fragments(self, atom_array: AtomArray) -> dict:
+        """
+        Finds pockets in fragments using Pocketeer.
+
+        Args:
+            atom_array (AtomArray): AtomArray with fragment_id annotation.
+
+        Returns:
+            dictionary mapping fragment  id to lists of per-pocket statistics.
+        """
+        fragment_pockets = {}
+
+        # Get unique fragment IDs (excluding -1)
+        unique_frag_ids = np.unique(atom_array.fragment_id)
+        unique_frag_ids = unique_frag_ids[unique_frag_ids != -1]
+
+        # Add atom id field for proper indexing
+        atom_id = np.arange(len(atom_array))
+        atom_array.set_annotation("atom_id", atom_id)
+
+        for frag_id in unique_frag_ids:
+            mask = atom_array.fragment_id == frag_id
+            frag_atoms = atom_array[mask]
+            pockets = find_confident_pockets(
+                frag_atoms,
+                plddt_cutoff=70.0,
+                polar_probe_radius=5.0,
+                min_spheres=35,
+                sasa_cutoff=10.0,
+                merge_distance=1.75,
+            )
+            tree = KDTree(frag_atoms.coord)
+            centroids = []
+            volumes = []
+            pocket_atoms = []
+            r15_atom_counts = []
+            for pocket in pockets:
+                centroids.append(pocket.centroid)
+                volumes.append(pocket.volume)
+
+                pocket_atom_indices = set()
+                for sphere in pocket.spheres:
+                    pocket_atom_indices.update(sphere.atom_indices)
+
+                # Get the global index from local index for these pocket atoms
+                pocket_atom_indices = list(pocket_atom_indices)
+                global_atom_ids = frag_atoms.atom_id[pocket_atom_indices]
+                pocket_atoms.append(global_atom_ids.tolist())
+
+                # Count atoms within 15 Angstrom radius of pocket centroid
+                r15_indices = tree.query_ball_point(pocket.centroid, r=15.0)
+                r15_atom_counts.append(len(r15_indices))
+
+            fragment_pockets[frag_id] = {
+                "centroids": centroids,
+                "radius_15_atom_counts": r15_atom_counts,
+                "pocket_atoms": pocket_atoms,
+                "volumes": volumes,
+            }
+
+        return fragment_pockets
+
+    def filter_fragments(self, atom_array: AtomArray) -> AtomArray:
         """
         Filter fragments based on calculated metrics.
 
@@ -292,58 +366,31 @@ class FragmentMaker:
         Criteria:
         - length >= min_fragment_length
         - avg_plddt >= min_fragment_plddt
-        - rg <= max_fragment_rg
+        - rg <= length-dependent upper bound (linear equation: slope * length + y_intercept)
 
         Args:
             atom_array (AtomArray): AtomArray with fragment_id annotation.
-            metrics (dict): Dictionary of fragment_id to metrics.
 
         Returns:
             AtomArray: AtomArray with filtered fragments marked as -1.
         """
         fragment_ids = atom_array.fragment_id.copy()
+        metrics = self.calculate_fragment_metrics(atom_array)
 
         for frag_id, frag_metrics in metrics.items():
             # Check if fragment meets all criteria
             passes_length = frag_metrics["length"] >= self.min_fragment_length
             passes_plddt = frag_metrics["avg_plddt"] >= self.min_fragment_plddt
-            passes_rg = frag_metrics["rg"] <= self.max_fragment_rg
+
+            # Calculate length-dependent Rg upper bound using linear equation
+            slope, y_intercept = self.rg_upper_bound_line
+            max_rg = slope * frag_metrics["length"] + y_intercept
+            passes_rg = frag_metrics["rg"] <= max_rg
 
             if not (passes_length and passes_plddt and passes_rg):
                 # Mark this fragment as filtered
                 mask = atom_array.fragment_id == frag_id
                 fragment_ids[mask] = -1
-
-        atom_array.set_annotation("fragment_id", fragment_ids)
-        return atom_array
-
-    def correct_fragment_ids(self, atom_array: AtomArray) -> AtomArray:
-        """
-        Renumber fragment IDs to be contiguous starting from 0.
-
-        After filtering, fragment IDs may have gaps. This method renumbers
-        remaining fragments to be 0, 1, 2, ... while keeping -1 as -1.
-
-        Args:
-            atom_array (AtomArray): AtomArray with fragment_id annotation.
-
-        Returns:
-            AtomArray: AtomArray with corrected fragment_id annotation.
-        """
-        # Get unique remaining fragment IDs (excluding -1), sorted
-        unique_frag_ids = np.unique(atom_array.fragment_id)
-        unique_frag_ids = unique_frag_ids[unique_frag_ids != -1]
-        unique_frag_ids = np.sort(unique_frag_ids)
-
-        # Create mapping from old to new IDs
-        id_mapping = {old_id: new_id for new_id, old_id in enumerate(unique_frag_ids)}
-        id_mapping[-1] = -1  # Keep -1 as -1
-
-        # Apply mapping
-        fragment_ids = atom_array.fragment_id.copy()
-        for old_id, new_id in id_mapping.items():
-            mask = atom_array.fragment_id == old_id
-            fragment_ids[mask] = new_id
 
         atom_array.set_annotation("fragment_id", fragment_ids)
         return atom_array
@@ -370,7 +417,53 @@ class FragmentMaker:
         atom_array = self.filter_low_plddt_residues(atom_array)
         atom_array = self.assign_fragment_ids(atom_array)
         atom_array = self.spatially_cluster_fragments(atom_array)
-        metrics = self.calculate_fragment_metrics(atom_array)
-        atom_array = self.filter_fragments(atom_array, metrics)
-        atom_array = self.correct_fragment_ids(atom_array)
+        atom_array = self.filter_fragments(atom_array)
         return atom_array
+
+    def get_fragment_statistics(self, atom_array: AtomArray) -> dict:
+        """
+        Calculate metrics per-fragment after spatial clustering and return a
+        dictionary of lists that includes the metrics per-fragment as well as all
+        the pockets in different fragments.
+
+        Args:
+            atom_array (AtomArray): Input AtomArray
+
+        Returns:
+            a dictionary with per-fragment metrics and pocket data.
+        """
+        atom_array = self.filter_low_plddt_residues(atom_array)
+        atom_array = self.assign_fragment_ids(atom_array)
+        atom_array = self.spatially_cluster_fragments(atom_array)
+
+        metrics = self.calculate_fragment_metrics(atom_array)
+        pockets = self.find_pockets_in_fragments(atom_array)
+
+        fragment_ids = sorted(metrics.keys())
+
+        # Organize fragment metrics and pocket data by metric name
+        metrics_by_name = {
+            # Fragment-level metrics
+            "fragment_avg_plddt": [
+                metrics[frag_id]["avg_plddt"] for frag_id in fragment_ids
+            ],
+            "fragment_length": [metrics[frag_id]["length"] for frag_id in fragment_ids],
+            "fragment_rg": [metrics[frag_id]["rg"] for frag_id in fragment_ids],
+            "fragment_sasa": [metrics[frag_id]["sasa"] for frag_id in fragment_ids],
+            # Pocket-level metrics
+            "fragment_pocket_centroids": [
+                pockets[frag_id].get("centroids", []) for frag_id in fragment_ids
+            ],
+            "fragment_pocket_radius_15_atom_counts": [
+                pockets[frag_id].get("radius_15_atom_counts", [])
+                for frag_id in fragment_ids
+            ],
+            "fragment_pocket_atoms": [
+                pockets[frag_id].get("pocket_atoms", []) for frag_id in fragment_ids
+            ],
+            "fragment_pocket_volumes": [
+                pockets[frag_id].get("volumes", []) for frag_id in fragment_ids
+            ],
+        }
+
+        return metrics_by_name

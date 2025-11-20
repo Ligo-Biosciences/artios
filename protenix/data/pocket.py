@@ -180,7 +180,7 @@ def find_pockets(
         atomarray = atomarray[~atomarray.hetero]
 
     if len(atomarray) < MIN_ATOMS_FOR_TESSELLATION:
-        logger.warning(f"Not enough atoms ({len(atomarray)}). Returning empty result.")
+        logger.info(f"Not enough atoms ({len(atomarray)}). Returning empty result.")
         return []
 
     # 1. Compute all alpha-spheres from Delaunay tessellation
@@ -195,7 +195,7 @@ def find_pockets(
     logger.info(f"Found {len(buried_spheres)} buried spheres")
 
     if not buried_spheres:
-        logger.warning("No buried spheres found. Returning empty pocket list.")
+        logger.info("No buried spheres found. Returning empty pocket list.")
         return []
 
     # 3. Label spheres as confident or non-confident and filter (if plddt_cutoff provided)
@@ -207,7 +207,7 @@ def find_pockets(
         spheres_to_cluster = filter_low_confidence_spheres(buried_spheres)
         logger.info(f"Found {len(spheres_to_cluster)} confident spheres")
         if not spheres_to_cluster:
-            logger.warning("No confident spheres found. Returning empty pocket list.")
+            logger.info("No confident spheres found. Returning empty pocket list.")
             return []
 
     # 4. Cluster spheres into pockets
@@ -217,7 +217,7 @@ def find_pockets(
     logger.info(f"Found {len(pocket_clusters)} clusters (potential pockets)")
 
     if not pocket_clusters:
-        logger.warning("No clusters found. Returning empty pocket list.")
+        logger.info("No clusters found. Returning empty pocket list.")
         return []
 
     # Create Pocket objects with descriptors

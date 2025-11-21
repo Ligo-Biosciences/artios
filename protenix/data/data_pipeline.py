@@ -28,7 +28,10 @@ from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.parser import DistillationMMCIFParser, MMCIFParser
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.utils.cropping import CropData
-from protenix.utils.file_io import load_lz4_pickle
+from protenix.utils.file_io import (
+    load_atomarray_from_npz,
+    load_gzip_pickle,
+)
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -126,10 +129,16 @@ class DataPipeline(object):
         Raises:
             AssertionError: If the bioassembly dictionary file does not exist.
         """
-        assert os.path.exists(
-            bioassembly_dict_fpath
-        ), f"File not exists {bioassembly_dict_fpath}"
-        bioassembly_dict = load_lz4_pickle(bioassembly_dict_fpath)
+        bioassembly_dict_path = Path(bioassembly_dict_fpath)
+
+        assert (
+            bioassembly_dict_path.exists()
+        ), f"File not exists {bioassembly_dict_path}"
+        bioassembly_dict = load_gzip_pickle(bioassembly_dict_path)
+
+        # Load and add atom array to the bioassembly dict
+        npz_path = bioassembly_dict_path.with_suffix(".npz")
+        bioassembly_dict["atom_array"] = load_atomarray_from_npz(npz_path)
 
         return bioassembly_dict
 

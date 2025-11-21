@@ -23,7 +23,7 @@ import ray
 from tqdm import tqdm
 
 from protenix.data.data_pipeline import DataPipeline
-from protenix.utils.file_io import dump_gzip_pickle
+from protenix.utils.file_io import dump_atomarray_to_npz, dump_gzip_pickle
 
 
 def gen_a_bioassembly_data(
@@ -56,7 +56,9 @@ def gen_a_bioassembly_data(
     if sample_indices_list and bioassembly_dict:
         pdb_id = bioassembly_dict["pdb_id"]
         # save to output dir
+        atom_array = bioassembly_dict.pop("atom_array")
         dump_gzip_pickle(bioassembly_dict, bioassembly_output_dir / f"{pdb_id}.pkl.gz")
+        dump_atomarray_to_npz(atom_array, bioassembly_output_dir / f"{pdb_id}.npz")
         return sample_indices_list
 
 
@@ -81,8 +83,12 @@ def gen_data_from_mmcifs(
 
     # Create a remote version of gen_a_bioassembly_data
     @ray.remote
-    def gen_a_bioassembly_data_remote(mmcif, bioassembly_output_dir, cluster_file, distillation):
-        return gen_a_bioassembly_data(mmcif, bioassembly_output_dir, cluster_file, distillation)
+    def gen_a_bioassembly_data_remote(
+        mmcif, bioassembly_output_dir, cluster_file, distillation
+    ):
+        return gen_a_bioassembly_data(
+            mmcif, bioassembly_output_dir, cluster_file, distillation
+        )
 
     # Submit tasks to Ray
     futures = [
@@ -96,7 +102,9 @@ def gen_data_from_mmcifs(
     all_sample_indices_list = []
     pbar = tqdm(total=len(futures), desc="Processing mmCIF files")
     while futures:
-        done_id, futures = ray.wait(futures, timeout=1.0)  # Add timeout for progress updates
+        done_id, futures = ray.wait(
+            futures, timeout=1.0
+        )  # Add timeout for progress updates
         if done_id:
             result = ray.get(done_id[0])
             if result:

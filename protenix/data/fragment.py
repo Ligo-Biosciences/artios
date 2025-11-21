@@ -46,7 +46,7 @@ class FragmentMaker:
 
     def __init__(
         self,
-        plddt_disorder_threshold: float = 50,
+        plddt_disorder_threshold: float = 65,
         contact_distance_threshold: float = 4.0,
         min_contact_residues: int = 4,
         min_fragment_length: int = 150,
@@ -56,7 +56,7 @@ class FragmentMaker:
         Initialize FragmentMaker with filtering and clustering thresholds.
 
         Args:
-            plddt_disorder_threshold (float): Threshold for pLDDT to filter residues. Defaults to 50.
+            plddt_disorder_threshold (float): Threshold for pLDDT to filter residues. Defaults to 65.
             contact_distance_threshold (float): Distance threshold for atom-atom contacts in spatial clustering. Defaults to 4.0 Angstroms.
             min_contact_residues (int): Minimum number of residues with contacts to merge fragments. Defaults to 4.
             min_fragment_length (int): Minimum length of a fragment. Defaults to 150.

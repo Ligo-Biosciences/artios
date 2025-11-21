@@ -558,6 +558,8 @@ class BaseSingleDataset(Dataset):
             )
         timings["preprocessing"] = time.time() - t1
 
+        # TODO: cropping before the token array re-generation can be problematic.
+
         # Crop
         t2 = time.time()
         (

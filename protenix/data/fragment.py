@@ -70,8 +70,8 @@ class FragmentMaker:
 
         # Create length-dependent Rg upper bound
         self.rg_upper_bound_line = (
-            0.03457943925233645,
-            12.813084112149532,
+            0.029767441860465118,
+            14.279069767441861,
         )  # slope and y-intercept w.r.t length
 
     def filter_low_plddt_residues(self, atom_array: AtomArray) -> AtomArray:

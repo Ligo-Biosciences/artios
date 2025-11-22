@@ -340,6 +340,10 @@ class DataPipeline(object):
                 resovled_atom_num > 4
             ), f"{resovled_atom_num=} <= 4 after ContiguousCropping"
 
+        assert (
+            len(cropped_token_array) >= 10
+        ), f"Only {len(cropped_token_array)} tokens after cropping. Trying again..."
+
         return (
             crop_method,
             cropped_token_array,

@@ -137,7 +137,7 @@ class DataPipeline(object):
         bioassembly_dict = load_gzip_pickle(bioassembly_dict_path)
 
         # Load and add atom array to the bioassembly dict
-        npz_path = bioassembly_dict_path.with_suffix(".npz")
+        npz_path = bioassembly_dict_path.with_suffix("").with_suffix(".npz")
         bioassembly_dict["atom_array"] = load_atomarray_from_npz(npz_path)
 
         return bioassembly_dict
@@ -244,7 +244,7 @@ class DataPipeline(object):
         crop_size: int,
         msa_featurizer: Optional[MSAFeaturizer],
         template_featurizer: None,
-        method_weights: list[float] = [0.2, 0.4, 0.4],
+        method_weights: list[float] = [0.0, 0.1, 0.4, 0.5],
         contiguous_crop_complete_lig: bool = False,
         spatial_crop_complete_lig: bool = False,
         drop_last: bool = False,
@@ -260,7 +260,7 @@ class DataPipeline(object):
             msa_featurizer (MSAFeaturizer): Default to an empty replacement for msa featurizer.
             template_featurizer (None): Placeholder for the template featurizer.
             method_weights (list[float]): The weights corresponding to these three cropping methods:
-                                          ["ContiguousCropping", "SpatialCropping", "SpatialInterfaceCropping"].
+                                          ["ContiguousCropping", "SpatialCropping", "SpatialInterfaceCropping", "PocketCropping"].
             contiguous_crop_complete_lig (bool): Whether to crop the complete ligand in ContiguousCropping method.
             spatial_crop_complete_lig (bool): Whether to crop the complete ligand in SpatialCropping method.
             drop_last (bool): Whether to drop the last fragment in ContiguousCropping.
@@ -348,6 +348,10 @@ class DataPipeline(object):
             assert (
                 resovled_atom_num > 4
             ), f"{resovled_atom_num=} <= 4 after ContiguousCropping"
+
+        assert (
+            len(cropped_token_array) >= 10
+        ), f"Only {len(cropped_token_array)} tokens after cropping. Trying again..."
 
         return (
             crop_method,

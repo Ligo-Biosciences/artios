@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional, Union
 import numpy as np
 import torch
 
-from protenix.common.atom_types import DENSE_ATOM_NUM
 from protenix.data.utils import get_data_shape_dict
 from protenix.model.utils import pad_at_dim
 
@@ -23,24 +22,20 @@ DEFAULT_PADDING_VALUES: Dict[str, Union[float, int]] = {
 }
 
 
-def get_atom_padding_length(n_atom: int, bin_ends: list[int], crop_size: int) -> int:
+def get_padding_length(num: int, bin_ends: list[int]) -> int:
     """
-    Get the bin end (padding target) for the given number of atoms. Also calculates the largest
-    bin end for the given crop size.
+    Given an input number of atoms or tokes as well as a list of bin ends, returns the bin
+    the input lies in.
 
-    Args:
-        n_atom (int): Number of atoms in structure.
+    Args
+        num (int): Input number of atoms or tokens.
         bin_ends (list[int]): List of bin ends.
-        crop_size (int): Crop size.
 
     Returns:
-        int: Bin end (padding target) for the given number of atoms.
+        int: Bin end for the given input number.
     """
-    max_bin_end = crop_size * DENSE_ATOM_NUM
-    bin_ends.append(max_bin_end)
-
     for end in bin_ends:
-        if n_atom <= end:
+        if num <= end:
             return end
     return bin_ends[-1]
 

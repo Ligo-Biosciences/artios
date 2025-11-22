@@ -102,14 +102,16 @@ def gen_data_from_mmcifs(
     all_sample_indices_list = []
     pbar = tqdm(total=len(futures), desc="Processing mmCIF files")
     while futures:
-        done_id, futures = ray.wait(
-            futures, timeout=1.0
-        )  # Add timeout for progress updates
-        if done_id:
-            result = ray.get(done_id[0])
-            if result:
-                all_sample_indices_list.append(result)
-            pbar.update(1)
+        # num_returns=-1 gets ALL completed tasks, not just one
+        done_ids, futures = ray.wait(
+            futures, num_returns=min(len(futures), 1000), timeout=0.5
+        )
+        if done_ids:
+            results = ray.get(done_ids)
+            for result in results:
+                if result:
+                    all_sample_indices_list.append(result)
+            pbar.update(len(done_ids))
     pbar.close()
 
     # Shutdown Ray

@@ -606,10 +606,12 @@ class DiffusionModule(nn.Module):
         assert timestep.size(-1) == N_sample
 
         atom_mask = input_feature_dict["atom_mask"]
-        n_token = input_feature_dict["residue_index"].shape[-1]
         atom_to_token_idx = expand_at_dim(
             input_feature_dict["atom_to_token_idx"], dim=-2, n=N_sample
         )
+        n_token = input_feature_dict["residue_index"].shape[-1]
+        n_atom = atom_mask.shape[-1]
+        batch_shape = input_feature_dict["residue_index"].shape[:-1]
 
         # Compute pair mask
         token_mask = input_feature_dict["token_mask"]  # [..., N_token]
@@ -618,12 +620,9 @@ class DiffusionModule(nn.Module):
         # [..., 1, N_token, N_token]
 
         # Average coordinates per token
-        # TODO: let's break symmetry here with some very minor atom level information instead
-        # of using a q_skip with coordinates.
-        q_skip = self.linear_no_bias_r_embed(r_noisy)  # [..., N_sample, N_atom, c_atom]
-        a_token = self.linear_no_bias_q_skip(
+        a_token = self.linear_no_bias_r_embed(
             average_atom_to_token(
-                x_atom=q_skip,
+                x_atom=r_noisy,
                 atom_mask=atom_mask,
                 atom_to_token_idx=atom_to_token_idx,
                 n_token=n_token,
@@ -639,10 +638,7 @@ class DiffusionModule(nn.Module):
 
         # Mix single conditioning into token representation
         a_token = a_token + self.linear_no_bias_s(self.layernorm_s(s))
-        a_token = a_token * token_mask[..., None]
-
-        q_skip = a_token.clone()
-        # [..., N_sample, N_token, c_token]
+        a_token = a_token * token_mask[..., None]  # [..., N_sample, N_token, c_token]
 
         z = z.unsqueeze(-4)
         z = z * pair_mask[..., None]
@@ -658,7 +654,18 @@ class DiffusionModule(nn.Module):
             )
         )  # [..., N_sample, N_atom, c_atom]
 
-        q_atom = q_atom + q_skip
+        # Break symmetry in the backbone atoms with atom level information
+        q_atom = q_atom + self.linear_no_bias_f(
+            torch.cat(
+                [
+                    input_feature_dict[name].reshape(
+                        *batch_shape, n_atom, self.atom_input_feature[name]
+                    )
+                    for name in self.atom_input_feature
+                ],
+                dim=-1,
+            )
+        )
 
         return self.readout(q_atom)
 

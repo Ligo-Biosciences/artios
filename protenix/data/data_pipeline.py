@@ -244,7 +244,7 @@ class DataPipeline(object):
         crop_size: int,
         msa_featurizer: Optional[MSAFeaturizer],
         template_featurizer: None,
-        method_weights: list[float] = [0.2, 0.4, 0.4],
+        method_weights: list[float] = [0.0, 0.1, 0.4, 0.5],
         contiguous_crop_complete_lig: bool = False,
         spatial_crop_complete_lig: bool = False,
         drop_last: bool = False,
@@ -260,7 +260,7 @@ class DataPipeline(object):
             msa_featurizer (MSAFeaturizer): Default to an empty replacement for msa featurizer.
             template_featurizer (None): Placeholder for the template featurizer.
             method_weights (list[float]): The weights corresponding to these three cropping methods:
-                                          ["ContiguousCropping", "SpatialCropping", "SpatialInterfaceCropping"].
+                                          ["ContiguousCropping", "SpatialCropping", "SpatialInterfaceCropping", "PocketCropping"].
             contiguous_crop_complete_lig (bool): Whether to crop the complete ligand in ContiguousCropping method.
             spatial_crop_complete_lig (bool): Whether to crop the complete ligand in SpatialCropping method.
             drop_last (bool): Whether to drop the last fragment in ContiguousCropping.

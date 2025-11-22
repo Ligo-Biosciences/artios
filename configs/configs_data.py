@@ -26,7 +26,8 @@ default_test_configs = {
         "method_weights": [
             0.0,  # ContiguousCropping
             0.0,  # SpatialCropping
-            1.0,  # SpatialInterfaceCropping
+            0.5,  # SpatialInterfaceCropping (legacy: 1.0)
+            0.5,  # PocketCropping
         ],
         "crop_size": GlobalConfigValue("test_crop_size"),  # -1
     },
@@ -50,7 +51,9 @@ default_weighted_pdb_configs = {
         "force_recompute_weight": True,
     },
     "cropping_configs": {
-        "method_weights": ListValue([0.0, 0.5, 0.5]),  # AF3: [0.2, 0.4, 0.4]
+        "method_weights": ListValue(
+            [0.0, 0.1, 0.4, 0.5]
+        ),  # Legacy: [0.0, 0.5, 0.5] # AF3: [0.2, 0.4, 0.4]
         "crop_size": GlobalConfigValue("train_crop_size"),
     },
     "sample_weight": 0.5,
@@ -141,6 +144,8 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": True,
     "binding_target_train_rate": 0.75,
+    "filter_unique_fragment_prob": 0.8,
+    "filter_unique_domain_prob": 0.1,
     "motif_training": {
         "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,

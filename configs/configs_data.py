@@ -149,6 +149,7 @@ data_configs = {
     "motif_training": {
         "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,
+        "pocket_motif_prob": 0.8,
         "whole_ligand_prob": 0.7,
         "whole_sidechain_prob": 0.2,
         "pocket_score_threshold": 0.18,

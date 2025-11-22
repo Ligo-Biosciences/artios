@@ -572,6 +572,7 @@ class BaseSingleDataset(Dataset):
         timings["preprocessing"] = time.time() - t1
 
         p = np.random.rand()
+        # Filter for a unique fragment/domain. Used for Distillation data.
         if p < self.filter_unique_fragment_prob:
             # apply fragment filter
             bioassembly_dict["atom_array"] = self._filter_for_unique_id(

@@ -1,16 +1,36 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+"""
+Generate bioassembly dictionaries and npz files for fast atom array loading at training time.
+
+Usage:
+    python scripts/prepare_training_data_ray.py \
+      --input-path <input_path> \
+      --output-csv <output_csv> \
+      --bio-output-dir <bio_output_dir> \
+      [--cluster-file <cluster_file>] \
+      [--distillation] \
+      [--n-cpu <n_cpu>]
+
+Arguments:
+    --input-path         Path to input directory containing .cif/.cif.gz files,
+                         OR a .txt file listing MMCIF file paths (required)
+    --output-csv         Path to output CSV file where sample indices will be saved (required)
+    --bio-output-dir     Directory where bioassembly outputs (.pkl.gz and .npz) will be saved (required)
+    --cluster-file       Path to cluster txt file (optional)
+    --distillation       Use the 'Distillation' dataset setting (optional flag)
+    --n-cpu             Number of worker processes for parallel processing (default: 1)
+
+python artios-all-atom/scripts/prepare_training_data_ray.py \
+    -i af3-dev/release_data/posebusters_mmcif \
+    -o af3-dev/release_data/indices/full_mmcif.csv \
+    -b af3-dev/release_data/posebusters_bioassembly \
+    -c af3-dev/release_data/clusters-by-entity-40.txt \
+    -n 220
+
+Note:
+    Ray might complain about not having enough object store memory. If you have sudo privileges,
+    the following command should fix it:
+        sudo mount -o remount,size=600G /dev/shm
+"""
 
 import argparse
 import csv

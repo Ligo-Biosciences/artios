@@ -137,7 +137,7 @@ class DataPipeline(object):
         bioassembly_dict = load_gzip_pickle(bioassembly_dict_path)
 
         # Load and add atom array to the bioassembly dict
-        npz_path = bioassembly_dict_path.with_suffix(".npz")
+        npz_path = bioassembly_dict_path.with_suffix("").with_suffix(".npz")
         bioassembly_dict["atom_array"] = load_atomarray_from_npz(npz_path)
 
         return bioassembly_dict

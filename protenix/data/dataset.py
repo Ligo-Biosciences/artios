@@ -31,6 +31,7 @@ from torch.utils.data import Dataset
 from protenix.common.constants import BACKBONE_DEFS, EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
+from protenix.data.filter import Filter
 from protenix.data.motif import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.parser import AddAtomArrayAnnot
@@ -612,28 +613,29 @@ class BaseSingleDataset(Dataset):
         timings["assign_binding_target"] = time.time() - t3
 
         # motif work
-        # cropped_atom_array = self._get_motif(
-        #     atom_array=cropped_atom_array,
-        # )
+        cropped_atom_array = self._get_motif(
+            atom_array=cropped_atom_array,
+        )
 
-        # self._save_motif(
-        #     atom_array=cropped_atom_array,
-        #     pdb_id=bioassembly_dict["pdb_id"],
-        # )
+        self._save_motif(
+            atom_array=cropped_atom_array,
+            pdb_id=bioassembly_dict["pdb_id"],
+        )
 
-        # cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
+        cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
 
-        # cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
-        #     cropped_atom_array
-        # )
+        cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
+            cropped_atom_array,
+            motif_training=self.motif_configs["motif_train_rate"] > 0.0,
+        )
 
-        # cropped_atom_array = self._update_ids_to_unindex_motif_residues(
-        #     cropped_atom_array
-        # )
+        cropped_atom_array = self._update_ids_to_unindex_motif_residues(
+            cropped_atom_array
+        )
 
-        # cropped_atom_array = self._update_centre_atom_mask_to_include_motif(
-        #     cropped_atom_array
-        # )
+        cropped_atom_array = self._update_centre_atom_mask_to_include_motif(
+            cropped_atom_array
+        )
 
         tokenizer = AtomArrayTokenizer(cropped_atom_array)
         cropped_token_array = tokenizer.get_token_array()
@@ -1522,6 +1524,7 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
+        dataset_param["motif_training"] = data_config.get("motif_training", {})
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["motif_training"] = data_config.get("motif_training", {})

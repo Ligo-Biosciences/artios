@@ -19,6 +19,12 @@ Arguments:
     --distillation       Use the 'Distillation' dataset setting (optional flag)
     --n-cpu             Number of worker processes for parallel processing (default: 1)
 
+python artios-all-atom/scripts/prepare_training_data_ray.py \
+    -i af3-dev/release_data/posebusters_mmcif \
+    -o af3-dev/release_data/indices/full_mmcif.csv \
+    -b af3-dev/release_data/posebusters_bioassembly \
+    -c af3-dev/release_data/clusters-by-entity-40.txt \
+    -n 220
 
 Note:
     Ray might complain about not having enough object store memory. If you have sudo privileges,

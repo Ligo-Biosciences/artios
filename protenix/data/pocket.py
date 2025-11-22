@@ -20,6 +20,7 @@ from pocketeer.core import (
 from pocketeer.core.types import AlphaSphere
 from pocketeer.utils.constants import MIN_ATOMS_FOR_TESSELLATION
 from pocketeer.utils.exceptions import ValidationError
+from scipy.spatial import KDTree
 
 logger = logging.getLogger("pocketeer.api")
 
@@ -292,3 +293,98 @@ def find_confident_pockets(
         ignore_water=ignore_water,
         ignore_hetero=ignore_hetero,
     )
+
+
+def find_globular_pockets(
+    atomarray: struc.AtomArray,
+    *,
+    r_min: float = 3.0,
+    r_max: float = 6.0,
+    polar_probe_radius: float = 5.0,
+    sasa_cutoff: float = 1.0,
+    plddt_cutoff: float | None = None,
+    merge_distance: float = 1.75,
+    min_spheres: int = 35,
+    centroid_radius: float = 15.0,
+    min_atoms_in_radius: int = 100,
+    ignore_hydrogens: bool = True,
+    ignore_water: bool = True,
+    ignore_hetero: bool = True,
+) -> list[Pocket]:
+    """Detect globular binding pockets with sufficient local atom density.
+
+    Filters pockets based on the number of atoms within a specified radius
+    of the pocket centroid. This helps identify pockets in globular regions
+    with sufficient structural context.
+
+    Args:
+        atomarray: Biotite AtomArray with structure data
+        r_min: Minimum alpha-sphere radius (Å). Default: 3.0
+        r_max: Maximum alpha-sphere radius (Å). Default: 6.0
+        polar_probe_radius: Radius to test atom contact for polarity (Å). Default: 5.0
+        sasa_cutoff: Solvent accessible surface area cutoff for buried spheres (Å²). Default: 1.0
+        plddt_cutoff: AlphaFold pLDDT cutoff for confident spheres. Default: None (no filtering)
+        merge_distance: Distance threshold for merging nearby sphere clusters (Å). Default: 1.75
+        min_spheres: Minimum number of spheres per pocket cluster. Default: 35
+        centroid_radius: Radius around pocket centroid to count atoms (Å). Default: 15.0
+        min_atoms_in_radius: Minimum number of atoms within centroid_radius to keep pocket. Default: 100
+        ignore_hydrogens: Ignore hydrogen atoms (recommended). Default: True
+        ignore_water: Ignore water molecules (recommended). Default: True
+        ignore_hetero: Ignore hetero atoms i.e. ligands (recommended). Default: True
+
+    Returns:
+        list[Pocket]: List of detected globular Pocket objects that meet the atom density
+            criteria, sorted by score (highest first)
+
+    Examples:
+        >>> import pocketeer as pt
+        >>> atomarray = pt.load_structure("protein.pdb")
+        >>> pockets = pt.find_globular_pockets(atomarray)
+
+        >>> # With custom density parameters
+        >>> pockets = pt.find_globular_pockets(
+        ...     atomarray,
+        ...     centroid_radius=20.0,
+        ...     min_atoms_in_radius=150
+        ... )
+    """
+    # Find all pockets using standard detection
+    pockets = find_pockets(
+        atomarray,
+        r_min=r_min,
+        r_max=r_max,
+        polar_probe_radius=polar_probe_radius,
+        sasa_cutoff=sasa_cutoff,
+        plddt_cutoff=plddt_cutoff,
+        merge_distance=merge_distance,
+        min_spheres=min_spheres,
+        ignore_hydrogens=ignore_hydrogens,
+        ignore_water=ignore_water,
+        ignore_hetero=ignore_hetero,
+    )
+
+    if not pockets:
+        logger.info("No pockets found. Returning empty list.")
+        return []
+
+    # Build KDTree for efficient spatial queries
+    tree = KDTree(atomarray.coord)
+
+    # Filter pockets based on local atom density
+    globular_pockets = []
+    for pocket in pockets:
+        # Count atoms within specified radius of pocket centroid
+        atom_indices_in_radius = tree.query_ball_point(
+            pocket.centroid, r=centroid_radius
+        )
+        atom_count = len(atom_indices_in_radius)
+
+        # Keep pocket if it meets the minimum atom density requirement
+        if atom_count >= min_atoms_in_radius:
+            globular_pockets.append(pocket)
+
+    logger.info(
+        f"Found {len(globular_pockets)} globular pockets out of {len(pockets)} total pockets"
+    )
+
+    return globular_pockets

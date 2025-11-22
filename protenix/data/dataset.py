@@ -17,7 +17,6 @@ import os
 import random
 import traceback
 from copy import deepcopy
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
@@ -32,7 +31,6 @@ from torch.utils.data import Dataset
 from protenix.common.constants import BACKBONE_DEFS, EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
-from protenix.data.filter import Filter
 from protenix.data.motif import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.parser import AddAtomArrayAnnot
@@ -127,13 +125,6 @@ class BaseSingleDataset(Dataset):
         self.msa_featurizer = msa_featurizer
         self.template_featurizer = template_featurizer
         self.motif_maker = motif_maker
-
-        # temp motif dir
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.motif_dir = (
-            Path(self.mmcif_dir).parent.parent.parent / f"motifs_{timestamp}"
-        )
-        os.makedirs(self.motif_dir, exist_ok=True)
 
         # Motif training configs
         self.motif_configs = kwargs.get("motif_training", {})
@@ -592,29 +583,28 @@ class BaseSingleDataset(Dataset):
         timings["assign_binding_target"] = time.time() - t3
 
         # motif work
-        cropped_atom_array = self._get_motif(
-            atom_array=cropped_atom_array,
-        )
+        # cropped_atom_array = self._get_motif(
+        #     atom_array=cropped_atom_array,
+        # )
 
-        self._save_motif(
-            atom_array=cropped_atom_array,
-            pdb_id=bioassembly_dict["pdb_id"],
-        )
+        # self._save_motif(
+        #     atom_array=cropped_atom_array,
+        #     pdb_id=bioassembly_dict["pdb_id"],
+        # )
 
-        cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
+        # cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
 
-        cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
-            cropped_atom_array,
-            motif_training=self.motif_configs["motif_train_rate"] > 0.0,
-        )
+        # cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
+        #     cropped_atom_array
+        # )
 
-        cropped_atom_array = self._update_ids_to_unindex_motif_residues(
-            cropped_atom_array
-        )
+        # cropped_atom_array = self._update_ids_to_unindex_motif_residues(
+        #     cropped_atom_array
+        # )
 
-        cropped_atom_array = self._update_centre_atom_mask_to_include_motif(
-            cropped_atom_array
-        )
+        # cropped_atom_array = self._update_centre_atom_mask_to_include_motif(
+        #     cropped_atom_array
+        # )
 
         tokenizer = AtomArrayTokenizer(cropped_atom_array)
         cropped_token_array = tokenizer.get_token_array()
@@ -855,6 +845,10 @@ class BaseSingleDataset(Dataset):
         Saves the motif to the motif directory. Mainly used for debugging/visualising
         changes to motif generation algorithm.
         """
+        # temp motif dir
+        self.motif_dir = Path(self.mmcif_dir).parent.parent.parent / "motifs"
+        os.makedirs(self.motif_dir, exist_ok=True)
+
         if (
             atom_array.is_motif.sum() == 0
             or not self.motif_configs["save_motifs_for_debugging"]
@@ -1496,6 +1490,7 @@ def get_datasets(
         dataset_param["motif_training"] = data_config.get("motif_training", {})
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
+        dataset_param["motif_training"] = data_config.get("motif_training", {})
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

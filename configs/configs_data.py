@@ -196,7 +196,7 @@ data_configs = {
         # "token_bin_ends": ListValue([440, 600]),
     },
     "train_sets": ListValue(
-        ["weightedPDB_before2109_wopb_nometalc_0925"]
+        ["trousers_train"]  # weightedPDB_before2109_wopb_nometalc_0925"]
     ),  # "trousers_train"
     "train_sampler": {
         "train_sample_weights": ListValue([1.0]),
@@ -211,7 +211,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            "pdb_list": ["6mwb"],  # ["1s01", "1sr0"]
+            "pdb_list": "",  # ["1s01", "1sr0"]
             "random_sample_if_failed": True,
             "max_n_token": -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,

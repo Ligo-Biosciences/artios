@@ -49,7 +49,7 @@ from protenix.utils.torch_utils import dict_to_tensor
 logger = get_logger(__name__)
 
 
-SLOW_STEP_THRESHOLD = 60.0  # seconds
+SLOW_STEP_THRESHOLD = 1.0  # seconds
 
 
 class BaseSingleDataset(Dataset):
@@ -571,22 +571,22 @@ class BaseSingleDataset(Dataset):
             )
         timings["preprocessing"] = time.time() - t1
 
-        # p = np.random.rand()
-        # # Filter for a unique fragment/domain. Used for Distillation data.
-        # if p < self.filter_unique_fragment_prob:
-        #     # apply fragment filter
-        #     bioassembly_dict["atom_array"] = self._filter_for_unique_id(
-        #         atom_array=bioassembly_dict["atom_array"], id_type="fragment_id"
-        #     )
-        #     tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
-        #     bioassembly_dict["token_array"] = tokenizer.get_token_array()
-        # elif p < self.filter_unique_fragment_prob + self.filter_unique_domain_prob:
-        #     # apply domain filter
-        #     bioassembly_dict["atom_array"] = self._filter_for_unique_id(
-        #         atom_array=bioassembly_dict["atom_array"], id_type="domain_id"
-        #     )
-        #     tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
-        #     bioassembly_dict["token_array"] = tokenizer.get_token_array()
+        p = np.random.rand()
+        # Filter for a unique fragment/domain. Used for Distillation data.
+        if p < self.filter_unique_fragment_prob:
+            # apply fragment filter
+            bioassembly_dict["atom_array"] = self._filter_for_unique_id(
+                atom_array=bioassembly_dict["atom_array"], id_type="fragment_id"
+            )
+            tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
+            bioassembly_dict["token_array"] = tokenizer.get_token_array()
+        elif p < self.filter_unique_fragment_prob + self.filter_unique_domain_prob:
+            # apply domain filter
+            bioassembly_dict["atom_array"] = self._filter_for_unique_id(
+                atom_array=bioassembly_dict["atom_array"], id_type="domain_id"
+            )
+            tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
+            bioassembly_dict["token_array"] = tokenizer.get_token_array()
 
         # Crop
         t2 = time.time()
@@ -877,7 +877,7 @@ class BaseSingleDataset(Dataset):
         changes to motif generation algorithm.
         """
         # temp motif dir
-        self.motif_dir = Path(self.mmcif_dir).parent.parent.parent / "motifs"
+        self.motif_dir = Path(self.bioassembly_dict_dir).parent.parent.parent / "motifs"
         os.makedirs(self.motif_dir, exist_ok=True)
 
         if (

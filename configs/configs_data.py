@@ -252,26 +252,35 @@ data_configs = {
         },
         **deepcopy(default_distillation_configs),
     },
-    "distillation": {
+    "shirts_with_no_pockets": {
         "base_info": {
-            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "distillation/mmcif"),
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
             "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "distillation/mmcif_bioassembly"
+                DATA_ROOT_DIR, "shirts_with_no_pockets/bioassembly"
             ),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/distillation_sample_indices.csv",  # .gz
+                "indices/shirts_with_no_pockets.csv",
             ),
             "pdb_list": "",
             "random_sample_if_failed": True,
-            "max_n_token": -1,  # can be used for removing data with too many tokens.
-            "use_reference_chains_only": False,
-            "exclusion": {  # do not sample the data based on ions.
-                "mol_1_type": ListValue(["ions"]),
-                "mol_2_type": ListValue(["ions"]),
-            },
         },
-        **deepcopy(default_weighted_pdb_configs),
+        **deepcopy(default_distillation_configs),
+    },
+    "shirts_with_small_pockets": {
+        "base_info": {
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
+            "bioassembly_dict_dir": os.path.join(
+                DATA_ROOT_DIR, "shirts_with_small_pockets/bioassembly"
+            ),
+            "indices_fpath": os.path.join(
+                DATA_ROOT_DIR,
+                "indices/shirts_with_small_pockets.csv",
+            ),
+            "pdb_list": "",
+            "random_sample_if_failed": True,
+        },
+        **deepcopy(default_distillation_configs),
     },
     "recentPDB_1536_sample384_0925": {
         "base_info": {

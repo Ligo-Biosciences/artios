@@ -1452,6 +1452,8 @@ def get_datasets(
 
     Returns:
         A tuple containing the training dataset and a dictionary of testing datasets.
+
+    # TODO: this code needs to be re-factored a bit - the
     """
 
     def _get_dataset_param(config_dict, dataset_name: str, stage: str):
@@ -1468,6 +1470,12 @@ def get_datasets(
             "lig_atom_rename": config_dict.get("lig_atom_rename", False),
             "shuffle_mols": config_dict.get("shuffle_mols", False),
             "shuffle_sym_ids": config_dict.get("shuffle_sym_ids", False),
+            "filter_unique_fragment_prob": config_dict.get(
+                "filter_unique_fragment_prob", 0
+            ),
+            "filter_unique_domain_prob": config_dict.get(
+                "filter_unique_domain_prob", 0
+            ),
         }
 
     data_config = configs.data
@@ -1488,12 +1496,12 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
-        dataset_param["filter_unique_fragment_prob"] = data_config.get(
-            "filter_unique_fragment_prob", 0.8
-        )
-        dataset_param["filter_unique_domain_prob"] = data_config.get(
-            "filter_unique_domain_prob", 0.1
-        )
+        # dataset_param["filter_unique_fragment_prob"] = data_config.get(
+        #     "filter_unique_fragment_prob", 0.8
+        # )
+        # dataset_param["filter_unique_domain_prob"] = data_config.get(
+        #     "filter_unique_domain_prob", 0.1
+        # )
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
@@ -1527,7 +1535,6 @@ def get_datasets(
         dataset_param["motif_training"] = data_config.get("motif_training", {})
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
-        dataset_param["motif_training"] = data_config.get("motif_training", {})
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

@@ -9,6 +9,8 @@ we follow.
 
 Cross attention and self attention are separated.
 
+TODO: add typechecking with
+
 """
 
 from functools import partial

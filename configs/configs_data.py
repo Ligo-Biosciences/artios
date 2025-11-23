@@ -173,7 +173,9 @@ data_configs = {
         # "atom_bin_ends": ListValue([1536, 1728]),
         # "token_bin_ends": ListValue([440, 600]),
     },
-    "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925"]),
+    "train_sets": ListValue(
+        ["weightedPDB_before2109_wopb_nometalc_0925"]
+    ),  # "trousers_train"
     "train_sampler": {
         "train_sample_weights": ListValue([1.0]),
         "sampler_type": "weighted",
@@ -182,7 +184,7 @@ data_configs = {
     "weightedPDB_before2109_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
-            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
@@ -195,6 +197,27 @@ data_configs = {
                 "mol_1_type": ListValue(["ions"]),
                 "mol_2_type": ListValue(["ions"]),
             },
+        },
+        **deepcopy(default_weighted_pdb_configs),
+    },
+    "trousers_train": {
+        "base_info": {
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
+            "bioassembly_dict_dir": os.path.join(
+                DATA_ROOT_DIR, "trousers/bioassembly_train"
+            ),
+            "indices_fpath": os.path.join(
+                DATA_ROOT_DIR,
+                "indices/trousers_train.csv",
+            ),
+            "pdb_list": "",
+            "random_sample_if_failed": True,
+            # "max_n_token": -1,  # can be used for removing data with too many tokens.
+            # "use_reference_chains_only": False,
+            # "exclusion": {  # do not sample the data based on ions.
+            #     "mol_1_type": ListValue(["ions"]),
+            #     "mol_2_type": ListValue(["ions"]),
+            # },
         },
         **deepcopy(default_weighted_pdb_configs),
     },

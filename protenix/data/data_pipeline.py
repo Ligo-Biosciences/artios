@@ -160,6 +160,8 @@ class DataPipeline(object):
         ref_chain_indices = []
         for chain_id_field in ["chain_1_id", "chain_2_id"]:
             chain_id = one_sample[chain_id_field]
+            if not np.isin(chain_id, np.unique(atom_array.chain_id)):
+                print(atom_array.chain_id)
             assert np.isin(
                 chain_id, np.unique(atom_array.chain_id)
             ), f"PDB {bioassembly_dict['pdb_id']} {chain_id_field}:{chain_id} not in atom_array"

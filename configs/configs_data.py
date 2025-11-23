@@ -61,6 +61,28 @@ default_weighted_pdb_configs = {
     "lig_atom_rename": GlobalConfigValue("train_lig_atom_rename"),
     "shuffle_mols": GlobalConfigValue("train_shuffle_mols"),
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
+    "filter_unique_fragment_prob": 0.0,
+    "filter_unique_domain_prob": 0.0,
+}
+
+default_distillation_configs = {
+    "sampler_configs": {
+        "sampler_type": "uniform",
+        "force_recompute_weight": True,
+    },
+    "cropping_configs": {
+        "method_weights": ListValue(
+            [0.0, 0.1, 0.4, 0.5]
+        ),  # Legacy: [0.0, 0.5, 0.5] # AF3: [0.2, 0.4, 0.4]
+        "crop_size": GlobalConfigValue("train_crop_size"),
+    },
+    "sample_weight": 0.5,
+    "limits": -1,
+    "lig_atom_rename": GlobalConfigValue("train_lig_atom_rename"),
+    "shuffle_mols": GlobalConfigValue("train_shuffle_mols"),
+    "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
+    "filter_unique_fragment_prob": 0.8,
+    "filter_unique_domain_prob": 0.1,
 }
 
 DATA_ROOT_DIR = "af3-dev/release_data/"
@@ -144,8 +166,8 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": True,
     "binding_target_train_rate": 0.75,
-    "filter_unique_fragment_prob": 0.8,
-    "filter_unique_domain_prob": 0.1,
+    # "filter_unique_fragment_prob": 0.8,
+    # "filter_unique_domain_prob": 0.1,
     "motif_training": {
         "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,
@@ -212,14 +234,23 @@ data_configs = {
             ),
             "pdb_list": "",
             "random_sample_if_failed": True,
-            # "max_n_token": -1,  # can be used for removing data with too many tokens.
-            # "use_reference_chains_only": False,
-            # "exclusion": {  # do not sample the data based on ions.
-            #     "mol_1_type": ListValue(["ions"]),
-            #     "mol_2_type": ListValue(["ions"]),
-            # },
         },
-        **deepcopy(default_weighted_pdb_configs),
+        **deepcopy(default_distillation_configs),
+    },
+    "trousers_val": {
+        "base_info": {
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
+            "bioassembly_dict_dir": os.path.join(
+                DATA_ROOT_DIR, "trousers/bioassembly_val"
+            ),
+            "indices_fpath": os.path.join(
+                DATA_ROOT_DIR,
+                "indices/trousers_val.csv",
+            ),
+            "pdb_list": "",
+            "random_sample_if_failed": True,
+        },
+        **deepcopy(default_distillation_configs),
     },
     "distillation": {
         "base_info": {

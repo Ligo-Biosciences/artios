@@ -125,8 +125,8 @@ class DiffusionConditioning(nn.Module):
             "is_rna_token": 1,
             "is_target_token": 1,
             "is_hotspot": 1,
-            # "is_motif_token": 1,
-            # TODO: any other motif related features we require?
+            "is_motif_token": 1,
+            "is_motif_related_token": 1,
         }
         self.entity_type_embed = LinearNoBias(
             in_features=sum(self.entity_features.values()),
@@ -162,9 +162,7 @@ class DiffusionConditioning(nn.Module):
         )
 
         ### Transitions
-        self.transition_z = Transition(
-            c_in=self.c_z, n=2
-        )  # TODO: are zero init's appropriate here with Muon?
+        self.transition_z = Transition(c_in=self.c_z, n=2)
         self.transition_s1 = Transition(c_in=self.c_s, n=2)
         self.transition_s2 = Transition(c_in=self.c_s, n=2)
 
@@ -185,7 +183,6 @@ class DiffusionConditioning(nn.Module):
                  * [..., n_token, c_s]
                  * [..., n_token, n_token, c_z]
         """
-        # TODO: I don't really like how we use is_atom here. Come up with a better name!
         atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
         atom_mask = input_feature_dict["atom_mask"]
         n_token = input_feature_dict["residue_index"].shape[-1]
@@ -280,14 +277,13 @@ class DiffusionConditioning(nn.Module):
                 - s_motif (torch.Tensor): [..., N_token, c_s]
                 - z_motif (torch.Tensor): [..., N_token, N_token, c_z]
         """
-        is_motif = input_feature_dict["is_motif"]  # [..., N_atom]
         is_motif_token = input_feature_dict["is_motif_token"]  # [..., N_token]
         motif_coord = input_feature_dict["motif_coordinate"]  # [..., N_token, 3]
         motif_restype = input_feature_dict["motif_restype"]  # [..., N_token, 32]
 
         # Augment motif coordinates
         motif_coord_augment = centre_random_augmentation(
-            motif_coord, mask=is_motif, N_sample=1, s_trans=1.0
+            motif_coord, mask=is_motif_token, N_sample=1, s_trans=1.0
         ).squeeze(-3)  # [..., N_token, 3]
 
         # Single embeddings
@@ -303,8 +299,8 @@ class DiffusionConditioning(nn.Module):
         # One-hot encode distances
         motif_pair_dist_onehot = one_hot(
             motif_pair_dists,
-            self.motif_dist_lower_bins,
-            self.motif_dist_upper_bins,
+            self.motif_lower_bins,
+            self.motif_upper_bins,
         )  # [..., N_token, N_token, n_bins]
 
         # Mask pair embeddings for motif tokens only
@@ -366,8 +362,8 @@ class DiffusionConditioning(nn.Module):
         # One-hot encode distances
         pair_dist_onehot = one_hot(
             pair_dists,
-            self.lower_bins,
-            self.upper_bins,
+            self.target_lower_bins,
+            self.target_upper_bins,
         )  # [..., N_token, N_token, n_bins]
 
         # Embed one-hot distances
@@ -397,7 +393,7 @@ class DiffusionConditioning(nn.Module):
         """
         Args:
             r_noisy (torch.Tensor): noisy coordinates
-                [..., N_sample, 3]
+                [..., N_sample, N_atom, 3]
             timestep (torch.Tensor): the noising timestep
                 [..., N_sample]
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
@@ -407,6 +403,9 @@ class DiffusionConditioning(nn.Module):
                 - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
                 - z (torch.Tensor): [..., N_tokens, N_tokens, c_z]
         """
+        assert (
+            timestep.shape[-1] == r_noisy.shape[-3]
+        ), f"Got timestep shape {timestep.shape} and r_noisy {r_noisy.shape}"
         dtype = r_noisy.dtype
 
         # Grab data on inputs
@@ -539,11 +538,7 @@ class DiffusionModule(nn.Module):
         # Coordinate embedding layer
         self.linear_no_bias_r_embed = LinearNoBias(
             3,
-            c_atom,  # init="lecun"
-        )
-        self.linear_no_bias_q_skip = LinearNoBias(
-            c_atom,
-            c_token,
+            c_token,  # init="lecun"
         )
 
         self.diffusion_conditioning = DiffusionConditioning(
@@ -564,6 +559,11 @@ class DiffusionModule(nn.Module):
 
         self.linear_no_bias_a = LinearNoBias(
             c_token,
+            c_atom,
+        )
+
+        self.linear_no_bias_f = LinearNoBias(
+            sum(self.atom_input_feature.values()),
             c_atom,
         )
 
@@ -595,20 +595,26 @@ class DiffusionModule(nn.Module):
                 [..., N_sample]
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input feature dictionary
             inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
-            chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 
         Returns:
             torch.Tensor: Network output. This will either be velocity prediction or denoising coord prediction,
                 depending on network parameterisation.
                 [..., N_sample, N_token, 3]
         """
-        N_sample = r_noisy.size(-3)
-        assert timestep.size(-1) == N_sample
+        N_sample = r_noisy.shape[-3]
+        assert (
+            timestep.shape[-1] == N_sample
+        ), f"Got timestep shape {timestep.shape} but expected {N_sample}"
 
-        atom_mask = input_feature_dict["atom_mask"]
+        atom_mask = expand_at_dim(
+            input_feature_dict["atom_mask"],
+            dim=-2,
+            n=N_sample,
+        )
         atom_to_token_idx = expand_at_dim(
             input_feature_dict["atom_to_token_idx"], dim=-2, n=N_sample
         )
+
         n_token = input_feature_dict["residue_index"].shape[-1]
         n_atom = atom_mask.shape[-1]
         batch_shape = input_feature_dict["residue_index"].shape[:-1]
@@ -620,11 +626,16 @@ class DiffusionModule(nn.Module):
         # [..., 1, N_token, N_token]
 
         # Average coordinates per token
+        print("s")
+        print("r_noisy", r_noisy.shape)
+        print("atom_mask", atom_mask.shape)
+        print("atom_to_token_idx", atom_to_token_idx.shape)
+        print("n_token", n_token)
         a_token = self.linear_no_bias_r_embed(
             average_atom_to_token(
-                x_atom=r_noisy,
-                atom_mask=atom_mask,
-                atom_to_token_idx=atom_to_token_idx,
+                x_atom=r_noisy,  # [...N_sample, N_atom, 3]
+                atom_mask=atom_mask,  # [..., N_atom]
+                atom_to_token_idx=atom_to_token_idx,  # [..., N_sample, N]
                 n_token=n_token,
             )
         )  # [..., N_sample, N_token, c_token]
@@ -643,6 +654,11 @@ class DiffusionModule(nn.Module):
         z = z.unsqueeze(-4)
         z = z * pair_mask[..., None]
 
+        print("going into diffusion transformer got following shapes:")
+        print("a_token", a_token.shape)
+        print("s", s.shape)
+        print("z", z.shape)
+        print("pair_mask", pair_mask.shape)
         a_token = self.diffusion_transformer(a=a_token, s=s, z=z, pair_mask=pair_mask)
         a_token = a_token * token_mask[..., None]
         a_token = self.layernorm_a(a_token)
@@ -658,9 +674,9 @@ class DiffusionModule(nn.Module):
         q_atom = q_atom + self.linear_no_bias_f(
             torch.cat(
                 [
-                    input_feature_dict[name].reshape(
-                        *batch_shape, n_atom, self.atom_input_feature[name]
-                    )
+                    input_feature_dict[name]
+                    .reshape(*batch_shape, n_atom, self.atom_input_feature[name])
+                    .to(q_atom.dtype)
                     for name in self.atom_input_feature
                 ],
                 dim=-1,
@@ -684,7 +700,6 @@ class DiffusionModule(nn.Module):
         timestep: torch.Tensor,
         input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
         inplace_safe: bool = False,
-        chunk_size: Optional[int] = None,
     ) -> dict[str, torch.Tensor]:
         """
         Performs a forward pass of the diffusion module.
@@ -694,7 +709,6 @@ class DiffusionModule(nn.Module):
             timestep (torch.Tensor): The noising timestep.
             input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): Input feature dictionary.
             inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
-            chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
 
         Returns:
             torch.Tensor: Predicted coordinates.
@@ -712,7 +726,6 @@ class DiffusionModule(nn.Module):
             timestep=timestep,
             input_feature_dict=input_feature_dict,
             inplace_safe=inplace_safe,
-            chunk_size=chunk_size,
         )
 
         # Apply skip connections and output scaling

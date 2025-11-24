@@ -3,13 +3,13 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 
-from protenix.model.generator import (
+from protenix.model.generator_backbone import (
     LaProteinaCoordScheduler,
     TrainingTimestepSampler,
     sample_diffusion,
     sample_noising,
 )
-from protenix.model.modules.diffusion_allatom import DiffusionModule
+from protenix.model.modules.diffusion_backbone import DiffusionModule
 from protenix.utils.torch_utils import autocasting_disable_decorator
 
 
@@ -18,32 +18,23 @@ class ArtiosBackbone(nn.Module):
         super(ArtiosBackbone, self).__init__()
         self.configs = configs
 
-        # Some constants
         self.N_model_seed = self.configs.model.N_model_seed
 
         # Fixed eval generator for reproducibility
         # self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
 
-        # Diffusion
-        self.coord_timestep_sampler = TrainingTimestepSampler(
+        self.timestep_sampler = TrainingTimestepSampler(
             **configs.train_timestep_sampler.coord
         )
 
-        self.coord_inference_timestep_scheduler = LaProteinaCoordScheduler(
+        self.inference_timestep_scheduler = LaProteinaCoordScheduler(
             **configs.inference_timestep_scheduler.la_proteina.coord
         )
 
         self.diffusion_batch_size = self.configs.diffusion_batch_size
         self.cfg_drop_probability = self.configs.cfg_drop_probability
 
-        # Model
-        self.c_s, self.c_z = (
-            configs.c_s,
-            configs.c_z,
-        )
-
         self.diffusion_module = DiffusionModule(**configs.model.diffusion_module)
-
         self.sigma_coord = configs.sigma_coord
 
     def sample_diffusion(self, **kwargs) -> torch.Tensor:
@@ -57,9 +48,9 @@ class ArtiosBackbone(nn.Module):
             key: self.configs.sample_diffusion.get(key)
             for key in [
                 "sigma_coord",
-                "stoch_type_coord",
-                "alpha_coord",
-                "gamma_coord",
+                "stoch_type",
+                "alpha",
+                "gamma",
                 "second_order",
                 "guidance_weight",
                 "beta_mean",
@@ -95,14 +86,14 @@ class ArtiosBackbone(nn.Module):
         time_tracker = {}  # TODO: remove this
 
         # Generate timesteps for solving the FM SDE
-        coord_timesteps = self.coord_inference_timestep_scheduler(
+        timesteps = self.inference_timestep_scheduler(
             N_step=N_step, device=device, dtype=dtype
         )
 
-        pred_dict["centre_coordinate"] = self.sample_diffusion(
+        pred_dict["coordinate"] = self.sample_diffusion(
             denoise_net=self.diffusion_module,
             input_feature_dict=input_feature_dict,
-            coord_timesteps=coord_timesteps,
+            timesteps=timesteps,
             N_sample=N_sample,
             inplace_safe=inplace_safe,
         )
@@ -114,7 +105,6 @@ class ArtiosBackbone(nn.Module):
         input_feature_dict: dict[str, Any],
         label_dict: dict,
         inplace_safe: bool = False,
-        chunk_size: Optional[int] = None,
         seed: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
@@ -124,7 +114,6 @@ class ArtiosBackbone(nn.Module):
             input_feature_dict (dict[str, Any]): Input features dictionary.
             label_dict (dict): Label dictionary (cropped).
             inplace_safe (bool): Whether to use inplace operations safely. Defaults to False.
-            chunk_size (Optional[int]): Chunk size for memory-efficient operations. Defaults to None.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
@@ -142,10 +131,10 @@ class ArtiosBackbone(nn.Module):
         )
 
         # Noising
-        noisy_centre_coords, coord_timestep, _ = sample_noising(  # TODO: write new
-            input=label_dict["centre_coordinate"],
-            mask=label_dict["has_centre_atom"],
-            timestep_sampler=self.coord_timestep_sampler,
+        noisy_coords, timestep, _ = sample_noising(
+            input=label_dict["coordinate"],
+            mask=label_dict["coordinate_mask"],
+            timestep_sampler=self.timestep_sampler,
             num_sample=N_sample,
             scale=self.sigma_coord,
             generator=generator,
@@ -168,18 +157,17 @@ class ArtiosBackbone(nn.Module):
             # TODO: drop motif related features
 
         # Denoising
-        coord_pred = self.diffusion_module(  # TODO: maybe write new, adjust signature
-            noisy_coord=noisy_centre_coords,
-            coord_timestep=coord_timestep,
+        pred = self.diffusion_module(
+            r_noisy=noisy_coords,
+            timestep=timestep,
             input_feature_dict=input_feature_dict,
             inplace_safe=inplace_safe,
-            chunk_size=chunk_size,
         )
 
         pred_dict.update(
             {
-                "coord_timestep": coord_timestep,
-                "centre_coordinate": coord_pred,
+                "timestep": timestep,
+                "coordinate": pred,
             }
         )
 
@@ -210,7 +198,7 @@ class ArtiosBackbone(nn.Module):
 
         assert mode in ["train", "inference", "eval"]
         inplace_safe = not (self.training or torch.is_grad_enabled())
-        chunk_size = self.configs.infer_setting.chunk_size if inplace_safe else None
+        # chunk_size = self.configs.infer_setting.chunk_size if inplace_safe else None
 
         if mode == "train" or mode == "eval":
             # nc_rng = np.random.RandomState(current_step)
@@ -220,7 +208,6 @@ class ArtiosBackbone(nn.Module):
                 input_feature_dict=input_feature_dict,
                 label_dict=label_dict,
                 inplace_safe=inplace_safe,
-                chunk_size=chunk_size,
                 seed=seed,
             )
         elif mode == "inference":

@@ -57,8 +57,8 @@ class DiffusionConditioning(nn.Module):
         self.c_z = c_z
         self.c_s = c_s
 
-        ### Ligand features
-        # Ligand reference position embeddings
+        ### Atom level features
+        # Reference position embeddings
         self.embed_atom_ref_pos = LinearNoBias(3, self.c_s, init="lecun")
         self.embed_atom_pair_offsets = LinearNoBias(
             3, self.c_z, init="lecun", high_precision=False
@@ -66,7 +66,7 @@ class DiffusionConditioning(nn.Module):
         self.embed_atom_pair_invd = LinearNoBias(1, self.c_z, init="lecun")
         self.embed_atom_pair_offsets_valid = LinearNoBias(1, self.c_z, init="normal")
 
-        # Ligand condition embeddings
+        # Atom level condition embeddings
         self.atom_input_feature = {
             "ref_charge": 1,
             "ref_mask": 1,
@@ -175,11 +175,11 @@ class DiffusionConditioning(nn.Module):
         are atoms. This is the ligand and motif atoms only.
 
         Args:
-            input_feature_dict: Input feature dictionary containing ligand data
+            input_feature_dict: Input feature dictionary.
             inplace_safe: Whether it is safe to use inplace operations
 
         Returns:
-            torch.Tensor: Initial single and pair embeddingwith ligand conditioning
+            torch.Tensor: Initial single and pair embedding with atom level conditioning
                  * [..., n_token, c_s]
                  * [..., n_token, n_token, c_z]
         """
@@ -193,8 +193,8 @@ class DiffusionConditioning(nn.Module):
 
         is_motif_related = input_feature_dict["is_motif_related"]  # [..., N_atom]
 
-        ### Create ligand pair conditioning
-        # 1. Get token-wise ligand reference positions
+        ### Create atom pair conditioning
+        # 1. Get token-wise atom reference positions
         # [..., N_atom, 3]
         is_atom = (is_ligand | is_motif_related).unsqueeze(-1)  # [..., n_atom, 1]
         ref_pos = (
@@ -222,7 +222,7 @@ class DiffusionConditioning(nn.Module):
             == token_ref_space_uid[..., :, None, :].int()
         ).to(ref_pos.dtype)  # [..., n_token, n_token, 1]
 
-        # 3. Compute ligand ref pos displacement
+        # 3. Compute ref pos displacement
         d_lm = (
             ref_pos[..., :, None, :] - ref_pos[..., None, :, :]
         )  # [..., n_token, n_token, 3]
@@ -411,7 +411,7 @@ class DiffusionConditioning(nn.Module):
         # Grab data on inputs
         n_token = input_feature_dict["residue_index"].shape[-1]
 
-        # Initialize pair embedding with ligand conformer features
+        # Initialize pair embedding with atom level (motif + ligand) conformer features
         s_atom, z_atom = self.get_atom_condition(input_feature_dict)
 
         # Motif features

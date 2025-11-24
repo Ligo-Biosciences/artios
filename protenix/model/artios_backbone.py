@@ -154,7 +154,12 @@ class ArtiosBackbone(nn.Module):
             input_feature_dict["is_hotspot"] = torch.zeros_like(
                 input_feature_dict["is_hotspot"]
             )
-            # TODO: drop motif related features
+            input_feature_dict["is_motif_related"] = torch.zeros_like(
+                input_feature_dict["is_motif_related"]
+            )
+            input_feature_dict["is_motif_related_token"] = torch.zeros_like(
+                input_feature_dict["is_motif_related_token"]
+            )
 
         # Denoising
         pred = self.diffusion_module(
@@ -178,6 +183,7 @@ class ArtiosBackbone(nn.Module):
         input_feature_dict: dict[str, Any],
         label_dict: dict[str, Any],
         mode: str = "inference",
+        label_full_dict: Optional[dict[str, Any]] = None,
         current_step: Optional[int] = None,
         seed: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
@@ -187,6 +193,7 @@ class ArtiosBackbone(nn.Module):
         Args:
             input_feature_dict (dict[str, Any]): Input features dictionary.
             label_dict (dict[str, Any]): Label dictionary (cropped).
+            label_full_dict (dict[str, Any]): Label dictionary (full).
             mode (str): Mode of operation ('train', 'inference', 'eval'). Defaults to 'inference'.
             current_step (Optional[int]): Current training step. Defaults to None.
             seed (Optional[int]): Seed for random number generation. Defaults to None.

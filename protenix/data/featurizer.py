@@ -748,9 +748,9 @@ class Featurizer(object):
             self.cropped_atom_array.plddt_m_rep_atom_mask
         ).long()  # [N_atom]
 
-        mask_features["distogram_rep_atom_mask"] = torch.Tensor(
-            self.cropped_atom_array.distogram_rep_atom_mask
-        ).long()  # [N_atom]
+        # mask_features["distogram_rep_atom_mask"] = torch.Tensor(
+        #     self.cropped_atom_array.distogram_rep_atom_mask
+        # ).long()  # [N_atom]
 
         mask_features["modified_res_mask"] = torch.Tensor(
             self.cropped_atom_array.modified_res_mask
@@ -985,8 +985,8 @@ class Featurizer(object):
         mpnn_features = self.get_mpnn_features()
         features.update(mpnn_features)
 
-        motif_features = self.get_motif_features()
-        features.update(motif_features)
+        # motif_features = self.get_motif_features()
+        # features.update(motif_features)
 
         return features
 

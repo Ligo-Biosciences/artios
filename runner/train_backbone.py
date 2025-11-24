@@ -20,7 +20,6 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 
-import matplotlib.pyplot as plt
 import numpy as np
 import rootutils
 import torch
@@ -33,13 +32,10 @@ from tqdm import tqdm
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
-from protenix.common.atom_utils import (
-    create_atom_array_from_predictions,
-    dense_atoms_to_flat_atoms,
-)
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
+from protenix.data.featurizer import Featurizer
 from protenix.data.utils import save_structure_cif
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.metrics.plausibility import (
@@ -47,22 +43,20 @@ from protenix.metrics.plausibility import (
     PerResidueRotamerScore,
     StructureClashScore,
 )
-from protenix.model.loss import FlowLoss
+from protenix.model.allatom_mpnn import AllatomMPNN
+from protenix.model.artios_backbone import ArtiosBackbone
+from protenix.model.loss import BackboneLoss
 from protenix.model.modules.transformer import (
     DiffusionTransformer,
     DiTBlock,
 )
-from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.monitoring import (
-    analyse_evaluation_latents,
-    analyse_inference_latents,
     grad_norm,
 )
-from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.profiler import profile_function
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
@@ -105,7 +99,6 @@ class ArtiosBackboneTrainer(object):
         self.ema_checkpoint_dir = f"{self.run_dir}/ema_checkpoints"
         self.post_hoc_ema_checkpoint_dir = f"{self.run_dir}/post_hoc_ema_checkpoints"
         self.prediction_dir = f"{self.run_dir}/predictions"
-        self.structure_dir = f"{self.run_dir}/structures"
         self.dump_dir = f"{self.run_dir}/dumps"
         self.error_dir = f"{self.run_dir}/errors"
         self.logs_dir = f"{self.run_dir}/logs"
@@ -119,7 +112,6 @@ class ArtiosBackboneTrainer(object):
             os.makedirs(self.ema_checkpoint_dir)
             os.makedirs(self.post_hoc_ema_checkpoint_dir)
             os.makedirs(self.prediction_dir)
-            os.makedirs(self.structure_dir)
             os.makedirs(self.dump_dir)
             os.makedirs(self.error_dir)
             os.makedirs(self.logs_dir)
@@ -130,8 +122,8 @@ class ArtiosBackboneTrainer(object):
 
         self.print(
             f"Using run name: {self.run_name}, run dir: {self.run_dir}, checkpoint_dir: "
-            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, post_hoc_ema_checkpoint_dir: {self.post_hoc_ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, structure_dir: "
-            + f"{self.structure_dir}, error_dir: {self.error_dir}"
+            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, post_hoc_ema_checkpoint_dir: {self.post_hoc_ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, "
+            + f"{self.error_dir}"
         )
 
     def init_log(self):
@@ -153,9 +145,9 @@ class ArtiosBackboneTrainer(object):
                 else None,
             )
             self.torchwatcher = TorchWatcher(
-                model=self.flow_model.module
+                model=self.backbone_model.module
                 if DIST_WRAPPER.world_size > 1
-                else self.flow_model,
+                else self.backbone_model,
                 run=self.neptune_run,
                 track_layers=[
                     DiffusionTransformer,
@@ -210,44 +202,39 @@ class ArtiosBackboneTrainer(object):
         logging.info("Finished init ENV.")
 
     def init_loss(self):
-        self.loss = FlowLoss(self.configs)  # TODO: change the loss!
-        self.symmetric_permutation = (
-            SymmetricPermutation(  # TODO: still needed for ligands
-                self.configs, error_dir=self.error_dir
-            )
-        )
+        self.loss = BackboneLoss(self.configs)  # TODO: change the loss!
+        # self.symmetric_permutation = (
+        #     SymmetricPermutation(  # TODO: still needed for ligands
+        #         self.configs, error_dir=self.error_dir
+        #     )
+        # )
         self.lddt_metrics = LDDTMetrics(self.configs)
 
     def init_model(self):
-        # self.raw_model = ArtiosLigand(self.configs).to(
-        #    self.device
-        # )
-        self.raw_flow_model = ArtiosAllatom(self.configs).to(
-            self.device
-        )  # TODO: change the model
-        self.vae_shell = ArtiosAllAtomVAE(self.configs).to(self.device)
-        self.vae_shell.eval()
+        self.raw_backbone_model = ArtiosBackbone(self.configs).to(self.device)
+        self.mpnn_model = AllatomMPNN(self.configs).to(self.device)
+        self.mpnn_model.eval()
         # DDP not required for VAE loading since model is frozen - no need for gradient aggregation
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
             self.print("Using DDP")
             self.use_ddp = True
             # Fix DDP/checkpoint https://discuss.pytorch.org/t/ddp-and-gradient-checkpointing/132244
-            self.flow_model = DDP(
-                self.raw_flow_model,
+            self.backbone_model = DDP(
+                self.raw_backbone_model,
                 find_unused_parameters=self.configs.find_unused_parameters,
                 device_ids=[DIST_WRAPPER.local_rank],
                 output_device=DIST_WRAPPER.local_rank,
                 static_graph=True,
             )
         else:
-            self.flow_model = self.raw_flow_model
+            self.backbone_model = self.raw_backbone_model
 
         if self.configs.get("power_law_ema_sigma", []):  # Check if list is not empty
             self.power_law_ema_wrappers = []  # Store wrappers in a list
             for sigma in self.configs.power_law_ema_sigma:
                 wrapper = PowerLawEMAWrapper(
-                    model=self.flow_model,
+                    model=self.backbone_model,
                     sigma=sigma,
                     mutable_param_keywords=self.configs.ema_mutable_param_keywords,
                 )
@@ -258,7 +245,7 @@ class ArtiosBackboneTrainer(object):
             )
 
         torch.cuda.empty_cache()
-        self.optimizer = get_optimizer(self.configs, self.flow_model)
+        self.optimizer = get_optimizer(self.configs, self.backbone_model)
         self.init_scheduler()
 
     def init_scheduler(self, **kwargs):
@@ -284,7 +271,7 @@ class ArtiosBackboneTrainer(object):
             if not save_model_only:
                 # Save model, optimizer, scheduler, and step
                 checkpoint = {
-                    "model": self.flow_model.state_dict(),
+                    "model": self.backbone_model.state_dict(),
                     "optimizer": self.optimizer.state_dict(),
                     "scheduler": (
                         self.lr_scheduler.state_dict()
@@ -295,13 +282,14 @@ class ArtiosBackboneTrainer(object):
                 }
             else:
                 # Save model and step (used for EMA wrappers)
-                checkpoint = {"model": self.flow_model.state_dict(), "step": self.step}
+                checkpoint = {
+                    "model": self.backbone_model.state_dict(),
+                    "step": self.step,
+                }
 
             torch.save(checkpoint, path)
             self.print(f"Saved checkpoint to {path}")
 
-    # TODO: new loading logic required here for loading in different models (the encoder, decoder or
-    # flow model).
     def try_load_checkpoint(self):
         def _load_checkpoint(
             checkpoint_path: str,
@@ -349,18 +337,6 @@ class ArtiosBackboneTrainer(object):
 
             return model
 
-        if self.configs.load_vae_checkpoint_path:
-            use_ddp = (
-                self.use_ddp
-            )  # workaround for loading VAE checkpoint trained with DDP
-            self.use_ddp = False
-            self.vae_shell = _load_checkpoint(
-                self.configs.load_vae_checkpoint_path,
-                load_params_only=True,
-                model=self.vae_shell,
-            )
-            self.use_ddp = use_ddp
-
         # Load power-law EMA wrappers from checkpoint
         if self.configs.load_ema_checkpoint_paths_directory:
             checkpoint_dir = self.configs.load_ema_checkpoint_paths_directory
@@ -402,7 +378,7 @@ class ArtiosBackboneTrainer(object):
                     or step
                     > sigma_to_latest_checkpoint[sigma][
                         0
-                    ]  # TODO: assert step is smaller than the loaded checkpoint of flow model (or give warning).
+                    ]  # TODO: assert step is smaller than the loaded checkpoint of backbone model (or give warning).
                 ):
                     sigma_to_latest_checkpoint[sigma] = (step, checkpoint_file)
 
@@ -418,7 +394,7 @@ class ArtiosBackboneTrainer(object):
 
                 # Register only the wrapper corresponding to this sigma
                 _load_checkpoint(
-                    checkpoint_path, load_params_only=True, model=self.flow_model
+                    checkpoint_path, load_params_only=True, model=self.backbone_model
                 )
                 matching_wrapper = sigma_to_wrapper[sigma]
                 matching_wrapper.register()
@@ -427,15 +403,17 @@ class ArtiosBackboneTrainer(object):
                 )
 
         # Load model parameters (With no EMA) from checkpoint
-        if self.configs.load_flow_checkpoint_path:
-            self.flow_model = _load_checkpoint(
-                self.configs.load_flow_checkpoint_path,
+        if self.configs.load_backbone_checkpoint_path:
+            self.backbone_model = _load_checkpoint(
+                self.configs.load_backbone_checkpoint_path,
                 self.configs.load_params_only,
-                model=self.flow_model,
+                model=self.backbone_model,
                 skip_load_optimizer=self.configs.skip_load_optimizer,
                 skip_load_scheduler=self.configs.skip_load_scheduler,
                 skip_load_step=self.configs.skip_load_step,
             )
+
+        # TODO: implement loading of mpnn model checkpoint
 
     def print(self, msg: str):
         if DIST_WRAPPER.rank == 0:
@@ -446,8 +424,6 @@ class ArtiosBackboneTrainer(object):
         self,
         batch: dict,
         mode: str = "train",
-        encoder: Optional[nn.Module] = None,
-        decoder: Optional[nn.Module] = None,
         seed: Optional[int] = None,
     ) -> tuple[dict, dict]:
         """Forward pass of the model.
@@ -455,23 +431,17 @@ class ArtiosBackboneTrainer(object):
         Args:
             batch (dict): Batch of data.
             mode (str): Mode of the forward pass.
-            encoder (Optional[nn.Module]): Encoder model. Defaults to None.
-            decoder (Optional[nn.Module]): Decoder model. Defaults to None.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
             tuple[dict, dict]: Predictions and log dict.
         """
         assert mode in ["train", "eval"]
-        batch["pred_dict"], batch["label_dict"], log_dict = self.flow_model(
+        batch["pred_dict"], batch["label_dict"], log_dict = self.backbone_model(
             input_feature_dict=batch["input_feature_dict"],
             label_dict=batch["label_dict"],
-            label_full_dict=batch["label_full_dict"],
             mode=mode,
             current_step=self.step if mode == "train" else None,
-            symmetric_permutation=self.symmetric_permutation,
-            encoder=encoder,
-            decoder=decoder,
             seed=seed,
         )
         return batch, log_dict
@@ -497,19 +467,6 @@ class ArtiosBackboneTrainer(object):
         lddt_dict = self.lddt_metrics.compute_lddt(
             batch["pred_dict"], batch["label_dict"]
         )
-        # TODO: add the get_latents metric logic. It will be valuable to see the same
-        # visualisations of the latents coming out of the flow model to compare to what
-        # we see training the VAE.
-
-        # TODO: building on the above todo, comparing the latent distribution to the VAE's
-        # latent distribution is going to be key for analysing training performance. Ideas
-        # for what we want to see:
-        # - Wasserstein dist aggregated over seeds, per sample
-        # - histograms, tsne, qq aggregated over samples
-        # - histograms, tsne, qq aggregated over seeds, per sample
-        # - it is likely that specific molecular properties get mapped to specific subsets of
-        # the latent distribution. Is this retained by the flow model?
-
         return lddt_dict
 
     @torch.no_grad()
@@ -517,62 +474,6 @@ class ArtiosBackboneTrainer(object):
         simple_metrics, _ = self.lddt_metrics.aggregate_lddt(lddt_dict)
 
         return simple_metrics
-
-    @torch.no_grad()
-    def get_latents_data(self, batch: dict) -> dict:
-        """Get the latents, seq_logits, timesteps, restype, and is_X_token from a batch.
-
-        Returns:
-            data (dict): A dictionary containing the data.
-                Keys: "latents", "seq_logits", "latent_timestep", "restype", "is_X_token"
-                where X is [protein, rna, dna, ligand]
-                Values: np.ndarray, each of shape [..., N_sample*N_token, *]
-        """
-        data = {}
-
-        # Latents
-        latents = batch["pred_dict"]["latents"]  # [..., N_sample, N_token, c_latent]
-        data["latents"] = latents
-
-        # Seq logits
-        seq_logits = batch["pred_dict"][
-            "seq_logits"
-        ]  # [..., N_sample, N_token, NUM_RESIDUES]
-        data["seq_logits"] = seq_logits
-
-        # Latent timestep
-        latent_timestep = expand_at_dim(
-            batch["pred_dict"]["latent_timestep"], -1, latents.shape[-2]
-        ).unsqueeze(-1)  # [..., N_sample, N_token, 1]
-        data["latent_timestep"] = latent_timestep
-
-        # Restype
-        restype = expand_at_dim(
-            batch["input_feature_dict"]["restype"], -3, latents.shape[-3]
-        )  # [..., N_sample, N_token, NUM_RESIDUES]
-        data["restype"] = restype
-
-        # is_X_token
-        for mol_type in ["protein", "rna", "dna", "ligand"]:
-            is_x_token = batch["input_feature_dict"][f"is_{mol_type}_token"]
-            is_x_token = expand_at_dim(
-                is_x_token, -3, latents.shape[-3]
-            )  # [..., N_sample, N_token, 1]
-            is_x_token = is_x_token.unsqueeze(-1)  # [..., N_sample, N_token, 1]
-            data[f"is_{mol_type}_token"] = is_x_token
-
-        # Reshape, move to numpy
-        batch_dims = latents.shape[:-3]
-        for name, tensor in data.items():
-            data[name] = (
-                tensor.reshape(*batch_dims, -1, tensor.shape[-1])
-                .detach()
-                .cpu()
-                .float()
-                .numpy()
-            )
-
-        return data
 
     @torch.no_grad()
     def evaluate(self, mode: str = "eval"):
@@ -589,7 +490,7 @@ class ArtiosBackboneTrainer(object):
 
             # Store current model state
             current_state = {
-                k: v.clone() for k, v in self.flow_model.state_dict().items()
+                k: v.clone() for k, v in self.backbone_model.state_dict().items()
             }
 
             for checkpoint_path in post_hoc_checkpoints:
@@ -600,7 +501,7 @@ class ArtiosBackboneTrainer(object):
                 checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
                 # Load post-hoc EMA weights
-                self.flow_model.load_state_dict(checkpoint["model"])
+                self.backbone_model.load_state_dict(checkpoint["model"])
 
                 # Evaluate
                 self.print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
@@ -614,7 +515,7 @@ class ArtiosBackboneTrainer(object):
                     os.remove(checkpoint_path)
 
             # Restore original model state
-            self.flow_model.load_state_dict(current_state)
+            self.backbone_model.load_state_dict(current_state)
 
         # Plot all the metrics on Neptune
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
@@ -641,19 +542,7 @@ class ArtiosBackboneTrainer(object):
             else nullcontext()
         )
 
-        self.flow_model.eval()
-
-        self.latents_evaluation = (
-            {"latents": [], "seq_logits": [], "latent_timestep": [], "restype": []}
-            if self.configs.monitor.latents.track_evaluation_latents
-            else None
-        )
-
-        self.latents_inference = (
-            {"latents": [], "seq_logits": [], "latent_timestep": [], "restype": []}
-            if self.configs.monitor.latents.track_inference_latents
-            else None
-        )
+        self.backbone_model.eval()
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
@@ -677,20 +566,12 @@ class ArtiosBackboneTrainer(object):
 
                 simple_metrics = {}
                 with enable_amp:
-                    batch, _ = self.model_forward(
-                        batch, encoder=self.vae_shell.vae.encoder, mode=mode, seed=index
-                    )
-
+                    batch, _ = self.model_forward(batch, mode=mode, seed=index)
                     # Loss forward - forms loss and loss_dict, additionally returns the batch
                     loss, loss_dict = self.get_loss(
                         batch, mode="train"
                     )  # eval, loss evaluated in the same way as train
                     simple_metrics.update(loss_dict)
-
-                # Track latents
-                if self.latents_evaluation is not None and index < 20:
-                    for name, tensor in self.get_latents_data(batch).items():
-                        self.latents_evaluation[name].append(tensor)
 
                 # Metrics
                 for key, value in simple_metrics.items():
@@ -702,28 +583,95 @@ class ArtiosBackboneTrainer(object):
                     and index < 20
                     and DIST_WRAPPER.rank == 0
                 ):
-                    pred_dict, _, _ = self.flow_model(
+                    backbone_pred_dict, _, _ = self.backbone_model(
                         input_feature_dict=batch["input_feature_dict"],
-                        label_full_dict=batch["label_full_dict"],
                         label_dict=batch["label_dict"],
-                        decoder=self.vae_shell.vae.decoder,
+                        label_full_dict=None,
                         mode="inference",
                     )
-                    saved_files = None
-                    try:
-                        saved_files, pred_atom_array_list = self.save_outputs(
-                            pred_dict=pred_dict, batch=batch, ema_suffix=ema_suffix
+
+                    allatom_mpnn_pred_dict = None
+                    if self.configs.run_training_time_mpnn_inference_on_backbones:
+                        mpnn_batch = {}
+                        cropped_atom_array = batch["cropped_atom_array"]
+                        cropped_token_array = batch["cropped_token_array"]
+
+                        cropped_atom_array.coord = backbone_pred_dict["coordinate"]
+
+                        mpnn_batch["cropped_atom_array"] = cropped_atom_array
+                        mpnn_batch["cropped_token_array"] = cropped_token_array
+
+                        mpnn_featurizer = Featurizer(
+                            cropped_token_array=cropped_token_array,
+                            cropped_atom_array=cropped_atom_array,
+                            ref_pos_augment=True,
+                            lig_atom_rename=False,
                         )
-                    except Exception:
+                        mpnn_batch["input_feature_dict"] = (
+                            mpnn_featurizer.get_mpnn_features()
+                        )
+                        mpnn_batch["label_dict"] = mpnn_featurizer.get_labels()
+
+                        allatom_mpnn_pred_dict, _, _ = (
+                            self.allatom_mpnn_model(  # TODO: initialise me !
+                                input_feature_dict=mpnn_batch["input_feature_dict"],
+                                label_full_dict=None,
+                                label_dict=mpnn_batch["label_dict"],
+                                mode="inference",
+                                temperature=0.1,
+                                # decoding_order=?,
+                                # seed=?,
+                            )
+                        )
+
+                    saved_files = None
+
+                    try:
+                        saved_files, backbone_atom_array_list = self.save_outputs(
+                            pred_dict=backbone_pred_dict,
+                            batch=batch,
+                            structure_type="backbone",
+                            ema_suffix=ema_suffix,
+                            motif_as_b_factor=True,
+                        )
+
+                        packed_atom_array_list = []
+                        if allatom_mpnn_pred_dict is not None:
+                            packed_saved_files, packed_atom_array_list = (
+                                self.save_outputs(
+                                    pred_dict=allatom_mpnn_pred_dict,
+                                    batch=mpnn_batch,
+                                    structure_type="packed",
+                                    ema_suffix=ema_suffix,
+                                    motif_as_b_factor=True,
+                                )
+                            )
+                            saved_files.extend(packed_saved_files)
+                    except Exception as e:
+                        print(f"Error saving outputs for {pid}, error: {e}")
                         continue
 
-                    rotamer_score.update(pred_atom_array_list)
-                    rama_score.update(pred_atom_array_list)
-                    clash_score.update(pred_atom_array_list)
+                    # TODO: calculate a motif RMSD score between packed and backbone is_motif
+                    # TODO: work out how best to log this
+                    # if packed_atom_array_list is not None:
+                    #     for idx, (b_aa, p_aa) in enumerate(
+                    #         zip(backbone_atom_array_list, packed_atom_array_list)
+                    #     ):
+                    #         backbone_motif = b_aa[b_aa.is_motif > 0]
+                    #         packed_motif = p_aa[p_aa.is_motif > 0]
+                    #         motif_rmsd = np.sqrt(
+                    #             np.mean(
+                    #                 np.sum(
+                    #                     (backbone_motif.coord - packed_motif.coord)
+                    #                     ** 2,
+                    #                     axis=-1,
+                    #                 )
+                    #             )
+                    #         )
 
-                    if self.latents_inference is not None:
-                        for name, tensor in self.get_latents_data(batch).items():
-                            self.latents_inference[name].append(tensor)
+                    rotamer_score.update(packed_atom_array_list)
+                    rama_score.update(packed_atom_array_list)
+                    clash_score.update(packed_atom_array_list)
 
                     # Log structure files to Neptune Scale
                     if self.configs.use_wandb:
@@ -758,48 +706,13 @@ class ArtiosBackboneTrainer(object):
             clash_score.reset()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
-            ### Plots
-            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                ### Evaluation latent plots
-                if self.latents_evaluation is not None:
-                    for name, fig in analyse_evaluation_latents(
-                        self.latents_evaluation,
-                    ).items():
-                        # Save figure to file and log to neptune
-                        fig_path = f"{self.run_dir}/figures/{name}.png"
-                        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-                        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
-
-                        self.neptune_run.log_files(
-                            files={f"figures/{name}": fig_path},
-                            step=self.step,
-                        )
-                        plt.close(fig)
-                    # os.remove(fig_path)
-
-                ### Inference latent plots
-                if self.latents_inference is not None:
-                    for name, fig in analyse_inference_latents(
-                        self.latents_inference,
-                    ).items():
-                        # Save figure to file and log to neptune
-                        fig_path = f"{self.run_dir}/figures/{name}.png"
-                        os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-                        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
-
-                        self.neptune_run.log_files(
-                            files={f"figures/{name}": fig_path},
-                            step=self.step,
-                        )
-                        plt.close(fig)
-                        # os.remove(fig_path)
         return metrics
 
     def update(self):
         # Clip the gradient
         if self.configs.grad_clip_norm != 0.0:
             torch.nn.utils.clip_grad_norm_(
-                self.flow_model.parameters(), self.configs.grad_clip_norm
+                self.backbone_model.parameters(), self.configs.grad_clip_norm
             )
 
     @profile_function("backward_pass")
@@ -814,7 +727,7 @@ class ArtiosBackboneTrainer(object):
 
     @profile_function("train_step")
     def train_step(self, batch: dict):
-        self.flow_model.train()
+        self.backbone_model.train()
 
         # FP16 training has not been verified yet
         train_precision = {
@@ -836,11 +749,7 @@ class ArtiosBackboneTrainer(object):
         )
 
         with enable_amp:
-            # batch, _ = self.model_forward(batch, mode="train")
-
-            batch, _ = self.model_forward(
-                batch, encoder=self.vae_shell.vae.encoder, mode="train"
-            )
+            batch, _ = self.model_forward(batch, mode="train")
             loss, loss_dict = self.get_loss(batch, mode="train")
 
         if self.configs.dtype in ["bf16", "fp32"]:
@@ -933,7 +842,7 @@ class ArtiosBackboneTrainer(object):
 
         # Calculate and log weight norms for each parameter
         weight_norms = {}
-        for name, param in self.flow_model.named_parameters():
+        for name, param in self.backbone_model.named_parameters():
             if not param.requires_grad:  # Skip non-trainable parameters
                 continue
 
@@ -962,7 +871,7 @@ class ArtiosBackboneTrainer(object):
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
         if self.configs.monitor.grad_norm:
-            _, total_norm = grad_norm(self.flow_model, norm_type=2)
+            _, total_norm = grad_norm(self.backbone_model, norm_type=2)
 
             # Average across all ranks
             # def numpy_mean_aggregation(values):
@@ -973,76 +882,43 @@ class ArtiosBackboneTrainer(object):
             if DIST_WRAPPER.rank == 0:
                 self.neptune_run.log_metrics({"grad_norm": total_norm}, step=self.step)
 
-    def save_outputs(self, pred_dict: dict, batch: dict, ema_suffix: str):
-        """
-        Saves outputs to CIFs.
-        """
-        # Get data
+    def save_outputs(
+        self,
+        pred_dict: dict,
+        batch: dict,
+        ema_suffix: str,
+        structure_type: str = "backbone",
+        motif_as_b_factor: bool = False,
+    ):
+        """Saves outputs to CIFs."""
         cropped_atom_array = batch["cropped_atom_array"]
         pdb_id = batch["basic"]["pdb_id"]
-        is_ligand_token = batch["input_feature_dict"]["is_ligand_token"].cpu().numpy()
 
-        # Get predictions
         coordinate = pred_dict["coordinate"].detach().cpu().numpy()
-        seq_logits = pred_dict["seq_logits"].detach().cpu().numpy()
 
-        restype_onehot = np.eye(seq_logits.shape[-1])[
-            np.argmax(seq_logits, axis=-1)
-        ].astype(np.float32)  # [..., N_sample, N_token, NUM_RESIDUES]
-
-        # Get chain, res_id's
-        centre_atom_indices = batch["cropped_token_array"].get_annotation(
-            "centre_atom_index"
-        )
-        centre_atoms = cropped_atom_array[centre_atom_indices]
-
-        chain_ids = centre_atoms.chain_id  # [N_token]
-        res_ids = centre_atoms.res_id  # [N_token]
-        label_entity_ids = centre_atoms.label_entity_id
+        if motif_as_b_factor:
+            cropped_atom_array.b_factor = cropped_atom_array.is_motif
 
         # Save each sample
         saved_files = []
         atom_arrays = []
         for idx in range(coordinate.shape[-4]):
-            sample_dense_coords = coordinate[idx]
-            sample_restype_onehot = restype_onehot[idx]
-
-            # Calculate flattened coordinates
-            flattened_coords, atoms_per_token = dense_atoms_to_flat_atoms(
-                restype_onehot=sample_restype_onehot,
-                dense_atom_coords=sample_dense_coords,
-                is_ligand_token=is_ligand_token,
-            )  # [..., N_atom_flat, 3], [..., N_token]
-
-            predicted_atom_array = create_atom_array_from_predictions(
-                flattened_coords=flattened_coords,
-                atoms_per_token=atoms_per_token,
-                restype_onehot=sample_restype_onehot,
-                chain_ids=chain_ids,
-                res_ids=res_ids,
-                is_ligand_token=is_ligand_token,
-                label_entity_ids=label_entity_ids,
-            )
-
-            # Determine output file path
             output_path = os.path.join(
-                self.structure_dir, f"{pdb_id}_sample_{idx}_{ema_suffix}.cif"
+                self.prediction_dir,
+                f"{pdb_id}_{structure_type}_sample_{idx}_{ema_suffix}.cif",
             )
-
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
+            sample_coords = coordinate[idx]
             # Call save_to_cif function
             try:
                 save_structure_cif(
-                    atom_array=predicted_atom_array,
-                    pred_coordinate=torch.Tensor(predicted_atom_array.coord),
+                    atom_array=cropped_atom_array,
+                    pred_coordinate=sample_coords,
                     output_fpath=output_path,
                     entity_poly_type=None,
                     pdb_id=pdb_id,
                 )
                 saved_files.append(output_path)
-                atom_arrays.append(predicted_atom_array)
+                atom_arrays.append(cropped_atom_array)
                 self.print(f"Saved sample {idx} to {output_path}")
 
             except Exception as e:
@@ -1051,40 +927,9 @@ class ArtiosBackboneTrainer(object):
 
         return saved_files, atom_arrays
 
-    def log_structure_files_to_wandb(self, cif_files: list[Path], ema_suffix: str = ""):
-        if not self.configs.use_wandb or DIST_WRAPPER.rank != 0:
-            return
-
-        files_dict = {}
-        for cif_path in cif_files:
-            try:
-                # Get relative path for the neptune key
-                rel_path = os.path.relpath(cif_path, self.prediction_dir)
-                structure_name = os.path.splitext(rel_path)[0].replace(os.sep, "_")
-
-                # Create Neptune key and add to files dict
-                neptune_key = (
-                    f"structures/{ema_suffix}_{structure_name}_step_{self.step}"
-                )
-                files_dict[neptune_key] = str(cif_path)
-
-            except Exception as e:
-                self.print(f"Error processing CIF file {cif_path}: {e}")
-                continue
-
-        # Log all files to Neptune in one call
-        if files_dict:
-            self.neptune_run.log_files(
-                files=files_dict,
-                step=self.step,
-            )
-
-        # Explicitly clean up memory
-        torch.cuda.empty_cache()
-
     def run(self):
         """
-        Main entry for the ArtiosAllAtomFlowTrainer.
+        Main entry for the ArtiosBackboneTrainer.
 
         This function handles the training process, evaluation, logging, and checkpoint saving.
         """
@@ -1223,7 +1068,7 @@ def main():
 
     print(configs.run_name)
     print(configs)
-    trainer = ArtiosAllAtomFlowTrainer(configs)
+    trainer = ArtiosBackboneTrainer(configs)
     trainer.run()
 
 

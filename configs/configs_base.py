@@ -31,9 +31,11 @@ basic_configs = {
     "eval_first": False,  # run evaluate() before training steps
     "iters_to_accumulate": 1,
     "eval_only": False,
+    "load_backbone_checkpoint_path": "",
     "load_flow_checkpoint_path": "",
     "load_mpnn_checkpoint_path": "",
     "load_vae_checkpoint_path": "",
+    "load_ema_backbone_checkpoint_path": "",
     "load_ema_flow_checkpoint_path": "",  # TODO: no need!
     "load_ema_vae_checkpoint_path": "",  # TODO: no need
     "load_ema_mpnn_checkpoint_path": "",  # TODO: likely no need
@@ -358,6 +360,19 @@ loss_configs = {
             "sigma_coord": GlobalConfigValue("sigma_coord"),
             "sigma_latent": GlobalConfigValue("sigma_latent"),
         },
+        "backbone": {
+            "mse": {
+                "weight_mse": 1 / 3,
+                "weight_protein": 1.0,
+                "weight_dna": 1.0,
+                "weight_rna": 1.0,
+                "weight_ligand": 1.0,
+                "weight_motif": 0.0,  # a supplementary weighting. 0.0 means weighted same as all other atoms
+                "weight_motif_related": 0.0,
+                "eps": 1e-6,
+            },
+            "sigma_coord": GlobalConfigValue("sigma_coord"),
+        },
         "mpnn": {
             "label_smoothing": 0.1,
             "weight_protein": 1.0,
@@ -402,6 +417,7 @@ monitor_configs = {
 
 training_time_inference_configs = {
     "run_training_time_inference": True,
+    "run_training_time_mpnn_inference_on_backbones": False,
     "seeds": ListValue([101]),
     "need_atom_confidence": False,
     "sorted_by_ranking_score": False,

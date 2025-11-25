@@ -188,7 +188,13 @@ class ConfigManager(object):
                         else []
                     )
                 else:
-                    local_configs[key] = dtype(new_configs[full_key])
+                    try:
+                        local_configs[key] = dtype(new_configs[full_key])
+                    except Exception as e:
+                        print(
+                            f"Error when converting config key '{full_key}' with value '{new_configs[full_key]}' to type '{dtype}': {e}"
+                        )
+                        raise
             elif isinstance(value, GlobalConfigValue):
                 local_configs[key] = global_configs[value.global_key]
             else:

@@ -82,7 +82,7 @@ default_distillation_configs = {
     "shuffle_mols": GlobalConfigValue("train_shuffle_mols"),
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
     "filter_unique_fragment_prob": 0.8,
-    "filter_unique_domain_prob": 0.1,
+    "filter_unique_domain_prob": 0.0,
 }
 
 DATA_ROOT_DIR = "af3-dev/release_data/"

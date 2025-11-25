@@ -48,7 +48,8 @@ class MotifMaker:
         whole_sidechain_prob: float = 0.2,
         pocket_score_threshold: float = 0.18,
         pocket_n_neighbours: int = 25,
-        sidechain_seed_is_tip_prob: float = 0.8,
+        sidechain_seed_is_tip_prob: float = 0.1,
+        sidechain_seed_is_in_sphere_prob: float = 0.8,
         sidechain_bfs_depth_prob: float = 0.5,
         residue_inclusion_prob: float = 0.9,
         r_min: float = 3.0,
@@ -66,6 +67,7 @@ class MotifMaker:
             pocket_score_threshold (float): Threshold for pocket score to identify seed atoms.
             pocket_n_neighbours (int): Number of neighbours for pocket score calculation.
             sidechain_seed_is_tip_prob (float): Probability tip atom is used as seed.
+            sidechain_seed_is_in_sphere_prob (float): Probability in-sphere atom is used as seed.
             sidechain_bfs_depth_prob (float): Probability parameter for geometric distribution of BFS depth.
             residue_inclusion_prob (float): Probability of including a residue in sphere.
             r_min (float): Minimum radius in angstroms for sphere search.

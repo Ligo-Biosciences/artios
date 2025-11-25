@@ -709,11 +709,11 @@ class DiffusionModule(nn.Module):
         timestep_ = timestep[..., None, None]
 
         # Scale input noisy coords to unit variance
-        r_noisy = (r_noisy / self.sigma_coord) * self.c_in(timestep_)
+        r_noisy_unit = (r_noisy / self.sigma_coord) * self.c_in(timestep_)
 
         # Predict velocity
         out = self.f_forward(
-            r_noisy=r_noisy,
+            r_noisy=r_noisy_unit,
             timestep=timestep,
             input_feature_dict=input_feature_dict,
             inplace_safe=inplace_safe,

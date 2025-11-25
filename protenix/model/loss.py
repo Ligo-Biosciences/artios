@@ -788,7 +788,7 @@ class BackboneLoss(AggregatedLoss):
                     expand_ground_truth=True,
                     # Per sample scale keys
                     timestep_key="timestep",
-                    sigma=configs.loss.backbone.mse.sigma_coord,
+                    sigma=configs.loss.backbone.sigma_coord,
                     metric_suffix="_coord",
                 ),
             ),

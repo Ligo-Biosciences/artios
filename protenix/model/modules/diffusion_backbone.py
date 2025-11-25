@@ -490,11 +490,10 @@ class DiffusionModule(nn.Module):
     def __init__(
         self,
         sigma_coord: float = 12.0,
-        c_z: int = 128,
         c_token: int = 768,
         c_atom: int = 128,
         c_s: int = 384,
-        c_s_inputs: int = 449,
+        c_z: int = 128,
         transformer: dict[str, int] = {"num_blocks": 24, "num_heads": 16},
         dropout: float = 0.0,
         blocks_per_ckpt: Optional[int] = None,
@@ -507,7 +506,6 @@ class DiffusionModule(nn.Module):
             c_atom (int, optional): feature channel of atom. Defaults to 128.
             c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
             c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128.
-            c_s_inputs (int, optional): hidden dim [for single input embedding]. Defaults to 449.
             transformer (dict[str, int], optional): configs in DiffusionTransformer. Defaults to {"n_blocks": 24, "n_heads": 16}.
             dropout (float, optional): dropout probability for attention weights and transition block. Defaults to 0.0.
             blocks_per_ckpt: number of atom_encoder/transformer/atom_decoder blocks in each activation checkpoint
@@ -521,7 +519,6 @@ class DiffusionModule(nn.Module):
         self.sigma_coord = sigma_coord
         self.c_token = c_token
         self.c_atom = c_atom
-        self.c_s_inputs = c_s_inputs
         self.c_s = c_s
         self.c_z = c_z
 
@@ -626,11 +623,6 @@ class DiffusionModule(nn.Module):
         # [..., 1, N_token, N_token]
 
         # Average coordinates per token
-        print("s")
-        print("r_noisy", r_noisy.shape)
-        print("atom_mask", atom_mask.shape)
-        print("atom_to_token_idx", atom_to_token_idx.shape)
-        print("n_token", n_token)
         a_token = self.linear_no_bias_r_embed(
             average_atom_to_token(
                 x_atom=r_noisy,  # [...N_sample, N_atom, 3]
@@ -654,11 +646,6 @@ class DiffusionModule(nn.Module):
         z = z.unsqueeze(-4)
         z = z * pair_mask[..., None]
 
-        print("going into diffusion transformer got following shapes:")
-        print("a_token", a_token.shape)
-        print("s", s.shape)
-        print("z", z.shape)
-        print("pair_mask", pair_mask.shape)
         a_token = self.diffusion_transformer(a=a_token, s=s, z=z, pair_mask=pair_mask)
         a_token = a_token * token_mask[..., None]
         a_token = self.layernorm_a(a_token)

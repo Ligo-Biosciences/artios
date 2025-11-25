@@ -658,16 +658,20 @@ class DiffusionModule(nn.Module):
         )  # [..., N_sample, N_atom, c_atom]
 
         # Break symmetry in the backbone atoms with atom level information
-        q_atom = q_atom + self.linear_no_bias_f(
-            torch.cat(
-                [
-                    input_feature_dict[name]
-                    .reshape(*batch_shape, n_atom, self.atom_input_feature[name])
-                    .to(q_atom.dtype)
-                    for name in self.atom_input_feature
-                ],
-                dim=-1,
-            )
+        q_atom = q_atom + expand_at_dim(
+            self.linear_no_bias_f(
+                torch.cat(
+                    [
+                        input_feature_dict[name]
+                        .reshape(*batch_shape, n_atom, self.atom_input_feature[name])
+                        .to(q_atom.dtype)
+                        for name in self.atom_input_feature
+                    ],
+                    dim=-1,
+                )
+            ),
+            dim=-3,
+            n=N_sample,
         )
 
         return self.readout(q_atom)

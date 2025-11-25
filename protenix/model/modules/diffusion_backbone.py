@@ -425,9 +425,9 @@ class DiffusionConditioning(nn.Module):
         z = z_target + z_atom + z_motif
 
         # Add token bonds to pair embedding
-        z = z + self.token_bonds_embed(
-            input_feature_dict["token_bonds"].unsqueeze(-1)
-        )  # [..., N_token, N_token, c_z]
+        # z = z + self.token_bonds_embed(
+        #     input_feature_dict["token_bonds"].unsqueeze(-1)
+        # )  # [..., N_token, N_token, c_z]
 
         ### Relative position encodings
         # Concatenate z_init with relative position encoding and embed (Line 1)

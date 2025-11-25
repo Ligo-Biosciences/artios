@@ -113,7 +113,7 @@ model_configs = {
     # Model
     "c_s": 256,  # 192
     "c_z": 128,  # 64
-    # "c_s_inputs": 256,  # c_s_inputs == c_token + 32
+    "c_s_inputs": 256,  # c_s_inputs == c_token + 32
     "c_atom": 256,  # 64
     "c_atompair": 16,  # 16
     "c_token": 768,  # 192

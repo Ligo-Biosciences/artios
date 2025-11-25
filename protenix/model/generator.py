@@ -14,6 +14,8 @@ from protenix.model.utils import (
     noise_w_flow_matching,
 )
 
+# TODO: the timestep samplers are better suited as dataclasses
+
 
 class TrainingTimestepSampler:
     """Sample timesteps using a mixture of Beta(alpha,beta) and Uniform(0,1) distributions.

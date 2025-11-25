@@ -230,7 +230,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/trousers_train.csv",
             ),
-            "pdb_list": "",
+            "pdb_list": ["af-a0a0d2yk69-f1", "af-a0a3d3q4w2-f1", "af-a0a3a5v9n6-f1"],
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),

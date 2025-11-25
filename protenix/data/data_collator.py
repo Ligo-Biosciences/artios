@@ -90,25 +90,25 @@ class DataCollatorWithPadding:
                 - (optional) cropped_atom_arrays: List of AtomArrays
                 - (optional) cropped_token_arrays: List of TokenArrays
         """
-        import time
+        # import time
 
-        t0 = time.time()
+        # t0 = time.time()
 
         atom_padding_length = self._get_atom_padding_length(batch)
         token_padding_length = self._get_token_padding_length(batch)
-        t1 = time.time()
+        # t1 = time.time()
 
         padded_batch = self._pad_batch(batch, atom_padding_length, token_padding_length)
-        t2 = time.time()
+        # t2 = time.time()
 
         collated = {}
         for dict_key in ["input_feature_dict", "label_dict", "basic"]:
             collated[dict_key] = self._collate_dicts(dict_key, padded_batch)
-        t3 = time.time()
+        # t3 = time.time()
 
-        print(
-            f"Collate timing - get_pad_len: {t1-t0:.3f}s, pad_batch: {t2-t1:.3f}s, collate: {t3-t2:.3f}s"
-        )
+        # print(
+        #     f"Collate timing - get_pad_len: {t1-t0:.3f}s, pad_batch: {t2-t1:.3f}s, collate: {t3-t2:.3f}s"
+        # )
 
         # Add optional atom and token arrays if requested
         if self.return_atom_token_arrays:

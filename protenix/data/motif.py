@@ -384,7 +384,7 @@ class MotifMaker:
             if np.random.rand() > self.whole_sidechain_prob:
                 # Partial residue
                 partial_mask = self._get_partial_residue_motif_mask(
-                    atom_array, residue_mask, in_sphere_mask=atom_in_sphere_mask
+                    atom_array, residue_mask, in_sphere_mask=atom_in_sphere
                 )
                 is_motif[partial_mask > 0] = 1
             else:

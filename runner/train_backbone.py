@@ -885,7 +885,12 @@ class ArtiosBackboneTrainer(object):
             if DIST_WRAPPER.rank == 0:
                 self.neptune_run.log_metrics({"grad_norm": total_norm}, step=self.step)
 
-    def save_training_sample(self, batch: dict, motif_as_b_factor: bool = True):
+    def save_training_sample(
+        self,
+        batch: dict,
+        motif_as_b_factor: bool = False,
+        save_true_motif: bool = False,
+    ):
         """Saves a training sample to the training samples directory."""
         arrays = batch["cropped_atom_arrays"]
         for idx, atom_array in enumerate(arrays):
@@ -895,6 +900,12 @@ class ArtiosBackboneTrainer(object):
             save_structure(
                 os.path.join(self.training_samples_dir, f"{pdb_id}.cif"), atom_array
             )
+            if save_true_motif:
+                motif_array = atom_array[atom_array.is_motif > 0]
+                save_structure(
+                    os.path.join(self.training_samples_dir, f"{pdb_id}_motif.cif"),
+                    motif_array,
+                )
 
     def save_outputs(
         self,

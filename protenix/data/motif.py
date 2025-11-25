@@ -96,10 +96,16 @@ class MotifMaker:
         Returns:
             AtomArray: The same atom array with is_motif annotation added (int mask)
         """
+        # TODO: delete this check once we have pocket annotations for the PDB
+        has_pocket_id = "pocket_id" in atom_array.get_annotation_categories()
         # Generate motif mask
-        if atom_array.is_ligand.any() and np.random.rand() < self.ligand_motif_prob:
+        if np.random.rand() < self.ligand_motif_prob and atom_array.is_ligand.any():
             is_motif_mask = self._generate_ligand_motif_mask(atom_array)
-        elif atom_array.pocket_id.any() and np.random.rand() < self.pocket_motif_prob:
+        elif (
+            has_pocket_id
+            and np.random.rand() < self.pocket_motif_prob
+            and atom_array.pocket_id.any()
+        ):
             is_motif_mask = self._generate_pocket_motif_mask(atom_array)
         else:
             is_motif_mask = self._generate_chain_motif_mask(atom_array)

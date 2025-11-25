@@ -384,7 +384,7 @@ class MotifMaker:
             if np.random.rand() > self.whole_sidechain_prob:
                 # Partial residue
                 partial_mask = self._get_partial_residue_motif_mask(
-                    atom_array, residue_mask, in_sphere_mask=atoms_in_sphere
+                    atom_array, residue_mask, in_sphere_mask=atoms_in_sphere_mask
                 )
                 is_motif[partial_mask > 0] = 1
             else:
@@ -424,9 +424,18 @@ class MotifMaker:
 
         # Pick seed atom
         p = np.random.rand()
-        residue_atoms_in_sphere = residue_mask & in_sphere_mask
-        if p < self.sidechain_seed_is_in_sphere_prob and residue_atoms_in_sphere.any():
-            seed_atom = np.random.choice(residue_atoms_in_sphere)
+        residue_indices = np.where(residue_mask)[0]
+        local_in_sphere_mask = in_sphere_mask[residue_indices]
+        local_indices_in_sphere = np.where(local_in_sphere_mask)[0]
+
+        # Filter to valid graph nodes (atoms with bonds)
+        graph_node_set = set(graph_nodes)
+        valid_seed_atoms = [
+            idx for idx in local_indices_in_sphere if idx in graph_node_set
+        ]
+
+        if p < self.sidechain_seed_is_in_sphere_prob and valid_seed_atoms:
+            seed_atom = np.random.choice(valid_seed_atoms)
         elif (
             p < self.sidechain_seed_is_in_sphere_prob + self.sidechain_seed_is_tip_prob
         ):

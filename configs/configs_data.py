@@ -52,7 +52,7 @@ default_weighted_pdb_configs = {
     },
     "cropping_configs": {
         "method_weights": ListValue(
-            [0.0, 0.1, 0.4, 0.5]
+            [0.0, 0.5, 0.5, 0.0]
         ),  # Legacy: [0.0, 0.5, 0.5] # AF3: [0.2, 0.4, 0.4]
         "crop_size": GlobalConfigValue("train_crop_size"),
     },
@@ -72,7 +72,7 @@ default_distillation_configs = {
     },
     "cropping_configs": {
         "method_weights": ListValue(
-            [0.0, 0.1, 0.9, 0.0]
+            [0.0, 0.1, 0.0, 0.9]
         ),  # Legacy: [0.0, 0.5, 0.5] # AF3: [0.2, 0.4, 0.4]
         "crop_size": GlobalConfigValue("train_crop_size"),
     },

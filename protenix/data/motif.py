@@ -80,6 +80,7 @@ class MotifMaker:
         self.pocket_score_threshold = pocket_score_threshold
         self.pocket_n_neighbours = pocket_n_neighbours
         self.sidechain_seed_is_tip_prob = sidechain_seed_is_tip_prob
+        self.sidechain_seed_is_in_sphere_prob = sidechain_seed_is_in_sphere_prob
         self.sidechain_bfs_depth_prob = sidechain_bfs_depth_prob
         self.residue_inclusion_prob = residue_inclusion_prob
         self.r_min = r_min
@@ -381,7 +382,7 @@ class MotifMaker:
             if np.random.rand() > self.whole_sidechain_prob:
                 # Partial residue
                 partial_mask = self._get_partial_residue_motif_mask(
-                    atom_array, residue_mask
+                    atom_array, residue_mask, in_sphere_mask=atom_in_sphere_mask
                 )
                 is_motif[partial_mask > 0] = 1
             else:
@@ -391,7 +392,10 @@ class MotifMaker:
         return is_motif
 
     def _get_partial_residue_motif_mask(
-        self, atom_array: AtomArray, residue_mask: np.ndarray
+        self,
+        atom_array: AtomArray,
+        residue_mask: np.ndarray,
+        in_sphere_mask: np.ndarray,
     ) -> np.ndarray:
         """
         Gets partial residue motif mask using BFS on the residue bond graph.
@@ -399,7 +403,7 @@ class MotifMaker:
         Args:
             atom_array (AtomArray): Full atom array
             residue_mask (np.ndarray): Boolean mask indicating which atoms belong to the residue
-
+            in_sphere_mask (np.ndarray | None, optional): Boolean mask indicating which atoms are in the sphere.
         Returns:
             np.ndarray: Integer mask (0/1) indicating which atoms of the residue are in the motif
         """
@@ -417,19 +421,25 @@ class MotifMaker:
             return partial_motif_mask
 
         # Pick seed atom
-        if np.random.rand() < self.sidechain_seed_is_tip_prob:
-            tip_atom = graph_nodes[
+        p = np.random.rand()
+        residue_atoms_in_sphere = residue_mask & in_sphere_mask
+        if p < self.sidechain_seed_is_in_sphere_prob and residue_atoms_in_sphere.any():
+            seed_atom = np.random.choice(residue_atoms_in_sphere)
+        elif (
+            p < self.sidechain_seed_is_in_sphere_prob + self.sidechain_seed_is_tip_prob
+        ):
+            seed_atom = graph_nodes[
                 -1
             ]  # TODO: I don't think the last node in the graph is neccessarily the tip
         else:
-            tip_atom = np.random.choice(graph_nodes)
+            seed_atom = np.random.choice(graph_nodes)
 
         # Pick depth
         num_bonds = np.random.geometric(self.sidechain_bfs_depth_prob) - 1
 
         # Get atoms within num_bonds of seed
         motif_atom_ids = nx.single_source_shortest_path_length(
-            G_res, tip_atom, cutoff=num_bonds
+            G_res, seed_atom, cutoff=num_bonds
         )
         motif_atom_ids = list(motif_atom_ids.keys())
 

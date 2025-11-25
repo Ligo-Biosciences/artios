@@ -27,7 +27,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "PyYaml",
     "scipy",
@@ -62,6 +62,7 @@ dependencies = [
     "ray>=2.48.0",
     "polars>=1.35.2",
     "rapidgzip>=0.15.2",
+    "beartype>=0.22.6",
 ]
 
 [project.optional-dependencies]
@@ -158,4 +159,5 @@ ignore_missing_imports = true
 [dependency-groups]
 dev = [
     "ipykernel>=6.30.1",
+    "ty>=0.0.1a27",
 ]

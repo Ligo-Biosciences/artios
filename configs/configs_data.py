@@ -196,7 +196,7 @@ data_configs = {
         # "token_bin_ends": ListValue([440, 600]),
     },
     "train_sets": ListValue(
-        ["trousers_train"]  # weightedPDB_before2109_wopb_nometalc_0925"]
+        ["weightedPDB_before2109_wopb_nometalc_0925"]
     ),  # "trousers_train"
     "train_sampler": {
         "train_sample_weights": ListValue([1.0]),

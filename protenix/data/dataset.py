@@ -639,12 +639,6 @@ class BaseSingleDataset(Dataset):
         tokenizer = AtomArrayTokenizer(cropped_atom_array)
         cropped_token_array = tokenizer.get_token_array()
 
-        # temp: save filtered structure
-        # save_structure(
-        #     self.motif_dir / f"{bioassembly_dict['pdb_id']}_filtered.cif",
-        #     cropped_atom_array,
-        # )
-
         t4 = time.time()
         feat, label, label_full = self.get_feature_and_label(
             idx=idx,

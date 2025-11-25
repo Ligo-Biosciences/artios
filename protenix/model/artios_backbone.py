@@ -24,7 +24,7 @@ class ArtiosBackbone(nn.Module):
         # self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
 
         self.timestep_sampler = TrainingTimestepSampler(
-            **configs.train_timestep_sampler.coord
+            **configs.train_timestep_sampler
         )
 
         self.inference_timestep_scheduler = LaProteinaCoordScheduler(

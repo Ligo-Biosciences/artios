@@ -887,8 +887,7 @@ class ArtiosBackboneTrainer(object):
 
     def save_training_sample(self, batch: dict, motif_as_b_factor: bool = True):
         """Saves a training sample to the training samples directory."""
-        print("the keys to save training sample are: ", batch.keys())
-        arrays = batch["cropped_atom_array"]
+        arrays = batch["cropped_atom_arrays"]
         for idx, atom_array in enumerate(arrays):
             pdb_id = batch["basic"]["pdb_id"][idx]
             if motif_as_b_factor:

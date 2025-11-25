@@ -990,6 +990,9 @@ class BaseSingleDataset(Dataset):
                     num_atoms_in_residue
                 )
 
+        # TODO: This is to please the tokenizer for now.
+        new_array.chain_id = new_array.asym_id_int
+
         # Update ref_space_uid
         new_array = AddAtomArrayAnnot.add_ref_space_uid(new_array)
 

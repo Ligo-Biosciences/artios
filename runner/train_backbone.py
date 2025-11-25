@@ -892,7 +892,9 @@ class ArtiosBackboneTrainer(object):
             pdb_id = batch["basic"]["pdb_id"][idx]
             if motif_as_b_factor:
                 atom_array.b_factor = atom_array.is_motif
-            save_structure(self.training_samples_dir / f"{pdb_id}.cif", atom_array)
+            save_structure(
+                os.path.join(self.training_samples_dir, f"{pdb_id}.cif"), atom_array
+            )
 
     def save_outputs(
         self,

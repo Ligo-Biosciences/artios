@@ -26,7 +26,8 @@ default_test_configs = {
         "method_weights": [
             0.0,  # ContiguousCropping
             0.0,  # SpatialCropping
-            1.0,  # SpatialInterfaceCropping
+            0.5,  # SpatialInterfaceCropping (legacy: 1.0)
+            0.5,  # PocketCropping
         ],
         "crop_size": GlobalConfigValue("test_crop_size"),  # -1
     },
@@ -50,7 +51,9 @@ default_weighted_pdb_configs = {
         "force_recompute_weight": True,
     },
     "cropping_configs": {
-        "method_weights": ListValue([0.0, 0.5, 0.5]),  # AF3: [0.2, 0.4, 0.4]
+        "method_weights": ListValue(
+            [0.0, 0.1, 0.4, 0.5]
+        ),  # Legacy: [0.0, 0.5, 0.5] # AF3: [0.2, 0.4, 0.4]
         "crop_size": GlobalConfigValue("train_crop_size"),
     },
     "sample_weight": 0.5,
@@ -141,9 +144,12 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": True,
     "binding_target_train_rate": 0.75,
+    "filter_unique_fragment_prob": 0.8,
+    "filter_unique_domain_prob": 0.1,
     "motif_training": {
-        "motif_train_rate": 1.0,
+        "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,
+        "pocket_motif_prob": 0.8,
         "whole_ligand_prob": 0.7,
         "whole_sidechain_prob": 0.2,
         "pocket_score_threshold": 0.18,
@@ -151,16 +157,21 @@ data_configs = {
         "sidechain_seed_is_tip_prob": 0.8,
         "sidechain_bfs_depth_prob": 0.5,
         "residue_inclusion_prob": 0.8,
+        "max_motif_residues": 15,
         "r_min": 4.0,
         "r_max": 5.0,
         "save_motifs_for_debugging": False,
     },
-    "bin_ends": ListValue([2112, 3008, 4000]),
     "padding": {
         "max_n_msa": 1,
         "max_n_template": 4,
         "max_n_pocket": 16,
-        "bin_ends": ListValue([2112, 3008, 4000]),
+        # all-atom mpnn training:
+        "atom_bin_ends": ListValue([2112, 3008, 4000]),
+        "token_bin_ends": ListValue([384]),
+        # motif scaffolding training:
+        # "atom_bin_ends": ListValue([1536, 1728]),
+        # "token_bin_ends": ListValue([440, 600]),
     },
     "train_sets": ListValue(["weightedPDB_before2109_wopb_nometalc_0925"]),
     "train_sampler": {
@@ -176,7 +187,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            "pdb_list": "",  # ["1s01", "1sr0"], # NOTE: sensitive to cases!
+            "pdb_list": "",  # ["1s01", "1sr0"],  # NOTE: sensitive to cases!
             "random_sample_if_failed": True,
             "max_n_token": -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,

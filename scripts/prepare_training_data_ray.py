@@ -1,16 +1,36 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+"""
+Generate bioassembly dictionaries and npz files for fast atom array loading at training time.
+
+Usage:
+    python scripts/prepare_training_data_ray.py \
+      --input-path <input_path> \
+      --output-csv <output_csv> \
+      --bio-output-dir <bio_output_dir> \
+      [--cluster-file <cluster_file>] \
+      [--distillation] \
+      [--n-cpu <n_cpu>]
+
+Arguments:
+    --input-path         Path to input directory containing .cif/.cif.gz files,
+                         OR a .txt file listing MMCIF file paths (required)
+    --output-csv         Path to output CSV file where sample indices will be saved (required)
+    --bio-output-dir     Directory where bioassembly outputs (.pkl.gz and .npz) will be saved (required)
+    --cluster-file       Path to cluster txt file (optional)
+    --distillation       Use the 'Distillation' dataset setting (optional flag)
+    --n-cpu             Number of worker processes for parallel processing (default: 1)
+
+python artios-all-atom/scripts/prepare_training_data_ray.py \
+    -i af3-dev/release_data/posebusters_mmcif \
+    -o af3-dev/release_data/indices/full_mmcif.csv \
+    -b af3-dev/release_data/posebusters_bioassembly \
+    -c af3-dev/release_data/clusters-by-entity-40.txt \
+    -n 220
+
+Note:
+    Ray might complain about not having enough object store memory. If you have sudo privileges,
+    the following command should fix it:
+        sudo mount -o remount,size=600G /dev/shm
+"""
 
 import argparse
 import csv
@@ -23,7 +43,7 @@ import ray
 from tqdm import tqdm
 
 from protenix.data.data_pipeline import DataPipeline
-from protenix.utils.file_io import dump_gzip_pickle
+from protenix.utils.file_io import dump_atomarray_to_npz, dump_gzip_pickle
 
 
 def gen_a_bioassembly_data(
@@ -56,7 +76,9 @@ def gen_a_bioassembly_data(
     if sample_indices_list and bioassembly_dict:
         pdb_id = bioassembly_dict["pdb_id"]
         # save to output dir
+        atom_array = bioassembly_dict.pop("atom_array")
         dump_gzip_pickle(bioassembly_dict, bioassembly_output_dir / f"{pdb_id}.pkl.gz")
+        dump_atomarray_to_npz(atom_array, bioassembly_output_dir / f"{pdb_id}.npz")
         return sample_indices_list
 
 
@@ -81,8 +103,12 @@ def gen_data_from_mmcifs(
 
     # Create a remote version of gen_a_bioassembly_data
     @ray.remote
-    def gen_a_bioassembly_data_remote(mmcif, bioassembly_output_dir, cluster_file, distillation):
-        return gen_a_bioassembly_data(mmcif, bioassembly_output_dir, cluster_file, distillation)
+    def gen_a_bioassembly_data_remote(
+        mmcif, bioassembly_output_dir, cluster_file, distillation
+    ):
+        return gen_a_bioassembly_data(
+            mmcif, bioassembly_output_dir, cluster_file, distillation
+        )
 
     # Submit tasks to Ray
     futures = [
@@ -96,12 +122,16 @@ def gen_data_from_mmcifs(
     all_sample_indices_list = []
     pbar = tqdm(total=len(futures), desc="Processing mmCIF files")
     while futures:
-        done_id, futures = ray.wait(futures, timeout=1.0)  # Add timeout for progress updates
-        if done_id:
-            result = ray.get(done_id[0])
-            if result:
-                all_sample_indices_list.append(result)
-            pbar.update(1)
+        # num_returns=-1 gets ALL completed tasks, not just one
+        done_ids, futures = ray.wait(
+            futures, num_returns=min(len(futures), 1000), timeout=0.5
+        )
+        if done_ids:
+            results = ray.get(done_ids)
+            for result in results:
+                if result:
+                    all_sample_indices_list.append(result)
+            pbar.update(len(done_ids))
     pbar.close()
 
     # Shutdown Ray

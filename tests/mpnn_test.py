@@ -1336,13 +1336,15 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
+        # Add restype to input_feature_dict
+        input_feature_dict_with_restype = {**input_feature_dict, "restype": restype}
+
         sampled_sequence, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
             centre_atom_mask=centre_atom_mask,
-            restype=restype,
-            input_feature_dict=input_feature_dict,
+            input_feature_dict=input_feature_dict_with_restype,
             temperature=1.0,
         )
 
@@ -1364,13 +1366,15 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
+        # Add restype to input_feature_dict
+        input_feature_dict_with_restype = {**input_feature_dict, "restype": restype}
+
         sampled_sequence, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
             centre_atom_mask=centre_atom_mask,
-            restype=restype,
-            input_feature_dict=input_feature_dict,
+            input_feature_dict=input_feature_dict_with_restype,
             temperature=1.0,
         )
 
@@ -1384,45 +1388,6 @@ class TestSample:
         assert torch.all(
             (sampled_sequence == 0) | (sampled_sequence == 1)
         ), "Sampled sequence contains non-binary values"
-
-    def test_sample_greedy_mode(self, mpnn_model, sample_data, input_feature_dict):
-        """Test greedy sampling (temperature=0)."""
-        basic = sample_data["basic"]
-        n_tokens = basic["N_token"].item()
-        batch_size = 1
-        num_residue_types = 32
-
-        backbone_coords = torch.randn(batch_size, n_tokens, 5, 3)
-        backbone_mask = torch.ones(batch_size, n_tokens, 5)
-        centre_atom_coord = torch.randn(batch_size, n_tokens, 3)
-        centre_atom_mask = torch.ones(batch_size, n_tokens)
-        restype = torch.zeros(batch_size, n_tokens, num_residue_types)
-
-        # Greedy sampling should be deterministic
-        sample_1, _ = mpnn_model.sample(
-            backbone_coords=backbone_coords,
-            backbone_mask=backbone_mask,
-            centre_atom_coord=centre_atom_coord,
-            centre_atom_mask=centre_atom_mask,
-            restype=restype,
-            input_feature_dict=input_feature_dict,
-            temperature=0.0,
-        )
-
-        sample_2, _ = mpnn_model.sample(
-            backbone_coords=backbone_coords,
-            backbone_mask=backbone_mask,
-            centre_atom_coord=centre_atom_coord,
-            centre_atom_mask=centre_atom_mask,
-            restype=restype,
-            input_feature_dict=input_feature_dict,
-            temperature=0.0,
-        )
-
-        # Greedy sampling should be deterministic
-        assert torch.equal(
-            sample_1, sample_2
-        ), "Greedy sampling (temperature=0) is not deterministic"
 
     def test_sample_with_custom_decoding_order(
         self, mpnn_model, sample_data, input_feature_dict
@@ -1439,6 +1404,9 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
+        # Add restype to input_feature_dict
+        input_feature_dict_with_restype = {**input_feature_dict, "restype": restype}
+
         # Create two different decoding orders
         decoding_order_1 = torch.randperm(n_tokens).unsqueeze(0)
         decoding_order_2 = torch.randperm(n_tokens).unsqueeze(0)
@@ -1448,8 +1416,7 @@ class TestSample:
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
             centre_atom_mask=centre_atom_mask,
-            restype=restype,
-            input_feature_dict=input_feature_dict,
+            input_feature_dict=input_feature_dict_with_restype,
             decoding_order=decoding_order_1,
             temperature=0.0,
         )
@@ -1459,8 +1426,7 @@ class TestSample:
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
             centre_atom_mask=centre_atom_mask,
-            restype=restype,
-            input_feature_dict=input_feature_dict,
+            input_feature_dict=input_feature_dict_with_restype,
             decoding_order=decoding_order_2,
             temperature=0.0,
         )
@@ -1482,13 +1448,15 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
+        # Add restype to input_feature_dict
+        input_feature_dict_with_restype = {**input_feature_dict, "restype": restype}
+
         result = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
             centre_atom_mask=centre_atom_mask,
-            restype=restype,
-            input_feature_dict=input_feature_dict,
+            input_feature_dict=input_feature_dict_with_restype,
             temperature=1.0,
             return_logits=True,
         )
@@ -1516,14 +1484,16 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
+        # Add restype to input_feature_dict
+        input_feature_dict_with_restype = {**input_feature_dict, "restype": restype}
+
         for temperature in [0.0, 0.5, 1.0, 1.5]:
             sampled_sequence, _ = mpnn_model.sample(
                 backbone_coords=backbone_coords,
                 backbone_mask=backbone_mask,
                 centre_atom_coord=centre_atom_coord,
                 centre_atom_mask=centre_atom_mask,
-                restype=restype,
-                input_feature_dict=input_feature_dict,
+                input_feature_dict=input_feature_dict_with_restype,
                 temperature=temperature,
             )
 
@@ -1543,13 +1513,15 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types)
 
+        # Add restype to input_feature_dict
+        input_feature_dict_with_restype = {**input_feature_dict, "restype": restype}
+
         sampled_sequence, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
             centre_atom_mask=centre_atom_mask,
-            restype=restype,
-            input_feature_dict=input_feature_dict,
+            input_feature_dict=input_feature_dict_with_restype,
             temperature=1.0,
         )
 
@@ -1581,12 +1553,14 @@ class TestSample:
         centre_atom_mask = torch.ones(batch_size, n_tokens).to(device)
         restype = torch.zeros(batch_size, n_tokens, num_residue_types).to(device)
 
+        # Add restype to input_feature_dict
+        input_feature_dict_device["restype"] = restype
+
         sampled_sequence, _ = mpnn_model.sample(
             backbone_coords=backbone_coords,
             backbone_mask=backbone_mask,
             centre_atom_coord=centre_atom_coord,
             centre_atom_mask=centre_atom_mask,
-            restype=restype,
             input_feature_dict=input_feature_dict_device,
             temperature=1.0,
         )

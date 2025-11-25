@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any, Union
 
 import lz4.frame
+import numpy as np
 import pandas as pd
+from biotite.structure import AtomArray, BondList
 
 from protenix.utils.logger import get_logger
 from protenix.utils.torch_utils import map_values_to_list
@@ -115,6 +117,52 @@ def dump_gzip_pickle(data: Any, pkl: Union[str, Path]):
     """
     with gzip.open(pkl, "wb") as f:
         pickle.dump(data, f)
+
+
+def dump_atomarray_to_npz(atom_array: AtomArray, npz_path: Union[str, Path]) -> None:
+    """
+    Save AtomArray to an NPZ file.
+    This can be saved more efficiently than pickling the whole AtomArray.
+
+    Args:
+        atom_array (AtomArray): The AtomArray to be saved.
+        npz_path (Union[str, Path]): The output NPZ file path.
+    """
+    atom_array_dict = {
+        "coord": atom_array.coord,
+        "bonds": atom_array.bonds.as_array(),
+    }
+
+    # Extract all annotation categories
+    for category in atom_array.get_annotation_categories():
+        atom_array_dict[category] = atom_array.get_annotation(category)
+
+    np.savez(npz_path, **atom_array_dict)
+
+
+def load_atomarray_from_npz(npz_path: Union[str, Path]) -> AtomArray:
+    """
+    Reconstruct AtomArray from NPZ file saved with dump_atomarray_to_npz.
+
+    Args:
+        npz_path (Union[str, Path]): The path to the NPZ file containing
+            AtomArray data.
+
+    Returns:
+        AtomArray: The reconstructed AtomArray with coordinates,
+            bonds, and all annotations.
+    """
+    data = dict(np.load(npz_path, allow_pickle=True))
+    n_atoms = len(data["coord"])
+    atom_array = AtomArray(length=n_atoms)
+    atom_array.coord = data.pop("coord")
+    atom_array.bonds = BondList(n_atoms, bonds=data.pop("bonds"))
+
+    # Restore all annotations
+    for category, values in data.items():
+        atom_array.set_annotation(category, values)
+
+    return atom_array
 
 
 def load_lz4_pickle(pkl: Union[str, Path]) -> Any:

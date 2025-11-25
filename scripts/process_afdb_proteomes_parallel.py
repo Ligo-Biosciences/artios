@@ -15,6 +15,12 @@ Expected workflow:
 
 gsutil -m cp gs://public-datasets-deepmind-alphafold-v4/proteomes/*v4.tar downloads/
 
+For randomized download:
+gsutil ls gs://public-datasets-deepmind-alphafold-v4/proteomes/*v4.tar | shuf | gsutil -m cp -I downloads/
+
+For reverse order:
+gsutil ls gs://public-datasets-deepmind-alphafold-v4/proteomes/*v4.tar | tac | gsutil -m cp -I downloads/
+
 # Terminal 2: Process as they complete
 python process_afdb_proteomes_parallel.py \
 --parquet clustered_afdb.parquet \
@@ -83,8 +89,13 @@ def process_tar_file(
                 and extract_uniprot_id(m.name) in uniprot_ids
             ]
             for member in cif_members:
-                tar.extract(member, path=proteome_dir)
-                stats["extracted"] += 1
+                try:
+                    tar.extract(member, path=proteome_dir)
+                    stats["extracted"] += 1
+                except Exception as e:
+                    logging.error(
+                        f"Error extracting {member.name} from {proteome_name}: {e}"
+                    )
 
         # Process CIF files: filter by UniProt ID, move to output (keep compressed)
         for cif_gz_path in proteome_dir.rglob("*.cif.gz"):

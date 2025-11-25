@@ -31,6 +31,7 @@ from torch.utils.data import Dataset
 from protenix.common.constants import BACKBONE_DEFS, EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
+from protenix.data.filter import Filter
 from protenix.data.motif import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.parser import AddAtomArrayAnnot
@@ -48,7 +49,7 @@ from protenix.utils.torch_utils import dict_to_tensor
 logger = get_logger(__name__)
 
 
-SLOW_STEP_THRESHOLD = 60.0  # seconds
+SLOW_STEP_THRESHOLD = 1.0  # seconds
 
 
 class BaseSingleDataset(Dataset):
@@ -117,6 +118,13 @@ class BaseSingleDataset(Dataset):
         # Binding target configs
         self.train_with_binding_target = kwargs.get("train_with_binding_target", False)
         self.binding_target_train_rate = kwargs.get("binding_target_train_rate", 0.75)
+
+        # Fragment and domain filter configs
+        self.filter_unique_fragment_prob = kwargs.get(
+            "filter_unique_fragment_prob", 0.8
+        )
+        self.filter_unique_domain_prob = kwargs.get("filter_unique_domain_prob", 0.1)
+        assert self.filter_unique_fragment_prob + self.filter_unique_domain_prob <= 1
 
         self.error_dir = kwargs.get("error_dir", None)
         if self.error_dir is not None:
@@ -363,8 +371,7 @@ class BaseSingleDataset(Dataset):
         if self.bioassembly_dict_dir is not None:
             bioassembly_dict_fpath = os.path.join(
                 self.bioassembly_dict_dir,
-                sample_indice.pdb_id
-                + ".pkl.pkl.lz4",  # .pkl.gz   # TODO: the extra pkl should be deleted
+                sample_indice.pdb_id + ".pkl.gz",  # .pkl.gz
             )
         else:
             bioassembly_dict_fpath = None
@@ -484,6 +491,12 @@ class BaseSingleDataset(Dataset):
 
         return atom_array
 
+    @staticmethod
+    def _filter_for_unique_id(atom_array: AtomArray, id_type: str) -> AtomArray:
+        """Filter for a unique id."""
+        id = np.random.choice(np.unique(atom_array.get_annotation(id_type)))
+        return atom_array[atom_array.get_annotation(id_type) == id]
+
     @profile_function("dataset.process_one")
     def process_one(
         self, idx: int, return_atom_token_array: bool = False
@@ -558,6 +571,23 @@ class BaseSingleDataset(Dataset):
             )
         timings["preprocessing"] = time.time() - t1
 
+        p = np.random.rand()
+        # Filter for a unique fragment/domain. Used for Distillation data.
+        if p < self.filter_unique_fragment_prob:
+            # apply fragment filter
+            bioassembly_dict["atom_array"] = self._filter_for_unique_id(
+                atom_array=bioassembly_dict["atom_array"], id_type="fragment_id"
+            )
+            tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
+            bioassembly_dict["token_array"] = tokenizer.get_token_array()
+        elif p < self.filter_unique_fragment_prob + self.filter_unique_domain_prob:
+            # apply domain filter
+            bioassembly_dict["atom_array"] = self._filter_for_unique_id(
+                atom_array=bioassembly_dict["atom_array"], id_type="domain_id"
+            )
+            tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
+            bioassembly_dict["token_array"] = tokenizer.get_token_array()
+
         # Crop
         t2 = time.time()
         (
@@ -583,28 +613,29 @@ class BaseSingleDataset(Dataset):
         timings["assign_binding_target"] = time.time() - t3
 
         # motif work
-        # cropped_atom_array = self._get_motif(
-        #     atom_array=cropped_atom_array,
-        # )
+        cropped_atom_array = self._get_motif(
+            atom_array=cropped_atom_array,
+        )
 
-        # self._save_motif(
-        #     atom_array=cropped_atom_array,
-        #     pdb_id=bioassembly_dict["pdb_id"],
-        # )
+        self._save_motif(
+            atom_array=cropped_atom_array,
+            pdb_id=bioassembly_dict["pdb_id"],
+        )
 
-        # cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
+        cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
 
-        # cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
-        #     cropped_atom_array
-        # )
+        cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
+            cropped_atom_array,
+            motif_training=self.motif_configs["motif_train_rate"] > 0.0,
+        )
 
-        # cropped_atom_array = self._update_ids_to_unindex_motif_residues(
-        #     cropped_atom_array
-        # )
+        cropped_atom_array = self._update_ids_to_unindex_motif_residues(
+            cropped_atom_array
+        )
 
-        # cropped_atom_array = self._update_centre_atom_mask_to_include_motif(
-        #     cropped_atom_array
-        # )
+        cropped_atom_array = self._update_centre_atom_mask_to_include_motif(
+            cropped_atom_array
+        )
 
         tokenizer = AtomArrayTokenizer(cropped_atom_array)
         cropped_token_array = tokenizer.get_token_array()
@@ -846,7 +877,7 @@ class BaseSingleDataset(Dataset):
         changes to motif generation algorithm.
         """
         # temp motif dir
-        self.motif_dir = Path(self.mmcif_dir).parent.parent.parent / "motifs"
+        self.motif_dir = Path(self.bioassembly_dict_dir).parent.parent.parent / "motifs"
         os.makedirs(self.motif_dir, exist_ok=True)
 
         if (
@@ -1421,6 +1452,8 @@ def get_datasets(
 
     Returns:
         A tuple containing the training dataset and a dictionary of testing datasets.
+
+    # TODO: this code needs to be re-factored a bit - the
     """
 
     def _get_dataset_param(config_dict, dataset_name: str, stage: str):
@@ -1437,6 +1470,12 @@ def get_datasets(
             "lig_atom_rename": config_dict.get("lig_atom_rename", False),
             "shuffle_mols": config_dict.get("shuffle_mols", False),
             "shuffle_sym_ids": config_dict.get("shuffle_sym_ids", False),
+            "filter_unique_fragment_prob": config_dict.get(
+                "filter_unique_fragment_prob", 0
+            ),
+            "filter_unique_domain_prob": config_dict.get(
+                "filter_unique_domain_prob", 0
+            ),
         }
 
     data_config = configs.data
@@ -1457,6 +1496,12 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
+        # dataset_param["filter_unique_fragment_prob"] = data_config.get(
+        #     "filter_unique_fragment_prob", 0.8
+        # )
+        # dataset_param["filter_unique_domain_prob"] = data_config.get(
+        #     "filter_unique_domain_prob", 0.1
+        # )
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
@@ -1490,7 +1535,6 @@ def get_datasets(
         dataset_param["motif_training"] = data_config.get("motif_training", {})
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
-        dataset_param["motif_training"] = data_config.get("motif_training", {})
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

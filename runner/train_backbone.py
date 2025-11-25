@@ -24,6 +24,7 @@ import numpy as np
 import rootutils
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 import torch.nn as nn
 from biotite.structure.io import save_structure
 from neptune_scale import Run
@@ -169,6 +170,7 @@ class ArtiosBackboneTrainer(object):
             f"Distributed environment: world size: {DIST_WRAPPER.world_size}, "
             + f"global rank: {DIST_WRAPPER.rank}, local rank: {DIST_WRAPPER.local_rank}"
         )
+        mp.set_start_method("spawn", force=True)
         self.use_cuda = torch.cuda.device_count() > 0
         if self.use_cuda:
             self.device = torch.device("cuda:{}".format(DIST_WRAPPER.local_rank))

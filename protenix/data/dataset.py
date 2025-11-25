@@ -514,7 +514,7 @@ class BaseSingleDataset(Dataset):
         import time
 
         timings = {}
-        # process_start = time.time()
+        process_start = time.time()
 
         t0 = time.time()
         (
@@ -611,6 +611,7 @@ class BaseSingleDataset(Dataset):
         )
         timings["assign_binding_target"] = time.time() - t3
 
+        tmotif = time.time()
         # motif work
         cropped_atom_array = self._get_motif(
             atom_array=cropped_atom_array,
@@ -638,6 +639,8 @@ class BaseSingleDataset(Dataset):
 
         tokenizer = AtomArrayTokenizer(cropped_atom_array)
         cropped_token_array = tokenizer.get_token_array()
+
+        timings["motif"] = time.time() - tmotif
 
         t4 = time.time()
         feat, label, label_full = self.get_feature_and_label(
@@ -727,17 +730,18 @@ class BaseSingleDataset(Dataset):
             data["cropped_token_array"] = cropped_token_array
 
         # Log if process_one took too long
-        # total_time = time.time() - process_start
-        # if total_time > SLOW_STEP_THRESHOLD:  # Log slow processing (> 1 second)
-        #     logger.warning(
-        #         f"SLOW process_one for idx={idx}, pdb_id={sample_indice.pdb_id}: "
-        #         f"{total_time:.2f}s - "
-        #         f"bioassembly={timings.get('get_bioassembly', 0):.3f}s, "
-        #         f"preprocess={timings.get('preprocessing', 0):.3f}s, "
-        #         f"crop={timings.get('crop', 0):.3f}s, "
-        #         f"features={timings.get('get_feature_and_label', 0):.3f}s, "
-        #         f"padding={timings.get('padding', 0):.3f}s"
-        #     )
+        total_time = time.time() - process_start
+        if total_time > SLOW_STEP_THRESHOLD:  # Log slow processing (> 1 second)
+            logger.warning(
+                f"SLOW process_one for idx={idx}, pdb_id={sample_indice.pdb_id}: "
+                f"{total_time:.2f}s - "
+                f"bioassembly={timings.get('get_bioassembly', 0):.3f}s, "
+                f"preprocess={timings.get('preprocessing', 0):.3f}s, "
+                f"motif={timings.get('motif', 0):.3f}s, "
+                f"crop={timings.get('crop', 0):.3f}s, "
+                f"features={timings.get('get_feature_and_label', 0):.3f}s, "
+                f"padding={timings.get('padding', 0):.3f}s"
+            )
 
         return data
 

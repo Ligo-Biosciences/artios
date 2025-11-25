@@ -21,16 +21,16 @@ from typing import Any, Optional, Union
 import biotite.structure.io as strucio
 import numpy as np
 import pandas as pd
-import torch
 from biotite.structure import AtomArray
 
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.parser import DistillationMMCIFParser, MMCIFParser
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.utils.cropping import CropData
-from protenix.utils.file_io import load_lz4_pickle
-
-torch.multiprocessing.set_sharing_strategy("file_system")
+from protenix.utils.file_io import (
+    load_atomarray_from_npz,
+    load_gzip_pickle,
+)
 
 
 class DataPipeline(object):
@@ -126,10 +126,16 @@ class DataPipeline(object):
         Raises:
             AssertionError: If the bioassembly dictionary file does not exist.
         """
-        assert os.path.exists(
-            bioassembly_dict_fpath
-        ), f"File not exists {bioassembly_dict_fpath}"
-        bioassembly_dict = load_lz4_pickle(bioassembly_dict_fpath)
+        bioassembly_dict_path = Path(bioassembly_dict_fpath)
+
+        assert (
+            bioassembly_dict_path.exists()
+        ), f"File not exists {bioassembly_dict_path}"
+        bioassembly_dict = load_gzip_pickle(bioassembly_dict_path)
+
+        # Load and add atom array to the bioassembly dict
+        npz_path = bioassembly_dict_path.with_suffix("").with_suffix(".npz")
+        bioassembly_dict["atom_array"] = load_atomarray_from_npz(npz_path)
 
         return bioassembly_dict
 
@@ -235,7 +241,7 @@ class DataPipeline(object):
         crop_size: int,
         msa_featurizer: Optional[MSAFeaturizer],
         template_featurizer: None,
-        method_weights: list[float] = [0.2, 0.4, 0.4],
+        method_weights: list[float] = [0.0, 0.1, 0.4, 0.5],
         contiguous_crop_complete_lig: bool = False,
         spatial_crop_complete_lig: bool = False,
         drop_last: bool = False,
@@ -251,7 +257,7 @@ class DataPipeline(object):
             msa_featurizer (MSAFeaturizer): Default to an empty replacement for msa featurizer.
             template_featurizer (None): Placeholder for the template featurizer.
             method_weights (list[float]): The weights corresponding to these three cropping methods:
-                                          ["ContiguousCropping", "SpatialCropping", "SpatialInterfaceCropping"].
+                                          ["ContiguousCropping", "SpatialCropping", "SpatialInterfaceCropping", "PocketCropping"].
             contiguous_crop_complete_lig (bool): Whether to crop the complete ligand in ContiguousCropping method.
             spatial_crop_complete_lig (bool): Whether to crop the complete ligand in SpatialCropping method.
             drop_last (bool): Whether to drop the last fragment in ContiguousCropping.

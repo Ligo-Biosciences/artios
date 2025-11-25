@@ -1,90 +1,97 @@
-"""Structural metrics calculation for protein structures."""
-
-import io
-from typing import Tuple
+from collections import Counter
 
 import biotite.structure as struc
-import biotite.structure.io.pdb as pdb
 import numpy as np
 
 
-class ProteinMetricsCalculator:
-    """A class for calculating various metrics for protein structures."""
+def compute_mean_sasa(atom_array: struc.AtomArray) -> float:
+    """
+    Calculate mean solvent accessible surface area (SASA) per residue.
 
-    @staticmethod
-    def structure_from_pdb_string(pdb_str: str) -> struc.AtomArray:
-        """Takes a PDB string and returns an AtomArray object.
+    Args:
+        atom_array: Biotite AtomArray structure
 
-        Args:
-            pdb_str: The contents of the pdb file
+    Returns:
+        Mean SASA across all residues
+    """
+    # Calculate atom-level SASA
+    atom_sasa = struc.sasa(atom_array, vdw_radii="Single")
+    return np.nanmean(atom_sasa)
 
-        Returns:
-            A new Biotite AtomArray parsed from the pdb contents.
-        """
-        pdb_file = pdb.PDBFile.read(io.StringIO(pdb_str))
-        structure = pdb.get_structure(pdb_file, extra_fields=["b_factor"])
-        return structure.get_array(0)  # get first model
 
-    @staticmethod
-    def calculate_radius_of_gyration(structure: struc.AtomArray) -> float:
-        """Calculate radius of gyration for a protein structure.
+def compute_radius_of_gyration(atom_array: struc.AtomArray) -> float:
+    """
+    Calculate radius of gyration (Rg).
 
-        Args:
-            structure: Biotite AtomArray object.
+    Args:
+        atom_array: Biotite AtomArray structure
 
-        Returns:
-            Radius of gyration in Angstroms.
-        """
-        # Get coordinates of all atoms
-        coords = structure.coord
+    Returns:
+        Radius of gyration in Angstroms
 
-        # Calculate center of mass
-        center = np.mean(coords, axis=0)
+    Notes:
+        This is not normalized.
+    """
+    coords = atom_array.coord
+    center = coords.mean(axis=0)
+    distances_squared = np.sum((coords - center) ** 2, axis=1)
+    rg = np.sqrt(np.mean(distances_squared))
+    return float(rg)
 
-        # Calculate radius of gyration
-        rg = np.sqrt(np.mean(np.sum((coords - center) ** 2, axis=1)))
-        return float(rg)
 
-    @staticmethod
-    def calculate_plddt_stats(structure: struc.AtomArray) -> Tuple[float, float]:
-        """Calculate mean and standard deviation of pLDDT scores.
+def compute_plddt_statistics(atom_array: struc.AtomArray) -> dict[str, float]:
+    """
+    Calculate comprehensive pLDDT statistics.
+    We access the pLDDT from the b_factor annotation.
 
-        Args:
-            structure: Biotite AtomArray object with b_factor field containing pLDDT.
+    Args:
+        atom_array: Biotite AtomArray structure
 
-        Returns:
-            Tuple of (mean_plddt, std_plddt).
-        """
-        plddt_scores = structure.b_factor
-        return float(np.mean(plddt_scores)), float(np.std(plddt_scores))
+    Returns:
+        Dictionary containing:
+            - mean: Mean pLDDT score
+            - median: Median pLDDT score
+            - std: Standard deviation of pLDDT scores
+            - top_80_mean: Mean of top 80% pLDDT scores (excludes bottom 20%)
+            - p25: 25th percentile
+            - p75: 75th percentile
+    """
+    plddt_scores = atom_array.b_factor
 
-    @staticmethod
-    def calculate_average_atom_sasa(
-        structure: struc.AtomArray, point_number: int = 10
-    ) -> float:
-        """Calculate average atom Solvent Accessible Surface Area.
+    # Basic statistics
+    mean_plddt = float(np.mean(plddt_scores))
+    median_plddt = float(np.median(plddt_scores))
+    std_plddt = float(np.std(plddt_scores))
 
-        Args:
-            structure: Biotite AtomArray object.
-            point_number: Number of points to use for the SASA calculation.
+    # Top 80% mean (excludes bottom 20%)
+    sorted_scores = np.sort(plddt_scores)
+    top_80_idx = int(len(sorted_scores) * 0.2)  # Start from 20th percentile
+    top_80_mean = float(np.mean(sorted_scores[top_80_idx:]))
 
-        Returns:
-            Average SASA in Angstroms squared.
-        """
-        atom_wise_sasa = struc.sasa(structure, point_number=point_number)
-        atom_wise_sasa = np.nan_to_num(
-            atom_wise_sasa, copy=False
-        )  # replace NaNs inplace
-        return float(np.mean(atom_wise_sasa))
+    # Percentiles
+    p25 = float(np.percentile(plddt_scores, 25))
+    p75 = float(np.percentile(plddt_scores, 75))
 
-    @staticmethod
-    def calculate_sequence_length(structure: struc.AtomArray) -> int:
-        """Calculate sequence length by counting CA atoms.
+    return {
+        "mean": mean_plddt,
+        "median": median_plddt,
+        "std": std_plddt,
+        "top_80_mean": top_80_mean,
+        "p25": p25,
+        "p75": p75,
+    }
 
-        Args:
-            structure: Biotite AtomArray object.
 
-        Returns:
-            Number of residues (CA atoms).
-        """
-        return len(structure[structure.atom_name == "CA"])
+def compute_sse(atom_array: struc.AtomArray) -> float:
+    """
+    Calculates the secondary structure splits.
+    """
+    sse_array = struc.annotate_sse(atom_array)
+    sse_counter = Counter(sse_array.tolist())
+
+    total_size = sse_counter.total()
+    return {
+        "alpha": sse_counter.get("a", 0) / total_size,
+        "beta": sse_counter.get("b", 0) / total_size,
+        "coil": sse_counter.get("c", 0) / total_size,
+    }

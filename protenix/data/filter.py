@@ -742,3 +742,21 @@ class Filter(object):
         )
 
         return atom_array[mask]
+
+    @staticmethod
+    def remove_disordered_fragments(atom_array: AtomArray) -> AtomArray:
+        """
+        Removes disordered fragments indicated by fragment id == -1.
+
+        Args:
+            atom_array (AtomArray): Input atom array containing protein structure
+
+        Returns:
+            AtomArray: Modified atom array with the disordered fragments removed.
+        """
+        assert (
+            "fragment_id" in atom_array.get_annotation_categories()
+        ), "Atom array must have fragment_id annotation."
+
+        mask = atom_array.fragment_id != -1
+        return atom_array[mask]

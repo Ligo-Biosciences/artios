@@ -748,9 +748,9 @@ class Featurizer(object):
             self.cropped_atom_array.plddt_m_rep_atom_mask
         ).long()  # [N_atom]
 
-        mask_features["distogram_rep_atom_mask"] = torch.Tensor(
-            self.cropped_atom_array.distogram_rep_atom_mask
-        ).long()  # [N_atom]
+        # mask_features["distogram_rep_atom_mask"] = torch.Tensor(
+        #     self.cropped_atom_array.distogram_rep_atom_mask
+        # ).long()  # [N_atom]
 
         mask_features["modified_res_mask"] = torch.Tensor(
             self.cropped_atom_array.modified_res_mask

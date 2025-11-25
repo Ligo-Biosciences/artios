@@ -714,8 +714,8 @@ class Filter(object):
         (say in binder design), so it feels like we're repeating filtering logic. It would be nice if this could be completely
         unified.
         """
-        if not motif_training:
-            return atom_array
+        # if not motif_training:
+        #     return atom_array
 
         assert hasattr(
             atom_array, "is_motif"

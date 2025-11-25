@@ -325,9 +325,8 @@ class BaseSingleDataset(Dataset):
         Returns:
             A dictionary containing the processed data sample.
         """
-        import time
 
-        start_time = time.time()
+        # start_time = time.time()
 
         # Try at most 10 times
         for _ in range(10):
@@ -339,15 +338,15 @@ class BaseSingleDataset(Dataset):
                 )
 
                 # Log if data loading took too long
-                total_time = time.time() - start_time
-                if (
-                    total_time > SLOW_STEP_THRESHOLD
-                ):  # Log slow data loading (> 1 second)
-                    sample_indice = self._get_sample_indice(idx=idx)
-                    logger.warning(
-                        f"SLOW __getitem__ for idx={idx}, pdb_id={sample_indice.pdb_id}: "
-                        f"{total_time:.2f}s"
-                    )
+                # total_time = time.time() - start_time
+                # if (
+                #     total_time > SLOW_STEP_THRESHOLD
+                # ):  # Log slow data loading (> 1 second)
+                #     sample_indice = self._get_sample_indice(idx=idx)
+                #     logger.warning(
+                #         f"SLOW __getitem__ for idx={idx}, pdb_id={sample_indice.pdb_id}: "
+                #         f"{total_time:.2f}s"
+                #     )
 
                 return data
             except Exception as e:

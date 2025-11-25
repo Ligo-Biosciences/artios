@@ -25,6 +25,7 @@ import rootutils
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+from biotite.structure.io import save_structure
 from neptune_scale import Run
 from neptune_scale.api.run import SourceTrackingConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -99,6 +100,7 @@ class ArtiosBackboneTrainer(object):
         self.ema_checkpoint_dir = f"{self.run_dir}/ema_checkpoints"
         self.post_hoc_ema_checkpoint_dir = f"{self.run_dir}/post_hoc_ema_checkpoints"
         self.prediction_dir = f"{self.run_dir}/predictions"
+        self.training_samples_dir = f"{self.run_dir}/training_samples"
         self.dump_dir = f"{self.run_dir}/dumps"
         self.error_dir = f"{self.run_dir}/errors"
         self.logs_dir = f"{self.run_dir}/logs"
@@ -112,6 +114,7 @@ class ArtiosBackboneTrainer(object):
             os.makedirs(self.ema_checkpoint_dir)
             os.makedirs(self.post_hoc_ema_checkpoint_dir)
             os.makedirs(self.prediction_dir)
+            os.makedirs(self.training_samples_dir)
             os.makedirs(self.dump_dir)
             os.makedirs(self.error_dir)
             os.makedirs(self.logs_dir)
@@ -123,7 +126,7 @@ class ArtiosBackboneTrainer(object):
         self.print(
             f"Using run name: {self.run_name}, run dir: {self.run_dir}, checkpoint_dir: "
             + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, post_hoc_ema_checkpoint_dir: {self.post_hoc_ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, "
-            + f"{self.error_dir}"
+            + f"{self.error_dir} training_samples_dir: {self.training_samples_dir}"
         )
 
     def init_log(self):
@@ -882,6 +885,15 @@ class ArtiosBackboneTrainer(object):
             if DIST_WRAPPER.rank == 0:
                 self.neptune_run.log_metrics({"grad_norm": total_norm}, step=self.step)
 
+    def save_training_sample(self, batch: dict, motif_as_b_factor: bool = True):
+        """Saves a training sample to the training samples directory."""
+        arrays = batch["cropped_atom_array"]
+        for idx, atom_array in enumerate(arrays):
+            pdb_id = batch["basic"]["pdb_id"][idx]
+            if motif_as_b_factor:
+                atom_array.b_factor = atom_array.is_motif
+            save_structure(self.training_samples_dir / f"{pdb_id}.cif", atom_array)
+
     def save_outputs(
         self,
         pred_dict: dict,
@@ -986,12 +998,18 @@ class ArtiosBackboneTrainer(object):
                         and (self.step + 1) % self.configs.checkpoint_interval == 0
                     )
 
+                    is_save_training_sample_step = self.global_step < 10
+
                     is_last_step &= is_update_step
                     step_need_log &= is_update_step
                     step_need_eval &= is_update_step
                     step_need_save &= is_update_step
 
                     batch = to_device(batch, self.device, non_blocking=True)
+
+                    if is_save_training_sample_step:
+                        self.save_training_sample(batch)
+
                     self.progress_bar()
                     self.train_step(batch)
                     if use_ema and is_update_step:

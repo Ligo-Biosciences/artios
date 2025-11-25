@@ -72,7 +72,7 @@ default_distillation_configs = {
     },
     "cropping_configs": {
         "method_weights": ListValue(
-            [0.0, 0.1, 0.0, 0.9]
+            [0.0, 0.2, 0.0, 0.8]
         ),  # Legacy: [0.0, 0.5, 0.5] # AF3: [0.2, 0.4, 0.4]
         "crop_size": GlobalConfigValue("train_crop_size"),
     },
@@ -195,14 +195,12 @@ data_configs = {
         "atom_bin_ends": ListValue([1536, 1728]),
         "token_bin_ends": ListValue([440, 600]),
     },
-    "train_sets": ListValue(
-        ["weightedPDB_before2109_wopb_nometalc_0925"]
-    ),  # "trousers_train"
+    "train_sets": ListValue(["trousers_train"]),  # "trousers_train"
     "train_sampler": {
         "train_sample_weights": ListValue([1.0]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["recentPDB_1536_sample384_0925"]),
+    "test_sets": ListValue(["trousers_val"]),
     "weightedPDB_before2109_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),

@@ -188,7 +188,7 @@ class TestAtomAttentionEncoder:
             n_atoms + atom_attention_encoder.num_queries - 1
         ) // atom_attention_encoder.num_queries
         expected_p_lm_shape = (
-            n_samples,
+            1,
             n_blocks,
             atom_attention_encoder.num_queries,
             atom_attention_encoder.num_keys,

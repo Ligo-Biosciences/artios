@@ -554,10 +554,6 @@ class ArtiosAllAtomTrainer(object):
             )
 
     def train_step(self, batch: dict):
-        timings = {}
-        step_start = time.time()
-
-        t0 = time.time()
         self.model.train()
         # FP16 training has not been verified yet
         train_precision = {
@@ -577,24 +573,17 @@ class ArtiosAllAtomTrainer(object):
             device="cuda" if torch.cuda.is_available() else "cpu",
             enabled=(self.configs.dtype == "float16"),
         )
-        timings["setup"] = time.time() - t0
 
-        t1 = time.time()
         with enable_amp:
             batch, _ = self.model_forward(batch, mode="train")
             loss, loss_dict = self.get_loss(batch, mode="train")
-        timings["forward"] = time.time() - t1
 
-        t2 = time.time()
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):
                 self.print(f"Skip iteration with NaN loss: {self.step} steps")
                 loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
-        timings["nan_check"] = time.time() - t2
 
-        t3 = time.time()
         scaler.scale(loss / self.iters_to_accumulate).backward()
-        timings["backward"] = time.time() - t3
 
         # For simplicity, the global training step is used
         if (self.global_step + 1) % self.iters_to_accumulate == 0:
@@ -602,47 +591,21 @@ class ArtiosAllAtomTrainer(object):
                 f"self.step {self.step}, self.iters_to_accumulate: {self.iters_to_accumulate}"
             )
             # Unscales the gradients of optimizer's assigned parameters in-place
-            t4 = time.time()
             scaler.unscale_(self.optimizer)
-            timings["unscale"] = time.time() - t4
 
-            t5 = time.time()
             self.on_before_optimizer_step()
             self.update()
-            timings["update_and_clip"] = time.time() - t5
 
-            t6 = time.time()
             scaler.step(self.optimizer)
             scaler.update()
-            timings["optimizer_step"] = time.time() - t6
 
-            t7 = time.time()
             self.optimizer.zero_grad(set_to_none=True)
             self.lr_scheduler.step()
-            timings["cleanup"] = time.time() - t7
 
-        t8 = time.time()
         for key, value in loss_dict.items():
             if "loss" not in key:
                 continue
             self.train_metric_wrapper.add(key, value, namespace="train")
-        timings["metrics"] = time.time() - t8
-
-        # Calculate total time and log if slow
-        total_time = time.time() - step_start
-        timings["total"] = total_time
-
-        if total_time > 2.0:  # Log slow steps (> 2 seconds)
-            logging.warning(
-                f"SLOW STEP {self.step} (rank {DIST_WRAPPER.rank}): {total_time:.2f}s - "
-                f"setup={timings.get('setup', 0):.3f}s, "
-                f"forward={timings.get('forward', 0):.3f}s, "
-                f"backward={timings.get('backward', 0):.3f}s, "
-                f"unscale={timings.get('unscale', 0):.3f}s, "
-                f"update={timings.get('update_and_clip', 0):.3f}s, "
-                f"optimizer={timings.get('optimizer_step', 0):.3f}s, "
-                f"cleanup={timings.get('cleanup', 0):.3f}s"
-            )
 
     def progress_bar(self, desc: str = ""):
         if DIST_WRAPPER.rank != 0:

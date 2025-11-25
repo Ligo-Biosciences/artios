@@ -43,6 +43,7 @@ class MotifMaker:
     def __init__(
         self,
         ligand_motif_prob: float = 0.8,
+        pocket_motif_prob: float = 0.8,
         whole_ligand_prob: float = 0.7,
         whole_sidechain_prob: float = 0.2,
         pocket_score_threshold: float = 0.18,
@@ -59,6 +60,7 @@ class MotifMaker:
         """
         Args:
             ligand_motif_prob (float): Probability _generate_ligand_motif_mask is used for ligand complexes.
+            pocket_motif_prob (float): Probability _generate_pocket_motif_mask is used for complexes with a pocket.
             whole_ligand_prob (float): Probability the whole ligand is used in the motif.
             whole_sidechain_prob (float): Probability the whole sidechain is included vs partial.
             pocket_score_threshold (float): Threshold for pocket score to identify seed atoms.
@@ -72,6 +74,7 @@ class MotifMaker:
             motif_train_rate (float): Training rate for motif generation.
         """
         self.ligand_motif_prob = ligand_motif_prob
+        self.pocket_motif_prob = pocket_motif_prob
         self.whole_ligand_prob = whole_ligand_prob
         self.whole_sidechain_prob = whole_sidechain_prob
         self.pocket_score_threshold = pocket_score_threshold
@@ -96,6 +99,8 @@ class MotifMaker:
         # Generate motif mask
         if atom_array.is_ligand.any() and np.random.rand() < self.ligand_motif_prob:
             is_motif_mask = self._generate_ligand_motif_mask(atom_array)
+        elif atom_array.pocket_id.any() and np.random.rand() < self.pocket_motif_prob:
+            is_motif_mask = self._generate_pocket_motif_mask(atom_array)
         else:
             is_motif_mask = self._generate_chain_motif_mask(atom_array)
 
@@ -215,6 +220,37 @@ class MotifMaker:
                 atom_array=atom_array,
             )
             is_motif[surrounding_mask > 0] = 1
+
+        return is_motif
+
+    def _generate_pocket_motif_mask(self, atom_array: AtomArray) -> np.ndarray:
+        """
+        Generates a motif mask centered around a pocket.
+
+        Args:
+            atom_array (AtomArray): Input Biotite AtomArray
+
+        Returns:
+            np.ndarray: Integer mask (0/1) indicating motif atoms
+        """
+        is_motif = np.zeros(len(atom_array), dtype=int)
+
+        pocket_ids = np.unique(atom_array.pocket_id)
+        pocket_ids = pocket_ids[pocket_ids > 0]
+        random_pocket_id = np.random.choice(pocket_ids)
+
+        pocket_mask = atom_array.pocket_id == random_pocket_id
+
+        # Get the centroid of the pocket
+        pocket_atoms = atom_array[pocket_mask]
+        pocket_centroid = np.mean(pocket_atoms.coord, axis=0)
+
+        # Generate motif around the centroid
+        motif_mask = self._generate_motif_around_point_mask(
+            point_coord=pocket_centroid,
+            atom_array=atom_array,
+        )
+        is_motif[motif_mask > 0] = 1
 
         return is_motif
 

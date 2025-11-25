@@ -255,6 +255,7 @@ class MotifMaker:
         motif_mask = self._generate_motif_around_point_mask(
             point_coord=pocket_centroid,
             atom_array=atom_array,
+            optional_mask=pocket_mask,
         )
         is_motif[motif_mask > 0] = 1
 
@@ -323,6 +324,7 @@ class MotifMaker:
         self,
         point_coord: np.ndarray,
         atom_array: AtomArray,
+        optional_mask: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Generates a motif mask around a point by identifying residues within a sphere.
@@ -330,6 +332,8 @@ class MotifMaker:
         Args:
             point_coord (np.ndarray): Center point coordinates
             atom_array (AtomArray): AtomArray to generate motif from
+            optional_mask (np.ndarray | None, optional): Optional boolean mask to further filter atoms.
+                If provided, will be combined with atoms_in_sphere_mask using logical AND. Defaults to None.
 
         Returns:
             np.ndarray: Integer mask (0/1) indicating motif atoms
@@ -346,6 +350,10 @@ class MotifMaker:
         # Filter for polymer atoms in sphere
         polymer_mask = np.isin(atom_array.chain_mol_type, ["protein", "RNA", "DNA"])
         atoms_in_sphere_mask = within_radius_mask & polymer_mask
+
+        # Apply optional mask if provided
+        if optional_mask is not None:
+            atoms_in_sphere_mask = atoms_in_sphere_mask & optional_mask
 
         if not atoms_in_sphere_mask.any():
             logger.warning(

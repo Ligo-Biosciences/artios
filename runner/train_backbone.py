@@ -1011,7 +1011,7 @@ class ArtiosBackboneTrainer(object):
                         and (self.step + 1) % self.configs.checkpoint_interval == 0
                     )
 
-                    # is_save_training_sample_step = self.global_step < 10
+                    is_save_training_sample_step = self.global_step < 20
 
                     is_last_step &= is_update_step
                     step_need_log &= is_update_step
@@ -1020,8 +1020,8 @@ class ArtiosBackboneTrainer(object):
 
                     batch = to_device(batch, self.device, non_blocking=True)
 
-                    # if is_save_training_sample_step:
-                    #     self.save_training_sample(batch)
+                    if is_save_training_sample_step:
+                        self.save_training_sample(batch)
 
                     self.progress_bar()
                     self.train_step(batch)

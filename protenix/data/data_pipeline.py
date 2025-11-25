@@ -33,7 +33,7 @@ from protenix.utils.file_io import (
     load_gzip_pickle,
 )
 
-torch.multiprocessing.set_sharing_strategy("file_system")
+torch.multiprocessing.set_sharing_strategy("file_descriptor")
 
 
 class DataPipeline(object):

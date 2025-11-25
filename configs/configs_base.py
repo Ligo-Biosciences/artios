@@ -117,12 +117,10 @@ model_configs = {
     "c_atom": 256,  # 64
     "c_atompair": 16,  # 16
     "c_token": 768,  # 192
-    "c_latent": 10,
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
     "sigma_coord": 12.0,
-    "sigma_latent": 1.0,
     "cfg_drop_probability": 0.1,
     "diffusion_batch_size": 16,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
@@ -195,7 +193,6 @@ model_configs = {
         "diffusion_module": {
             "use_fine_grained_checkpoint": False,
             "sigma_coord": GlobalConfigValue("sigma_coord"),
-            "sigma_latent": GlobalConfigValue("sigma_latent"),
             "c_token": GlobalConfigValue("c_token"),
             "c_atom": GlobalConfigValue("c_atom"),
             "c_z": GlobalConfigValue("c_z"),
@@ -363,18 +360,18 @@ loss_configs = {
                 },
             },
         },
-        "flow": {
-            "centre_atom": {
-                "weight_mse": 1.0,
-                "weight_protein": 1.0,
-                "weight_dna": 5.0,
-                "weight_rna": 5.0,
-                "weight_ligand": 10.0,
-                "eps": 1e-6,
-            },
-            "sigma_coord": GlobalConfigValue("sigma_coord"),
-            "sigma_latent": GlobalConfigValue("sigma_latent"),
-        },
+        # "flow": {
+        #     "centre_atom": {
+        #         "weight_mse": 1.0,
+        #         "weight_protein": 1.0,
+        #         "weight_dna": 5.0,
+        #         "weight_rna": 5.0,
+        #         "weight_ligand": 10.0,
+        #         "eps": 1e-6,
+        #     },
+        #     "sigma_coord": GlobalConfigValue("sigma_coord"),
+        #     "sigma_latent": GlobalConfigValue("sigma_latent"),
+        # },
         "backbone": {
             "mse": {
                 "weight_mse": 1 / 3,
@@ -406,7 +403,6 @@ loss_configs = {
             ["chain_pair_iptm", "chain_pair_iptm_global", "chain_pair_plddt"]
         ),
         "clash": {"af3_clash_threshold": 1.1, "vdw_clash_threshold": 0.75},
-        "track_latents": False,
     },
 }
 
@@ -417,14 +413,6 @@ monitor_configs = {
         "weight_norm": True,
         "eval_metrics": {
             "eval_tests": ListValue(["ss_distribution", "posebusters"]),
-        },
-        "latents": {
-            "track_during_vae_training": True,
-            "track_evaluation_latents": False,
-            "track_inference_latents": False,
-            "num_batch": 25,
-            "num_sample": 1,
-            "plot_per_batch": False,
         },
     },
 }

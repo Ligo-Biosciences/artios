@@ -889,7 +889,6 @@ class ArtiosBackboneTrainer(object):
         self,
         batch: dict,
         motif_as_b_factor: bool = False,
-        save_true_motif: bool = False,
     ):
         """Saves a training sample to the training samples directory."""
         arrays = batch["cropped_atom_arrays"]
@@ -900,12 +899,6 @@ class ArtiosBackboneTrainer(object):
             save_structure(
                 os.path.join(self.training_samples_dir, f"{pdb_id}.cif"), atom_array
             )
-            if save_true_motif:
-                motif_array = atom_array[atom_array.is_motif > 0]
-                save_structure(
-                    os.path.join(self.training_samples_dir, f"{pdb_id}_motif.cif"),
-                    motif_array,
-                )
 
     def save_outputs(
         self,
@@ -1021,7 +1014,7 @@ class ArtiosBackboneTrainer(object):
                     batch = to_device(batch, self.device, non_blocking=True)
 
                     if is_save_training_sample_step:
-                        self.save_training_sample(batch)
+                        self.save_training_sample(batch, motif_as_b_factor=True)
 
                     self.progress_bar()
                     self.train_step(batch)

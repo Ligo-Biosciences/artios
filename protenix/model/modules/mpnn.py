@@ -537,7 +537,6 @@ class MPNN(nn.Module):
         backbone_mask: Float[Tensor, "batch n_token 5"],
         centre_atom_coord: Float[Tensor, "batch n_token 3"],
         centre_atom_mask: Float[Tensor, "batch n_token"],
-        restype: Float[Tensor, "batch n_token num_residue_types"],
         input_feature_dict: Dict[str, Tensor],
         decoding_order: Optional[Float[Tensor, "batch n_token"]] = None,
         temperature: float = 1.0,
@@ -558,7 +557,6 @@ class MPNN(nn.Module):
             backbone_mask: backbone mask for each token (which backbone atoms are valid)
             centre_atom_coord: centre atom coordinate for each token
             centre_atom_mask: centre atom mask is resolved mask
-            restype: one-hot encoded residue types
             input_feature_dict: Input feature dict with the following tensors:
                 - asym_id, residue_index, entity_id, sym_id, etc.
             decoding_order: Permutation defining generation order
@@ -567,6 +565,8 @@ class MPNN(nn.Module):
             show_progress: show progress during sampling
             return_logits: whether to return the logits or not
             seed: seed for deterministic sampling
+
+            TODO: seed_token_index and smoothing factor
 
         Returns:
             Union[Tensor, Tuple[Tensor, Tensor]]:
@@ -577,6 +577,8 @@ class MPNN(nn.Module):
                 sequence_ids: sampled sequence as one-hot encoded tensor
         """
         assert temperature >= 0, "Temperature must be non-negative"
+        restype_shape = input_feature_dict["restype"].shape
+        restype_dtype = input_feature_dict["restype"].dtype
 
         # Run encoder trunk
         node_feats, edge_feats, edge_idx, edge_mask = self.run_encoder_trunk(
@@ -589,7 +591,12 @@ class MPNN(nn.Module):
 
         # Optionally prepare random decoding order
         if decoding_order is None:
-            decoding_order = self._generate_random_decoding_order(node_feats, seed)
+            decoding_order = self._generate_random_spatially_smooth_decoding_order(
+                centre_atom_coords=centre_atom_coord,
+                centre_atom_mask=centre_atom_mask,
+                # seed_token_index
+                # smoothing_factor
+            )
 
         # Generate masks
         forward_attn_mask, backward_attn_mask = self._generate_sequential_masks(
@@ -601,13 +608,13 @@ class MPNN(nn.Module):
         forward_attn_mask = forward_attn_mask[..., None]
         backward_attn_mask = backward_attn_mask[..., None]
 
-        sequence_ids = torch.zeros(
-            restype.shape,
+        restype = torch.zeros(
+            restype_shape,
             device=backbone_coords.device,
-            dtype=restype.dtype,
+            dtype=restype_dtype,
         )
         logits_at_timestep = torch.zeros(
-            restype.shape,
+            restype_shape,
             device=backbone_coords.device,
             dtype=backbone_coords.dtype,
         )
@@ -636,10 +643,10 @@ class MPNN(nn.Module):
             pred_vals = self._sample_from_logits(
                 logits, temperature=temperature, seed=seed
             )
-            sequence_ids[batch_idx, next_pos_idx] = pred_vals[batch_idx, next_pos_idx]
+            restype[batch_idx, next_pos_idx] = pred_vals[batch_idx, next_pos_idx]
             logits_at_timestep[batch_idx, timestep] = logits[batch_idx, next_pos_idx]
 
         if return_logits:
-            return sequence_ids, node_feats, logits_at_timestep
+            return restype, node_feats, logits_at_timestep
         else:
-            return sequence_ids, node_feats
+            return restype, node_feats

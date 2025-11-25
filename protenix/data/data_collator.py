@@ -89,6 +89,8 @@ class DataCollatorWithPadding:
         """
         import time
 
+        import torch
+
         t0 = time.time()
 
         atom_padding_length = self._get_atom_padding_length(batch)
@@ -103,8 +105,17 @@ class DataCollatorWithPadding:
             collated[dict_key] = self._collate_dicts(dict_key, padded_batch)
         t3 = time.time()
 
+        # Get tensor device and current CUDA device
+        sample_tensor = batch[0]["input_feature_dict"]["atom_to_token_idx"]
+        tensor_device = (
+            sample_tensor.device if isinstance(sample_tensor, torch.Tensor) else "N/A"
+        )
+        cuda_device = (
+            torch.cuda.current_device() if torch.cuda.is_available() else "N/A"
+        )
+
         print(
-            f"Collate timing - get_pad_len: {t1-t0:.3f}s, pad_batch: {t2-t1:.3f}s, collate: {t3-t2:.3f}s"
+            f"Collate timing [tensor_device={tensor_device}, cuda_device={cuda_device}] - get_pad_len: {t1-t0:.3f}s, pad_batch: {t2-t1:.3f}s, collate: {t3-t2:.3f}s, total: {t3-t0:.3f}s"
         )
 
         # Add optional atom and token arrays if requested

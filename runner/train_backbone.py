@@ -911,7 +911,7 @@ class ArtiosBackboneTrainer(object):
         motif_as_b_factor: bool = False,
     ):
         """Saves outputs to CIFs."""
-        cropped_atom_array = batch["cropped_atom_array"]
+        cropped_atom_array = batch["cropped_atom_arrays"][0]
         pdb_id = batch["basic"]["pdb_id"]
 
         coordinate = pred_dict["coordinate"].detach().cpu().numpy()
@@ -922,7 +922,7 @@ class ArtiosBackboneTrainer(object):
         # Save each sample
         saved_files = []
         atom_arrays = []
-        for idx in range(coordinate.shape[-4]):
+        for idx in range(coordinate.shape[-3]):  # -4
             output_path = os.path.join(
                 self.prediction_dir,
                 f"{pdb_id}_{structure_type}_sample_{idx}_{ema_suffix}.cif",

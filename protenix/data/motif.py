@@ -8,6 +8,7 @@ import networkx as nx
 import numpy as np
 from biotite.structure import AtomArray
 
+from protenix.common.atom_types import MOTIF_ATOMS
 from protenix.data.motif_utils import (
     bfs_nodes_by_count,
     compute_pocket_scores,
@@ -56,6 +57,7 @@ class MotifMaker:
         r_max: float = 6.0,
         max_motif_residues: int = 20,
         motif_train_rate: float = 0.0,
+        use_motif_atoms_only: bool = False,
         **kwargs,
     ):
         """
@@ -74,6 +76,7 @@ class MotifMaker:
             r_max (float): Maximum radius in angstroms for sphere search.
             max_motif_residues (int): Maximum number of residues allowed in motif.
             motif_train_rate (float): Training rate for motif generation.
+            use_motif_atoms_only (bool): Whether to use only motif atoms in the motif.
         """
         self.ligand_motif_prob = ligand_motif_prob
         self.pocket_motif_prob = pocket_motif_prob
@@ -88,6 +91,7 @@ class MotifMaker:
         self.r_min = r_min
         self.r_max = r_max
         self.max_motif_residues = max_motif_residues
+        self.use_motif_atoms_only = use_motif_atoms_only
 
     def make_motif(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -101,6 +105,7 @@ class MotifMaker:
         """
         # TODO: delete this check once we have pocket annotations for the PDB
         has_pocket_id = "pocket_id" in atom_array.get_annotation_categories()
+
         # Generate motif mask
         if np.random.rand() < self.ligand_motif_prob and atom_array.is_ligand.any():
             is_motif_mask = self._generate_ligand_motif_mask(atom_array)
@@ -365,6 +370,15 @@ class MotifMaker:
             return is_motif
 
         # Get unique residues in sphere
+        if self.use_motif_atoms_only:
+            # Create mask for atoms that are valid motif atoms based on residue type
+            is_valid_motif_atom = np.zeros(len(atom_array), dtype=bool)
+            for res_name, valid_atoms in MOTIF_ATOMS.items():
+                res_mask = atom_array.res_name == res_name
+                atom_mask = np.isin(atom_array.atom_name, valid_atoms)
+                is_valid_motif_atom |= res_mask & atom_mask
+            atoms_in_sphere_mask = atoms_in_sphere_mask & is_valid_motif_atom
+
         atoms_in_sphere = atom_array[atoms_in_sphere_mask]
         unique_ref_space_uids = np.unique(atoms_in_sphere.ref_space_uid)
 
@@ -390,6 +404,10 @@ class MotifMaker:
             else:
                 # Whole residue
                 is_motif[residue_mask > 0] = 1
+
+        # Filter the final motif for only
+        if self.use_motif_atoms_only:
+            is_motif = is_motif * is_valid_motif_atom.astype(int)
 
         return is_motif
 
@@ -428,7 +446,7 @@ class MotifMaker:
         local_in_sphere_mask = in_sphere_mask[residue_indices]
         local_indices_in_sphere = np.where(local_in_sphere_mask)[0]
 
-        # Filter to valid graph nodes (atoms with bonds)
+        # Filter to valid graph nodes
         graph_node_set = set(graph_nodes)
         valid_seed_atoms = [
             idx for idx in local_indices_in_sphere if idx in graph_node_set

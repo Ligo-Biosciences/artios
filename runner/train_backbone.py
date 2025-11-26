@@ -637,6 +637,7 @@ class ArtiosBackboneTrainer(object):
                         coordinate = batch["pred_dict"]["coordinate"][0]
                         atom_array = batch["cropped_atom_arrays"][0]
                         n_atoms = len(atom_array)
+                        n_sample = coordinate.shape[-3]
                         atom_array.set_annotation("b_factor", atom_array.is_motif)
                         # NOTE: this will include the atoms of unresolved residues.
                         # These were masked when passed through to MPNN so the output
@@ -652,9 +653,10 @@ class ArtiosBackboneTrainer(object):
                         # NOTE: I think we still have the age-old problem of attending to
                         # unresolved residues during training though...
                         batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
-                        batch["pred_dict"]["atom_plddt"] = (
-                            atom_array.is_motif
-                        )  # saved as bfactor
+                        # Expand is_motif along first dim by n_sample: [n_atom,] -> [n_sample, n_atom]
+                        is_motif = np.tile(
+                            atom_array.is_motif[np.newaxis, :], (n_sample, 1)
+                        )
                         saved_files = self.dumper.dump(
                             dataset_name=test_name,
                             pdb_id=pid,
@@ -662,6 +664,7 @@ class ArtiosBackboneTrainer(object):
                             pred_dict=batch["pred_dict"],
                             atom_array=atom_array,
                             entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
+                            b_factor=is_motif,
                         )
 
                     # TODO: calculate a motif RMSD score between packed and backbone is_motif

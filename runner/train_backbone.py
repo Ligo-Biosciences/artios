@@ -652,6 +652,9 @@ class ArtiosBackboneTrainer(object):
                         # NOTE: I think we still have the age-old problem of attending to
                         # unresolved residues during training though...
                         batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
+                        batch["pred_dict"]["atom_plddt"] = (
+                            atom_array.is_motif
+                        )  # saved as bfactor
                         saved_files = self.dumper.dump(
                             dataset_name=test_name,
                             pdb_id=pid,

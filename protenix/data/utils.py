@@ -276,7 +276,10 @@ def save_structure_cif(
         pdb_id (str): The PDB ID for the entry.
     """
     pred_atom_array = copy.deepcopy(atom_array)
-    pred_pose = pred_coordinate.float().cpu().numpy()
+    if isinstance(pred_coordinate, np.ndarray):
+        pred_pose = pred_coordinate.astype(np.float32)
+    else:
+        pred_pose = pred_coordinate.float().cpu().numpy()
     pred_atom_array.coord = pred_pose
     save_atoms_to_cif(
         output_fpath,

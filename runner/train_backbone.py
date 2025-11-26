@@ -60,6 +60,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
+from runner.dumper import DataDumper
 from runner.ema import PowerLawEMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -104,6 +105,7 @@ class ArtiosBackboneTrainer(object):
 
         # Add dump dir for training time inference
         self.configs.dump_dir = self.prediction_dir
+        self.dumper = DataDumper(self.configs.dump_dir)
 
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)
@@ -631,31 +633,33 @@ class ArtiosBackboneTrainer(object):
                         )
 
                     saved_files = None
-
-                    try:
-                        saved_files, backbone_atom_array_list = self.save_outputs(
-                            pred_dict=backbone_pred_dict,
-                            batch=batch,
-                            structure_type="backbone",
-                            ema_suffix=ema_suffix,
-                            motif_as_b_factor=True,
+                    if DIST_WRAPPER.rank == 0:
+                        coordinate = batch["pred_dict"]["coordinate"][0]
+                        atom_array = batch["cropped_atom_arrays"][0]
+                        n_atoms = len(atom_array)
+                        atom_array.b_factor = atom_array.is_motif
+                        # NOTE: this will include the atoms of unresolved residues.
+                        # These were masked when passed through to MPNN so the output
+                        # will be nonsensical. Filtering for these will:
+                        #   1. leave breaks in the backbone if unresolved residues lie
+                        # within the main structure
+                        #   2. remove the "blobs" found in inference outputs caused
+                        # by the inputted PDB data not having any crystallographic data
+                        # and consequently being labelled as is_resolved=False
+                        # NOTE: the above will not be a problem when performing this model
+                        # is placed in our full eval pipeline as our design model will
+                        # not be designing unresolved residues.
+                        # NOTE: I think we still have the age-old problem of attending to
+                        # unresolved residues during training though...
+                        batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
+                        saved_files = self.dumper.dump(
+                            dataset_name=test_name,
+                            pdb_id=pid,
+                            seed=0,
+                            pred_dict=batch["pred_dict"],
+                            atom_array=atom_array,
+                            entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
                         )
-
-                        packed_atom_array_list = []
-                        if allatom_mpnn_pred_dict is not None:
-                            packed_saved_files, packed_atom_array_list = (
-                                self.save_outputs(
-                                    pred_dict=allatom_mpnn_pred_dict,
-                                    batch=mpnn_batch,
-                                    structure_type="packed",
-                                    ema_suffix=ema_suffix,
-                                    motif_as_b_factor=True,
-                                )
-                            )
-                            saved_files.extend(packed_saved_files)
-                    except Exception as e:
-                        print(f"Error saving outputs for {pid}, error: {e}")
-                        continue
 
                     # TODO: calculate a motif RMSD score between packed and backbone is_motif
                     # TODO: work out how best to log this

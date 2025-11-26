@@ -170,6 +170,7 @@ class ArtiosBackboneTrainer(object):
             f"Distributed environment: world size: {DIST_WRAPPER.world_size}, "
             + f"global rank: {DIST_WRAPPER.rank}, local rank: {DIST_WRAPPER.local_rank}"
         )
+        mp.set_sharing_strategy("file_system")
         mp.set_start_method("spawn", force=True)
         self.use_cuda = torch.cuda.device_count() > 0
         if self.use_cuda:

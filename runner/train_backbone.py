@@ -637,7 +637,7 @@ class ArtiosBackboneTrainer(object):
                         coordinate = batch["pred_dict"]["coordinate"][0]
                         atom_array = batch["cropped_atom_arrays"][0]
                         n_atoms = len(atom_array)
-                        atom_array.b_factor = atom_array.is_motif
+                        atom_array.set_annotation("b_factor", atom_array.is_motif)
                         # NOTE: this will include the atoms of unresolved residues.
                         # These were masked when passed through to MPNN so the output
                         # will be nonsensical. Filtering for these will:

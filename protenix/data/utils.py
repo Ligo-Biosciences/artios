@@ -397,15 +397,15 @@ class CIFWriter:
                 + "_predicted_by_protenix": block
             }
         )
-        # if self.atom_array.get_annotation("b_factor") is not None:
-        #     pdbx.set_structure(
-        #         cif,
-        #         self.atom_array,
-        #         include_bonds=include_bonds,
-        #         extra_fields=["b_factor"],
-        #     )
-        # else:
-        pdbx.set_structure(cif, self.atom_array, include_bonds=include_bonds)
+        if self.atom_array.get_annotation("b_factor") is not None:
+            pdbx.set_structure(
+                cif,
+                self.atom_array,
+                include_bonds=include_bonds,
+                extra_fields=["b_factor"],
+            )
+        else:
+            pdbx.set_structure(cif, self.atom_array, include_bonds=include_bonds)
 
         block = cif.block
         atom_site = block.get("atom_site")

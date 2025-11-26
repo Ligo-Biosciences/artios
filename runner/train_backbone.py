@@ -559,7 +559,7 @@ class ArtiosBackboneTrainer(object):
 
             for index, batch in enumerate(tqdm(test_dl)):
                 batch = to_device(batch, self.device)
-                pid = batch["basic"]["pdb_id"]
+                pid = batch["basic"]["pdb_id"][0]
 
                 # if index + 1 == total_batch_num and DIST_WRAPPER.world_size > 1:
                 #     # Gather all pids across ranks for avoiding duplicated evaluations when drop_last = False

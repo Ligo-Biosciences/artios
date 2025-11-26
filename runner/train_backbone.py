@@ -552,23 +552,23 @@ class ArtiosBackboneTrainer(object):
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
-            evaluated_pids = []
-            total_batch_num = len(test_dl)
+            # evaluated_pids = []
+            # total_batch_num = len(test_dl)
 
             for index, batch in enumerate(tqdm(test_dl)):
                 batch = to_device(batch, self.device)
                 pid = batch["basic"]["pdb_id"]
 
-                if index + 1 == total_batch_num and DIST_WRAPPER.world_size > 1:
-                    # Gather all pids across ranks for avoiding duplicated evaluations when drop_last = False
-                    all_data_ids = DIST_WRAPPER.all_gather_object(evaluated_pids)
-                    dedup_ids = set(sum(all_data_ids, []))
-                    if pid in dedup_ids:
-                        print(
-                            f"Rank {DIST_WRAPPER.rank}: Drop data_id {pid} as it is already evaluated."
-                        )
-                        break
-                evaluated_pids.append(pid)
+                # if index + 1 == total_batch_num and DIST_WRAPPER.world_size > 1:
+                #     # Gather all pids across ranks for avoiding duplicated evaluations when drop_last = False
+                #     all_data_ids = DIST_WRAPPER.all_gather_object(evaluated_pids)
+                #     dedup_ids = set(sum(all_data_ids, []))
+                #     if pid in dedup_ids:
+                #         print(
+                #             f"Rank {DIST_WRAPPER.rank}: Drop data_id {pid} as it is already evaluated."
+                #         )
+                #         break
+                # evaluated_pids.append(pid)
 
                 simple_metrics = {}
                 with enable_amp:

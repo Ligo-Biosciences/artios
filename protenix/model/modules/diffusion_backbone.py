@@ -623,13 +623,13 @@ class DiffusionModule(nn.Module):
         # [..., 1, N_token, N_token]
 
         # Average coordinates per token
-        a_token = self.linear_no_bias_r_embed(
-            average_atom_to_token(
-                x_atom=r_noisy,  # [...N_sample, N_atom, 3]
-                atom_mask=atom_mask,  # [..., N_atom]
-                atom_to_token_idx=atom_to_token_idx,  # [..., N_sample, N]
-                n_token=n_token,
-            )
+        q_skip = self.linear_no_bias_r_embed(r_noisy)
+
+        a_token = average_atom_to_token(
+            x_atom=q_skip,  # [..., N_sample, N_atom, 3]
+            atom_mask=atom_mask,  # [..., N_atom]
+            atom_to_token_idx=atom_to_token_idx,  # [..., N_sample, N]
+            n_token=n_token,
         )  # [..., N_sample, N_token, c_token]
 
         s, z = self.diffusion_conditioning(
@@ -655,6 +655,7 @@ class DiffusionModule(nn.Module):
             broadcast_token_to_atom(
                 x_token=a_token, atom_to_token_idx=atom_to_token_idx
             )
+            + q_skip
         )  # [..., N_sample, N_atom, c_atom]
 
         # Break symmetry in the backbone atoms with atom level information

@@ -16,6 +16,7 @@ import datetime
 import logging
 import os
 import time
+import warnings
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
@@ -172,6 +173,7 @@ class ArtiosBackboneTrainer(object):
         )
         mp.set_sharing_strategy("file_system")
         mp.set_start_method("spawn", force=True)
+
         self.use_cuda = torch.cuda.device_count() > 0
         if self.use_cuda:
             self.device = torch.device("cuda:{}".format(DIST_WRAPPER.local_rank))
@@ -206,6 +208,9 @@ class ArtiosBackboneTrainer(object):
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         logging.info("Finished init ENV.")
+
+        # Suppress annoying atomworks warnings
+        warnings.filterwarnings("ignore", module="atomworks")
 
     def init_loss(self):
         self.loss = BackboneLoss(self.configs)  # TODO: change the loss!

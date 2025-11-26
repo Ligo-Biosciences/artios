@@ -184,6 +184,7 @@ data_configs = {
         "r_min": 4.0,
         "r_max": 5.0,
         "save_motifs_for_debugging": False,
+        "use_motif_atoms_only": False,
     },
     "padding": {
         "max_n_msa": 1,

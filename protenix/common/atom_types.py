@@ -483,11 +483,11 @@ PROTONATION_HYDROGENS: Mapping[str, Set[str]] = {
 # Atoms that can lie in the motifs
 MOTIF_ATOMS: Mapping[str, tuple[str, ...]] = {
     # Protein residues for motif scaffolding
-    residue_names.ALA: (CA, CB),
+    residue_names.ALA: (CB,),
     residue_names.ARG: (CD, CZ, NE, NH1, NH2),
     residue_names.ASP: (CB, CG, OD1, OD2),
     residue_names.ASN: (CB, CG, ND2, OD1),
-    residue_names.CYS: (CA, CB, SG),
+    residue_names.CYS: (CB, SG),
     residue_names.GLU: (CG, CD, OE1, OE2),
     residue_names.GLN: (CG, CD, NE2, OE1),
     residue_names.GLY: (),
@@ -497,9 +497,9 @@ MOTIF_ATOMS: Mapping[str, tuple[str, ...]] = {
     residue_names.LYS: (CE, NZ),
     residue_names.MET: (CG, CE, SD),
     residue_names.PHE: (CB, CG, CD1, CD2, CE1, CE2, CZ),
-    residue_names.PRO: (CA, CB, CG, CD, N),
-    residue_names.SER: (CA, CB, OG),
-    residue_names.THR: (CA, CB, CG2, OG1),
+    residue_names.PRO: (N, CB, CG, CD),
+    residue_names.SER: (CB, OG),
+    residue_names.THR: (CB, CG2, OG1),
     residue_names.TRP: (CB, CG, CD1, CD2, CE2, CE3, CZ2, CZ3, CH2, NE1),
     residue_names.TYR: (CB, CG, CD1, CD2, CE1, CE2, CZ, OH),
     residue_names.VAL: (CB, CG1, CG2),

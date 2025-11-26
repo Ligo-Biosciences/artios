@@ -916,6 +916,7 @@ class ArtiosBackboneTrainer(object):
         pdb_id = batch["basic"]["pdb_id"]
 
         coordinate = pred_dict["coordinate"].detach().cpu().numpy()
+        self.print(f"Coordinate shape: {coordinate.shape}")
 
         if motif_as_b_factor:
             cropped_atom_array.b_factor = cropped_atom_array.is_motif

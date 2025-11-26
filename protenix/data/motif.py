@@ -8,7 +8,7 @@ import networkx as nx
 import numpy as np
 from biotite.structure import AtomArray
 
-from protenix.common.atom_types import MOTIF_ATOMS
+from protenix.common.atom_types import TIP_ATOMS
 from protenix.data.motif_utils import (
     bfs_nodes_by_count,
     compute_pocket_scores,
@@ -53,11 +53,11 @@ class MotifMaker:
         sidechain_seed_is_in_sphere_prob: float = 0.8,
         sidechain_bfs_depth_prob: float = 0.5,
         residue_inclusion_prob: float = 0.9,
+        use_tip_atoms_only_prob: float = 0.9,
         r_min: float = 3.0,
         r_max: float = 6.0,
         max_motif_residues: int = 20,
         motif_train_rate: float = 0.0,
-        use_motif_atoms_only: bool = False,
         **kwargs,
     ):
         """
@@ -76,7 +76,7 @@ class MotifMaker:
             r_max (float): Maximum radius in angstroms for sphere search.
             max_motif_residues (int): Maximum number of residues allowed in motif.
             motif_train_rate (float): Training rate for motif generation.
-            use_motif_atoms_only (bool): Whether to use only motif atoms in the motif.
+            use_tip_atoms_only_prob (float): Probability of using only tip atoms in the motif.
         """
         self.ligand_motif_prob = ligand_motif_prob
         self.pocket_motif_prob = pocket_motif_prob
@@ -88,10 +88,10 @@ class MotifMaker:
         self.sidechain_seed_is_in_sphere_prob = sidechain_seed_is_in_sphere_prob
         self.sidechain_bfs_depth_prob = sidechain_bfs_depth_prob
         self.residue_inclusion_prob = residue_inclusion_prob
+        self.use_tip_atoms_only_prob = use_tip_atoms_only_prob
         self.r_min = r_min
         self.r_max = r_max
         self.max_motif_residues = max_motif_residues
-        self.use_motif_atoms_only = use_motif_atoms_only
 
     def make_motif(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -346,6 +346,11 @@ class MotifMaker:
         Returns:
             np.ndarray: Integer mask (0/1) indicating motif atoms
         """
+        if np.random.rand() < self.use_tip_atoms_only_prob:
+            use_tip_atoms_only = True
+        else:
+            use_tip_atoms_only = False
+
         is_motif = np.zeros(len(atom_array), dtype=int)
 
         # Pick radius
@@ -370,14 +375,14 @@ class MotifMaker:
             return is_motif
 
         # Get unique residues in sphere
-        if self.use_motif_atoms_only:
+        if use_tip_atoms_only:
             # Create mask for atoms that are valid motif atoms based on residue type
-            is_valid_motif_atom = np.zeros(len(atom_array), dtype=bool)
-            for res_name, valid_atoms in MOTIF_ATOMS.items():
+            is_valid_tip_atom = np.zeros(len(atom_array), dtype=bool)
+            for res_name, valid_atoms in TIP_ATOMS.items():
                 res_mask = atom_array.res_name == res_name
                 atom_mask = np.isin(atom_array.atom_name, valid_atoms)
-                is_valid_motif_atom |= res_mask & atom_mask
-            atoms_in_sphere_mask = atoms_in_sphere_mask & is_valid_motif_atom
+                is_valid_tip_atom |= res_mask & atom_mask
+            atoms_in_sphere_mask = atoms_in_sphere_mask & is_valid_tip_atom
 
         atoms_in_sphere = atom_array[atoms_in_sphere_mask]
         unique_ref_space_uids = np.unique(atoms_in_sphere.ref_space_uid)
@@ -406,8 +411,8 @@ class MotifMaker:
                 is_motif[residue_mask > 0] = 1
 
         # Filter the final motif for only
-        if self.use_motif_atoms_only:
-            is_motif = is_motif * is_valid_motif_atom.astype(int)
+        if use_tip_atoms_only:
+            is_motif = is_motif * is_valid_tip_atom.astype(int)
 
         return is_motif
 

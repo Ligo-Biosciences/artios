@@ -41,11 +41,6 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.data.featurizer import Featurizer
 from protenix.data.utils import save_structure_cif
 from protenix.metrics.lddt_metrics import LDDTMetrics
-from protenix.metrics.plausibility import (
-    PerResidueRamaScore,
-    PerResidueRotamerScore,
-    StructureClashScore,
-)
 from protenix.model.allatom_mpnn import AllatomMPNN
 from protenix.model.artios_backbone import ArtiosBackbone
 from protenix.model.loss import BackboneLoss
@@ -536,9 +531,9 @@ class ArtiosBackboneTrainer(object):
     def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):
         # Init Metric Aggregator
         simple_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
-        rotamer_score = PerResidueRotamerScore()
-        rama_score = PerResidueRamaScore()
-        clash_score = StructureClashScore()
+        # rotamer_score = PerResidueRotamerScore()
+        # rama_score = PerResidueRamaScore()
+        # clash_score = StructureClashScore()
         eval_precision = {
             "fp32": torch.float32,
             "bf16": torch.bfloat16,
@@ -680,9 +675,9 @@ class ArtiosBackboneTrainer(object):
                     #             )
                     #         )
 
-                    rotamer_score.update(packed_atom_array_list)
-                    rama_score.update(packed_atom_array_list)
-                    clash_score.update(packed_atom_array_list)
+                    # rotamer_score.update(packed_atom_array_list)
+                    # rama_score.update(packed_atom_array_list)
+                    # clash_score.update(packed_atom_array_list)
 
                     # Log structure files to Neptune Scale
                     if self.configs.use_wandb:
@@ -706,15 +701,15 @@ class ArtiosBackboneTrainer(object):
                     torch.cuda.empty_cache()
 
             metrics = simple_metric_wrapper.calc()
-            if rotamer_score.num_total_residues > 0.0:
-                metrics["val/rotamer_score"] = rotamer_score.compute()
-            if rama_score.num_total_residues > 0.0:
-                metrics["val/rama_score"] = rama_score.compute()
-            if clash_score.num_total_interactions > 0.0:
-                metrics["val/clash_score"] = clash_score.compute()
-            rotamer_score.reset()
-            rama_score.reset()
-            clash_score.reset()
+            # if rotamer_score.num_total_residues > 0.0:
+            #     metrics["val/rotamer_score"] = rotamer_score.compute()
+            # if rama_score.num_total_residues > 0.0:
+            #     metrics["val/rama_score"] = rama_score.compute()
+            # if clash_score.num_total_interactions > 0.0:
+            #     metrics["val/clash_score"] = clash_score.compute()
+            # rotamer_score.reset()
+            # rama_score.reset()
+            # clash_score.reset()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
         return metrics

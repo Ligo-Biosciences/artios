@@ -172,7 +172,7 @@ class ArtiosBackboneTrainer(object):
             + f"global rank: {DIST_WRAPPER.rank}, local rank: {DIST_WRAPPER.local_rank}"
         )
         mp.set_sharing_strategy("file_system")
-        mp.set_start_method("spawn", force=True)
+        # mp.set_start_method("spawn", force=True)
 
         self.use_cuda = torch.cuda.device_count() > 0
         if self.use_cuda:
@@ -928,7 +928,7 @@ class ArtiosBackboneTrainer(object):
         # Save each sample
         saved_files = []
         atom_arrays = []
-        for idx in range(coordinate.shape[-3]):  # -4
+        for idx in range(coordinate.shape[-4]):
             output_path = os.path.join(
                 self.prediction_dir,
                 f"{pdb_id}_{structure_type}_sample_{idx}_{ema_suffix}.cif",

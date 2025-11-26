@@ -180,11 +180,11 @@ data_configs = {
         "sidechain_seed_is_in_sphere_prob": 0.8,
         "sidechain_bfs_depth_prob": 0.5,
         "residue_inclusion_prob": 0.8,
+        "use_tip_atoms_only_prob": 0.9,
         "max_motif_residues": 15,
         "r_min": 4.0,
         "r_max": 5.0,
         "save_motifs_for_debugging": False,
-        "use_motif_atoms_only": False,
     },
     "padding": {
         "max_n_msa": 1,

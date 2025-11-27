@@ -123,6 +123,16 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
             DATA_ROOT_DIR, "components.v20240608.cif.rdkit_mol.pkl"
         )
 
+# if still not found, try ccd_files local directory
+if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
+    not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
+):
+    ccd_files_dir = os.path.join(os.path.dirname(__file__), "..", "ccd_files")
+    CCD_COMPONENTS_FILE_PATH = os.path.join(ccd_files_dir, "components.cif")
+    CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
+        ccd_files_dir, "components.cif.rdkit_mol.pkl"
+    )
+
 
 # This is a patch in inference stage for users that do not have root permission.
 # If you run

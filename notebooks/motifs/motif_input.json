@@ -1,0 +1,27 @@
+[
+    {
+        "name": "carbonic-motif",
+        "design": [
+            {
+                "proteinChain": {
+                    "length": 256
+                }
+            }
+        ],
+        "motif": [
+            {
+                "ligand": {
+                    "file": "carbonic_anhydrase_motif.cif"
+                }
+            }
+        ],
+        "ligand": [
+            {
+                "ligand": {
+                    "ligand": "Cc1ccc(CN[S](=O)(=O)c2sc(cc2)[S](N)(=O)=O)cc1",
+                    "count": 1
+                }
+            }
+        ]
+    }
+]

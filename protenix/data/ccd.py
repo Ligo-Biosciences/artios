@@ -133,15 +133,7 @@ def get_one_letter_code(ccd_code: str) -> Union[str, None]:
     Returns:
         str: one letter code
     """
-    # ccd_cif = biotite_load_ccd_cif()
-    # if ccd_code not in ccd_cif:
-    #     return None
-    # one = ccd_cif[ccd_code]["chem_comp"]["one_letter_code"].as_item()
-    # if one == "?":
-    #     return None
-    # else:
-    #     return one
-    return chem_comp_to_one_letter.get(ccd_code, None)
+    return chem_comp_to_one_letter().get(ccd_code, None)
 
 
 @functools.lru_cache(maxsize=None)

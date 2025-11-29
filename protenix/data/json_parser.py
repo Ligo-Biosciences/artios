@@ -164,9 +164,15 @@ def _remove_non_std_ccd_leaving_atoms(atom_array: AtomArray) -> AtomArray:
             staying_atoms = ccd.get_component_atom_array(
                 res_name, keep_leaving_atoms=False, keep_hydrogens=False
             ).atom_name
-            if idx == 1 and ccd.get_mol_type(res_name) in ("dna", "rna"):
+            if (
+                idx == 1
+                and ccd.get_chain_type_from_ccd_code(res_name).is_nucleic_acid()
+            ):
                 staying_atoms = np.append(staying_atoms, ["OP3"])
-            if idx == atom_array.res_id[-1] and ccd.get_mol_type(res_name) == "protein":
+            if (
+                idx == atom_array.res_id[-1]
+                and ccd.get_chain_type_from_ccd_code(res_name).is_protein()
+            ):
                 staying_atoms = np.append(staying_atoms, ["OXT"])
             leaving_atoms |= (atom_array.res_id == idx) & (
                 ~np.isin(atom_array.atom_name, staying_atoms)
@@ -201,6 +207,7 @@ def remove_leaving_atoms(atom_array: AtomArray, bond_count: dict) -> AtomArray:
 
     Returns:
         AtomArray: Biotite Atom array with leaving atoms removed.
+    # TODO: move somewhere else, e.g. ccd.py
     """
     remove_indices = []
     res_starts = struc.get_residue_starts(atom_array, add_exclusive_stop=True)

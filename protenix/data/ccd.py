@@ -14,6 +14,7 @@
 
 import functools
 import logging
+import pickle
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -198,34 +199,34 @@ _ccd_rdkit_mols: dict[str, Chem.Mol] = {}
 
 
 def get_component_rdkit_mol(ccd_code: str) -> Union[Chem.Mol, None]:
-    """get rdkit mol by PDBeCCDUtils
-    https://github.com/PDBeurope/ccdutils
+    """Returns the pre-computed reference RDKit mol corresponding to the CCD.
+    The reference conformer is computed with RDKit ETKDGv3 as stated in
+    AlphaFold3's supplementary information.
 
-    preprocessing all ccd components in _components_file at first time run.
+    NOTE: it is unclear the performance difference of this vs doing something
+    like ccd_code_to_rdkit, but we save that for ablations.
 
     Args:
         ccd_code (str): ccd code
 
     Returns
         rdkit.Chem.Mol: rdkit mol with ref coord
-    # TODO: move to rdkit.py
     """
-    # global _ccd_rdkit_mols
-    # # _ccd_rdkit_mols is not empty
-    # if _ccd_rdkit_mols:
-    #     return _ccd_rdkit_mols.get(ccd_code, None)
+    global _ccd_rdkit_mols
+    if _ccd_rdkit_mols:
+        return _ccd_rdkit_mols.get(ccd_code, None)
 
-    # rdkit_mol_pkl = RKDIT_MOL_PKL
-    # if rdkit_mol_pkl.exists():
-    #     with open(rdkit_mol_pkl, "rb") as f:
-    #         _ccd_rdkit_mols = pickle.load(f)
-    #     return _ccd_rdkit_mols.get(ccd_code, None)
-    # else:
-    #     raise FileNotFoundError(
-    #         f"CCD components file {rdkit_mol_pkl} not found, please download it to your DATA_ROOT_DIR before running."
-    #         "See https://github.com/bytedance/Protenix"
-    #     )
-    return ccd_code_to_rdkit(ccd_code, ccd_mirror_path=None)
+    rdkit_mol_pkl = RKDIT_MOL_PKL
+    if rdkit_mol_pkl.exists():
+        with open(rdkit_mol_pkl, "rb") as f:
+            _ccd_rdkit_mols = pickle.load(f)
+        return _ccd_rdkit_mols.get(ccd_code, None)
+    else:
+        raise FileNotFoundError(
+            f"CCD components file {rdkit_mol_pkl} not found, please download it to your DATA_ROOT_DIR before running."
+            "or generate it with scripts/gen_ccd_cache.py"
+        )
+    # return ccd_code_to_rdkit(ccd_code)
 
 
 @functools.lru_cache
@@ -253,10 +254,7 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
             charge: atom formal charge
             perm: atom permutation
     """
-    # TODO: ccd mirror path
-    mol = ccd_code_to_rdkit(
-        ccd_code, ccd_mirror_path=None
-    )  # get_component_rdkit_mol(ccd_code)
+    mol = get_component_rdkit_mol(ccd_code)
     if mol is None:
         return {}
     if mol.GetNumAtoms() == 0:  # eg: "UNL"
@@ -272,9 +270,9 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
     results = {
         "ccd": ccd_code,  # str
         "atom_map": mol.atom_map,  # dict[str,int]: atom name to atom index
-        "coord": coord,  # np.ndarray[float]: atom coordinates, shape:(n_atom,3)
-        "mask": mol.ref_mask,  # np.ndarray[bool]: atom mask, shape:(n_atom,)
-        "charge": charge,  # np.ndarray[int]: atom formal charge, shape:(n_atom,)
+        "coord": coord,  # np.ndarray[float]: atom coordinates, (n_atom,3)
+        "mask": mol.ref_mask,  # np.ndarray[bool]: atom mask, (n_atom,)
+        "charge": charge,  # np.ndarray[int]: atom formal charge, (n_atom,)
     }
 
     if return_perm:
@@ -293,7 +291,7 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
                     ]
                 ]
             )
-        # np.ndarray[int]: atom permutation, shape:(n_atom_wo_h, n_perm)
+        # np.ndarray[int]: atom permutation, (n_atom_wo_h, n_perm)
         results["perm"] = perm.T
 
     return results
@@ -395,12 +393,14 @@ def add_inter_residue_bonds(
     remove_far_inter_chain_pairs: bool = False,
 ) -> AtomArray:
     """
-    add polymer bonds (C-N or O3'-P) between adjacent residues based on auth_seq_id.
+    Add polymer bonds (C-N or O3'-P) between adjacent residues based on auth_seq_id.
 
-    exclude_struct_conn_pairs: if True, do not add bond between adjacent residues already has non-standard polymer bonds
-                  on atom C or N or O3' or P.
-
-    remove_far_inter_chain_pairs: if True, remove inter chain (based on label_asym_id) bonds that are far away from each other.
+    Args:
+        atom_array: input atom array
+        exclude_struct_conn_pairs: if True, do not add bond between adjacent residues already
+            has non-standard polymer bonds on atom C or N or O3' or P.
+        remove_far_inter_chain_pairs: if True, remove inter chain (based on label_asym_id)
+            bonds that are far away from each other.
 
     returns:
         AtomArray: Biotite AtomArray merged inter residue bonds into atom_array.bonds
@@ -455,9 +455,14 @@ def add_inter_residue_bonds(
 
 
 def res_names_to_sequence(res_names: list[str]) -> str:
-    """convert res_names to sequences {chain_id: canonical_sequence} based on CCD
+    """
+    Convert res_names to sequences {chain_id: canonical_sequence}
+    based on CCD.
 
-    Return
+    Args:
+        res_names: residue names (HIS, ARG, ...)
+
+    Returns:
         str: canonical_sequence
     """
     seq = ""
@@ -469,4 +474,4 @@ def res_names_to_sequence(res_names: list[str]) -> str:
     return seq
 
 
-__all__ = ["get_chain_type_from_ccd_code"]
+__all__ = ["get_chain_type_from_ccd_code", "ccd_code_to_rdkit"]

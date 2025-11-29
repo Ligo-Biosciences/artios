@@ -20,10 +20,17 @@ from protenix.data.utils import save_structure_cif
 
 def load_structure(path_to_file: Path) -> AtomArray:
     """
-    Loads an AtomArray from a .cif file.
+    Loads an AtomArray from a structure file (PDB or CIF).
     """
-    parser = MMCIFParser(path_to_file)
-    return parser.get_structure()
+    file_extension = path_to_file.suffix.lower()
+
+    if file_extension == ".cif":
+        parser = MMCIFParser(path_to_file)
+        return parser.get_structure()
+    elif file_extension == ".pdb":
+        return strucio.load_structure(path_to_file)
+    else:
+        raise ValueError(f"Unsupported file extension: {file_extension}")
 
 
 def save_to_sdf(atom_array, output_path):

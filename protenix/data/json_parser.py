@@ -90,7 +90,7 @@ RDKIT_TO_BIOTITE_BOND_TYPE = {
 
 def add_reference_features(atom_array: AtomArray) -> AtomArray:
     """
-    Add reference features of each resiude to atom_array
+    Add reference features of each residue to atom_array
 
     Args:
         atom_array (AtomArray): biotite AtomArray

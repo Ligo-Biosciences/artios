@@ -13,18 +13,22 @@
 # limitations under the License.
 
 import functools
-import gzip
 import logging
 import pickle
-import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional, Union
 
-import biotite
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
+from atomworks.enums import ChainType
+from atomworks.io.utils.ccd import (
+    atom_array_from_ccd_code,
+    chem_comp_to_one_letter,
+    get_available_ccd_codes,
+    get_chain_type_from_ccd_code,
+)
 from biotite.structure import AtomArray
 from rdkit import Chem
 
@@ -47,8 +51,11 @@ def biotite_load_ccd_cif() -> pdbx.CIFFile:
     return pdbx.CIFFile.read(COMPONENTS_FILE)
 
 
-def _map_central_to_leaving_groups(component) -> Optional[dict[str, list[list[str]]]]:
-    """map each central atom (bonded atom) index to leaving atom groups in component (atom_array).
+def _map_central_to_leaving_groups(
+    component: AtomArray,
+) -> Optional[dict[str, list[list[str]]]]:
+    """
+    Map each central atom (bonded atom) index to leaving atom groups in component (atom_array).
 
     Returns:
         dict[str, list[list[str]]]: central atom name to leaving atom groups (atom names).
@@ -58,16 +65,20 @@ def _map_central_to_leaving_groups(component) -> Optional[dict[str, list[list[st
     if comp.bonds is None:
         return {}
     central_to_leaving_groups = defaultdict(list)
-    for c_idx in np.flatnonzero(~comp.leaving_atom_flag):
-        bonds, _ = comp.bonds.get_bonds(c_idx)
-        for l_idx in bonds:
-            if comp.leaving_atom_flag[l_idx]:
-                comp.bonds.remove_bond(c_idx, l_idx)
-                group_idx = struc.find_connected(comp.bonds, l_idx)
-                if not np.all(comp.leaving_atom_flag[group_idx]):
+
+    # ... iterate through the central atoms
+    for central_idx in np.flatnonzero(~comp.is_leaving_atom):
+        bonds, _ = comp.bonds.get_bonds(central_idx)
+
+        # ... iterate through leaving groups defined by the bond graph
+        for leaving_idx in bonds:
+            if comp.is_leaving_atom[leaving_idx]:
+                comp.bonds.remove_bond(central_idx, leaving_idx)
+                connected_group = struc.find_connected(comp.bonds, leaving_idx)
+                if not np.all(comp.is_leaving_atom[connected_group]):
                     return None
-                central_to_leaving_groups[comp.atom_name[c_idx]].append(
-                    comp.atom_name[group_idx].tolist()
+                central_to_leaving_groups[comp.atom_name[central_idx]].append(
+                    comp.atom_name[connected_group].tolist()
                 )
     return central_to_leaving_groups
 
@@ -85,35 +96,22 @@ def get_component_atom_array(
 
     Returns:
         AtomArray: Biotite AtomArray of CCD component
-            with additional attribute: leaving_atom_flag (bool)
+            with additional attribute: is_leaving_atom (bool)
     """
-    ccd_cif = biotite_load_ccd_cif()
-    if ccd_code not in ccd_cif:
-        logger.warning(f"Warning: get_component_atom_array() can not parse {ccd_code}")
-        return None
-    try:
-        comp = pdbx.get_component(ccd_cif, data_block=ccd_code, use_ideal_coord=True)
-    except biotite.InvalidFileError as e:
-        # Eg: UNL without atom.
-        logger.warning(f"Warning: get_component_atom_array() can not parse {ccd_code} for {e}")
-        return None
-    atom_category = ccd_cif[ccd_code]["chem_comp_atom"]
-    leaving_atom_flag = atom_category["pdbx_leaving_atom_flag"].as_array()
-    comp.set_annotation("leaving_atom_flag", leaving_atom_flag == "Y")
+    comp = atom_array_from_ccd_code(ccd_code)
 
-    for atom_id in ["alt_atom_id", "pdbx_component_atom_id"]:
-        comp.set_annotation(atom_id, atom_category[atom_id].as_array())
     if not keep_leaving_atoms:
-        comp = comp[~comp.leaving_atom_flag]
+        comp = comp[~comp.is_leaving_atom]
     if not keep_hydrogens:
         # EG: ND4
         comp = comp[~np.isin(comp.element, ["H", "D"])]
 
-    # Map central atom index to leaving group (atom_indices) in component (atom_array).
+    # Map central atom index to leaving group in atom array.
     comp.central_to_leaving_groups = _map_central_to_leaving_groups(comp)
     if comp.central_to_leaving_groups is None:
         logger.warning(
-            f"Warning: ccd {ccd_code} has leaving atom group bond to more than one central atom, central_to_leaving_groups is None."
+            f"Warning: ccd {ccd_code} has leaving atom group bond to more than",
+            "one central atom, central_to_leaving_groups is None.",
         )
     return comp
 
@@ -135,45 +133,35 @@ def get_one_letter_code(ccd_code: str) -> Union[str, None]:
     Returns:
         str: one letter code
     """
-    ccd_cif = biotite_load_ccd_cif()
-    if ccd_code not in ccd_cif:
-        return None
-    one = ccd_cif[ccd_code]["chem_comp"]["one_letter_code"].as_item()
-    if one == "?":
-        return None
-    else:
-        return one
+    # ccd_cif = biotite_load_ccd_cif()
+    # if ccd_code not in ccd_cif:
+    #     return None
+    # one = ccd_cif[ccd_code]["chem_comp"]["one_letter_code"].as_item()
+    # if one == "?":
+    #     return None
+    # else:
+    #     return one
+    return chem_comp_to_one_letter.get(ccd_code, None)
 
 
 @functools.lru_cache(maxsize=None)
-def get_mol_type(ccd_code: str) -> str:
-    """get mol_type from CCD components file.
-
-    based on _chem_comp.type
-    http://mmcif.rcsb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_chem_comp.type.html
-
-    not use _chem_comp.pdbx_type, because it is not consistent with _chem_comp.type
-    e.g. ccd 000 --> _chem_comp.type="NON-POLYMER" _chem_comp.pdbx_type="ATOMP"
-    https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v5_next.dic/Items/_struct_asym.pdbx_type.html
+def get_mol_type_str(ccd_code: str) -> str:
+    """Get mol_type as string from CCD components file.
 
     Args:
         ccd_code (str): ccd code
 
     Returns:
-        str: mol_type, one of {"protein", "rna", "dna", "ligand"}
+        str: mol_type, one of "protein", "rna", "dna", "ligand"
     """
-    ccd_cif = biotite_load_ccd_cif()
-    if ccd_code not in ccd_cif:
-        return "ligand"
+    chain_type: ChainType = get_chain_type_from_ccd_code(ccd_code)
 
-    link_type = ccd_cif[ccd_code]["chem_comp"]["type"].as_item().upper()
-
-    if "PEPTIDE" in link_type and link_type != "PEPTIDE-LIKE":
+    if chain_type.is_protein():
         return "protein"
-    if "DNA" in link_type:
-        return "dna"
-    if "RNA" in link_type:
-        return "rna"
+    if chain_type in (ChainType.DNA, ChainType.DNA_RNA_HYBRID):
+        "dna"
+    if chain_type == ChainType.RNA:
+        "rna"
     return "ligand"
 
 
@@ -209,8 +197,9 @@ def get_smiles_str(ccd_code: str) -> str:
 
 def get_all_ccd_code() -> list:
     """get all ccd code from components file"""
-    ccd_cif = biotite_load_ccd_cif()
-    return list(ccd_cif.keys())
+    # ccd_cif = biotite_load_ccd_cif()
+    # return list(ccd_cif.keys())
+    return list(get_available_ccd_codes())
 
 
 _ccd_rdkit_mols: dict[str, Chem.Mol] = {}
@@ -227,6 +216,7 @@ def get_component_rdkit_mol(ccd_code: str) -> Union[Chem.Mol, None]:
 
     Returns
         rdkit.Chem.Mol: rdkit mol with ref coord
+    # TODO: move to rdkit.py
     """
     global _ccd_rdkit_mols
     # _ccd_rdkit_mols is not empty
@@ -296,10 +286,16 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
             Chem.SanitizeMol(mol)
             perm = get_substructure_perms(mol, MaxMatches=1000)
 
-        except:
+        except Exception:
             # Sanitize failed, permutation is unavailable
             perm = np.array(
-                [[i for i, atom in enumerate(mol.GetAtoms()) if atom.GetAtomicNum() != 1]]
+                [
+                    [
+                        i
+                        for i, atom in enumerate(mol.GetAtoms())
+                        if atom.GetAtomicNum() != 1
+                    ]
+                ]
             )
         # np.ndarray[int]: atom permutation, shape:(n_atom_wo_h, n_perm)
         results["perm"] = perm.T
@@ -308,7 +304,9 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
 
 
 # Modified from biotite to use consistent ccd components file
-def _connect_inter_residue(atoms: AtomArray, residue_starts: np.ndarray) -> struc.BondList:
+def _connect_inter_residue(
+    atoms: AtomArray, residue_starts: np.ndarray
+) -> struc.BondList:
     """
     Create a :class:`BondList` containing the bonds between adjacent
     amino acid or nucleotide residues.
@@ -352,13 +350,16 @@ def _connect_inter_residue(atoms: AtomArray, residue_starts: np.ndarray) -> stru
             continue
 
         # Get link type for this residue from RCSB components.cif
-        curr_link = get_mol_type(res_names[curr_start_i])
-        next_link = get_mol_type(res_names[next_start_i])
+        # curr_link = get_mol_type(res_names[curr_start_i])
+        # next_link = get_mol_type(res_names[next_start_i])
 
-        if curr_link == "protein" and next_link in "protein":
+        curr_link: ChainType = get_chain_type_from_ccd_code(res_names[curr_start_i])
+        next_link: ChainType = get_chain_type_from_ccd_code(res_names[next_start_i])
+
+        if curr_link.is_protein() and next_link.is_protein():
             curr_connect_atom_name = "C"
             next_connect_atom_name = "N"
-        elif curr_link in ["dna", "rna"] and next_link in ["dna", "rna"]:
+        elif curr_link.is_nucleic_acid() and next_link.is_nucleic_acid():
             curr_connect_atom_name = "O3'"
             next_connect_atom_name = "P"
         else:
@@ -385,7 +386,9 @@ def _connect_inter_residue(atoms: AtomArray, residue_starts: np.ndarray) -> stru
             # -> skip this bond
             continue
 
-        bonds.append((curr_connect_indices[0], next_connect_indices[0], struc.BondType.SINGLE))
+        bonds.append(
+            (curr_connect_indices[0], next_connect_indices[0], struc.BondType.SINGLE)
+        )
 
     return struc.BondList(atoms.array_length(), np.array(bonds, dtype=np.uint32))
 
@@ -432,7 +435,9 @@ def add_inter_residue_bonds(
 
     if remove_far_inter_chain_pairs:
         if not hasattr(atom_array, "label_asym_id"):
-            logging.warning("label_asym_id not found, far inter chain bonds will not be removed")
+            logging.warning(
+                "label_asym_id not found, far inter chain bonds will not be removed"
+            )
         for b_idx, (atom_i, atom_j, b_type) in enumerate(inter_bonds._bonds):
             if atom_array.label_asym_id[atom_i] != atom_array.label_asym_id[atom_j]:
                 coord_i = atom_array.coord[atom_i]
@@ -466,3 +471,6 @@ def res_names_to_sequence(res_names: list[str]) -> str:
         one = "X" if len(one) > 1 else one
         seq += one
     return seq
+
+
+__all__ = ["get_chain_type_from_ccd_code"]

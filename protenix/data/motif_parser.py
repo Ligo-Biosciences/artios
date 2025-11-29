@@ -30,7 +30,7 @@ from protenix.data.parser import AddAtomArrayAnnot, MMCIFParser
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class MotifResidue:
     """Partial residue extracted from motif CIF file."""
 
@@ -40,13 +40,13 @@ class MotifResidue:
     coords: np.ndarray  # [N_atoms, 3]
 
 
-@dataclass
+@dataclass(frozen=True)
 class MotifLigand:
     """Ligand fragment extracted from motif CIF file."""
 
     chain_id: str
     res_id: int
-    res_name: str  # e.g., "ZN", "AL5"
+    res_name: str  # e.g., CCD code "CCD_ZN", "CCD_AL5", or smiles "C=C"
     atom_names: list[str]
     coords: np.ndarray  # [N_atoms, 3]
     elements: list[str]
@@ -84,6 +84,10 @@ def parse_motif_cif(
 
         if res_slice.hetero[0]:
             # Ligand entity
+            # TODO: do res_name CCD code and smiles string stuff,
+            # just need to add an extension to CCD codes.
+            # to do this properly, might just need to get the whole json as input
+            # to check if it is a CCD code or a smiles.
             ligands.append(
                 MotifLigand(
                     chain_id=str(res_slice.chain_id[0]),
@@ -113,22 +117,21 @@ def parse_motif_cif(
 
 def expand_motif_residue(
     motif_res: MotifResidue,
-) -> tuple[AtomArray, np.ndarray]:
+) -> AtomArray:
     """
     Expand partial sidechain to full residue from CCD.
 
     1. Get full residue from CCD (e.g., complete HIS with all atoms)
     2. Match motif atoms by atom_name
     3. Transfer coordinates for matching atoms
-    4. Return (full_residue, is_motif_mask)
+    4. Return full residue with is_motif and is_motif_related annotations
 
     Args:
         motif_res: MotifResidue with partial atom coordinates
 
     Returns:
-        tuple containing:
-        - AtomArray: Full residue with coordinates transferred where available
-        - np.ndarray: Boolean mask indicating which atoms have motif coordinates
+        AtomArray: Full residue with coordinates transferred where available,
+            with is_motif and is_motif_related annotations added
     """
     full_residue = ccd.get_component_atom_array(
         motif_res.res_name,
@@ -140,6 +143,9 @@ def expand_motif_residue(
         raise ValueError(f"Could not find CCD component for {motif_res.res_name}")
 
     is_motif = np.zeros(len(full_residue), dtype=bool)
+
+    # Set coords to zero as a safety measure
+    full_residue.coord = np.zeros_like(full_residue.coord)
 
     # Transfer coordinates for matching atoms
     for i, atom_name in enumerate(motif_res.atom_names):
@@ -156,7 +162,29 @@ def expand_motif_residue(
     # Set residue ID
     full_residue.res_id[:] = motif_res.res_id
 
-    return full_residue, is_motif
+    # Add is_motif annotation
+    full_residue.set_annotation("is_motif", is_motif)
+
+    # Add is_motif_related annotation (all atoms in this residue are related)
+    is_motif_related = np.ones(len(full_residue), dtype=bool)
+    full_residue.set_annotation("is_motif_related", is_motif_related)
+
+    return full_residue
+
+
+def expand_ligand(motif_ligand: MotifLigand) -> AtomArray:
+    """
+    Expand motif ligand using the CCD code or the SMILES id.
+
+    Args:
+        motif_ligand: MotifLigand with partial coordinates
+
+    Returns:
+       AtomArray of the full ligand with the motif atom coordinates
+       filled in.
+    """
+
+    pass
 
 
 def match_ccd_ligand_coords(
@@ -417,8 +445,9 @@ class MotifScaffoldParser:
         protein = builder.build_all_annotations()
 
         # Add is_motif annotation (all zeros for design backbone)
-        protein.add_annotation("is_motif", dtype=int)
-        protein.is_motif[:] = 0
+        protein.add_annotation("is_motif", dtype=bool)
+        protein.is_motif[:] = False
+        # TODO: add is motif related false as well
 
         return protein
 

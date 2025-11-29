@@ -14,7 +14,6 @@
 
 import functools
 import logging
-import pickle
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -23,6 +22,7 @@ import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
 from atomworks.enums import ChainType
+from atomworks.io.tools.rdkit import ccd_code_to_rdkit
 from atomworks.io.utils.ccd import (
     atom_array_from_ccd_code,
     chem_comp_to_one_letter,
@@ -218,21 +218,22 @@ def get_component_rdkit_mol(ccd_code: str) -> Union[Chem.Mol, None]:
         rdkit.Chem.Mol: rdkit mol with ref coord
     # TODO: move to rdkit.py
     """
-    global _ccd_rdkit_mols
-    # _ccd_rdkit_mols is not empty
-    if _ccd_rdkit_mols:
-        return _ccd_rdkit_mols.get(ccd_code, None)
+    # global _ccd_rdkit_mols
+    # # _ccd_rdkit_mols is not empty
+    # if _ccd_rdkit_mols:
+    #     return _ccd_rdkit_mols.get(ccd_code, None)
 
-    rdkit_mol_pkl = RKDIT_MOL_PKL
-    if rdkit_mol_pkl.exists():
-        with open(rdkit_mol_pkl, "rb") as f:
-            _ccd_rdkit_mols = pickle.load(f)
-        return _ccd_rdkit_mols.get(ccd_code, None)
-    else:
-        raise FileNotFoundError(
-            f"CCD components file {rdkit_mol_pkl} not found, please download it to your DATA_ROOT_DIR before running."
-            "See https://github.com/bytedance/Protenix"
-        )
+    # rdkit_mol_pkl = RKDIT_MOL_PKL
+    # if rdkit_mol_pkl.exists():
+    #     with open(rdkit_mol_pkl, "rb") as f:
+    #         _ccd_rdkit_mols = pickle.load(f)
+    #     return _ccd_rdkit_mols.get(ccd_code, None)
+    # else:
+    #     raise FileNotFoundError(
+    #         f"CCD components file {rdkit_mol_pkl} not found, please download it to your DATA_ROOT_DIR before running."
+    #         "See https://github.com/bytedance/Protenix"
+    #     )
+    return ccd_code_to_rdkit(ccd_code, ccd_mirror_path=None)
 
 
 @functools.lru_cache
@@ -260,7 +261,10 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
             charge: atom formal charge
             perm: atom permutation
     """
-    mol = get_component_rdkit_mol(ccd_code)
+    # TODO: ccd mirror path
+    mol = ccd_code_to_rdkit(
+        ccd_code, ccd_mirror_path=None
+    )  # get_component_rdkit_mol(ccd_code)
     if mol is None:
         return {}
     if mol.GetNumAtoms() == 0:  # eg: "UNL"

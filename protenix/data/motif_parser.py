@@ -36,20 +36,149 @@ class MotifResidue:
 
     res_id: int
     res_name: str  # e.g., "HIS", "GLU", "THR"
-    atom_names: list[str]  # e.g., ["CG", "CD2", "ND1", "CE1", "NE2"]
+    atom_names: tuple[str, ...]  # e.g., ("CG", "CD2", "ND1", "CE1", "NE2")
     coords: np.ndarray  # [N_atoms, 3]
+
+    def to_atom_array(self) -> AtomArray:
+        """
+        Expand partial sidechain to full residue AtomArray from CCD.
+
+        1. Get full residue from CCD (e.g., complete HIS with all atoms)
+        2. Match motif atoms by atom_name
+        3. Transfer coordinates for matching atoms
+        4. Add is_motif annotation (True for atoms with motif coordinates)
+
+        Returns:
+            AtomArray: Full residue with coordinates transferred where available
+        """
+        full_residue = ccd.get_component_atom_array(
+            self.res_name,
+            keep_leaving_atoms=False,
+            keep_hydrogens=False,
+        )
+
+        if full_residue is None:
+            raise ValueError(f"Could not find CCD component for {self.res_name}")
+
+        is_motif = np.zeros(len(full_residue), dtype=bool)
+        full_residue.coord = np.zeros_like(full_residue.coord)
+
+        for i, atom_name in enumerate(self.atom_names):
+            match_idx = np.where(full_residue.atom_name == atom_name)[0]
+            if len(match_idx) > 0:
+                full_residue.coord[match_idx[0]] = self.coords[i]
+                is_motif[match_idx[0]] = True
+            else:
+                logger.warning(
+                    f"Motif atom {atom_name} not found in CCD component {self.res_name}"
+                )
+
+        full_residue.res_id[:] = self.res_id
+        full_residue.set_annotation("is_motif", is_motif)
+
+        return full_residue
 
 
 @dataclass(frozen=True)
 class MotifLigand:
-    """Ligand fragment extracted from motif CIF file."""
+    """Ligand specification combining motif CIF fragment with full ligand description."""
 
-    chain_id: str
-    res_id: int
-    res_name: str  # e.g., CCD code "CCD_ZN", "CCD_AL5", or smiles "C=C"
-    atom_names: list[str]
-    coords: np.ndarray  # [N_atoms, 3]
-    elements: list[str]
+    # From motif CIF file
+    cif_res_name: str  # Residue name in the CIF (e.g., "ZN", "AL5")
+    atom_names: tuple[str, ...]  # Atom names from CIF (e.g., ("O1A", "S1", "N21"))
+    coords: np.ndarray  # [N_atoms, 3] coordinates from CIF
+    elements: tuple[str, ...]  # Element types (e.g., ("O", "S", "N"))
+
+    # From JSON specification
+    full_ligand: str  # Full ligand: "CCD_ZN", "CCD_AL5", or SMILES string
+
+    # Optional explicit atom mapping for SMILES
+    # Maps CIF atom_name -> SMILES atom map number
+    atom_map: Optional[dict[str, int]] = None
+
+    # Metadata (optional, for debugging/logging)
+    chain_id: Optional[str] = None
+    res_id: Optional[int] = None
+
+    def _is_ccd_ligand(self) -> bool:
+        """Check if full_ligand is a CCD code (vs SMILES)."""
+        return self.full_ligand.startswith("CCD_")
+
+    def to_atom_array(self) -> AtomArray:
+        """
+        Expand motif ligand to full ligand AtomArray.
+
+        For CCD ligands: match by atom_name
+        For SMILES with atom_map: use explicit mapping via atom map numbers
+        For SMILES without atom_map: raises error (use atom_map for reliable matching)
+
+        Returns:
+            AtomArray: Full ligand with motif coordinates transferred
+        """
+        # Build full ligand using build_ligand from json_parser
+        # Works for both CCD ("CCD_ZN", "CCD_AL5") and SMILES
+        entity_info = {"ligand": {"ligand": self.full_ligand, "count": 1}}
+
+        ligand_info = build_ligand(entity_info)
+        full_ligand = ligand_info["atom_array"]
+
+        is_motif = np.zeros(len(full_ligand), dtype=bool)
+
+        if self._is_ccd_ligand():
+            # CCD ligand: match by atom_name
+            for i, atom_name in enumerate(self.atom_names):
+                match_idx = np.where(full_ligand.atom_name == atom_name)[0]
+                if len(match_idx) == 0:
+                    raise ValueError(
+                        f"Motif atom '{atom_name}' not found in CCD ligand "
+                        f"'{self.full_ligand}'. Available atoms: "
+                        f"{full_ligand.atom_name.tolist()}"
+                    )
+                full_ligand.coord[match_idx[0]] = self.coords[i]
+                is_motif[match_idx[0]] = True
+
+        elif self.atom_map is not None:
+            # SMILES with explicit atom_map
+
+            map_num_to_atom_name = ligand_info.get("atom_map_to_atom_name", {})
+            # map number -> AtomArray atom_name
+
+            for i, cif_atom_name in enumerate(self.atom_names):
+                if cif_atom_name not in self.atom_map:
+                    raise KeyError(
+                        f"CIF atom '{cif_atom_name}' not found in atom_map. "
+                        f"All motif atoms must be mapped. atom_map keys: "
+                        f"{list(self.atom_map.keys())}"
+                    )
+
+                map_num = self.atom_map[cif_atom_name]
+                if map_num not in map_num_to_atom_name:
+                    raise KeyError(
+                        f"Atom map number {map_num} (for '{cif_atom_name}') not found "
+                        f"in SMILES. Use [atom:{map_num}] notation in SMILES string. "
+                        f"Available map numbers: {list(map_num_to_atom_name.keys())}"
+                    )
+
+                target_atom_name = map_num_to_atom_name[map_num]
+                match_idx = np.where(full_ligand.atom_name == target_atom_name)[0]
+                if len(match_idx) == 0:
+                    raise ValueError(
+                        f"Atom name '{target_atom_name}' not found in ligand array. "
+                        f"This is an internal error."
+                    )
+                full_ligand.coord[match_idx[0]] = self.coords[i]
+                is_motif[match_idx[0]] = True
+
+        else:
+            raise ValueError(
+                f"SMILES ligand '{self.full_ligand}' requires atom_map for reliable "
+                f"coordinate matching. Use SMILES atom map notation [atom:N] and "
+                f"provide atom_map dict mapping CIF atom names to map numbers."
+            )
+
+        full_ligand.set_annotation("is_motif", is_motif)
+
+        return full_ligand
 
 
 def parse_motif_cif(

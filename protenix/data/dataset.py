@@ -945,58 +945,7 @@ class BaseSingleDataset(Dataset):
         Returns:
             AtomArray: AtomArray with updated IDs for motif-related residues
         """
-        new_array = atom_array.copy()
-
-        is_motif_related = new_array.is_motif_related > 0
-
-        if not is_motif_related.any():
-            return new_array
-
-        max_entity_id = new_array.entity_id_int.max()
-        max_asym_id = new_array.asym_id_int.max()
-
-        entity_counter = max_entity_id + 1
-        asym_counter = max_asym_id + 1
-
-        motif_restypes = np.unique(new_array.cano_seq_resname[is_motif_related])
-
-        for restype in motif_restypes:
-            restype_mask = is_motif_related & (new_array.cano_seq_resname == restype)
-
-            current_entity_id = entity_counter
-            new_array.entity_id_int[restype_mask] = current_entity_id
-            entity_counter += 1
-
-            # Within this restype, group by individual residue instances
-            unique_residue_uids = np.unique(new_array.ref_space_uid[restype_mask])
-
-            # Assign unique sym_id and asym_id for each residue instance
-            sym_id_counter = 0
-
-            for residue_uid in unique_residue_uids:
-                residue_instance_mask = restype_mask & (
-                    new_array.ref_space_uid == residue_uid
-                )
-
-                new_array.asym_id_int[residue_instance_mask] = asym_counter
-                asym_counter += 1
-
-                new_array.sym_id_int[residue_instance_mask] = sym_id_counter
-                sym_id_counter += 1
-
-                # Assign unique res_id for each atom in this residue instance
-                num_atoms_in_residue = residue_instance_mask.sum()
-                new_array.res_id[residue_instance_mask] = np.arange(
-                    num_atoms_in_residue
-                )
-
-        # TODO: This is to please the tokenizer for now.
-        new_array.chain_id = new_array.asym_id_int
-
-        # Update ref_space_uid
-        new_array = AddAtomArrayAnnot.add_ref_space_uid(new_array)
-
-        return new_array
+        return AddAtomArrayAnnot.update_ids_to_unindex_motif_residues(atom_array)
 
     @staticmethod
     def _update_centre_atom_mask_to_include_motif(atom_array: AtomArray) -> AtomArray:

@@ -19,10 +19,7 @@ import numpy as np
 from biotite.structure import AtomArray
 
 from protenix.data import ccd
-from protenix.data.json_parser import (
-    add_reference_features,
-    build_ligand,
-)
+from protenix.data.array_builder import add_reference_features, build_ligand
 from protenix.data.json_parser_new import CCDLigand, MotifInput, SMILESLigand
 
 # from protenix.data.parser import MMCIFParser
@@ -109,20 +106,12 @@ class MotifLigand:
         Returns:
             AtomArray: Full ligand with motif coordinates transferred
         """
-        # Build full ligand using build_ligand from json_parser
-        # Convert typed ligand to the string format expected by build_ligand
-        if self._is_ccd_ligand():
-            ligand_str = "CCD_" + "_".join(self.full_ligand.codes)
-        else:
-            ligand_str = self.full_ligand.smiles
-
-        entity_info = {"ligand": {"ligand": ligand_str, "count": 1}}
-        ligand_info = build_ligand(entity_info)
-        full_ligand_array = ligand_info["atom_array"]
+        ligand_info = build_ligand(self.full_ligand)
+        full_ligand_array = ligand_info.atom_array
 
         is_motif = np.zeros(len(full_ligand_array), dtype=bool)
 
-        # CCD
+        # CCD: match by atom_name
         if self._is_ccd_ligand():
             for i, atom_name in enumerate(self.atom_names):
                 match_idx = np.where(full_ligand_array.atom_name == atom_name)[0]
@@ -135,7 +124,7 @@ class MotifLigand:
                 full_ligand_array.coord[match_idx[0]] = self.coords[i]
                 is_motif[match_idx[0]] = True
 
-        # SMILES
+        # SMILES: use atom_map for coordinate transfer
         else:
             atom_map = self.full_ligand.atom_map
             if atom_map is None:
@@ -144,7 +133,7 @@ class MotifLigand:
                     f"SMILES: {self.full_ligand.smiles}"
                 )
 
-            map_num_to_atom_name = ligand_info.get("atom_map_to_atom_name", {})
+            map_num_to_atom_name = ligand_info.atom_map_to_atom_name
 
             for i, cif_atom_name in enumerate(self.atom_names):
                 if cif_atom_name not in atom_map:

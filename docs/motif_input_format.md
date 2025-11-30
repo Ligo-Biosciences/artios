@@ -23,19 +23,23 @@ The model will design a protein that accommodates the motif geometry.
       }
     }
   ],
-  "motif": {
-    "file": "path/to/motif.cif",
-    "ligands": [
-      {
-        "cif_res_name": "ZN",
-        "full_ligand": "CCD_ZN"
-      },
-      {
-        "cif_res_name": "AL5",
-        "full_ligand": "CCD_AL5"
+  "motif": [
+    {
+      "motif": {
+        "file": "path/to/motif.cif",
+        "ligands": [
+          {
+            "cif_res_name": "ZN",
+            "full_ligand": "CCD_ZN"
+          },
+          {
+            "cif_res_name": "AL5",
+            "full_ligand": "CCD_AL5"
+          }
+        ]
       }
-    ]
-  }
+    }
+  ]
 }
 ```
 

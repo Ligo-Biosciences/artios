@@ -10,16 +10,18 @@
         ],
         "motif": [
             {
-                "ligand": {
-                    "file": "carbonic_anhydrase_motif.cif"
-                }
-            }
-        ],
-        "ligand": [
-            {
-                "ligand": {
-                    "ligand": "Cc1ccc(CN[S](=O)(=O)c2sc(cc2)[S](N)(=O)=O)cc1",
-                    "count": 1
+                "motif": {
+                    "file": "notebooks/motifs/carbonic_anhydrase_motif.cif",
+                    "ligands": [
+                        {
+                            "cif_res_name": "ZN",
+                            "full_ligand": "CCD_ZN"
+                        },
+                        {
+                            "cif_res_name": "AL5",
+                            "full_ligand": "CCD_AL5"
+                        }
+                    ]
                 }
             }
         ]

@@ -1,17 +1,35 @@
 """RDKit utilities."""
 
+import copy
+import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
+import biotite.structure as struc
+import numpy as np
 from atomworks.io.tools.rdkit import (
-    atom_array_from_rdkit,
+    CONVERTIBLE_RDKIT_BOND_TYPES,
+    RDKIT_BOND_TYPE_TO_BIOTITE,
+    RDKIT_HYBRIDIZATION_TO_INT,
+    not_isin,
 )
 from atomworks.io.tools.rdkit import (
     smiles_to_rdkit as smiles_to_rdkit_mol,
 )
 from biotite.structure import AtomArray
 from rdkit import Chem
+
+logger = logging.getLogger(__name__)
+
+UNKNOWN_LIGAND = "UNL"
+HYDROGEN_LIKE_SYMBOLS = ["H", "D", "T"]
+
+
+@dataclass(frozen=True)
+class AtomInfo:
+    atom_array: AtomArray
+    atom_map_to_atom_name: Dict[int, str] = field(default_factory=dict)
 
 
 def is_valid_smiles(smiles: str) -> bool:
@@ -39,10 +57,163 @@ def parse_smiles(smiles: str) -> Optional[Chem.Mol]:
     return Chem.MolFromSmiles(smiles)
 
 
-@dataclass(frozen=True)
-class AtomInfo:
-    atom_array: AtomArray
-    atom_map_to_atom_name: Dict[int, str] = field(default_factory=dict)
+def atom_array_from_rdkit(
+    mol: Chem.Mol,
+    *,
+    set_coord_if_available: bool = True,
+    conformer_id: int | None = None,
+    remove_hydrogens: bool = True,
+    remove_inferred_atoms: bool = False,
+) -> AtomArray:
+    """Convert an RDKit molecule to a Biotite AtomArray object.
+
+    This is a local copy of atomworks.io.tools.rdkit.atom_array_from_rdkit
+    with ONE CHANGE: atom naming uses 1-based indexing (C1, C2, O1) instead
+    of 0-based (C0, C1, O0) to match our atom_map_to_atom_name convention.
+
+    Args:
+        mol: The RDKit molecule to convert.
+        set_coord_if_available: Whether to set the coordinates from the RDKit
+            molecule if a conformer is available.
+        conformer_id: The conformer ID to use for coordinates. If None, the first
+          conformer is used.
+        remove_hydrogens: Whether to remove any explicit hydrogen atoms.
+        remove_inferred_atoms: Whether to remove any atoms that do not carry the
+            `rdkit_atom_id` annotation.
+
+    Returns:
+        An AtomArray containing the atoms and bonds from the input Mol object.
+    """
+    mol = copy.deepcopy(mol)
+
+    n_atoms = mol.GetNumAtoms()
+
+    # Get coordinates (if available)
+    coords = np.full((mol.GetNumAtoms(), 3), np.nan)
+    n_conformers = mol.GetNumConformers()
+    if set_coord_if_available and n_conformers > 0:
+        conformer_id = conformer_id if conformer_id is not None else -1
+        if conformer_id >= n_conformers:
+            raise ValueError(
+                f"Conformer ID {conformer_id} out of range for molecule "
+                f"with {n_conformers} conformers"
+            )
+        coords = mol.GetConformer(conformer_id).GetPositions()
+
+    # Set atoms
+    atoms = []
+    element_counter = Counter()
+    for idx, rdatom in enumerate(mol.GetAtoms()):
+        # CHANGE: Use 1-based indexing for atom names (C1, C2, O1)
+        # Original atomworks uses 0-based (C0, C1, O0)
+        element_counter[rdatom.GetAtomicNum()] += 1
+        element_occurence = element_counter[rdatom.GetAtomicNum()]
+
+        atoms.append(
+            struc.Atom(
+                element=rdatom.GetSymbol(),
+                atomic_number=rdatom.GetAtomicNum(),
+                coord=coords[idx],
+                charge=rdatom.GetFormalCharge(),
+                hyb=RDKIT_HYBRIDIZATION_TO_INT[rdatom.GetHybridization()],
+                nhyd=rdatom.GetTotalNumHs(),
+                hvydeg=rdatom.GetDegree() - rdatom.GetTotalNumHs(),
+                rdkit_atom_id=(
+                    rdatom.GetIntProp("rdkit_atom_id")
+                    if rdatom.HasProp("rdkit_atom_id")
+                    else -1
+                ),
+                hetero=True,
+                atom_name=f"{rdatom.GetSymbol().upper()}{element_occurence}",
+                res_name=UNKNOWN_LIGAND,
+                chiral_tag=int(rdatom.GetChiralTag()),
+                is_aromatic=rdatom.GetIsAromatic(),
+            )
+        )
+    atom_array = struc.array(atoms)
+
+    # Set bonds
+    Chem.Kekulize(mol)
+    bond_list = []
+    for bond in mol.GetBonds():
+        rdkit_bond_type = bond.GetBondType()
+
+        if rdkit_bond_type not in CONVERTIBLE_RDKIT_BOND_TYPES:
+            logger.warning(
+                f"Skipping {rdkit_bond_type=}. Not in convertible bond types."
+            )
+            continue
+
+        begin_atom_idx = bond.GetBeginAtomIdx()
+        end_atom_idx = bond.GetEndAtomIdx()
+        is_bond_aromatic = bond.GetIsAromatic()
+        bond_type = RDKIT_BOND_TYPE_TO_BIOTITE[(bond.GetBondType(), is_bond_aromatic)]
+        bond_list.append((begin_atom_idx, end_atom_idx, bond_type))
+    atom_array.bonds = struc.bonds.BondList(n_atoms, np.array(bond_list))
+
+    # Set extra annotations
+    annotations = mol._annotations if hasattr(mol, "_annotations") else {}
+    if len(annotations) > 0:
+        _rdkit_id_to_annotation_idx = {
+            rdkit_atom_id: idx
+            for idx, rdkit_atom_id in enumerate(annotations["rdkit_atom_id"])
+        }
+
+        array_idx_to_annotation_idx = []
+        for idx, atom in enumerate(atoms):
+            if atom.rdkit_atom_id in _rdkit_id_to_annotation_idx:
+                array_idx_to_annotation_idx.append(
+                    (idx, _rdkit_id_to_annotation_idx[atom.rdkit_atom_id])
+                )
+        array_idx_to_annotation_idx = np.array(array_idx_to_annotation_idx)
+
+        if len(array_idx_to_annotation_idx) == 0:
+            logger.warning(
+                "No rdkit atoms match any annotation. You may want to check that you "
+                "are using the @preserve_annotations decorator correctly. And set the "
+                "rdkit pickle options to preserve properties. Returning."
+            )
+            return atom_array
+
+        for key, val in annotations.items():
+            if key in ["coord", "charge"]:
+                logger.warning(
+                    f"Found built-in annotation: {key} as custom annotation. "
+                    "Using re-calculated values from RDKit instead."
+                )
+                continue
+
+            if np.issubdtype(val.dtype, np.integer):
+                if np.issubdtype(val.dtype, np.unsignedinteger):
+                    default = np.iinfo(val.dtype).max
+                else:
+                    default = -1
+            elif np.issubdtype(val.dtype, np.floating):
+                default = np.nan
+            elif np.issubdtype(val.dtype, np.str_ or str):
+                default = ""
+            elif np.issubdtype(val.dtype, bool):
+                default = False
+            else:
+                logger.warning(
+                    f"Unsupported annotation dtype: {val.dtype} for annotation: "
+                    f"{key}. Skipping."
+                )
+                continue
+
+            vals = np.full(len(atom_array), default, dtype=val.dtype)
+            vals[array_idx_to_annotation_idx[:, 0]] = annotations[key][
+                array_idx_to_annotation_idx[:, 1]
+            ]
+            atom_array.set_annotation(key, vals)
+
+    if remove_hydrogens:
+        atom_array = atom_array[not_isin(atom_array.element, HYDROGEN_LIKE_SYMBOLS)]
+
+    if remove_inferred_atoms:
+        atom_array = atom_array[atom_array.rdkit_atom_id != -1]
+
+    return atom_array
 
 
 def rdkit_mol_to_atom_info(mol: Chem.Mol, remove_hydrogens: bool = True) -> AtomInfo:
@@ -77,7 +248,7 @@ def rdkit_mol_to_atom_info(mol: Chem.Mol, remove_hydrogens: bool = True) -> Atom
             atom_map_to_atom_name[atom.GetAtomMapNum()] = atom_name
         atom_idx_to_atom_name[atom.GetIdx()] = atom_name
 
-    # ... create atom array from RDKit mol
+    # ... create atom array from RDKit mol (using our 1-based naming version)
     atom_array = atom_array_from_rdkit(mol, remove_hydrogens=remove_hydrogens)
     return AtomInfo(atom_array=atom_array, atom_map_to_atom_name=atom_map_to_atom_name)
 
@@ -132,4 +303,4 @@ def lig_file_to_atom_info(lig_file_path: str) -> AtomInfo:
     return atom_info
 
 
-__all__ = ["smiles_to_rdkit_mol"]
+__all__ = ["smiles_to_rdkit_mol", "atom_array_from_rdkit"]

@@ -1,91 +1,21 @@
 """
-Utilities for building atom arrays from CCD codes and other things.
-
-
-_build_polymer_atom_array
-
-build_polymer
-PolymerInfo ->
-
-build_ligand
-LigandInfo -> AtomInfo
-
-build_design_polymer?
-
-build_target_polymer?
-
+Utilities for building atom arrays from CCD codes and other sources.
 """
+
+from __future__ import annotations
 
 import logging
 import random
 import warnings
-from dataclasses import dataclass
 
 import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
 
+from protenix.common.residue_names import PROTEIN_ONE_TO_THREE_WITH_UNKNOWN
 from protenix.data import ccd
-from protenix.data.rdkit import lig_file_to_atom_info, smiles_to_atom_info
-
-DNA_1to3 = {
-    "A": "DA",
-    "G": "DG",
-    "C": "DC",
-    "T": "DT",
-    "X": "DN",
-    "I": "DI",  # eg: pdb 114d
-    "N": "DN",  # eg: pdb 7r6t-3DR
-    "U": "DU",  # eg: pdb 7sd8
-}
-RNA_1to3 = {
-    "A": "A",
-    "G": "G",
-    "C": "C",
-    "U": "U",
-    "X": "N",
-    "I": "I",  # eg: pdb 7wv5
-    "N": "N",
-}
-
-PROTEIN_1to3 = {
-    "A": "ALA",
-    "R": "ARG",
-    "N": "ASN",
-    "D": "ASP",
-    "C": "CYS",
-    "Q": "GLN",
-    "E": "GLU",
-    "G": "GLY",
-    "H": "HIS",
-    "I": "ILE",
-    "L": "LEU",
-    "K": "LYS",
-    "M": "MET",
-    "F": "PHE",
-    "P": "PRO",
-    "S": "SER",
-    "T": "THR",
-    "W": "TRP",
-    "Y": "TYR",
-    "V": "VAL",
-    "X": "UNK",
-}
-
-
-@dataclass(frozen=True)
-class PolymerInfo:
-    name: str
-    sequence: str  # "GPDSMEEVVVPEE..."
-    count: int = 1
-
-
-# Build polymer
-@dataclass(frozen=True)
-class LigandInfo:
-    name: str
-    # type - ligand, ion
-    full_ligand: str  # "CCD_ZN", "CCD_AL5", or SMILES string
+from protenix.data.json_parser_new import CCDLigand, SMILESLigand
+from protenix.data.rdkit import AtomInfo, smiles_to_atom_info
 
 
 def _remove_non_std_ccd_leaving_atoms(atom_array: AtomArray) -> AtomArray:
@@ -333,117 +263,49 @@ def add_reference_features(atom_array: AtomArray) -> AtomArray:
     return atom_array
 
 
-def build_polymer(entity_info: dict) -> dict:
-    """
-    Build a polymer from a polymer info dict
-    example: {
-        "name": "polymer",
-        "sequence": "GPDSMEEVVVPEEPPKLVSALATYVQQERLCTMFLSIANKLLPLKP",
-        "count": 1
-        }
+def build_polymer(sequence: str) -> AtomArray:
+    """Build a protein polymer AtomArray from a sequence string.
 
     Args:
-        item (dict): polymer info dict
+        sequence: One-letter amino acid sequence (e.g., "MVLSPADKTN...")
 
     Returns:
-        dict: {"atom_array": biotite_AtomArray_object}
+        AtomArray with all atoms, bonds, and reference features
     """
-    poly_type, info = list(entity_info.items())[0]
-    if poly_type == "proteinChain":
-        ccd_seqs = [PROTEIN_1to3[x] for x in info["sequence"]]
-        if modifications := info.get("modifications"):
-            for m in modifications:
-                index = m["ptmPosition"] - 1
-                mtype = m["ptmType"]
-                if mtype.startswith("CCD_"):
-                    ccd_seqs[index] = mtype[4:]
-                else:
-                    raise ValueError(f"unknown modification type: {mtype}")
-        if glycans := info.get("glycans"):
-            logging.warning(f"glycans not supported: {glycans}")
-        chain_array = _build_polymer_atom_array(ccd_seqs)
-
-    elif poly_type in ("dnaSequence", "rnaSequence"):
-        map_1to3 = DNA_1to3 if poly_type == "dnaSequence" else RNA_1to3
-        ccd_seqs = [map_1to3[x] for x in info["sequence"]]
-        if modifications := info.get("modifications"):
-            for m in modifications:
-                index = m["basePosition"] - 1
-                mtype = m["modificationType"]
-                if mtype.startswith("CCD_"):
-                    ccd_seqs[index] = mtype[4:]
-                else:
-                    raise ValueError(f"unknown modification type: {mtype}")
-        chain_array = _build_polymer_atom_array(ccd_seqs)
-
-    else:
-        raise ValueError(
-            "polymer type must be proteinChain, dnaSequence or rnaSequence"
-        )
+    ccd_seqs = [PROTEIN_ONE_TO_THREE_WITH_UNKNOWN[aa] for aa in sequence]
+    chain_array = _build_polymer_atom_array(ccd_seqs)
     chain_array = add_reference_features(chain_array)
-    return {"atom_array": chain_array}
+    return chain_array
 
 
-def build_ligand(entity_info: dict) -> dict:
-    """
-    Build a ligand from a ligand entity info dict
-    example1: {
-        "ligand": {
-          "ligand": "CCD_ATP",
-          "count": 1
-        }
-      },
-    example2:{
-        "ligand": {
-          "ligand": "CCC=O",  # smiles
-          "count": 1
-        }
-      },
-    example3:{
-        "ion": {
-          "ion": "NA",
-          "count": 3
-        }
-      },
+def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
+    """Build a ligand AtomArray from a typed ligand specification.
 
     Args:
-        entity_info (dict): ligand entity info
+        ligand: CCDLigand or SMILESLigand from json_parser_new
 
     Returns:
-        dict: info of atoms
-        example: {
-            "atom_array": biotite_AtomArray_object,
-            "index_to_atom_name": {1: "C2"}, # only for smiles
-            }
+        AtomInfo with atom_array and atom_map_to_atom_name (for SMILES)
     """
-    if info := entity_info.get("ion"):
-        ccd_code = [info["ion"]]
-    elif info := entity_info.get("ligand"):
-        ligand_str = info["ligand"]
-        if ligand_str.startswith("CCD_"):
-            ccd_code = ligand_str[4:].split("_")
-        else:
-            ccd_code = None
-
-    atom_info = {}
-    if ccd_code is not None:
+    if isinstance(ligand, CCDLigand):
         atom_array = AtomArray(0)
         res_ids = []
-        for idx, code in enumerate(ccd_code):
+        for idx, code in enumerate(ligand.codes):
             ccd_atom_array = ccd.get_component_atom_array(
                 code, keep_leaving_atoms=True, keep_hydrogens=False
             )
             atom_array += ccd_atom_array
             res_id = idx + 1
             res_ids += [res_id] * len(ccd_atom_array)
-        atom_info["atom_array"] = atom_array
-        atom_info["atom_array"].res_id[:] = res_ids
-    else:
-        if info["ligand"].startswith("FILE_"):
-            lig_file_path = ligand_str[5:]
-            atom_info = lig_file_to_atom_info(lig_file_path)
-        else:
-            atom_info = smiles_to_atom_info(ligand_str)
-        atom_info["atom_array"].res_id[:] = 1
-    atom_info["atom_array"] = add_reference_features(atom_info["atom_array"])
-    return atom_info
+        atom_array.res_id[:] = res_ids
+        atom_array = add_reference_features(atom_array)
+        return AtomInfo(atom_array=atom_array)
+
+    else:  # SMILESLigand
+        atom_info = smiles_to_atom_info(ligand.smiles)
+        atom_info.atom_array.res_id[:] = 1
+        atom_array = add_reference_features(atom_info.atom_array)
+        return AtomInfo(
+            atom_array=atom_array,
+            atom_map_to_atom_name=atom_info.atom_map_to_atom_name,
+        )

@@ -92,7 +92,6 @@ def remove_leaving_atoms(atom_array: AtomArray, bond_count: dict) -> AtomArray:
 
     Returns:
         AtomArray: Biotite Atom array with leaving atoms removed.
-    # TODO: move somewhere else, e.g. ccd.py
     """
     remove_indices = []
     res_starts = struc.get_residue_starts(atom_array, add_exclusive_stop=True)

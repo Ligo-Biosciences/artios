@@ -10,22 +10,20 @@
         "ligands": [
             {
                 "cif_res_name": "ZN",
-                "full_ligand": {"type": "ccd", "codes": ["ZN"]}
+                "full_ligand": {
+                    "type": "ccd",
+                    "codes": [
+                        "ZN"
+                    ]
+                }
             },
             {
-                "cif_res_name": "LIG",
+                "cif_res_name": "AL5",
                 "full_ligand": {
-                    "type": "smiles",
-                    "smiles": "Cc1ccc(CN[S:1](=[O:2])(=[O:3])c2sc(cc2)[S:4]([NH2:5])(=[O:6])=[O:7])cc1",
-                    "atom_map": {
-                        "S1": 1,
-                        "O1": 2,
-                        "O2": 3,
-                        "S2": 4,
-                        "N": 5,
-                        "O3": 6,
-                        "O4": 7
-                    }
+                    "type": "ccd",
+                    "codes": [
+                        "AL5"
+                    ]
                 }
             }
         ]

@@ -86,18 +86,16 @@ class MotifResidue:
 class MotifLigand:
     """Ligand specification combining motif CIF fragment with full ligand description."""
 
-    # From motif CIF file
     cif_res_name: str  # Residue / CCD name in the CIF (e.g., "ZN", "AL5", "LIG")
     atom_names: tuple[str, ...]  # Atom names from CIF (e.g., ("O1A", "S1", "N21"))
     coords: np.ndarray  # (n_atoms, 3) coordinates from CIF
     elements: tuple[str, ...]  # Element types (e.g., ("O", "S", "N"))
 
-    # From JSON specification
-    full_ligand: str  # Full ligand: "CCD_ZN", "CCD_AL5", or SMILES string
+    full_ligand: str  # "CCD_ZN", "CCD_AL5", or SMILES string
 
-    # Optional explicit atom mapping for SMILES
-    # Maps CIF atom_name -> SMILES atom map number
-    atom_map: Optional[dict[str, int]] = None
+    atom_map: Optional[dict[str, int]] = (
+        None  # Maps CIF atom_name -> SMILES atom map number
+    )
 
     def __post_init__(self) -> None:
         """Validate that SMILES ligands have an atom_map."""

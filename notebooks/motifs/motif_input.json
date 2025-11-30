@@ -1,27 +1,33 @@
-[
-    {
-        "name": "carbonic-motif",
-        "design": [
+{
+    "name": "carbonic-motif",
+    "design": [
+        {
+            "length": 256
+        }
+    ],
+    "motif": {
+        "file": "carbonic_anhydrase_motif.cif",
+        "ligands": [
             {
-                "proteinChain": {
-                    "length": 256
-                }
-            }
-        ],
-        "motif": [
+                "cif_res_name": "ZN",
+                "full_ligand": {"type": "ccd", "codes": ["ZN"]}
+            },
             {
-                "ligand": {
-                    "file": "carbonic_anhydrase_motif.cif"
-                }
-            }
-        ],
-        "ligand": [
-            {
-                "ligand": {
-                    "ligand": "Cc1ccc(CN[S](=O)(=O)c2sc(cc2)[S](N)(=O)=O)cc1",
-                    "count": 1
+                "cif_res_name": "LIG",
+                "full_ligand": {
+                    "type": "smiles",
+                    "smiles": "Cc1ccc(CN[S:1](=[O:2])(=[O:3])c2sc(cc2)[S:4]([NH2:5])(=[O:6])=[O:7])cc1",
+                    "atom_map": {
+                        "S1": 1,
+                        "O1": 2,
+                        "O2": 3,
+                        "S2": 4,
+                        "N": 5,
+                        "O3": 6,
+                        "O4": 7
+                    }
                 }
             }
         ]
     }
-]
+}

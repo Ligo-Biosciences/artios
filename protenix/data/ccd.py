@@ -195,6 +195,19 @@ def get_all_ccd_code() -> list:
     return list(get_available_ccd_codes())
 
 
+@functools.lru_cache(maxsize=None)
+def is_valid_ccd_code(ccd_code: str) -> bool:
+    """Check if a CCD code exists in the Chemical Component Dictionary.
+
+    Args:
+        ccd_code: CCD code to validate (e.g., "ZN", "ATP", "HIS")
+
+    Returns:
+        True if the code exists, False otherwise
+    """
+    return ccd_code in get_available_ccd_codes()
+
+
 _ccd_rdkit_mols: dict[str, Chem.Mol] = {}
 
 
@@ -344,9 +357,6 @@ def _connect_inter_residue(
             continue
 
         # Get link type for this residue from RCSB components.cif
-        # curr_link = get_mol_type(res_names[curr_start_i])
-        # next_link = get_mol_type(res_names[next_start_i])
-
         curr_link: ChainType = get_chain_type_from_ccd_code(res_names[curr_start_i])
         next_link: ChainType = get_chain_type_from_ccd_code(res_names[next_start_i])
 

@@ -1,8 +1,8 @@
 """RDKit utilities."""
 
 from collections import Counter
-from dataclasses import dataclass
-from typing import Dict
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 from atomworks.io.tools.rdkit import (
     atom_array_from_rdkit,
@@ -14,10 +14,35 @@ from biotite.structure import AtomArray
 from rdkit import Chem
 
 
+def is_valid_smiles(smiles: str) -> bool:
+    """Check if a SMILES string is valid.
+
+    Args:
+        smiles: SMILES string to validate
+
+    Returns:
+        True if valid, False otherwise
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    return mol is not None
+
+
+def parse_smiles(smiles: str) -> Optional[Chem.Mol]:
+    """Parse a SMILES string to RDKit Mol.
+
+    Args:
+        smiles: SMILES string to parse
+
+    Returns:
+        RDKit Mol if valid, None otherwise
+    """
+    return Chem.MolFromSmiles(smiles)
+
+
 @dataclass(frozen=True)
 class AtomInfo:
     atom_array: AtomArray
-    atom_map_to_atom_name: Dict[int, str]  # TODO: pydantic?
+    atom_map_to_atom_name: Dict[int, str] = field(default_factory=dict)
 
 
 def rdkit_mol_to_atom_info(mol: Chem.Mol, remove_hydrogens: bool = True) -> AtomInfo:

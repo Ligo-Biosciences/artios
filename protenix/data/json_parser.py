@@ -83,37 +83,112 @@ def add_entity_atom_array(single_job_dict: dict) -> dict:
                 # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
                 entity["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
         else:
-            raise ValueError(f"invalid design entity key: {key}")
+            logging.warning(f"no reference info for {res_name}")
 
-        entity[key].update(atom_info)
+    atom_array.set_annotation("ref_pos", ref_pos)
+    atom_array.set_annotation("ref_charge", ref_charge)
+    atom_array.set_annotation("ref_mask", ref_mask)
+    return atom_array
 
-    for entity in single_job_dict.get("sequences", []):
-        key = list(entity.keys())[0]
-        assert (
-            len(list(entity.keys())) == 1
-        ), f"sequence entity must only contain one key got {list(entity.keys())}"
-        assert key in polymer_keys, f"invalid sequence entity key: {key}"
-        atom_info = build_polymer(entity)
-        entity[key].update(atom_info)
 
-    for entity in single_job_dict.get("target", []):
-        key = list(entity.keys())[0]
+def _remove_non_std_ccd_leaving_atoms(atom_array: AtomArray) -> AtomArray:
+    """
+    Check polymer connections and remove non-standard leaving atoms
 
-        assert (
-            len(list(entity.keys())) == 1
-        ), f"target entity must only contain one key got {list(entity.keys())}"
+    Args:
+        atom_array (AtomArray): biotite AtomArray
 
-        if key in polymer_keys:
-            atom_info = build_target_polymer(entity)
-        elif key in small_mol_keys:
-            atom_info = build_ligand(entity)
-            atom_info["atom_array"].is_target[:] = True
+    Returns:
+        AtomArray: biotite AtomArray with leaving atoms removed.
+    """
+    connected = np.zeros(atom_array.res_id[-1], dtype=bool)
+    for i, j, t in atom_array.bonds._bonds:
+        if abs(atom_array.res_id[i] - atom_array.res_id[j]) == 1:
+            connected[atom_array.res_id[[i, j]].min()] = True
 
-            if not entity["ligand"].startswith("CCD_"):
-                smiles_ligand_count += 1
-                assert smiles_ligand_count <= 99, "too many smiles ligands"
-                # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
-                entity["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
+    leaving_atoms = np.zeros(len(atom_array), dtype=bool)
+    for res_id, conn in enumerate(connected):
+        if res_id == 0 or conn:
+            continue
+
+        # Res_id start from 1
+        res_name_i = atom_array.res_name[atom_array.res_id == res_id][0]
+        res_name_j = atom_array.res_name[atom_array.res_id == res_id + 1][0]
+        warnings.warn(
+            f"No C-N or O3'-P bond between residue {res_name_i}({res_id}) and residue {res_name_j}({res_id+1}). \n"
+            f"all leaving atoms will be removed for both residues."
+        )
+        for idx, res_name in zip([res_id, res_id + 1], [res_name_i, res_name_j]):
+            staying_atoms = ccd.get_component_atom_array(
+                res_name, keep_leaving_atoms=False, keep_hydrogens=False
+            ).atom_name
+            if (
+                idx == 1
+                and ccd.get_chain_type_from_ccd_code(res_name).is_nucleic_acid()
+            ):
+                staying_atoms = np.append(staying_atoms, ["OP3"])
+            if (
+                idx == atom_array.res_id[-1]
+                and ccd.get_chain_type_from_ccd_code(res_name).is_protein()
+            ):
+                staying_atoms = np.append(staying_atoms, ["OXT"])
+            leaving_atoms |= (atom_array.res_id == idx) & (
+                ~np.isin(atom_array.atom_name, staying_atoms)
+            )
+    return atom_array[~leaving_atoms]
+
+
+def find_range_by_index(starts: np.ndarray, atom_index: int) -> tuple[int, int]:
+    """
+    Find the residue range of an atom index
+
+    Args:
+        starts (np.ndarray): Residue starts or Chain starts with exclusive stop.
+        atom_index (int): Atom index.
+
+    Returns:
+        tuple[int, int]: range (start, stop).
+    """
+    for start, stop in zip(starts[:-1], starts[1:]):
+        if start <= atom_index < stop:
+            return start, stop
+    raise ValueError(f"atom_index {atom_index} not found in starts {starts}")
+
+
+def remove_leaving_atoms(atom_array: AtomArray, bond_count: dict) -> AtomArray:
+    """
+    Remove leaving atoms based on ccd info
+
+    Args:
+        atom_array (AtomArray): Biotite Atom array.
+        bond_count (dict): atom index -> Bond count.
+
+    Returns:
+        AtomArray: Biotite Atom array with leaving atoms removed.
+    # TODO: move somewhere else, e.g. ccd.py
+    """
+    remove_indices = []
+    res_starts = struc.get_residue_starts(atom_array, add_exclusive_stop=True)
+    for centre_idx, b_count in bond_count.items():
+        res_name = atom_array.res_name[centre_idx]
+        centre_name = atom_array.atom_name[centre_idx]
+
+        comp = ccd.get_component_atom_array(
+            res_name, keep_leaving_atoms=True, keep_hydrogens=False
+        )
+        if comp is None:
+            continue
+
+        leaving_groups = comp.central_to_leaving_groups.get(centre_name)
+        if leaving_groups is None:
+            continue
+
+        if b_count > len(leaving_groups):
+            warnings.warn(
+                f"centre atom {centre_name=} {res_name=} {centre_idx=} has {b_count} inter residue bonds, greater than number of leaving groups:{leaving_groups}, remove all leaving atoms.\n"
+                f"atom info: {atom_array[centre_idx]=}"
+            )
+            remove_groups = leaving_groups
         else:
             raise ValueError(f"invalid design entity key: {key}")
 

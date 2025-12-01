@@ -50,7 +50,7 @@ def add_entity_atom_array(single_job_dict: dict) -> dict:
         dict: deepcopy and updated job dict with atom_array
     """
 
-    valid_keys = ["design", "target", "name", "motif"]
+    valid_keys = ["design", "target", "name", "motif", "sequences"]
     small_mol_keys = ["ligand"]
     polymer_keys = ["proteinChain", "dnaSequence", "rnaSequence"]
     biomol_keys = small_mol_keys + polymer_keys
@@ -87,6 +87,15 @@ def add_entity_atom_array(single_job_dict: dict) -> dict:
 
         entity[key].update(atom_info)
 
+    for entity in single_job_dict.get("sequences", []):
+        key = list(entity.keys())[0]
+        assert (
+            len(list(entity.keys())) == 1
+        ), f"sequence entity must only contain one key got {list(entity.keys())}"
+        assert key in polymer_keys, f"invalid sequence entity key: {key}"
+        atom_info = build_polymer(entity)
+        entity[key].update(atom_info)
+
     for entity in single_job_dict.get("target", []):
         key = list(entity.keys())[0]
 
@@ -111,8 +120,13 @@ def add_entity_atom_array(single_job_dict: dict) -> dict:
         entity[key].update(atom_info)
 
     for entity in single_job_dict.get("motif", []):
+        key = list(entity.keys())[0]
         atom_info = build_motif(entity)
-        atom_info["atom_array"].set_annotation("is_target", False)
+        # TODO: I would love to neaten up where we add these extra annotations.
+        atom_array = atom_info["atom_array"]
+        atom_array.set_annotation("is_target", [False] * len(atom_array))
+        atom_array.set_annotation("is_hotspot", [False] * len(atom_array))
+        atom_array.set_annotation("is_resolved", [True] * len(atom_array))
         entity[key].update(atom_info)
 
     return single_job_dict
@@ -206,7 +220,15 @@ def build_polymer(entity_info: dict) -> dict:
         raise ValueError(
             "polymer type must be proteinChain, dnaSequence or rnaSequence"
         )
+
     chain_array = add_reference_features(chain_array)
+
+    chain_array.set_annotation("is_motif_related", [False] * len(chain_array))
+    chain_array.set_annotation("is_motif", [False] * len(chain_array))
+    chain_array.set_annotation("is_resolved", [True] * len(chain_array))
+    chain_array.set_annotation("is_target", [False] * len(chain_array))
+    chain_array.set_annotation("is_hotspot", [False] * len(chain_array))
+
     return {"atom_array": chain_array}
 
 
@@ -337,7 +359,6 @@ def build_motif(entity_info: dict) -> dict:
     ligands = []
 
     res_starts = struc.get_residue_starts(motif_array, add_exclusive_stop=True)
-
     for start, stop in zip(res_starts[:-1], res_starts[1:]):
         res_slice = motif_array[start:stop]
         cif_res_name = str(res_slice.res_name[0])
@@ -371,7 +392,12 @@ def build_motif(entity_info: dict) -> dict:
                 )
             )
 
-    atom_array = struc.concatenate([x.to_atom_array() for x in residues + ligands])
+    atom_arrays = []
+    for x in residues + ligands:
+        arr = x.to_atom_array()
+        atom_arrays.append(arr)
+
+    atom_array = struc.concatenate(atom_arrays)
 
     return {"atom_array": atom_array}
 
@@ -406,6 +432,8 @@ class MotifResidue:
 
         if full_residue is None:
             raise ValueError(f"Could not find CCD component for {self.res_name}")
+
+        full_residue = full_residue.copy()
 
         is_motif = np.zeros(len(full_residue), dtype=bool)
 

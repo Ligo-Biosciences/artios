@@ -229,3 +229,78 @@ def save_outputs(
             continue
 
     return saved_files
+
+
+def save_outputs_backbone(
+    output_dir_list: List[str],
+    pred_dict: dict,
+    atom_array: AtomArray,
+    pdb_id: str,
+):
+    """
+    Saves backbone-only outputs to CIFs.
+
+    For backbone models, the predicted coordinates are the same shape as input
+    atom_array, so no flattening or sequence prediction processing is needed.
+
+    Args:
+        output_dir_list: List of output directory paths for each sample
+        pred_dict: Dictionary containing model predictions with 'coordinate' key
+        input_feature_dict: Input features (not used in backbone case but kept for consistency)
+        atom_array: Input AtomArray structure
+        token_array: Input TokenArray (not used in backbone case but kept for consistency)
+        pdb_id: PDB identifier for the structure
+        ema_suffix: Optional suffix for EMA models (not used but kept for consistency)
+
+    Returns:
+        List[Path]: List of paths to the saved CIF files
+    """
+    # Get predictions - shape should match input atom_array
+    coordinate = pred_dict["coordinate"].detach().cpu().numpy()  # [N_sample, N_atom, 3]
+
+    # Save each sample
+    saved_files = []
+
+    assert (
+        len(output_dir_list) == coordinate.shape[0]
+    ), f"Number of output directories must match number of samples, got {len(output_dir_list)=} and {coordinate.shape[0]=}"
+
+    assert (
+        coordinate.shape[1] == len(atom_array)
+    ), f"Predicted coordinates must match input atom array size, got {coordinate.shape[1]=} and {len(atom_array)=}"
+
+    for idx in range(coordinate.shape[0]):
+        sample_coords = coordinate[idx]  # [N_atom, 3]
+
+        # Create a copy of the input atom_array with predicted coordinates
+        predicted_atom_array = atom_array.copy()
+        predicted_atom_array.coord = sample_coords
+
+        # Set b_factor to zeros (standard for predictions)
+        predicted_atom_array.set_annotation(
+            "b_factor", np.zeros(len(predicted_atom_array))
+        )
+
+        # Determine output file path
+        output_path = output_dir_list[idx]
+
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        # Save using save_structure_cif
+        try:
+            save_structure_cif(
+                atom_array=predicted_atom_array,
+                pred_coordinate=torch.Tensor(sample_coords),
+                output_fpath=output_path,
+                entity_poly_type=None,
+                pdb_id=pdb_id,
+            )
+            saved_files.append(output_path)
+            print(f"Saved backbone sample {idx} to {output_path}")
+
+        except Exception as e:
+            print(f"Error saving backbone sample {idx}: {e}")
+            continue
+
+    return saved_files

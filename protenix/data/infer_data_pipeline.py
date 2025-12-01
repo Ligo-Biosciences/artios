@@ -102,32 +102,32 @@ class InferenceDataset(Dataset):
         )
         features_dict, atom_array, token_array = sample2feat.get_feature_dict()
 
-        is_hotspot = torch.zeros(features_dict["is_hotspot"].shape)
+        # is_hotspot = torch.zeros(features_dict["is_hotspot"].shape)
 
         assert len(self.inputs) == 1, "Only one sample is supported currently"
-        assert (
-            len(self.inputs[0]["target"]) == 1
-        ), "Only one target is supported currently"
+        # assert (
+        #     len(self.inputs[0]["target"]) == 1
+        # ), "Only one target is supported currently"
 
-        initial_offset = 0
-        for design in self.inputs[0]["design"]:
-            chain_key = list(design.keys())[0]
-            initial_offset += design[chain_key]["length"]
+        # initial_offset = 0
+        # for design in self.inputs[0]["design"]:
+        #     chain_key = list(design.keys())[0]
+        #     initial_offset += design[chain_key]["length"]
 
-        hotspot_indices = []
-        for target in self.inputs[0]["target"]:
-            chain_key = list(target.keys())[0]
-            hotspot_indices.extend(
-                [initial_offset + hotspot for hotspot in target[chain_key]["hotspots"]]
-            )
+        # hotspot_indices = []
+        # for target in self.inputs[0]["target"]:
+        #     chain_key = list(target.keys())[0]
+        #     hotspot_indices.extend(
+        #         [initial_offset + hotspot for hotspot in target[chain_key]["hotspots"]]
+        #     )
 
-        is_hotspot[hotspot_indices] = 1.0
+        # is_hotspot[hotspot_indices] = 1.0
         # is_hotspot = torch.zeros(features_dict["is_hotspot"].shape)
-        features_dict["is_hotspot"] = is_hotspot
+        # features_dict["is_hotspot"] = is_hotspot
 
-        features_dict["distogram_rep_atom_mask"] = torch.Tensor(
-            atom_array.distogram_rep_atom_mask
-        ).long()
+        # features_dict["distogram_rep_atom_mask"] = torch.Tensor(
+        #     atom_array.distogram_rep_atom_mask
+        # ).long()
         entity_poly_type = sample2feat.entity_poly_type
         t1 = time.time()
 

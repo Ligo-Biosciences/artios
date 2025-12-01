@@ -954,8 +954,7 @@ class BaseSingleDataset(Dataset):
         related atoms. This is important as the Featurizer looks at the
         centre atom indices to retrieve the correct chain, res IDs etc.
         """
-        atom_array.centre_atom_mask[atom_array.is_motif_related > 0] = 1
-        return atom_array
+        return AddAtomArrayAnnot.update_centre_atom_mask_to_include_motif(atom_array)
 
     @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(

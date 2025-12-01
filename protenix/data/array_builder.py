@@ -285,6 +285,9 @@ def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
 
     Returns:
         AtomInfo with atom_array and atom_map_to_atom_name (for SMILES)
+
+    Raises:
+        TypeError: If ligand is neither CCDLigand nor SMILESLigand
     """
     if isinstance(ligand, CCDLigand):
         atom_array = AtomArray(0)
@@ -300,11 +303,16 @@ def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
         atom_array = add_reference_features(atom_array)
         return AtomInfo(atom_array=atom_array)
 
-    else:  # SMILESLigand
+    elif isinstance(ligand, SMILESLigand):
         atom_info = smiles_to_atom_info(ligand.smiles)
         atom_info.atom_array.res_id[:] = 1
         atom_array = add_reference_features(atom_info.atom_array)
         return AtomInfo(
             atom_array=atom_array,
             atom_map_to_atom_name=atom_info.atom_map_to_atom_name,
+        )
+
+    else:
+        raise TypeError(
+            f"Ligand must be CCDLigand or SMILESLigand, got {type(ligand).__name__}"
         )

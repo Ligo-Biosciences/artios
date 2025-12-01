@@ -63,6 +63,7 @@ dependencies = [
     "polars>=1.35.2",
     "rapidgzip>=0.15.2",
     "beartype>=0.22.6",
+    "pydantic>=2.12.5",
 ]
 
 [project.optional-dependencies]

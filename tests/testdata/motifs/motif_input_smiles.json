@@ -1,0 +1,35 @@
+{
+    "name": "carbonic-motif-smiles",
+    "design": [
+        {
+            "length": 256
+        }
+    ],
+    "motif": {
+        "file": "carbonic_anhydrase_motif.cif",
+        "ligands": [
+            {
+                "cif_res_name": "ZN",
+                "full_ligand": {
+                    "type": "ccd",
+                    "codes": ["ZN"]
+                }
+            },
+            {
+                "cif_res_name": "AL5",
+                "full_ligand": {
+                    "type": "smiles",
+                    "smiles": "Cc1ccc(CN[S](=O)(=O)c2s[c:5]([c:6]c2)[S:1]([N:4])(=[O:2])=[O:3])cc1",
+                    "atom_map": {
+                        "S1": 1,
+                        "O1A": 2,
+                        "O2A": 3,
+                        "N21": 4,
+                        "C3": 5,
+                        "C4": 6
+                    }
+                }
+            }
+        ]
+    }
+}

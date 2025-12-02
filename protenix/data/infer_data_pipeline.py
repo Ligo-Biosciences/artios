@@ -24,7 +24,7 @@ from biotite.structure import AtomArray
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
 from protenix.data.data_pipeline import DataPipeline
-from protenix.data.json_to_feature import SampleDictToFeatures
+from protenix.data.json_to_feature_new import SampleDictToFeatures
 from protenix.data.msa_featurizer import InferenceMSAFeaturizer
 from protenix.data.utils import data_type_transform, make_dummy_feature
 from protenix.utils.distributed import DIST_WRAPPER

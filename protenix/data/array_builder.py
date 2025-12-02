@@ -246,6 +246,8 @@ def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
     Raises:
         TypeError: If ligand is neither CCDLigand nor SMILESLigand
     """
+    # NOTE: the res_ids assigned here will either need to be changed downstream
+    # or inside this function.
     if isinstance(ligand, CCDLigand):
         atom_array = AtomArray(0)
         res_ids = []
@@ -314,6 +316,8 @@ def build_motif_residue(motif_residue: MotifResidue) -> AtomArray:
                 f"{motif_residue.res_name}"
             )
 
+    # NOTE: we need to change the res_id assigned here downstream and have
+    # motif res_id annotations to prevent information leakage and avoid train-test discrepancy.
     full_residue.res_id[:] = motif_residue.res_id
     full_residue.set_annotation("is_motif", is_motif)
     full_residue.set_annotation("is_motif_related", np.ones_like(is_motif, dtype=bool))

@@ -14,22 +14,22 @@
 
 import copy
 import logging
-from dataclasses import dataclass
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Union
 
 import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
 
+from protenix.common.constants import BACKBONE_DEFS
 from protenix.data import ccd
 from protenix.data.json_parser_new import (
+    CCDLigand,
     MotifInput,
-    MotifSpec,
     ProteinDesign,
     SequenceDesignInput,
+    SMILESLigand,
 )
 from protenix.data.json_parser_utils import (
-    DesignAtomArrayBuilder,  # TODO: to be deprecated
     DNA_1to3,
     PROTEIN_1to3,
     RNA_1to3,
@@ -38,11 +38,12 @@ from protenix.data.json_parser_utils import (
     remove_leaving_atoms,
     remove_non_std_ccd_leaving_atoms,
 )
-from protenix.data.parser import DistillationMMCIFParser, MMCIFParser
-from protenix.data.rdkit import (
-    lig_file_to_atom_info,
-    smiles_to_atom_info,
-)
+from protenix.data.motif_parser import Motif
+from protenix.data.parser import MMCIFParser
+from protenix.data.rdkit import AtomInfo, smiles_to_atom_info
+
+if TYPE_CHECKING:
+    from protenix.data.motif_parser import MotifLigand, MotifResidue
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def motif_input_to_atom_array(motif_input: MotifInput) -> AtomArray:
     atom_array += design_copy
 
     # Motif
-    motif_atom_array = build_motif(motif_input.motif)
+    motif_atom_array = Motif.from_input(motif_input).to_atom_array()
     motif_copy = copy.deepcopy(motif_atom_array)
 
     # TODO: temporary chain annotations before the correct IDs are inferred
@@ -109,7 +110,6 @@ def unconditional_input_to_atom_arrays(single_job_dict: dict) -> dict:
     raise NotImplementedError("Unconditional generation is not supported yet.")
 
 
-# Optional convenience dispatcher
 def process_input_to_atom_array(
     input: Union[MotifInput, SequenceDesignInput],
 ) -> AtomArray:
@@ -122,97 +122,97 @@ def process_input_to_atom_array(
         raise ValueError(f"Unknown input type: {type(input)}")
 
 
-def add_entity_atom_array(single_job_dict: dict) -> dict:
-    """
-    Add atom_array to each entity in single_job_dict
+# def add_entity_atom_array(single_job_dict: dict) -> dict:
+#     """
+#     Add atom_array to each entity in single_job_dict
 
-    Args:
-        single_job_dict (dict): input job dict
+#     Args:
+#         single_job_dict (dict): input job dict
 
-    Returns:
-        dict: deepcopy and updated job dict with atom_array
-    """
+#     Returns:
+#         dict: deepcopy and updated job dict with atom_array
+#     """
 
-    valid_keys = ["design", "target", "name", "motif", "sequences"]
-    small_mol_keys = ["ligand"]
-    polymer_keys = ["proteinChain", "dnaSequence", "rnaSequence"]
-    biomol_keys = small_mol_keys + polymer_keys
-    smiles_ligand_count = 0
+#     valid_keys = ["design", "target", "name", "motif", "sequences"]
+#     small_mol_keys = ["ligand"]
+#     polymer_keys = ["proteinChain", "dnaSequence", "rnaSequence"]
+#     biomol_keys = small_mol_keys + polymer_keys
+#     smiles_ligand_count = 0
 
-    single_job_dict = copy.deepcopy(single_job_dict)
+#     single_job_dict = copy.deepcopy(single_job_dict)
 
-    assert all(
-        key in valid_keys for key in single_job_dict.keys()
-    ), f"single_job_dict must only contain allowed keys: {valid_keys}"
+#     assert all(
+#         key in valid_keys for key in single_job_dict.keys()
+#     ), f"single_job_dict must only contain allowed keys: {valid_keys}"
 
-    for entity in single_job_dict.get("design", []):
-        key = list(entity.keys())[0]
+#     for entity in single_job_dict.get("design", []):
+#         key = list(entity.keys())[0]
 
-        assert (
-            key in biomol_keys
-        ), f"design entity must only contain allowed keys: {biomol_keys}"
-        assert (
-            len(list(entity.keys())) == 1
-        ), f"design entity must only contain one key got {list(entity.keys())}"
+#         assert (
+#             key in biomol_keys
+#         ), f"design entity must only contain allowed keys: {biomol_keys}"
+#         assert (
+#             len(list(entity.keys())) == 1
+#         ), f"design entity must only contain one key got {list(entity.keys())}"
 
-        if key in polymer_keys:
-            atom_info = build_design_polymer(entity)
-        elif key in small_mol_keys:
-            atom_info = build_ligand(entity)
-            atom_info["atom_array"].is_target[:] = False
-            if not entity["ligand"].startswith("CCD_"):
-                smiles_ligand_count += 1
-                assert smiles_ligand_count <= 99, "too many smiles ligands"
-                # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
-                entity["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
-        else:
-            raise ValueError(f"invalid design entity key: {key}")
+#         if key in polymer_keys:
+#             atom_info = build_design_polymer(entity)
+#         elif key in small_mol_keys:
+#             atom_info = build_ligand(entity)
+#             atom_info["atom_array"].is_target[:] = False
+#             if not entity["ligand"].startswith("CCD_"):
+#                 smiles_ligand_count += 1
+#                 assert smiles_ligand_count <= 99, "too many smiles ligands"
+#                 # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
+#                 entity["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
+#         else:
+#             raise ValueError(f"invalid design entity key: {key}")
 
-        entity[key].update(atom_info)
+#         entity[key].update(atom_info)
 
-    for entity in single_job_dict.get("sequences", []):
-        key = list(entity.keys())[0]
-        assert (
-            len(list(entity.keys())) == 1
-        ), f"sequence entity must only contain one key got {list(entity.keys())}"
-        assert key in polymer_keys, f"invalid sequence entity key: {key}"
-        atom_info = build_polymer(entity)
-        entity[key].update(atom_info)
+#     for entity in single_job_dict.get("sequences", []):
+#         key = list(entity.keys())[0]
+#         assert (
+#             len(list(entity.keys())) == 1
+#         ), f"sequence entity must only contain one key got {list(entity.keys())}"
+#         assert key in polymer_keys, f"invalid sequence entity key: {key}"
+#         atom_info = build_polymer(entity)
+#         entity[key].update(atom_info)
 
-    for entity in single_job_dict.get("target", []):
-        key = list(entity.keys())[0]
+#     for entity in single_job_dict.get("target", []):
+#         key = list(entity.keys())[0]
 
-        assert (
-            len(list(entity.keys())) == 1
-        ), f"target entity must only contain one key got {list(entity.keys())}"
+#         assert (
+#             len(list(entity.keys())) == 1
+#         ), f"target entity must only contain one key got {list(entity.keys())}"
 
-        if key in polymer_keys:
-            atom_info = build_target_polymer(entity)
-        elif key in small_mol_keys:
-            atom_info = build_ligand(entity)
-            atom_info["atom_array"].is_target[:] = True
+#         if key in polymer_keys:
+#             atom_info = build_target_polymer(entity)
+#         elif key in small_mol_keys:
+#             atom_info = build_ligand(entity)
+#             atom_info["atom_array"].is_target[:] = True
 
-            if not entity["ligand"].startswith("CCD_"):
-                smiles_ligand_count += 1
-                assert smiles_ligand_count <= 99, "too many smiles ligands"
-                # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
-                entity["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
-        else:
-            raise ValueError(f"invalid design entity key: {key}")
+#             if not entity["ligand"].startswith("CCD_"):
+#                 smiles_ligand_count += 1
+#                 assert smiles_ligand_count <= 99, "too many smiles ligands"
+#                 # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
+#                 entity["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
+#         else:
+#             raise ValueError(f"invalid design entity key: {key}")
 
-        entity[key].update(atom_info)
+#         entity[key].update(atom_info)
 
-    for entity in single_job_dict.get("motif", []):
-        key = list(entity.keys())[0]
-        atom_info = build_motif(entity)
-        # TODO: I would love to neaten up where we add these extra annotations.
-        atom_array = atom_info["atom_array"]
-        atom_array.set_annotation("is_target", [False] * len(atom_array))
-        atom_array.set_annotation("is_hotspot", [False] * len(atom_array))
-        atom_array.set_annotation("is_resolved", [True] * len(atom_array))
-        entity[key].update(atom_info)
+#     for entity in single_job_dict.get("motif", []):
+#         key = list(entity.keys())[0]
+#         atom_info = build_motif(entity)
+#         # TODO: I would love to neaten up where we add these extra annotations.
+#         atom_array = atom_info["atom_array"]
+#         atom_array.set_annotation("is_target", [False] * len(atom_array))
+#         atom_array.set_annotation("is_hotspot", [False] * len(atom_array))
+#         atom_array.set_annotation("is_resolved", [True] * len(atom_array))
+#         entity[key].update(atom_info)
 
-    return single_job_dict
+#     return single_job_dict
 
 
 def _build_polymer_atom_array(ccd_seqs: list[str]) -> AtomArray:
@@ -334,359 +334,250 @@ def build_polymer(entity_info: dict) -> AtomArray:
     return chain_array
 
 
-def build_ligand(entity_info: dict) -> dict:
-    """
-    Build a ligand from a ligand entity info dict
-    example1: {
-        "ligand": {
-          "ligand": "CCD_ATP",
-          "count": 1
-        }
-      },
-    example2:{
-        "ligand": {
-          "ligand": "CCC=O",  # smiles
-          "count": 1
-        }
-      },
-    example3:{
-        "ion": {
-          "ion": "NA",
-          "count": 3
-        }
-      },
+def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
+    """Build a ligand AtomArray from a typed ligand specification.
 
     Args:
-        entity_info (dict): ligand entity info
+        ligand: CCDLigand or SMILESLigand from json_parser_new
 
     Returns:
-        dict: info of atoms
-        example: {
-            "atom_array": biotite_AtomArray_object,
-            "index_to_atom_name": {1: "C2"}, # only for smiles
-            }
-    """
-    if info := entity_info.get("ion"):
-        ccd_code = [info["ion"]]
-    elif info := entity_info.get("ligand"):
-        ligand_str = info["ligand"]
-        if ligand_str.startswith("CCD_"):
-            ccd_code = ligand_str[4:].split("_")
-        else:
-            ccd_code = None
+        AtomInfo with atom_array and atom_map_to_atom_name (for SMILES)
 
-    atom_info = {}
-    if ccd_code is not None:
+    Raises:
+        TypeError: If ligand is neither CCDLigand nor SMILESLigand
+    """
+    if isinstance(ligand, CCDLigand):
         atom_array = AtomArray(0)
         res_ids = []
-        for idx, code in enumerate(ccd_code):
+        for idx, code in enumerate(ligand.codes):
             ccd_atom_array = ccd.get_component_atom_array(
                 code, keep_leaving_atoms=True, keep_hydrogens=False
             )
             atom_array += ccd_atom_array
             res_id = idx + 1
             res_ids += [res_id] * len(ccd_atom_array)
-        atom_info["atom_array"] = atom_array
-        atom_info["atom_array"].res_id[:] = res_ids
+        atom_array.res_id[:] = res_ids
+        atom_array = add_reference_features(atom_array)
+        return AtomInfo(atom_array=atom_array)
+
+    elif isinstance(ligand, SMILESLigand):
+        atom_info = smiles_to_atom_info(ligand.smiles)
+        atom_info.atom_array.res_id[:] = 1
+        atom_array = add_reference_features(atom_info.atom_array)
+        return AtomInfo(
+            atom_array=atom_array,
+            atom_map_to_atom_name=atom_info.atom_map_to_atom_name,
+        )
+
     else:
-        if info["ligand"].startswith("FILE_"):
-            lig_file_path = ligand_str[5:]
-            atom_info = lig_file_to_atom_info(lig_file_path)
-        else:
-            atom_info = smiles_to_atom_info(ligand_str)
-        atom_info["atom_array"].res_id[:] = 1
-    atom_info["atom_array"] = add_reference_features(atom_info["atom_array"])
-    return atom_info
+        raise TypeError(
+            f"Ligand must be CCDLigand or SMILESLigand, got {type(ligand).__name__}"
+        )
 
 
-def build_design_polymer(entity_info: dict) -> dict:
-    """
-    TODO: Update to use ProteinDesign pydantic object instead of dict.
+def build_motif_residue(motif_residue: MotifResidue) -> AtomArray:
+    """Expand partial sidechain to full residue AtomArray from CCD.
 
-    This function should be updated to take a ProteinDesign object directly,
-    eliminating the need for dict parsing and key extraction.
-    """
-    poly_to_mol = {
-        "proteinChain": "protein",
-        "dnaSequence": "dna",
-        "rnaSequence": "rna",
-    }
-    poly_type, info = list(entity_info.items())[0]
-    assert poly_type in poly_to_mol, f"invalid design entity key: {poly_type}"
-
-    builder = DesignAtomArrayBuilder(
-        length=info["length"],
-        mol_type=poly_to_mol[poly_type],
-    )
-
-    return builder.build_all_annotations()
-
-
-def build_target_polymer(entity_info: dict) -> dict:
-    poly_type, info = list(entity_info.items())[0]
-
-    pid = info["pdb_id"]
-    if pid.startswith("AF-"):
-        parser = DistillationMMCIFParser(mmcif_file=info["file"])
-        atom_array = parser.get_structure_dict()["atom_array"]
-    else:
-        parser = MMCIFParser(mmcif_file=info["file"])
-        atom_array = parser.get_bioassembly()["atom_array"]
-
-    assert (
-        np.unique(atom_array.chain_id).shape[0] == 1
-    ), "Expected single chain structure, but found multiple chains"
-
-    atom_array.add_annotation("is_target", dtype=np.int32)
-    atom_array.is_target[:] = True
-
-    atom_array.add_annotation("is_hotspot", dtype=np.int32)
-    atom_array.is_hotspot[:] = False
-    atom_array.is_hotspot[info["hotspots"]] = True
-
-    # TODO: is_target_token is only given as true when the centre atoms are
-    # resolved. Probably need to rethink how we're doing this.
-    atom_array.add_annotation("is_resolved", dtype=np.int32)
-    atom_array.is_resolved[:] = True
-
-    return {"atom_array": atom_array}
-
-
-def build_motif(motif_spec: MotifSpec) -> AtomArray:
-    """
-    Build motif AtomArray from MotifSpec pydantic object.
+    Takes a MotifResidue dataclass and:
+    1. Gets full residue from CCD (e.g., complete HIS with all atoms)
+    2. Matches motif atoms by atom_name
+    3. Transfers coordinates for matching atoms
+    4. Adds is_motif annotation (True for atoms with motif coordinates)
 
     Args:
-        motif_spec: MotifSpec object with file path and ligand mappings
+        motif_residue: MotifResidue dataclass with res_id, res_name,
+            atom_names, and coords
 
     Returns:
-        AtomArray: AtomArray with motif coordinates and annotations
+        AtomArray: Full residue with coordinates transferred where available,
+            with is_motif and is_motif_related annotations
     """
-    motif_cif_path = motif_spec.file
+    full_residue = ccd.get_component_atom_array(
+        motif_residue.res_name,
+        keep_leaving_atoms=False,
+        keep_hydrogens=False,
+    )
 
-    # Build ligand spec lookup: cif_res_name -> LigandMapping
-    ligand_specs = {mapping.cif_res_name: mapping for mapping in motif_spec.ligands}
+    if full_residue is None:
+        raise ValueError(f"Could not find CCD component for {motif_residue.res_name}")
 
-    # Parse CIF
-    parser = MMCIFParser(motif_cif_path)
-    motif_array = parser.get_structure()
+    is_motif = np.zeros(len(full_residue), dtype=bool)
 
-    residues = []
-    ligands = []
+    for i, atom_name in enumerate(motif_residue.atom_names):
+        match_idx = np.where(full_residue.atom_name == atom_name)[0]
+        if len(match_idx) > 0:
+            full_residue.coord[match_idx[0]] = motif_residue.coords[i]
+            is_motif[match_idx[0]] = True
+        else:
+            logger.warning(
+                f"Motif atom {atom_name} not found in CCD component "
+                f"{motif_residue.res_name}"
+            )
 
-    res_starts = struc.get_residue_starts(motif_array, add_exclusive_stop=True)
-    for start, stop in zip(res_starts[:-1], res_starts[1:]):
-        res_slice = motif_array[start:stop]
-        cif_res_name = str(res_slice.res_name[0])
+    full_residue.res_id[:] = motif_residue.res_id
+    full_residue.set_annotation("is_motif", is_motif)
+    full_residue.set_annotation("is_motif_related", np.ones_like(is_motif, dtype=bool))
 
-        if res_slice.hetero[0]:
-            # Ligand
-            if cif_res_name not in ligand_specs:
+    full_residue = add_reference_features(full_residue)
+    return full_residue
+
+
+def build_motif_ligand(motif_ligand: MotifLigand) -> AtomArray:
+    """Expand motif ligand fragment to full ligand AtomArray.
+
+    Takes a MotifLigand dataclass and:
+    1. Builds the full ligand from full_ligand spec (CCD or SMILES)
+    2. Matches motif atoms to full ligand atoms
+    3. Transfers coordinates for matching atoms
+    4. Adds is_motif annotation
+
+    For CCD ligands: matches by atom_name
+    For SMILES ligands: uses atom_map for mapping
+
+    Args:
+        motif_ligand: MotifLigand dataclass with cif_res_name, atom_names,
+            coords, elements, and full_ligand spec
+
+    Returns:
+        AtomArray: Full ligand with motif coordinates transferred,
+            with is_motif and is_motif_related annotations
+    """
+    ligand_info = build_ligand(motif_ligand.full_ligand)
+    full_ligand_array = ligand_info.atom_array
+
+    is_motif = np.zeros(len(full_ligand_array), dtype=bool)
+
+    # CCD: match by atom_name
+    if isinstance(motif_ligand.full_ligand, CCDLigand):
+        for i, atom_name in enumerate(motif_ligand.atom_names):
+            match_idx = np.where(full_ligand_array.atom_name == atom_name)[0]
+            if len(match_idx) == 0:
                 raise ValueError(
-                    f"Ligand '{cif_res_name}' in CIF has no matching entry in "
-                    f"motif.ligands. Available: {list(ligand_specs.keys())}"
+                    f"Motif atom '{atom_name}' not found in CCD ligand "
+                    f"'{motif_ligand.full_ligand.codes}'. Available atoms: "
+                    f"{full_ligand_array.atom_name.tolist()}"
                 )
-            mapping = ligand_specs[cif_res_name]
+            full_ligand_array.coord[match_idx[0]] = motif_ligand.coords[i]
+            is_motif[match_idx[0]] = True
 
-            # TODO: is this what we want to be doing?
-            # Convert FullLigand pydantic object to legacy format for MotifLigand
-            if mapping.full_ligand.type == "ccd":
-                full_ligand_str = f"CCD_{'_'.join(mapping.full_ligand.codes)}"
-                atom_map = None
-            else:  # SMILES
-                full_ligand_str = mapping.full_ligand.smiles
-                atom_map = mapping.full_ligand.atom_map
-
-            ligands.append(
-                MotifLigand(
-                    cif_res_name=cif_res_name,
-                    atom_names=tuple(res_slice.atom_name.tolist()),
-                    coords=res_slice.coord.copy(),
-                    elements=tuple(res_slice.element.tolist()),
-                    full_ligand=full_ligand_str,
-                    atom_map=atom_map,
-                )
-            )
-        else:
-            # Protein residue
-            residues.append(
-                MotifResidue(
-                    res_id=int(res_slice.res_id[0]),
-                    res_name=cif_res_name,
-                    atom_names=tuple(res_slice.atom_name.tolist()),
-                    coords=res_slice.coord.copy(),
-                )
-            )
-
-    atom_arrays = []
-    for x in residues + ligands:
-        arr = x.to_atom_array()
-        atom_arrays.append(arr)
-
-    motif_atom_array = struc.concatenate(atom_arrays)
-
-    motif_atom_array.set_annotation("is_target", [False] * len(motif_atom_array))
-    motif_atom_array.set_annotation("is_hotspot", [False] * len(motif_atom_array))
-    motif_atom_array.set_annotation("is_resolved", [True] * len(motif_atom_array))
-
-    return motif_atom_array
-
-
-@dataclass(frozen=True)
-class MotifResidue:
-    """Partial residue extracted from motif CIF file."""
-
-    res_id: int
-    res_name: str  # e.g., "HIS", "GLU", "THR"
-    atom_names: tuple[str, ...]  # e.g., ("CG", "CD2", "ND1", "CE1", "NE2")
-    coords: np.ndarray  # (N_atoms, 3)
-
-    def to_atom_array(self) -> AtomArray:
-        """
-        Expand partial sidechain to full residue AtomArray from CCD.
-
-        1. Get full residue from CCD (e.g., complete HIS with all atoms)
-        2. Match motif atoms by atom_name
-        3. Transfer coordinates for matching atoms
-        4. Add is_motif annotation (True for atoms with motif coordinates)
-
-        Returns:
-            AtomArray: Full residue with coordinates transferred where available
-        """
-
-        full_residue = ccd.get_component_atom_array(
-            self.res_name,
-            keep_leaving_atoms=False,
-            keep_hydrogens=False,
-        )
-
-        if full_residue is None:
-            raise ValueError(f"Could not find CCD component for {self.res_name}")
-
-        full_residue = full_residue.copy()
-
-        is_motif = np.zeros(len(full_residue), dtype=bool)
-
-        for i, atom_name in enumerate(self.atom_names):
-            match_idx = np.where(full_residue.atom_name == atom_name)[0]
-            if len(match_idx) > 0:
-                full_residue.coord[match_idx[0]] = self.coords[i]
-                is_motif[match_idx[0]] = True
-            else:
-                logger.warning(
-                    f"Motif atom {atom_name} not found in CCD component {self.res_name}"
-                )
-
-        full_residue.res_id[:] = self.res_id
-        full_residue.set_annotation("is_motif", is_motif)
-        full_residue.set_annotation(
-            "is_motif_related", np.ones_like(is_motif, dtype=bool)
-        )
-
-        # Add ref_pos, ref_charge, ref_mask annotations
-        full_residue = add_reference_features(full_residue)
-        return full_residue
-
-
-@dataclass(frozen=True)
-class MotifLigand:
-    """Ligand specification combining motif CIF fragment with full ligand description."""
-
-    # From motif CIF file
-    cif_res_name: str  # Residue / CCD name in the CIF (e.g., "ZN", "AL5", "LIG")
-    atom_names: tuple[str, ...]  # Atom names from CIF (e.g., ("O1A", "S1", "N21"))
-    coords: np.ndarray  # (n_atoms, 3) coordinates from CIF
-    elements: tuple[str, ...]  # Element types (e.g., ("O", "S", "N"))
-
-    # From JSON specification
-    full_ligand: str  # Full ligand: "CCD_ZN", "CCD_AL5", or SMILES string
-
-    # Optional explicit atom mapping for SMILES
-    # Maps CIF atom_name -> SMILES atom map number
-    atom_map: Optional[dict[str, int]] = None
-
-    def __post_init__(self) -> None:
-        """Validate that SMILES ligands have an atom_map."""
-        if not self.full_ligand.startswith("CCD_") and self.atom_map is None:
+    # SMILES: use atom_map for coordinate transfer
+    else:
+        atom_map = motif_ligand.full_ligand.atom_map
+        if atom_map is None:
             raise ValueError(
-                f"SMILES ligand '{self.full_ligand}' requires atom_map. "
-                f"Use SMILES atom map notation [atom:N] and provide atom_map dict "
-                f"mapping CIF atom names {self.atom_names} to map numbers."
+                f"SMILES ligand requires atom_map for coordinate transfer. "
+                f"SMILES: {motif_ligand.full_ligand.smiles}"
             )
 
-    def _is_ccd_ligand(self) -> bool:
-        """Check if full_ligand is a CCD code (vs SMILES)."""
-        return self.full_ligand.startswith("CCD_")
+        map_num_to_atom_name = ligand_info.atom_map_to_atom_name
 
-    def to_atom_array(self) -> AtomArray:
-        """
-        Expand motif ligand to full ligand AtomArray.
+        for i, cif_atom_name in enumerate(motif_ligand.atom_names):
+            if cif_atom_name not in atom_map:
+                raise KeyError(
+                    f"CIF atom '{cif_atom_name}' not found in atom_map. "
+                    f"All motif atoms must be mapped. atom_map keys: "
+                    f"{list(atom_map.keys())}"
+                )
 
-        For CCD ligands: match by atom_name
-        For SMILES with atom_map: use explicit mapping via atom map numbers
-        For SMILES without atom_map: raises error (use atom_map for reliable matching)
+            map_num = atom_map[cif_atom_name]
+            if map_num not in map_num_to_atom_name:
+                raise KeyError(
+                    f"Atom map number {map_num} (for '{cif_atom_name}') not found "
+                    f"in SMILES. Use [atom:{map_num}] notation in SMILES string. "
+                    f"Available map numbers: {list(map_num_to_atom_name.keys())}"
+                )
 
-        Returns:
-            AtomArray: Full ligand with motif coordinates transferred
-        """
-        # Build full ligand using build_ligand from json_parser
-        # Works for both CCD ("CCD_ZN", "CCD_AL5") and SMILES
-        # TODO: we can separate ions into separate things from ligands to make it explicit.
-        entity_info = {"ligand": {"ligand": self.full_ligand, "count": 1}}
+            target_atom_name = map_num_to_atom_name[map_num]
+            match_idx = np.where(full_ligand_array.atom_name == target_atom_name)[0]
+            if len(match_idx) == 0:
+                raise ValueError(
+                    f"Atom name '{target_atom_name}' not found in ligand array. "
+                    f"This is an internal error."
+                )
+            full_ligand_array.coord[match_idx[0]] = motif_ligand.coords[i]
+            is_motif[match_idx[0]] = True
 
-        ligand_info = build_ligand(entity_info)
-        full_ligand = ligand_info["atom_array"]
+    full_ligand_array.set_annotation("is_motif", is_motif)
+    full_ligand_array.set_annotation(
+        "is_motif_related", np.ones_like(is_motif, dtype=bool)
+    )
 
-        is_motif = np.zeros(len(full_ligand), dtype=bool)
+    return full_ligand_array
 
-        # CCD
-        if self._is_ccd_ligand():
-            # CCD ligand: match by atom_name
-            for i, atom_name in enumerate(self.atom_names):
-                match_idx = np.where(full_ligand.atom_name == atom_name)[0]
-                if len(match_idx) == 0:
-                    raise ValueError(
-                        f"Motif atom '{atom_name}' not found in CCD ligand "
-                        f"'{self.full_ligand}'. Available atoms: "
-                        f"{full_ligand.atom_name.tolist()}"
-                    )
-                full_ligand.coord[match_idx[0]] = self.coords[i]
-                is_motif[match_idx[0]] = True
 
-        # SMILES
-        else:
-            map_num_to_atom_name = ligand_info.get("atom_map_to_atom_name", {})
-            # map number -> AtomArray atom_name
+def build_sequence_design_structure(
+    input_data: SequenceDesignInput,
+) -> AtomArray:
+    """Build atom array from sequence design input.
 
-            for i, cif_atom_name in enumerate(self.atom_names):
-                if cif_atom_name not in self.atom_map:
-                    raise KeyError(
-                        f"CIF atom '{cif_atom_name}' not found in atom_map. "
-                        f"All motif atoms must be mapped. atom_map keys: "
-                        f"{list(self.atom_map.keys())}"
-                    )
+    Takes a SequenceDesignInput and:
+    1. Loads backbone CIF via MMCIFParser
+    2. Filters protein residues to backbone atoms only (N, CA, C, O)
+    3. Keeps ligand atoms (HETATM) as-is from CIF
+    4. Adds is_fixed annotation for fixed residues
+    5. Adds standard annotations (reference features)
 
-                map_num = self.atom_map[cif_atom_name]
-                if map_num not in map_num_to_atom_name:
-                    raise KeyError(
-                        f"Atom map number {map_num} (for '{cif_atom_name}') not found "
-                        f"in SMILES. Use [atom:{map_num}] notation in SMILES string. "
-                        f"Available map numbers: {list(map_num_to_atom_name.keys())}"
-                    )
+    Args:
+        input_data: SequenceDesignInput with backbone file and fixed residues
 
-                target_atom_name = map_num_to_atom_name[map_num]
-                match_idx = np.where(full_ligand.atom_name == target_atom_name)[0]
-                if len(match_idx) == 0:
-                    raise ValueError(
-                        f"Atom name '{target_atom_name}' not found in ligand array. "
-                        f"This is an internal error."
-                    )
-                full_ligand.coord[match_idx[0]] = self.coords[i]
-                is_motif[match_idx[0]] = True
+    Returns:
+        AtomArray: Complete structure with is_fixed annotation marking
+            fixed residue atoms
 
-        full_ligand.set_annotation("is_motif", is_motif)
-        full_ligand.set_annotation(
-            "is_motif_related", np.ones_like(is_motif, dtype=bool)
-        )
+    Raises:
+        FileNotFoundError: If backbone CIF file doesn't exist
+    """
+    cif_path = input_data.cif_file.path
+    if not cif_path.exists():
+        raise FileNotFoundError(f"Backbone CIF file not found: {cif_path}")
 
-        return full_ligand
+    parser = MMCIFParser(cif_path)
+    atoms = parser.get_structure()
+
+    # Group atoms by residue and process
+    res_starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
+    processed_arrays: list[AtomArray] = []
+
+    for start, stop in zip(res_starts[:-1], res_starts[1:]):
+        res_atoms = atoms[start:stop]
+        is_hetero = res_atoms.hetero[0]
+
+        # For protein residues, keep only backbone atoms
+        if not is_hetero:
+            backbone_atoms = BACKBONE_DEFS["protein"]
+            backbone_mask = np.isin(res_atoms.atom_name, backbone_atoms)
+            res_atoms = res_atoms[backbone_mask]
+
+        # Ligands (HETATM) are kept as-is from CIF
+        processed_arrays.append(res_atoms.copy())
+
+    # Combine all arrays
+    if not processed_arrays:
+        raise ValueError("No atoms found in backbone CIF")
+
+    combined = processed_arrays[0]
+    for arr in processed_arrays[1:]:
+        combined += arr
+
+    # Add is_fixed annotation for fixed residues
+    is_fixed = np.zeros(len(combined), dtype=bool)
+    fixed_residue_map = {
+        (fr.chain_id, fr.res_id): fr.residue for fr in input_data.fixed_residues
+    }
+
+    for start, stop in zip(
+        struc.get_residue_starts(combined, add_exclusive_stop=True)[:-1],
+        struc.get_residue_starts(combined, add_exclusive_stop=True)[1:],
+    ):
+        chain_id = combined.chain_id[start]
+        res_id = combined.res_id[start]
+        key = (chain_id, res_id)
+        if key in fixed_residue_map:
+            is_fixed[start:stop] = True
+
+    combined.set_annotation("is_fixed", is_fixed)
+
+    # Add reference features
+    combined = add_reference_features(combined)
+
+    return combined

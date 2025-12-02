@@ -13,6 +13,7 @@ import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
 
+from protenix.common.constants import BACKBONE_DEFS
 from protenix.common.residue_names import PROTEIN_ONE_TO_THREE_WITH_UNKNOWN
 from protenix.data import ccd
 from protenix.data.json_parser_new import CCDLigand, SequenceDesignInput, SMILESLigand
@@ -592,8 +593,11 @@ def build_sequence_design_structure(
             processed_arrays.append(expanded_ligand)
             ligands_found.add(res_name)
         else:
-            # Keep as-is (backbone residues, unmapped heteroatoms)
-            # TODO: filter for backbone only atoms
+            # For protein residues, keep only backbone atoms
+            if not is_hetero:
+                backbone_atoms = BACKBONE_DEFS["protein"]
+                backbone_mask = np.isin(res_atoms.atom_name, backbone_atoms)
+                res_atoms = res_atoms[backbone_mask]
             processed_arrays.append(res_atoms.copy())
 
     # Warn about unmapped ligands

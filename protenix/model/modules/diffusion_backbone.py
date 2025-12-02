@@ -144,6 +144,8 @@ class DiffusionConditioning(nn.Module):
         )
 
         # Initialize distance bins as parameters during initialization
+        # TODO: soft-binning with different parameters can work better here
+        # TODO: we likely need displacements and finer distances such as 1 / (1 + d**2)
         target_lower_bins = torch.arange(
             target_dist_min, target_dist_max, target_dist_bin_size
         )
@@ -196,10 +198,12 @@ class DiffusionConditioning(nn.Module):
         ### Create atom pair conditioning
         # 1. Get token-wise atom reference positions
         # [..., N_atom, 3]
-        is_atom = (is_ligand | is_motif_related).unsqueeze(-1)  # [..., n_atom, 1]
+        is_atom = (
+            (is_ligand | is_motif_related).bool().unsqueeze(-1)
+        )  # [..., n_atom, 1]
         ref_pos = (
             input_feature_dict["ref_pos"] * is_atom
-        )  # (zero out out that are non-atomized)
+        )  # (zero out that are non-atomized)
 
         # 2. Aggregate per-atom reference positions to per-token reference positions
         # [..., N_atom, 3] -> [..., N_token, 3]
@@ -217,9 +221,14 @@ class DiffusionConditioning(nn.Module):
             atom_mask=atom_mask,
             n_token=n_token,
         )  # [..., N_token, 1]
+
+        # Check if ref_space_uid values are the same (or very similar for floating point)
         v_lm = (
-            token_ref_space_uid[..., None, :, :].int()
-            == token_ref_space_uid[..., :, None, :].int()
+            torch.abs(
+                token_ref_space_uid[..., None, :, :]
+                - token_ref_space_uid[..., :, None, :]
+            )
+            < 1e-2
         ).to(ref_pos.dtype)  # [..., n_token, n_token, 1]
 
         # 3. Compute ref pos displacement
@@ -283,12 +292,16 @@ class DiffusionConditioning(nn.Module):
 
         # Augment motif coordinates
         motif_coord_augment = centre_random_augmentation(
-            motif_coord, mask=is_motif_token, N_sample=1, s_trans=1.0
+            motif_coord,
+            mask=is_motif_token,
+            N_sample=1,
+            s_trans=1.0,  # TODO: increase s_trans?
         ).squeeze(-3)  # [..., N_token, 3]
 
         # Single embeddings
         s_motif = self.embed_motif_restype(motif_restype)
         s_motif = s_motif + self.embed_motif_coord(motif_coord_augment)
+        s_motif = s_motif * is_motif_token[..., None]
 
         # Pair embeddings - compute motif distances
         motif_pair_dists = torch.norm(

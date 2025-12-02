@@ -168,12 +168,12 @@ model_configs = {
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
-        "N_sample": 10,  # changed from 1, BATCH SIZE AT SAMPLING
+        "N_sample": 50,  # changed from 1, BATCH SIZE AT SAMPLING
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type": "non_singular",
-        "alpha": 3.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
-        "gamma": 0.75,
+        "alpha": 0.3,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "gamma": 1.0,
         "sigma_coord": GlobalConfigValue("sigma_coord"),
         "second_order": False,
         "guidance_weight": 1.0,

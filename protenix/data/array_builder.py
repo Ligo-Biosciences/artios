@@ -14,7 +14,7 @@
 
 import copy
 import logging
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
 import biotite.structure as struc
 import numpy as np
@@ -23,9 +23,9 @@ from biotite.structure import AtomArray
 from protenix.common.constants import BACKBONE_DEFS
 from protenix.data import ccd
 from protenix.data.json_parser_new import (
+    Backbone,
     CCDLigand,
     MotifInput,
-    ProteinDesign,
     SequenceDesignInput,
     SMILESLigand,
 )
@@ -50,20 +50,14 @@ logger = logging.getLogger(__name__)
 
 def motif_input_to_atom_array(motif_input: MotifInput) -> AtomArray:
     """
-    Process motif scaffolding input to add atom_arrays.
-
-    Args:
-        motif_input: MotifInput pydantic object with design and motif specs
-
-    Returns:
-        dict: Dictionary with atom_array added to each entity (legacy format for now)
+    Process motif scaffolding input to build AtomArray.
     """
     assert len(motif_input.design) == 1, "Only one design entity is supported"
 
     atom_array = AtomArray(0)
 
     # Design
-    design_atom_array = build_protein_design(motif_input.design[0])
+    design_atom_array = build_backbone(motif_input.design[0])
 
     design_copy = copy.deepcopy(design_atom_array)
     design_chain_id = ["0"] * len(design_copy)
@@ -96,7 +90,7 @@ def motif_input_to_atom_array(motif_input: MotifInput) -> AtomArray:
 def sequence_input_to_atom_array(sequence_input: SequenceDesignInput) -> AtomArray:
     """Handles atom array generation for tasks with a sequence input and backbone.
     This is required for packing design tasks."""
-    raise NotImplementedError("Sequence-only generation is not supported yet.")
+    return build_sequence_design_structure(sequence_input)
 
 
 def backbone_input_to_atom_array(single_job_dict: dict) -> AtomArray:
@@ -111,7 +105,7 @@ def unconditional_input_to_atom_arrays(single_job_dict: dict) -> dict:
 
 
 def process_input_to_atom_array(
-    input: Union[MotifInput, SequenceDesignInput],
+    input: MotifInput | SequenceDesignInput,
 ) -> AtomArray:
     """Dispatch to appropriate task-specific processor based on input structure."""
     if isinstance(input, MotifInput):
@@ -120,99 +114,6 @@ def process_input_to_atom_array(
         return sequence_input_to_atom_array(input)
     else:
         raise ValueError(f"Unknown input type: {type(input)}")
-
-
-# def add_entity_atom_array(single_job_dict: dict) -> dict:
-#     """
-#     Add atom_array to each entity in single_job_dict
-
-#     Args:
-#         single_job_dict (dict): input job dict
-
-#     Returns:
-#         dict: deepcopy and updated job dict with atom_array
-#     """
-
-#     valid_keys = ["design", "target", "name", "motif", "sequences"]
-#     small_mol_keys = ["ligand"]
-#     polymer_keys = ["proteinChain", "dnaSequence", "rnaSequence"]
-#     biomol_keys = small_mol_keys + polymer_keys
-#     smiles_ligand_count = 0
-
-#     single_job_dict = copy.deepcopy(single_job_dict)
-
-#     assert all(
-#         key in valid_keys for key in single_job_dict.keys()
-#     ), f"single_job_dict must only contain allowed keys: {valid_keys}"
-
-#     for entity in single_job_dict.get("design", []):
-#         key = list(entity.keys())[0]
-
-#         assert (
-#             key in biomol_keys
-#         ), f"design entity must only contain allowed keys: {biomol_keys}"
-#         assert (
-#             len(list(entity.keys())) == 1
-#         ), f"design entity must only contain one key got {list(entity.keys())}"
-
-#         if key in polymer_keys:
-#             atom_info = build_design_polymer(entity)
-#         elif key in small_mol_keys:
-#             atom_info = build_ligand(entity)
-#             atom_info["atom_array"].is_target[:] = False
-#             if not entity["ligand"].startswith("CCD_"):
-#                 smiles_ligand_count += 1
-#                 assert smiles_ligand_count <= 99, "too many smiles ligands"
-#                 # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
-#                 entity["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
-#         else:
-#             raise ValueError(f"invalid design entity key: {key}")
-
-#         entity[key].update(atom_info)
-
-#     for entity in single_job_dict.get("sequences", []):
-#         key = list(entity.keys())[0]
-#         assert (
-#             len(list(entity.keys())) == 1
-#         ), f"sequence entity must only contain one key got {list(entity.keys())}"
-#         assert key in polymer_keys, f"invalid sequence entity key: {key}"
-#         atom_info = build_polymer(entity)
-#         entity[key].update(atom_info)
-
-#     for entity in single_job_dict.get("target", []):
-#         key = list(entity.keys())[0]
-
-#         assert (
-#             len(list(entity.keys())) == 1
-#         ), f"target entity must only contain one key got {list(entity.keys())}"
-
-#         if key in polymer_keys:
-#             atom_info = build_target_polymer(entity)
-#         elif key in small_mol_keys:
-#             atom_info = build_ligand(entity)
-#             atom_info["atom_array"].is_target[:] = True
-
-#             if not entity["ligand"].startswith("CCD_"):
-#                 smiles_ligand_count += 1
-#                 assert smiles_ligand_count <= 99, "too many smiles ligands"
-#                 # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
-#                 entity["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
-#         else:
-#             raise ValueError(f"invalid design entity key: {key}")
-
-#         entity[key].update(atom_info)
-
-#     for entity in single_job_dict.get("motif", []):
-#         key = list(entity.keys())[0]
-#         atom_info = build_motif(entity)
-#         # TODO: I would love to neaten up where we add these extra annotations.
-#         atom_array = atom_info["atom_array"]
-#         atom_array.set_annotation("is_target", [False] * len(atom_array))
-#         atom_array.set_annotation("is_hotspot", [False] * len(atom_array))
-#         atom_array.set_annotation("is_resolved", [True] * len(atom_array))
-#         entity[key].update(atom_info)
-
-#     return single_job_dict
 
 
 def _build_polymer_atom_array(ccd_seqs: list[str]) -> AtomArray:
@@ -255,12 +156,11 @@ def _build_polymer_atom_array(ccd_seqs: list[str]) -> AtomArray:
     return chain
 
 
-def build_protein_design(protein_design: ProteinDesign) -> AtomArray:
+def build_backbone(backbone: Backbone) -> AtomArray:
     """
-    Build a protein design from a ProteinDesign pydantic object.
-    TODO: I don't really like that this is very clearly a backbone not a protein.
+    Build a backbone from a Backbone pydantic object.
     """
-    sequence = [PROTEIN_1to3["G"] for _ in range(protein_design.length)]
+    sequence = [PROTEIN_1to3["G"] for _ in range(backbone.length)]
     atom_array = _build_polymer_atom_array(sequence)
 
     atom_array = add_reference_features(atom_array)

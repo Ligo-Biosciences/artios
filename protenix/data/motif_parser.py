@@ -88,7 +88,7 @@ class Motif:
         Raises:
             FileNotFoundError: If the motif CIF file doesn't exist
         """
-        cif_path = motif_input.motif.file
+        cif_path = motif_input.motif.cif_file.path
         if not cif_path.exists():
             raise FileNotFoundError(f"Motif CIF file not found: {cif_path}")
 

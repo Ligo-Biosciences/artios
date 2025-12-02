@@ -456,87 +456,6 @@ def build_motif_ligand(motif_ligand: MotifLigand) -> AtomArray:
     return full_ligand_array
 
 
-def build_ligand_with_coords(
-    cif_ligand: AtomArray,
-    full_ligand: CCDLigand | SMILESLigand,
-) -> AtomArray:
-    """Build full ligand with coordinates transferred from CIF fragment.
-
-    Takes coordinates from a CIF ligand AtomArray and transfers them to
-    the expanded full ligand structure. This is useful for sequence design
-    where the backbone CIF contains ligand coordinates.
-
-    For CCD ligands: matches by atom_name
-    For SMILES ligands: uses atom_map for mapping
-
-    Args:
-        cif_ligand: AtomArray from the CIF file containing ligand coordinates
-        full_ligand: CCDLigand or SMILESLigand specifying the full ligand
-
-    Returns:
-        AtomArray: Full ligand with coordinates transferred from CIF,
-            with is_motif annotation (True for atoms with transferred coords)
-    """
-    ligand_info = build_ligand(full_ligand)
-    full_ligand_array = ligand_info.atom_array
-
-    is_motif = np.zeros(len(full_ligand_array), dtype=bool)
-
-    # CCD: match by atom_name
-    if isinstance(full_ligand, CCDLigand):
-        for i, atom_name in enumerate(cif_ligand.atom_name):
-            match_idx = np.where(full_ligand_array.atom_name == atom_name)[0]
-            if len(match_idx) == 0:
-                logger.warning(
-                    f"CIF atom '{atom_name}' not found in CCD ligand "
-                    f"'{full_ligand.codes}'. Skipping coordinate transfer."
-                )
-                continue
-            full_ligand_array.coord[match_idx[0]] = cif_ligand.coord[i]
-            is_motif[match_idx[0]] = True
-
-    # SMILES: use atom_map for coordinate transfer
-    else:
-        atom_map = full_ligand.atom_map
-        if atom_map is None:
-            raise ValueError(
-                f"SMILES ligand requires atom_map for coordinate transfer. "
-                f"SMILES: {full_ligand.smiles}"
-            )
-
-        map_num_to_atom_name = ligand_info.atom_map_to_atom_name
-
-        for i, cif_atom_name in enumerate(cif_ligand.atom_name):
-            if cif_atom_name not in atom_map:
-                logger.warning(
-                    f"CIF atom '{cif_atom_name}' not found in atom_map. "
-                    f"Skipping coordinate transfer."
-                )
-                continue
-
-            map_num = atom_map[cif_atom_name]
-            if map_num not in map_num_to_atom_name:
-                raise KeyError(
-                    f"Atom map number {map_num} (for '{cif_atom_name}') not found "
-                    f"in SMILES. Use [atom:{map_num}] notation in SMILES string. "
-                    f"Available map numbers: {list(map_num_to_atom_name.keys())}"
-                )
-
-            target_atom_name = map_num_to_atom_name[map_num]
-            match_idx = np.where(full_ligand_array.atom_name == target_atom_name)[0]
-            if len(match_idx) == 0:
-                raise ValueError(
-                    f"Atom name '{target_atom_name}' not found in ligand array. "
-                    f"This is an internal error."
-                )
-            full_ligand_array.coord[match_idx[0]] = cif_ligand.coord[i]
-            is_motif[match_idx[0]] = True
-
-    full_ligand_array.set_annotation("is_motif", is_motif)
-
-    return full_ligand_array
-
-
 def build_sequence_design_structure(
     input_data: SequenceDesignInput,
 ) -> AtomArray:
@@ -544,13 +463,13 @@ def build_sequence_design_structure(
 
     Takes a SequenceDesignInput and:
     1. Loads backbone CIF via MMCIFParser
-    2. For each ligand mapping: expands CIF ligand to full_ligand, transfers coords
-    3. Adds is_fixed annotation for fixed residues
-    4. Adds standard annotations (reference features)
+    2. Filters protein residues to backbone atoms only (N, CA, C, O)
+    3. Keeps ligand atoms (HETATM) as-is from CIF
+    4. Adds is_fixed annotation for fixed residues
+    5. Adds standard annotations (reference features)
 
     Args:
-        input_data: SequenceDesignInput with backbone file, ligand mappings,
-            and fixed residues
+        input_data: SequenceDesignInput with backbone file and fixed residues
 
     Returns:
         AtomArray: Complete structure with is_fixed annotation marking
@@ -558,54 +477,30 @@ def build_sequence_design_structure(
 
     Raises:
         FileNotFoundError: If backbone CIF file doesn't exist
-        ValueError: If a ligand mapping doesn't match any residue in the CIF
     """
-    backbone_path = input_data.backbone.file
-    if not backbone_path.exists():
-        raise FileNotFoundError(f"Backbone CIF file not found: {backbone_path}")
+    cif_path = input_data.cif_file.path
+    if not cif_path.exists():
+        raise FileNotFoundError(f"Backbone CIF file not found: {cif_path}")
 
-    parser = MMCIFParser(backbone_path)
+    parser = MMCIFParser(cif_path)
     atoms = parser.get_structure()
-
-    # Build ligand mapping: cif_res_name -> full_ligand
-    ligand_mappings = {
-        mapping.cif_res_name: mapping.full_ligand
-        for mapping in input_data.backbone.ligands
-    }
 
     # Group atoms by residue and process
     res_starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
     processed_arrays: list[AtomArray] = []
-    ligands_found: set[str] = set()
 
     for start, stop in zip(res_starts[:-1], res_starts[1:]):
         res_atoms = atoms[start:stop]
-        res_name = res_atoms.res_name[0]
         is_hetero = res_atoms.hetero[0]
 
-        # Ligand that needs expansion
-        if is_hetero and res_name in ligand_mappings:
-            full_ligand = ligand_mappings[res_name]
-            expanded_ligand = build_ligand_with_coords(res_atoms, full_ligand)
-            # Preserve res_id from CIF
-            expanded_ligand.res_id[:] = res_atoms.res_id[0]
-            expanded_ligand.chain_id[:] = res_atoms.chain_id[0]
-            processed_arrays.append(expanded_ligand)
-            ligands_found.add(res_name)
-        else:
-            # For protein residues, keep only backbone atoms
-            if not is_hetero:
-                backbone_atoms = BACKBONE_DEFS["protein"]
-                backbone_mask = np.isin(res_atoms.atom_name, backbone_atoms)
-                res_atoms = res_atoms[backbone_mask]
-            processed_arrays.append(res_atoms.copy())
+        # For protein residues, keep only backbone atoms
+        if not is_hetero:
+            backbone_atoms = BACKBONE_DEFS["protein"]
+            backbone_mask = np.isin(res_atoms.atom_name, backbone_atoms)
+            res_atoms = res_atoms[backbone_mask]
 
-    # Warn about unmapped ligands
-    unmapped = set(ligand_mappings.keys()) - ligands_found
-    if unmapped:
-        logger.warning(
-            f"Ligand mappings not found in CIF: {unmapped}. " f"These will be ignored."
-        )
+        # Ligands (HETATM) are kept as-is from CIF
+        processed_arrays.append(res_atoms.copy())
 
     # Combine all arrays
     if not processed_arrays:

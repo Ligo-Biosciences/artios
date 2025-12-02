@@ -7,16 +7,14 @@ import pytest
 from biotite.structure import AtomArray
 
 from protenix.data.array_builder import (
-    build_ligand_with_coords,
     build_motif_ligand,
     build_motif_residue,
     build_sequence_design_structure,
 )
 from protenix.data.json_parser_new import (
-    BackboneSpec,
     CCDLigand,
+    CIFFile,
     FixedResidue,
-    LigandMapping,
     SequenceDesignInput,
     SMILESLigand,
 )
@@ -138,61 +136,13 @@ class TestBuildMotifLigand:
             build_motif_ligand(motif_ligand)
 
 
-class TestBuildLigandWithCoords:
-    """Tests for build_ligand_with_coords function."""
-
-    def test_ccd_ligand_coordinate_transfer(self):
-        """Test coordinate transfer for CCD ligand."""
-        # Create a mock CIF ligand AtomArray
-        cif_ligand = AtomArray(1)
-        cif_ligand.atom_name = np.array(["ZN"])
-        cif_ligand.coord = np.array([[1.0, 2.0, 3.0]])
-        cif_ligand.res_name = np.array(["ZN"])
-        cif_ligand.element = np.array(["ZN"])
-
-        full_ligand = CCDLigand(codes=["ZN"])
-
-        result = build_ligand_with_coords(cif_ligand, full_ligand)
-
-        assert hasattr(result, "is_motif")
-        assert result.is_motif[0]
-        np.testing.assert_array_almost_equal(result.coord[0], [1.0, 2.0, 3.0])
-
-    def test_smiles_ligand_with_atom_map(self):
-        """Test coordinate transfer for SMILES ligand with atom_map."""
-        # Create mock CIF ligand
-        cif_ligand = AtomArray(1)
-        cif_ligand.atom_name = np.array(["O1"])
-        cif_ligand.coord = np.array([[5.0, 6.0, 7.0]])
-        cif_ligand.res_name = np.array(["LIG"])
-        cif_ligand.element = np.array(["O"])
-
-        full_ligand = SMILESLigand(smiles="CC[O:1]", atom_map={"O1": 1})
-
-        result = build_ligand_with_coords(cif_ligand, full_ligand)
-
-        assert hasattr(result, "is_motif")
-        assert result.is_motif.sum() == 1
-
-    def test_smiles_without_atom_map_raises(self):
-        """Test that SMILES without atom_map raises ValueError."""
-        cif_ligand = AtomArray(1)
-        cif_ligand.atom_name = np.array(["C1"])
-        cif_ligand.coord = np.array([[0.0, 0.0, 0.0]])
-
-        full_ligand = SMILESLigand(smiles="C")
-
-        with pytest.raises(ValueError, match="requires atom_map"):
-            build_ligand_with_coords(cif_ligand, full_ligand)
-
-
 class TestBuildSequenceDesignStructure:
     """Tests for build_sequence_design_structure function."""
 
     def test_file_not_found_raises(self, tmp_path):
         """Test that missing backbone file raises FileNotFoundError."""
         input_data = SequenceDesignInput(
-            backbone=BackboneSpec(file=tmp_path / "nonexistent.cif"),
+            cif_file=CIFFile(path=tmp_path / "nonexistent.cif"),
         )
 
         with pytest.raises(FileNotFoundError, match="Backbone CIF file not found"):
@@ -229,18 +179,11 @@ class TestBuildSequenceDesignStructure:
     def test_fixed_residue_annotation(self, mock_mmcif_parser, tmp_path):
         """Test that fixed residues get is_fixed annotation."""
         # Create a temp CIF file (content doesn't matter since we're mocking)
-        cif_file = tmp_path / "backbone.cif"
-        cif_file.write_text("# Mock CIF")
+        cif_file_path = tmp_path / "backbone.cif"
+        cif_file_path.write_text("# Mock CIF")
 
         input_data = SequenceDesignInput(
-            backbone=BackboneSpec(
-                file=cif_file,
-                ligands=[
-                    LigandMapping(
-                        cif_res_name="ZN", full_ligand=CCDLigand(codes=["ZN"])
-                    )
-                ],
-            ),
+            cif_file=CIFFile(path=cif_file_path),
             fixed_residues=[
                 FixedResidue(chain_id="A", res_id=1, residue="GLY"),
             ],

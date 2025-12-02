@@ -6,7 +6,7 @@
         }
     ],
     "motif": {
-        "file": "carbonic_anhydrase_motif.cif",
+        "cif_file": "carbonic_anhydrase_motif.cif",
         "ligands": [
             {
                 "cif_res_name": "ZN",

@@ -16,8 +16,9 @@ import functools
 import logging
 import pickle
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Dict, Optional, Union
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
@@ -242,9 +243,22 @@ def get_component_rdkit_mol(ccd_code: str) -> Union[Chem.Mol, None]:
     # return ccd_code_to_rdkit(ccd_code)
 
 
+@dataclass(frozen=True)
+class RefInfo:
+    """Reference conformer information for a CCD component."""
+
+    ccd: str
+    atom_map: Dict[str, int]
+    coord: np.ndarray  # (n_atom, 3)
+    charge: np.ndarray  # (n_atom,)
+    mask: np.ndarray  # (n_atom,)
+    perm: np.ndarray  # (n_atom_wo_h, n_perm)
+
+
 @functools.lru_cache
-def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
-    """
+def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> Optional[RefInfo]:
+    """Get reference atom mapping and coordinates from CCD.
+
     Ref: AlphaFold3 SI Chapter 2.8
     Reference features. Features derived from a residue, nucleotide or ligand's reference conformer.
     Given an input CCD code or SMILES string, the conformer is typically generated
@@ -253,46 +267,39 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
     if they are from before our training date cut-off (2021-09-30 unless otherwise stated).
     At the end, any atom coordinates still missing are set to zeros.
 
-    Get reference atom mapping and coordinates.
-
     Args:
-        name (str): CCD name
-        return_perm (bool): return atom permutations.
+        ccd_code (str): CCD code
+        return_perm (bool): Whether to return atom permutations. Defaults to True.
 
     Returns:
-        Dict:
-            ccd: ccd code
-            atom_map: atom name to atom index
-            coord: atom coordinates
-            charge: atom formal charge
-            perm: atom permutation
+        Optional[RefInfo]: Reference information containing:
+            - ccd: CCD code
+            - atom_map: Atom name to atom index mapping
+            - coord: Atom coordinates, shape [n_atom, 3]
+            - charge: Atom formal charges, shape [n_atom]
+            - mask: Atom mask, shape [n_atom]
+            - perm: Atom permutations, shape [n_atom_wo_h, n_perm] (if return_perm=True)
+        Returns None if molecule cannot be loaded or has no atoms.
     """
     mol = get_component_rdkit_mol(ccd_code)
     if mol is None:
-        return {}
+        return None
     if mol.GetNumAtoms() == 0:  # eg: "UNL"
         logger.warning(
-            f"Warning: mol {ccd_code} from get_component_rdkit_mol() has no atoms,"
-            "get_ccd_ref_info() return empty dict"
+            f"Warning: mol {ccd_code} from get_component_rdkit_mol() has no atoms, "
+            "get_ccd_ref_info() return None"
         )
-        return {}
+        return None
+
     conf = mol.GetConformer(mol.ref_conf_id)
     coord = conf.GetPositions()
     charge = np.array([atom.GetFormalCharge() for atom in mol.GetAtoms()])
 
-    results = {
-        "ccd": ccd_code,  # str
-        "atom_map": mol.atom_map,  # dict[str,int]: atom name to atom index
-        "coord": coord,  # np.ndarray[float]: atom coordinates, (n_atom,3)
-        "mask": mol.ref_mask,  # np.ndarray[bool]: atom mask, (n_atom,)
-        "charge": charge,  # np.ndarray[int]: atom formal charge, (n_atom,)
-    }
-
+    perm = None
     if return_perm:
         try:
             Chem.SanitizeMol(mol)
             perm = get_substructure_perms(mol, MaxMatches=1000)
-
         except Exception:
             # Sanitize failed, permutation is unavailable
             perm = np.array(
@@ -305,9 +312,16 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
                 ]
             )
         # np.ndarray[int]: atom permutation, (n_atom_wo_h, n_perm)
-        results["perm"] = perm.T
+        perm = perm.T
 
-    return results
+    return RefInfo(
+        ccd=ccd_code,
+        atom_map=mol.atom_map,
+        coord=coord,
+        mask=mol.ref_mask,
+        charge=charge,
+        perm=perm if return_perm else np.array([]),
+    )
 
 
 # Modified from biotite to use consistent ccd components file

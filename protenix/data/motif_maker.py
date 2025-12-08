@@ -1,18 +1,18 @@
 """
 Houses all the logic for generating motifs during model training.
+
+TODO: make the motif maker config its own dataclass / Pydantic object for cleaner access / initialization.
 """
 
 from logging import getLogger
+from typing import Any
 
 import networkx as nx
 import numpy as np
 from biotite.structure import AtomArray
+from scipy.spatial import KDTree
 
-from protenix.data.motif_utils import (
-    bfs_nodes_by_count,
-    compute_pocket_scores,
-    get_random_seed_atom_from_array,
-)
+from protenix.common import atom_types
 
 logger = getLogger(__name__)
 
@@ -48,9 +48,11 @@ class MotifMaker:
         whole_sidechain_prob: float = 0.2,
         pocket_score_threshold: float = 0.18,
         pocket_n_neighbours: int = 25,
-        sidechain_seed_is_tip_prob: float = 0.8,
+        sidechain_seed_is_tip_prob: float = 0.1,
+        sidechain_seed_is_in_sphere_prob: float = 0.8,
         sidechain_bfs_depth_prob: float = 0.5,
         residue_inclusion_prob: float = 0.9,
+        use_tip_atoms_only_prob: float = 0.9,
         r_min: float = 3.0,
         r_max: float = 6.0,
         max_motif_residues: int = 20,
@@ -66,12 +68,14 @@ class MotifMaker:
             pocket_score_threshold (float): Threshold for pocket score to identify seed atoms.
             pocket_n_neighbours (int): Number of neighbours for pocket score calculation.
             sidechain_seed_is_tip_prob (float): Probability tip atom is used as seed.
+            sidechain_seed_is_in_sphere_prob (float): Probability in-sphere atom is used as seed.
             sidechain_bfs_depth_prob (float): Probability parameter for geometric distribution of BFS depth.
             residue_inclusion_prob (float): Probability of including a residue in sphere.
             r_min (float): Minimum radius in angstroms for sphere search.
             r_max (float): Maximum radius in angstroms for sphere search.
             max_motif_residues (int): Maximum number of residues allowed in motif.
             motif_train_rate (float): Training rate for motif generation.
+            use_tip_atoms_only_prob (float): Probability of using only tip atoms in the motif.
         """
         self.ligand_motif_prob = ligand_motif_prob
         self.pocket_motif_prob = pocket_motif_prob
@@ -80,8 +84,10 @@ class MotifMaker:
         self.pocket_score_threshold = pocket_score_threshold
         self.pocket_n_neighbours = pocket_n_neighbours
         self.sidechain_seed_is_tip_prob = sidechain_seed_is_tip_prob
+        self.sidechain_seed_is_in_sphere_prob = sidechain_seed_is_in_sphere_prob
         self.sidechain_bfs_depth_prob = sidechain_bfs_depth_prob
         self.residue_inclusion_prob = residue_inclusion_prob
+        self.use_tip_atoms_only_prob = use_tip_atoms_only_prob
         self.r_min = r_min
         self.r_max = r_max
         self.max_motif_residues = max_motif_residues
@@ -98,6 +104,7 @@ class MotifMaker:
         """
         # TODO: delete this check once we have pocket annotations for the PDB
         has_pocket_id = "pocket_id" in atom_array.get_annotation_categories()
+
         # Generate motif mask
         if np.random.rand() < self.ligand_motif_prob and atom_array.is_ligand.any():
             is_motif_mask = self._generate_ligand_motif_mask(atom_array)
@@ -255,6 +262,7 @@ class MotifMaker:
         motif_mask = self._generate_motif_around_point_mask(
             point_coord=pocket_centroid,
             atom_array=atom_array,
+            optional_mask=pocket_mask,
         )
         is_motif[motif_mask > 0] = 1
 
@@ -323,6 +331,7 @@ class MotifMaker:
         self,
         point_coord: np.ndarray,
         atom_array: AtomArray,
+        optional_mask: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Generates a motif mask around a point by identifying residues within a sphere.
@@ -330,10 +339,17 @@ class MotifMaker:
         Args:
             point_coord (np.ndarray): Center point coordinates
             atom_array (AtomArray): AtomArray to generate motif from
+            optional_mask (np.ndarray | None, optional): Optional boolean mask to further filter atoms.
+                If provided, will be combined with atoms_in_sphere_mask using logical AND. Defaults to None.
 
         Returns:
             np.ndarray: Integer mask (0/1) indicating motif atoms
         """
+        if np.random.rand() < self.use_tip_atoms_only_prob:
+            use_tip_atoms_only = True
+        else:
+            use_tip_atoms_only = False
+
         is_motif = np.zeros(len(atom_array), dtype=int)
 
         # Pick radius
@@ -347,6 +363,10 @@ class MotifMaker:
         polymer_mask = np.isin(atom_array.chain_mol_type, ["protein", "RNA", "DNA"])
         atoms_in_sphere_mask = within_radius_mask & polymer_mask
 
+        # Apply optional mask if provided
+        if optional_mask is not None:
+            atoms_in_sphere_mask = atoms_in_sphere_mask & optional_mask
+
         if not atoms_in_sphere_mask.any():
             logger.warning(
                 "No polymer atoms close to seed point. Setting all is_motif to 0."
@@ -354,6 +374,15 @@ class MotifMaker:
             return is_motif
 
         # Get unique residues in sphere
+        if use_tip_atoms_only:
+            # Create mask for atoms that are valid motif atoms based on residue type
+            is_valid_tip_atom = np.zeros(len(atom_array), dtype=bool)
+            for res_name, valid_atoms in atom_types.TIP_ATOMS.items():
+                res_mask = atom_array.res_name == res_name
+                atom_mask = np.isin(atom_array.atom_name, valid_atoms)
+                is_valid_tip_atom |= res_mask & atom_mask
+            atoms_in_sphere_mask = atoms_in_sphere_mask & is_valid_tip_atom
+
         atoms_in_sphere = atom_array[atoms_in_sphere_mask]
         unique_ref_space_uids = np.unique(atoms_in_sphere.ref_space_uid)
 
@@ -373,17 +402,24 @@ class MotifMaker:
             if np.random.rand() > self.whole_sidechain_prob:
                 # Partial residue
                 partial_mask = self._get_partial_residue_motif_mask(
-                    atom_array, residue_mask
+                    atom_array, residue_mask, in_sphere_mask=atoms_in_sphere_mask
                 )
                 is_motif[partial_mask > 0] = 1
             else:
                 # Whole residue
                 is_motif[residue_mask > 0] = 1
 
+        # Filter the final motif for only
+        if use_tip_atoms_only:
+            is_motif = is_motif * is_valid_tip_atom.astype(int)
+
         return is_motif
 
     def _get_partial_residue_motif_mask(
-        self, atom_array: AtomArray, residue_mask: np.ndarray
+        self,
+        atom_array: AtomArray,
+        residue_mask: np.ndarray,
+        in_sphere_mask: np.ndarray,
     ) -> np.ndarray:
         """
         Gets partial residue motif mask using BFS on the residue bond graph.
@@ -391,7 +427,7 @@ class MotifMaker:
         Args:
             atom_array (AtomArray): Full atom array
             residue_mask (np.ndarray): Boolean mask indicating which atoms belong to the residue
-
+            in_sphere_mask (np.ndarray | None, optional): Boolean mask indicating which atoms are in the sphere.
         Returns:
             np.ndarray: Integer mask (0/1) indicating which atoms of the residue are in the motif
         """
@@ -409,19 +445,34 @@ class MotifMaker:
             return partial_motif_mask
 
         # Pick seed atom
-        if np.random.rand() < self.sidechain_seed_is_tip_prob:
-            tip_atom = graph_nodes[
+        p = np.random.rand()
+        residue_indices = np.where(residue_mask)[0]
+        local_in_sphere_mask = in_sphere_mask[residue_indices]
+        local_indices_in_sphere = np.where(local_in_sphere_mask)[0]
+
+        # Filter to valid graph nodes
+        graph_node_set = set(graph_nodes)
+        valid_seed_atoms = [
+            idx for idx in local_indices_in_sphere if idx in graph_node_set
+        ]
+
+        if p < self.sidechain_seed_is_in_sphere_prob and valid_seed_atoms:
+            seed_atom = np.random.choice(valid_seed_atoms)
+        elif (
+            p < self.sidechain_seed_is_in_sphere_prob + self.sidechain_seed_is_tip_prob
+        ):
+            seed_atom = graph_nodes[
                 -1
             ]  # TODO: I don't think the last node in the graph is neccessarily the tip
         else:
-            tip_atom = np.random.choice(graph_nodes)
+            seed_atom = np.random.choice(graph_nodes)
 
         # Pick depth
         num_bonds = np.random.geometric(self.sidechain_bfs_depth_prob) - 1
 
         # Get atoms within num_bonds of seed
         motif_atom_ids = nx.single_source_shortest_path_length(
-            G_res, tip_atom, cutoff=num_bonds
+            G_res, seed_atom, cutoff=num_bonds
         )
         motif_atom_ids = list(motif_atom_ids.keys())
 
@@ -431,3 +482,74 @@ class MotifMaker:
         partial_motif_mask[selected_indices] = 1
 
         return partial_motif_mask
+
+
+def compute_pocket_scores(chain_array: AtomArray, n_neighbors: int = 25) -> np.ndarray:
+    """
+    Compute pocket scores for atoms in the array. The score is the distance between the target
+    atom and the centroid of the nearest n_neighbors neighbours.
+
+    Args:
+        chain_array (AtomArray): AtomArray containing all atoms
+        n_neighbors (int): Number of nearest neighbors to use for centroid calculation
+
+    Returns:
+        np.ndarray: Array of pocket scores for atoms. Lower scores indicate deeper pockets.
+
+    Notes:
+        - Lower pocket_score means the atom is more likely in a pocket
+        - Typical pocket threshold: score < 0.18 Å suggests pocket atom (we think)
+        - Adjust n_neighbors based on protein size (20-30 works well for most cases)
+    """
+    # Query for n_neighbors
+    coords = chain_array.coord
+    tree = KDTree(coords)
+    _, indices = tree.query(coords, k=min(len(coords), n_neighbors + 1))
+    neighbor_indices = indices[:, 1:]
+
+    # Calculate pocket scores for each atom
+    scores = np.zeros(len(coords))
+    for i, neighbor_idx in enumerate(neighbor_indices):
+        neighbor_coords = coords[neighbor_idx]
+        centroid = np.mean(neighbor_coords, axis=0)
+
+        # Distance from point to centroid (pocket score)
+        scores[i] = np.linalg.norm(coords[i] - centroid)
+    return scores
+
+
+def get_random_seed_atom_from_array(atom_array: AtomArray) -> np.ndarray:
+    """
+    Picks a seed atom uniformly at random from the input array
+    and returns its coordinates.
+
+    Args:
+        atom_array (AtomArray): Input atom array
+
+    Returns:
+        np.ndarray: Coordinates of the randomly selected seed atom [..., 3]
+    """
+    random_idx = np.random.randint(len(atom_array))
+    return atom_array[random_idx].coord
+
+
+def bfs_nodes_by_count(G: nx.Graph, source: Any, target_count: int) -> list[Any]:
+    """
+    Perform BFS from source and return nodes up to target_count.
+
+    Args:
+        G (nx.Graph): The graph to traverse.
+        source (Any): Starting node for BFS.
+        target_count (int): Number of nodes to collect.
+
+    Returns:
+        list: List of nodes in BFS order, up to target_count.
+    """
+    assert target_count > 0, "target_count must be greater than 0"
+    visited = [source]
+    for u, v in nx.bfs_edges(G, source):
+        if len(visited) >= target_count:
+            break
+        visited.append(v)
+
+    return visited

@@ -32,7 +32,7 @@ from protenix.common.constants import BACKBONE_DEFS, EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
 from protenix.data.featurizer import Featurizer
 from protenix.data.filter import Filter
-from protenix.data.motif import MotifMaker
+from protenix.data.motif_maker import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.parser import AddAtomArrayAnnot
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
@@ -49,7 +49,7 @@ from protenix.utils.torch_utils import dict_to_tensor
 logger = get_logger(__name__)
 
 
-SLOW_STEP_THRESHOLD = 1.0  # seconds
+SLOW_STEP_THRESHOLD = 5.0  # seconds
 
 
 class BaseSingleDataset(Dataset):
@@ -325,9 +325,8 @@ class BaseSingleDataset(Dataset):
         Returns:
             A dictionary containing the processed data sample.
         """
-        import time
 
-        start_time = time.time()
+        # start_time = time.time()
 
         # Try at most 10 times
         for _ in range(10):
@@ -339,15 +338,15 @@ class BaseSingleDataset(Dataset):
                 )
 
                 # Log if data loading took too long
-                total_time = time.time() - start_time
-                if (
-                    total_time > SLOW_STEP_THRESHOLD
-                ):  # Log slow data loading (> 1 second)
-                    sample_indice = self._get_sample_indice(idx=idx)
-                    logger.warning(
-                        f"SLOW __getitem__ for idx={idx}, pdb_id={sample_indice.pdb_id}: "
-                        f"{total_time:.2f}s"
-                    )
+                # total_time = time.time() - start_time
+                # if (
+                #     total_time > SLOW_STEP_THRESHOLD
+                # ):  # Log slow data loading (> 1 second)
+                #     sample_indice = self._get_sample_indice(idx=idx)
+                #     logger.warning(
+                #         f"SLOW __getitem__ for idx={idx}, pdb_id={sample_indice.pdb_id}: "
+                #         f"{total_time:.2f}s"
+                #     )
 
                 return data
             except Exception as e:
@@ -612,6 +611,7 @@ class BaseSingleDataset(Dataset):
         )
         timings["assign_binding_target"] = time.time() - t3
 
+        tmotif = time.time()
         # motif work
         cropped_atom_array = self._get_motif(
             atom_array=cropped_atom_array,
@@ -640,11 +640,7 @@ class BaseSingleDataset(Dataset):
         tokenizer = AtomArrayTokenizer(cropped_atom_array)
         cropped_token_array = tokenizer.get_token_array()
 
-        # temp: save filtered structure
-        # save_structure(
-        #     self.motif_dir / f"{bioassembly_dict['pdb_id']}_filtered.cif",
-        #     cropped_atom_array,
-        # )
+        timings["motif"] = time.time() - tmotif
 
         t4 = time.time()
         feat, label, label_full = self.get_feature_and_label(
@@ -741,6 +737,7 @@ class BaseSingleDataset(Dataset):
                 f"{total_time:.2f}s - "
                 f"bioassembly={timings.get('get_bioassembly', 0):.3f}s, "
                 f"preprocess={timings.get('preprocessing', 0):.3f}s, "
+                f"motif={timings.get('motif', 0):.3f}s, "
                 f"crop={timings.get('crop', 0):.3f}s, "
                 f"features={timings.get('get_feature_and_label', 0):.3f}s, "
                 f"padding={timings.get('padding', 0):.3f}s"
@@ -948,55 +945,7 @@ class BaseSingleDataset(Dataset):
         Returns:
             AtomArray: AtomArray with updated IDs for motif-related residues
         """
-        new_array = atom_array.copy()
-
-        is_motif_related = new_array.is_motif_related > 0
-
-        if not is_motif_related.any():
-            return new_array
-
-        max_entity_id = new_array.entity_id_int.max()
-        max_asym_id = new_array.asym_id_int.max()
-
-        entity_counter = max_entity_id + 1
-        asym_counter = max_asym_id + 1
-
-        motif_restypes = np.unique(new_array.cano_seq_resname[is_motif_related])
-
-        for restype in motif_restypes:
-            restype_mask = is_motif_related & (new_array.cano_seq_resname == restype)
-
-            current_entity_id = entity_counter
-            new_array.entity_id_int[restype_mask] = current_entity_id
-            entity_counter += 1
-
-            # Within this restype, group by individual residue instances
-            unique_residue_uids = np.unique(new_array.ref_space_uid[restype_mask])
-
-            # Assign unique sym_id and asym_id for each residue instance
-            sym_id_counter = 0
-
-            for residue_uid in unique_residue_uids:
-                residue_instance_mask = restype_mask & (
-                    new_array.ref_space_uid == residue_uid
-                )
-
-                new_array.asym_id_int[residue_instance_mask] = asym_counter
-                asym_counter += 1
-
-                new_array.sym_id_int[residue_instance_mask] = sym_id_counter
-                sym_id_counter += 1
-
-                # Assign unique res_id for each atom in this residue instance
-                num_atoms_in_residue = residue_instance_mask.sum()
-                new_array.res_id[residue_instance_mask] = np.arange(
-                    num_atoms_in_residue
-                )
-
-        # Update ref_space_uid
-        new_array = AddAtomArrayAnnot.add_ref_space_uid(new_array)
-
-        return new_array
+        return AddAtomArrayAnnot.update_ids_to_unindex_motif_residues(atom_array)
 
     @staticmethod
     def _update_centre_atom_mask_to_include_motif(atom_array: AtomArray) -> AtomArray:
@@ -1005,8 +954,7 @@ class BaseSingleDataset(Dataset):
         related atoms. This is important as the Featurizer looks at the
         centre atom indices to retrieve the correct chain, res IDs etc.
         """
-        atom_array.centre_atom_mask[atom_array.is_motif_related > 0] = 1
-        return atom_array
+        return AddAtomArrayAnnot.update_centre_atom_mask_to_include_motif(atom_array)
 
     @profile_function("dataset.get_feature_and_label")
     def get_feature_and_label(

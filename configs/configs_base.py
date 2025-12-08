@@ -31,9 +31,11 @@ basic_configs = {
     "eval_first": False,  # run evaluate() before training steps
     "iters_to_accumulate": 1,
     "eval_only": False,
+    "load_backbone_checkpoint_path": "",
     "load_flow_checkpoint_path": "",
     "load_mpnn_checkpoint_path": "",
     "load_vae_checkpoint_path": "",
+    "load_ema_backbone_checkpoint_path": "",
     "load_ema_flow_checkpoint_path": "",  # TODO: no need!
     "load_ema_vae_checkpoint_path": "",  # TODO: no need
     "load_ema_mpnn_checkpoint_path": "",  # TODO: likely no need
@@ -115,12 +117,10 @@ model_configs = {
     "c_atom": 256,  # 64
     "c_atompair": 16,  # 16
     "c_token": 768,  # 192
-    "c_latent": 10,
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
     "sigma_coord": 12.0,
-    "sigma_latent": 1.0,
     "cfg_drop_probability": 0.1,
     "diffusion_batch_size": 16,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
@@ -155,16 +155,9 @@ model_configs = {
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
     "train_timestep_sampler": {
-        "coord": {
-            "alpha": 1.9,
-            "beta": 1.0,
-            "uniform_weight": 0.02,
-        },
-        "latent": {
-            "alpha": 1.0,
-            "beta": 1.5,
-            "uniform_weight": 0.02,
-        },
+        "alpha": 1.9,
+        "beta": 1.0,
+        "uniform_weight": 0.02,
     },
     "inference_timestep_scheduler": {
         "ligo": {"p": -0.7},
@@ -175,17 +168,13 @@ model_configs = {
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
-        "N_sample": 10,  # changed from 1, BATCH SIZE AT SAMPLING
+        "N_sample": 50,  # changed from 1, BATCH SIZE AT SAMPLING
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
-        "stoch_type_coord": "non_singular",
-        "stoch_type_latent": "non_singular",
-        "alpha_coord": 3.0,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
-        "alpha_latent": 1.5,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
-        "gamma_coord": 0.75,
-        "gamma_latent": 0.25,
+        "stoch_type": "non_singular",
+        "alpha": 0.3,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "gamma": 1.0,
         "sigma_coord": GlobalConfigValue("sigma_coord"),
-        "sigma_latent": GlobalConfigValue("sigma_latent"),
         "second_order": False,
         "guidance_weight": 1.0,
         "lower_guidance_limit": 0.3,
@@ -204,42 +193,17 @@ model_configs = {
         "diffusion_module": {
             "use_fine_grained_checkpoint": False,
             "sigma_coord": GlobalConfigValue("sigma_coord"),
-            "sigma_latent": GlobalConfigValue("sigma_latent"),
             "c_token": GlobalConfigValue("c_token"),
-            "c_latent": GlobalConfigValue("c_latent"),
-            # "c_atom": GlobalConfigValue("c_atom"),
-            # "c_atompair": GlobalConfigValue("c_atompair"),
+            "c_atom": GlobalConfigValue("c_atom"),
             "c_z": GlobalConfigValue("c_z"),
             "c_s": GlobalConfigValue("c_s"),
-            "c_s_inputs": GlobalConfigValue("c_s_inputs"),
-            # "atom_encoder": {
-            #    "n_blocks": 3,
-            #    "n_heads": 4,
-            # },
+            # "c_s_inputs": GlobalConfigValue("c_s_inputs"),
             "transformer": {
                 "num_blocks": 16,
                 "num_heads": 16,
             },
-            # "atom_decoder": {
-            #    "n_blocks": 3,
-            #    "n_heads": 4,
-            # },
             "dropout": 0.0,
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
-        },
-        "autoencoder": {
-            "c_latent": GlobalConfigValue("c_latent"),
-            "c_token": 768,  # GlobalConfigValue("c_token"), TODO: hardcoded for checkpoint loading
-            "c_z": 128,  # GlobalConfigValue("c_z"),
-            "sigma_coord": GlobalConfigValue("sigma_coord"),
-            "encoder": {
-                "n_blocks": 6,
-                "n_heads": 4,
-            },
-            "decoder": {
-                "n_blocks": 6,
-                "n_heads": 16,
-            },
         },
         "mpnn_module": {
             "num_residue_types": 32,
@@ -396,17 +360,30 @@ loss_configs = {
                 },
             },
         },
-        "flow": {
-            "centre_atom": {
-                "weight_mse": 1.0,
+        # "flow": {
+        #     "centre_atom": {
+        #         "weight_mse": 1.0,
+        #         "weight_protein": 1.0,
+        #         "weight_dna": 5.0,
+        #         "weight_rna": 5.0,
+        #         "weight_ligand": 10.0,
+        #         "eps": 1e-6,
+        #     },
+        #     "sigma_coord": GlobalConfigValue("sigma_coord"),
+        #     "sigma_latent": GlobalConfigValue("sigma_latent"),
+        # },
+        "backbone": {
+            "mse": {
+                "weight_mse": 1 / 3,
                 "weight_protein": 1.0,
-                "weight_dna": 5.0,
-                "weight_rna": 5.0,
-                "weight_ligand": 10.0,
+                "weight_dna": 1.0,
+                "weight_rna": 1.0,
+                "weight_ligand": 1.0,
+                "weight_motif": 0.0,  # a supplementary weighting. 0.0 means weighted same as all other atoms
+                "weight_motif_related": 0.0,
                 "eps": 1e-6,
             },
             "sigma_coord": GlobalConfigValue("sigma_coord"),
-            "sigma_latent": GlobalConfigValue("sigma_latent"),
         },
         "mpnn": {
             "label_smoothing": 0.1,
@@ -426,7 +403,6 @@ loss_configs = {
             ["chain_pair_iptm", "chain_pair_iptm_global", "chain_pair_plddt"]
         ),
         "clash": {"af3_clash_threshold": 1.1, "vdw_clash_threshold": 0.75},
-        "track_latents": False,
     },
 }
 
@@ -438,20 +414,13 @@ monitor_configs = {
         "eval_metrics": {
             "eval_tests": ListValue(["ss_distribution", "posebusters"]),
         },
-        "latents": {
-            "track_during_vae_training": True,
-            "track_evaluation_latents": False,
-            "track_inference_latents": False,
-            "num_batch": 25,
-            "num_sample": 1,
-            "plot_per_batch": False,
-        },
     },
 }
 
 
 training_time_inference_configs = {
     "run_training_time_inference": True,
+    "run_training_time_mpnn_inference_on_backbones": False,
     "seeds": ListValue([101]),
     "need_atom_confidence": False,
     "sorted_by_ranking_score": False,

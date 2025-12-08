@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Union
 
 import torch
@@ -29,6 +30,7 @@ class DataCollatorWithPadding:
         motif_training: bool = False,
         max_motif_residues: int = 150,
         return_atom_token_arrays: bool = True,
+        num_pad_workers: int = 4,
         list_features: List[str] = [
             "pdb_id",
             "chain_id",
@@ -60,6 +62,7 @@ class DataCollatorWithPadding:
         self.motif_training = motif_training
         self.max_motif_residues = max_motif_residues
         self.return_atom_token_arrays = return_atom_token_arrays
+        self.num_pad_workers = num_pad_workers
 
         self.list_features = list_features
 
@@ -87,19 +90,25 @@ class DataCollatorWithPadding:
                 - (optional) cropped_atom_arrays: List of AtomArrays
                 - (optional) cropped_token_arrays: List of TokenArrays
         """
-        # Get max atom padding length for the batch
+        # import time
+
+        # t0 = time.time()
+
         atom_padding_length = self._get_atom_padding_length(batch)
-
-        # Get max token padding length for the batch
         token_padding_length = self._get_token_padding_length(batch)
+        # t1 = time.time()
 
-        # Pad all samples to the maximum dimensions
         padded_batch = self._pad_batch(batch, atom_padding_length, token_padding_length)
+        # t2 = time.time()
 
-        # Collate dicts
         collated = {}
         for dict_key in ["input_feature_dict", "label_dict", "basic"]:
             collated[dict_key] = self._collate_dicts(dict_key, padded_batch)
+        # t3 = time.time()
+
+        # print(
+        #     f"Collate timing - get_pad_len: {t1-t0:.3f}s, pad_batch: {t2-t1:.3f}s, collate: {t3-t2:.3f}s"
+        # )
 
         # Add optional atom and token arrays if requested
         if self.return_atom_token_arrays:
@@ -156,17 +165,20 @@ class DataCollatorWithPadding:
         """
         Pad a batch of samples to the maximum dimensions.
         """
-        padded_batch = []
-        for data in batch:
-            padded_data = pad_data(
-                data,
-                max_n_atom=atom_padding_length,
-                max_n_token=token_padding_length,
-                max_n_msa=self.max_n_msa,
-                max_n_template=self.max_n_template,
-                max_n_pocket=self.max_n_pocket,
-            )
-            padded_batch.append(padded_data)
+        with ThreadPoolExecutor(max_workers=self.num_pad_workers) as executor:
+            futures = [
+                executor.submit(
+                    pad_data,
+                    data,
+                    atom_padding_length,
+                    token_padding_length,
+                    self.max_n_msa,
+                    self.max_n_template,
+                    self.max_n_pocket,
+                )
+                for data in batch
+            ]
+            padded_batch = [future.result() for future in futures]
         return padded_batch
 
     def _add_optional_arrays(

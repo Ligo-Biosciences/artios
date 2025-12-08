@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# TODO: this can migrate to pydantic instead of being in pure python.
+
 import argparse
 import copy
 import shlex

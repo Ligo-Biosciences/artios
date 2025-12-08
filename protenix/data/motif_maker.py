@@ -1,19 +1,18 @@
 """
 Houses all the logic for generating motifs during model training.
+
+TODO: make the motif maker config its own dataclass / Pydantic object for cleaner access / initialization.
 """
 
 from logging import getLogger
+from typing import Any
 
 import networkx as nx
 import numpy as np
 from biotite.structure import AtomArray
+from scipy.spatial import KDTree
 
-from protenix.common.atom_types import TIP_ATOMS
-from protenix.data.motif_utils import (
-    bfs_nodes_by_count,
-    compute_pocket_scores,
-    get_random_seed_atom_from_array,
-)
+from protenix.common import atom_types
 
 logger = getLogger(__name__)
 
@@ -378,7 +377,7 @@ class MotifMaker:
         if use_tip_atoms_only:
             # Create mask for atoms that are valid motif atoms based on residue type
             is_valid_tip_atom = np.zeros(len(atom_array), dtype=bool)
-            for res_name, valid_atoms in TIP_ATOMS.items():
+            for res_name, valid_atoms in atom_types.TIP_ATOMS.items():
                 res_mask = atom_array.res_name == res_name
                 atom_mask = np.isin(atom_array.atom_name, valid_atoms)
                 is_valid_tip_atom |= res_mask & atom_mask
@@ -483,3 +482,74 @@ class MotifMaker:
         partial_motif_mask[selected_indices] = 1
 
         return partial_motif_mask
+
+
+def compute_pocket_scores(chain_array: AtomArray, n_neighbors: int = 25) -> np.ndarray:
+    """
+    Compute pocket scores for atoms in the array. The score is the distance between the target
+    atom and the centroid of the nearest n_neighbors neighbours.
+
+    Args:
+        chain_array (AtomArray): AtomArray containing all atoms
+        n_neighbors (int): Number of nearest neighbors to use for centroid calculation
+
+    Returns:
+        np.ndarray: Array of pocket scores for atoms. Lower scores indicate deeper pockets.
+
+    Notes:
+        - Lower pocket_score means the atom is more likely in a pocket
+        - Typical pocket threshold: score < 0.18 Å suggests pocket atom (we think)
+        - Adjust n_neighbors based on protein size (20-30 works well for most cases)
+    """
+    # Query for n_neighbors
+    coords = chain_array.coord
+    tree = KDTree(coords)
+    _, indices = tree.query(coords, k=min(len(coords), n_neighbors + 1))
+    neighbor_indices = indices[:, 1:]
+
+    # Calculate pocket scores for each atom
+    scores = np.zeros(len(coords))
+    for i, neighbor_idx in enumerate(neighbor_indices):
+        neighbor_coords = coords[neighbor_idx]
+        centroid = np.mean(neighbor_coords, axis=0)
+
+        # Distance from point to centroid (pocket score)
+        scores[i] = np.linalg.norm(coords[i] - centroid)
+    return scores
+
+
+def get_random_seed_atom_from_array(atom_array: AtomArray) -> np.ndarray:
+    """
+    Picks a seed atom uniformly at random from the input array
+    and returns its coordinates.
+
+    Args:
+        atom_array (AtomArray): Input atom array
+
+    Returns:
+        np.ndarray: Coordinates of the randomly selected seed atom [..., 3]
+    """
+    random_idx = np.random.randint(len(atom_array))
+    return atom_array[random_idx].coord
+
+
+def bfs_nodes_by_count(G: nx.Graph, source: Any, target_count: int) -> list[Any]:
+    """
+    Perform BFS from source and return nodes up to target_count.
+
+    Args:
+        G (nx.Graph): The graph to traverse.
+        source (Any): Starting node for BFS.
+        target_count (int): Number of nodes to collect.
+
+    Returns:
+        list: List of nodes in BFS order, up to target_count.
+    """
+    assert target_count > 0, "target_count must be greater than 0"
+    visited = [source]
+    for u, v in nx.bfs_edges(G, source):
+        if len(visited) >= target_count:
+            break
+        visited.append(v)
+
+    return visited

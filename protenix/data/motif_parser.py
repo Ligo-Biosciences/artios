@@ -6,9 +6,6 @@ Parses MotifInput specifying:
 - Ligand specification (CCD code or SMILES)
 
 Generates a Motif object that can be used for generating atom arrays for model inference.
-
-TODO: For now, to avoid circular imports, we have copied this code to the end of array_builder.py.
-Sort out a way to tidy this (or delete this file).
 """
 
 from __future__ import annotations
@@ -18,13 +15,7 @@ from dataclasses import dataclass
 
 import biotite.structure as struc
 import numpy as np
-from biotite.structure import AtomArray
 
-from protenix.data.array_builder import (
-    build_motif,
-    build_motif_ligand,
-    build_motif_residue,
-)
 from protenix.data.json_parser_new import CCDLigand, MotifInput, SMILESLigand
 from protenix.data.parser import MMCIFParser
 
@@ -40,15 +31,6 @@ class MotifResidue:
     atom_names: tuple[str, ...]  # e.g., ("CG", "CD2", "ND1", "CE1", "NE2")
     coords: np.ndarray  # (N_atoms, 3)
 
-    def to_atom_array(self) -> AtomArray:
-        """Expand partial sidechain to full residue AtomArray from CCD.
-
-        Returns:
-            AtomArray: Full residue with coordinates transferred where available,
-                with is_motif and is_motif_related annotations
-        """
-        return build_motif_residue(self)
-
 
 @dataclass(frozen=True)
 class MotifLigand:
@@ -60,15 +42,6 @@ class MotifLigand:
     elements: tuple[str, ...]  # Element types (e.g., ("O", "S", "N"))
 
     full_ligand: CCDLigand | SMILESLigand
-
-    def to_atom_array(self) -> AtomArray:
-        """Expand motif ligand to full ligand AtomArray.
-
-        Returns:
-            AtomArray: Full ligand with motif coordinates transferred,
-                with is_motif and is_motif_related annotations
-        """
-        return build_motif_ligand(self)
 
 
 @dataclass
@@ -151,11 +124,3 @@ class Motif:
                 )
 
         return cls(residues=residues, ligands=ligands)
-
-    def to_atom_array(self) -> AtomArray:
-        """Generate combined AtomArray from all residues and ligands.
-
-        Returns:
-            AtomArray with is_motif and is_motif_related annotations
-        """
-        return build_motif(self)

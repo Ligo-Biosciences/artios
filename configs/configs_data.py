@@ -72,7 +72,7 @@ default_distillation_configs = {
     },
     "cropping_configs": {
         "method_weights": ListValue(
-            [0.0, 0.1, 0.0, 0.9]
+            [0.0, 0.2, 0.0, 0.8]
         ),  # Legacy: [0.0, 0.5, 0.5] # AF3: [0.2, 0.4, 0.4]
         "crop_size": GlobalConfigValue("train_crop_size"),
     },
@@ -123,6 +123,16 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
             DATA_ROOT_DIR, "components.v20240608.cif.rdkit_mol.pkl"
         )
 
+# if still not found, try ccd_files local directory
+if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
+    not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
+):
+    ccd_files_dir = os.path.join(os.path.dirname(__file__), "..", "ccd_files")
+    CCD_COMPONENTS_FILE_PATH = os.path.join(ccd_files_dir, "components.cif")
+    CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
+        ccd_files_dir, "components.cif.rdkit_mol.pkl"
+    )
+
 
 # This is a patch in inference stage for users that do not have root permission.
 # If you run
@@ -164,10 +174,10 @@ data_configs = {
     "epoch_size": 10000,
     "train_ref_pos_augment": True,
     "test_ref_pos_augment": True,
-    "train_with_binding_target": True,
-    "binding_target_train_rate": 0.75,
-    # "filter_unique_fragment_prob": 0.8,
-    # "filter_unique_domain_prob": 0.1,
+    "train_with_binding_target": False,
+    "binding_target_train_rate": 0.0,
+    "filter_unique_fragment_prob": 0.9,
+    "filter_unique_domain_prob": 0.0,
     "motif_training": {
         "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,
@@ -176,9 +186,11 @@ data_configs = {
         "whole_sidechain_prob": 0.2,
         "pocket_score_threshold": 0.18,
         "pocket_n_neighbours": 100,
-        "sidechain_seed_is_tip_prob": 0.8,
+        "sidechain_seed_is_tip_prob": 0.1,
+        "sidechain_seed_is_in_sphere_prob": 0.8,
         "sidechain_bfs_depth_prob": 0.5,
         "residue_inclusion_prob": 0.8,
+        "use_tip_atoms_only_prob": 0.9,
         "max_motif_residues": 15,
         "r_min": 4.0,
         "r_max": 5.0,
@@ -189,20 +201,18 @@ data_configs = {
         "max_n_template": 4,
         "max_n_pocket": 16,
         # all-atom mpnn training:
-        "atom_bin_ends": ListValue([2112, 3008, 4000]),
-        "token_bin_ends": ListValue([384]),
+        # "atom_bin_ends": ListValue([2112, 3008, 4000]),
+        # "token_bin_ends": ListValue([384]),
         # motif scaffolding training:
-        # "atom_bin_ends": ListValue([1536, 1728]),
-        # "token_bin_ends": ListValue([440, 600]),
+        "atom_bin_ends": ListValue([1536, 1728]),
+        "token_bin_ends": ListValue([440, 600]),
     },
-    "train_sets": ListValue(
-        ["weightedPDB_before2109_wopb_nometalc_0925"]
-    ),  # "trousers_train"
+    "train_sets": ListValue(["trousers_train"]),  # "trousers_train"
     "train_sampler": {
         "train_sample_weights": ListValue([1.0]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["recentPDB_1536_sample384_0925"]),
+    "test_sets": ListValue(["trousers_val"]),
     "weightedPDB_before2109_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
@@ -232,7 +242,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/trousers_train.csv",
             ),
-            "pdb_list": "",
+            "pdb_list": "",  # ["af-a0a0d2yk69-f1", "af-a0a3d3q4w2-f1", "af-a0a3a5v9n6-f1"],
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),

@@ -14,6 +14,7 @@
 
 import os
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -63,6 +64,7 @@ class DataDumper:
         atom_array: AtomArray,
         entity_poly_type: dict[str, str],
         convert_to_flat: bool = False,
+        b_factor: Optional[list] = None,
     ) -> list[str]:
         """
         Dump the predictions and related data to the specified directory.
@@ -74,7 +76,8 @@ class DataDumper:
             pred_dict (dict): The dictionary containing the predictions.
             atom_array (AtomArray): The AtomArray object containing the structure data.
             entity_poly_type (dict[str, str]): The entity poly type information.
-            convert_to_flat(bool): Whether to convert the dense atoms to flat atoms.
+            convert_to_flat (bool): Whether to convert the dense atoms to flat atoms. Defaults to False.
+            b_factor (list, optional): B-factor values for each sample. Defaults to None.
 
         Returns:
             list[str]: List of file paths of saved structure files.
@@ -90,6 +93,7 @@ class DataDumper:
             entity_poly_type=entity_poly_type,
             seed=seed,
             convert_to_flat=convert_to_flat,
+            b_factor=b_factor,
         )
 
         return saved_files
@@ -112,11 +116,22 @@ class DataDumper:
         entity_poly_type: dict[str, str],
         seed: int,
         convert_to_flat: bool,
+        b_factor: Optional[list] = None,
     ) -> list[str]:
         """
         Dump raw predictions from the model:
             structure: Save the predicted coordinates as CIF files.
             confidence: Save the confidence data as JSON files.
+
+        Args:
+            pred_dict (dict): The dictionary containing the predictions.
+            dump_dir (str): The directory path for dumping data.
+            pdb_id (str): The PDB ID of the sample.
+            atom_array (AtomArray): The AtomArray object containing the structure data.
+            entity_poly_type (dict[str, str]): The entity poly type information.
+            seed (int): The seed used for randomization.
+            convert_to_flat (bool): Whether to convert the dense atoms to flat atoms.
+            b_factor (list, optional): B-factor values for each sample. Defaults to None.
 
         Returns:
             list[str]: List of file paths of saved structure files.
@@ -125,7 +140,7 @@ class DataDumper:
         os.makedirs(prediction_save_dir, exist_ok=True)
 
         # Dump structure
-        b_factor = None
+        # b_factor = None
         if "full_data" in pred_dict:
             all_atom_plddt = []
             # len(pred_dict["full_data"]) == N_sample

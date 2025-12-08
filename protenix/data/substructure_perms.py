@@ -20,7 +20,9 @@ from rdkit import Chem
 
 
 def neutralize_atoms(mol: Chem.Mol):
-    pattern = Chem.MolFromSmarts("[+1!h0!$([*]~[-1,-2,-3,-4]),-1!#4!#5!$([*]~[+1,+2,+3,+4])]")
+    pattern = Chem.MolFromSmarts(
+        "[+1!h0!$([*]~[-1,-2,-3,-4]),-1!#4!#5!$([*]~[+1,+2,+3,+4])]"
+    )
     at_matches = mol.GetSubstructMatches(pattern)
     at_matches_list = [y[0] for y in at_matches]
     if len(at_matches_list) > 0:
@@ -90,11 +92,17 @@ def augment_atom_maps_with_conjugate_terminal_groups(
 
     # group terminal group tuples with common atom_indices: [{0, 2}, {10, 11, 12}, {14, 15}]
     terminal_atom_clusters = _terminal_atom_cluster_from_pairs(terminal_group_tuples)
-    MaxTerminalGroups = max(1, int(np.ceil(np.emath.logn(3, MaxMatches / len(original_maps)))))
+    MaxTerminalGroups = max(
+        1, int(np.ceil(np.emath.logn(3, MaxMatches / len(original_maps))))
+    )
     # if MaxTerminalGroups is less than the total number terminal groups, sample the first {MaxTerminalGroups} groups (to remove randomness)
 
     perm_groups = sorted(
-        [atom_inds for common_id, atom_inds in terminal_atom_clusters.items() if len(atom_inds) > 1]
+        [
+            atom_inds
+            for common_id, atom_inds in terminal_atom_clusters.items()
+            if len(atom_inds) > 1
+        ]
     )[: min(MaxTerminalGroups, len(terminal_atom_clusters))]
 
     # within each terminal group, if there are different atom types, split by atom type (if only one left, discard)
@@ -143,12 +151,18 @@ def _get_substructure_perms(
         mol = neutralize_atoms(mol)
 
     # Get substructure matches
-    base_perms = np.array(mol.GetSubstructMatches(mol, uniquify=False, maxMatches=MaxMatches))
+    base_perms = np.array(
+        mol.GetSubstructMatches(mol, uniquify=False, maxMatches=MaxMatches)
+    )
     assert len(base_perms) > 0, "no matches found, error"
     # Check stereochem
     if CheckStereochem:
-        chem_order = np.array(list(Chem.rdmolfiles.CanonicalRankAtoms(mol, breakTies=False)))
-        perms_mask = (chem_order[base_perms] == chem_order[None]).sum(-1) == mol.GetNumAtoms()
+        chem_order = np.array(
+            list(Chem.rdmolfiles.CanonicalRankAtoms(mol, breakTies=False))
+        )
+        perms_mask = (chem_order[base_perms] == chem_order[None]).sum(
+            -1
+        ) == mol.GetNumAtoms()
         base_perms = base_perms[perms_mask]
 
     # Add terminal conjugate groups
@@ -158,7 +172,9 @@ def _get_substructure_perms(
     if (
         len(terminal_group_tuples) > 0 and SymmetrizeConjugatedTerminal
     ):  # Only augment if there exist conjugate pairs or if user sets to
-        atomic_number_mapping = {i: atom.GetAtomicNum() for i, atom in enumerate(mol.GetAtoms())}
+        atomic_number_mapping = {
+            i: atom.GetAtomicNum() for i, atom in enumerate(mol.GetAtoms())
+        }
         base_perms = augment_atom_maps_with_conjugate_terminal_groups(
             tuple(tuple(a) for a in base_perms),
             atomic_number_mapping,
@@ -207,7 +223,7 @@ def get_substructure_perms(
     else:
         # Have to deuplicate permutations across the two protonation states
         perms = np.unique(
-            np.row_stack(
+            np.vstack(
                 (
                     _get_substructure_perms(mol, Neutralize=False, **kwargs),
                     _get_substructure_perms(mol, Neutralize=True, **kwargs),

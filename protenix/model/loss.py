@@ -157,11 +157,15 @@ class MSELoss(BaseLoss):
         dna_mask_key: str = "is_dna",
         rna_mask_key: str = "is_rna",
         ligand_mask_key: str = "is_ligand",
+        motif_mask_key: str = "is_motif",
+        motif_related_mask_key: str = "is_motif_related",
         # Loss weights
         weight_protein: float = 1.0,
         weight_dna: float = 1.0,
         weight_rna: float = 1.0,
         weight_ligand: float = 1.0,
+        weight_motif: float = 0.0,
+        weight_motif_related: float = 0.0,
         # Behaviour flags
         enable_alignment: bool = True,
         expand_ground_truth: bool = True,
@@ -172,6 +176,7 @@ class MSELoss(BaseLoss):
         extra_filter_mask_key: Optional[str] = None,
         # (Optional) Per sample scale keys
         timestep_key: Optional[str] = None,
+        timestep_scale_clamp: Optional[float] = 0.98,
         sigma: Optional[float] = None,
         metric_suffix: Optional[str] = "",
     ) -> None:
@@ -185,16 +190,21 @@ class MSELoss(BaseLoss):
            dna_mask_key: Key for DNA mask in feat_dict
            rna_mask_key: Key for RNA mask in feat_dict
            ligand_mask_key: Key for ligand mask in feat_dict
+           motif_mask_key: Key for motif mask in feat_dict
+           motif_related_mask_key: Key for motif related mask in feat_dict
            weight_protein: Weight for protein
            weight_dna: Weight for DNA
            weight_rna: Weight for RNA
            weight_ligand: Weight for ligand
+           weight_motif: Weight for motif
+           weight_motif_related: Weight for motif related
            enable_alignment: Whether to align before MSE
            expand_ground_truth: Whether to expand GT over samples
            reduction: Reduction method
            eps: Epsilon for stability
            extra_filter_mask_key: Key to extract extra filter mask from label_dict
            timestep_key: Key to extract timestep from pred_dict
+           timestep_scale_clamp: Clamp the timestep to this value
            sigma: The sigma for per-sample scale computation
            metric_suffix: Suffix for the metric key. One of "centre_atom" or "latent". 
                If empty, no suffix is added.
@@ -211,19 +221,22 @@ class MSELoss(BaseLoss):
         self.dna_mask_key = dna_mask_key
         self.rna_mask_key = rna_mask_key
         self.ligand_mask_key = ligand_mask_key
-
+        self.motif_mask_key = motif_mask_key
+        self.motif_related_mask_key = motif_related_mask_key
         # Store weights
         self.weight_protein = weight_protein
         self.weight_dna = weight_dna
         self.weight_rna = weight_rna
         self.weight_ligand = weight_ligand
-
+        self.weight_motif = weight_motif
+        self.weight_motif_related = weight_motif_related
         # Store flags
         self.enable_alignment = enable_alignment
         self.expand_ground_truth = expand_ground_truth
 
         # Store per sample scale keys
         self.timestep_key = timestep_key
+        self.timestep_scale_clamp = timestep_scale_clamp
         self.sigma = sigma
         self.use_per_sample_scale = timestep_key is not None and sigma is not None
         self.metric_suffix = metric_suffix
@@ -246,13 +259,15 @@ class MSELoss(BaseLoss):
     def _extract_entity_masks(
         self,
         feat_dict: Dict[str, Any],
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Retrieves the entity masks."""
         is_protein = feat_dict[self.protein_mask_key]
         is_dna = feat_dict[self.dna_mask_key]
         is_rna = feat_dict[self.rna_mask_key]
         is_ligand = feat_dict[self.ligand_mask_key]
-        return is_protein, is_dna, is_rna, is_ligand
+        is_motif = feat_dict[self.motif_mask_key]
+        is_motif_related = feat_dict[self.motif_related_mask_key]
+        return is_protein, is_dna, is_rna, is_ligand, is_motif, is_motif_related
 
     def _calculate_per_sample_scale(
         self,
@@ -261,7 +276,7 @@ class MSELoss(BaseLoss):
         """Calculates the per-sample scale."""
         sqrt2 = 1.414
         timestep = pred_dict[self.timestep_key]
-        timestep = torch.clamp(timestep, max=0.99)
+        timestep = torch.clamp(timestep, max=self.timestep_scale_clamp)
         return 1 / (sqrt2 * (self.sigma * (1 - timestep)) ** 2)
 
     def weighted_rigid_align(
@@ -326,6 +341,8 @@ class MSELoss(BaseLoss):
                     - "mse_dna_loss": List[float]
                     - "mse_rna_loss": List[float]
                     - "mse_ligand_loss": List[float]
+                    - "mse_motif_loss": List[float]
+                    - "mse_motif_related_loss": List[float]
                     The list contains the losses for each item in the batch. The list
                     contains NaNs if the loss for that item is 0.0.
         """
@@ -335,8 +352,10 @@ class MSELoss(BaseLoss):
         )
 
         # Extract masks
-        is_protein, is_dna, is_rna, is_ligand = self._extract_entity_masks(
-            feat_dict=feat_dict,
+        is_protein, is_dna, is_rna, is_ligand, is_motif, is_motif_related = (
+            self._extract_entity_masks(
+                feat_dict=feat_dict,
+            )
         )
 
         # Expand masks
@@ -348,6 +367,10 @@ class MSELoss(BaseLoss):
         is_dna = expand_at_dim(is_dna, dim=-2, n=N_sample)  # [..., N_sample, N]
         is_rna = expand_at_dim(is_rna, dim=-2, n=N_sample)  # [..., N_sample, N]
         is_ligand = expand_at_dim(is_ligand, dim=-2, n=N_sample)  # [..., N_sample, N]
+        is_motif = expand_at_dim(is_motif, dim=-2, n=N_sample)  # [..., N_sample, N]
+        is_motif_related = expand_at_dim(
+            is_motif_related, dim=-2, n=N_sample
+        )  # [..., N_sample, N]
 
         # Calculate weights
         weight = (
@@ -355,6 +378,8 @@ class MSELoss(BaseLoss):
             + self.weight_dna * is_dna
             + self.weight_rna * is_rna
             + self.weight_ligand * is_ligand
+            + self.weight_motif * is_motif
+            + self.weight_motif_related * is_motif_related
         )  # [..., N]
 
         weight = weight * valid_mask
@@ -373,7 +398,6 @@ class MSELoss(BaseLoss):
         if self.enable_alignment:
             with torch.no_grad():
                 # TODO: is this right? should we be aligning batched coords ??
-                #
                 true_tensor = self.weighted_rigid_align(
                     pred_coordinate=pred_tensor,
                     true_coordinate=true_tensor,
@@ -427,6 +451,8 @@ class MSELoss(BaseLoss):
             "dna": is_dna,
             "rna": is_rna,
             "ligand": is_ligand,
+            "motif": is_motif,
+            "motif_related": is_motif_related,
         }
 
         # Calculate losses for all molecule types
@@ -727,6 +753,47 @@ class KLDivergenceLoss(BaseLoss):
 #             ),
 #         ]
 #         super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
+
+
+class BackboneLoss(AggregatedLoss):
+    """Backbone loss."""
+
+    def __init__(self, configs):
+        components = [
+            # TODO: change the loss configs !!!
+            LossComponent(
+                name="mse_loss",
+                weight=configs.loss.backbone.mse.weight_mse,
+                loss=MSELoss(
+                    # Tensor keys
+                    pred_key="coordinate",
+                    true_key="coordinate",
+                    mask_key="atom_loss_mask",
+                    # Entity mask keys
+                    protein_mask_key="is_protein",
+                    dna_mask_key="is_dna",
+                    rna_mask_key="is_rna",
+                    ligand_mask_key="is_ligand",
+                    motif_mask_key="is_motif",
+                    motif_related_mask_key="is_motif_related",
+                    # Weights
+                    weight_protein=configs.loss.backbone.mse.weight_protein,
+                    weight_dna=configs.loss.backbone.mse.weight_dna,
+                    weight_rna=configs.loss.backbone.mse.weight_rna,
+                    weight_ligand=configs.loss.backbone.mse.weight_ligand,
+                    weight_motif=configs.loss.backbone.mse.weight_motif,
+                    weight_motif_related=configs.loss.backbone.mse.weight_motif_related,
+                    # Behaviour
+                    enable_alignment=True,
+                    expand_ground_truth=True,
+                    # Per sample scale keys
+                    timestep_key="timestep",
+                    sigma=configs.loss.backbone.sigma_coord,
+                    metric_suffix="_coord",
+                ),
+            ),
+        ]
+        super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
 
 
 class MPNNLoss(AggregatedLoss):

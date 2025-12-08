@@ -39,7 +39,6 @@ dependencies = [
     "biopython>=1.83",
     "rootutils",
     "posebusters",
-    "modelcif==0.7",
     "biotite>=1.2.0",
     "protobuf==3.20.2",
     "seaborn",
@@ -56,6 +55,7 @@ dependencies = [
     "modal==1.1.4",
     "boto3",
     "lz4",
+    "peppr",
     "jaxtyping",
     "pocketeer[dev,vis]>=0.0.4",
     "atomworks>=1.0.3",
@@ -63,6 +63,7 @@ dependencies = [
     "polars>=1.35.2",
     "rapidgzip>=0.15.2",
     "beartype>=0.22.6",
+    "pydantic>=2.12.5",
 ]
 
 [project.optional-dependencies]

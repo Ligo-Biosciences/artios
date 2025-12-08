@@ -23,8 +23,8 @@ import torch
 from biotite.structure import AtomArray
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
-from protenix.data.json_parser_new import parse_input_dict
-from protenix.data.json_to_feature_new import SampleDictToFeatures
+from protenix.data.json_parser import parse_input_dict
+from protenix.data.json_to_feature import SampleDictToFeatures
 from protenix.data.utils import data_type_transform
 from protenix.utils.distributed import DIST_WRAPPER
 

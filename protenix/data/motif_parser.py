@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import biotite.structure as struc
 import numpy as np
 
-from protenix.data.json_parser_new import CCDLigand, MotifInput, SMILESLigand
+from protenix.data.json_parser import CCDLigand, MotifInput, SMILESLigand
 from protenix.data.parser import MMCIFParser
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class Motif:
         heteroatoms with mappings in the input.
 
         Args:
-            motif_input: Validated MotifInput from json_parser_new
+            motif_input: Validated MotifInput from json_parser.py
 
         Returns:
             Motif object with parsed residues and ligands

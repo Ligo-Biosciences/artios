@@ -172,7 +172,7 @@ The parser validates:
 ## Python Usage
 
 ```python
-from protenix.data.json_parser_new import (
+from protenix.data.json_parser import (
     parse_sequence_design_json,
     SequenceDesignInput,
     FixedResidue,

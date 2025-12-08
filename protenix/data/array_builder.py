@@ -30,9 +30,7 @@ from protenix.data.json_parser_new import (
     SMILESLigand,
 )
 from protenix.data.json_parser_utils import (
-    DNA_1to3,
     PROTEIN_1to3,
-    RNA_1to3,
     add_bonds_to_terminal_residues,
     add_reference_features,
     remove_leaving_atoms,
@@ -173,65 +171,6 @@ def build_backbone(backbone: Backbone) -> AtomArray:
     atom_array.hetero[:] = False
 
     return atom_array
-
-
-def build_polymer(entity_info: dict) -> AtomArray:
-    """
-    Build a polymer from a polymer info dict
-    example: {
-        "name": "polymer",
-        "sequence": "GPDSMEEVVVPEEPPKLVSALATYVQQERLCTMFLSIANKLLPLKP",
-        "count": 1
-        }
-
-    Args:
-        item (dict): polymer info dict
-
-    Returns:
-        AtomArray: Biotite AtomArray of chain
-    """
-    poly_type, info = list(entity_info.items())[0]
-    if poly_type == "proteinChain":
-        ccd_seqs = [PROTEIN_1to3[x] for x in info["sequence"]]
-        if modifications := info.get("modifications"):
-            for m in modifications:
-                index = m["ptmPosition"] - 1
-                mtype = m["ptmType"]
-                if mtype.startswith("CCD_"):
-                    ccd_seqs[index] = mtype[4:]
-                else:
-                    raise ValueError(f"unknown modification type: {mtype}")
-        if glycans := info.get("glycans"):
-            logging.warning(f"glycans not supported: {glycans}")
-        chain_array = _build_polymer_atom_array(ccd_seqs)
-
-    elif poly_type in ("dnaSequence", "rnaSequence"):
-        map_1to3 = DNA_1to3 if poly_type == "dnaSequence" else RNA_1to3
-        ccd_seqs = [map_1to3[x] for x in info["sequence"]]
-        if modifications := info.get("modifications"):
-            for m in modifications:
-                index = m["basePosition"] - 1
-                mtype = m["modificationType"]
-                if mtype.startswith("CCD_"):
-                    ccd_seqs[index] = mtype[4:]
-                else:
-                    raise ValueError(f"unknown modification type: {mtype}")
-        chain_array = _build_polymer_atom_array(ccd_seqs)
-
-    else:
-        raise ValueError(
-            "polymer type must be proteinChain, dnaSequence or rnaSequence"
-        )
-
-    chain_array = add_reference_features(chain_array)
-
-    chain_array.set_annotation("is_motif_related", [False] * len(chain_array))
-    chain_array.set_annotation("is_motif", [False] * len(chain_array))
-    chain_array.set_annotation("is_resolved", [True] * len(chain_array))
-    chain_array.set_annotation("is_target", [False] * len(chain_array))
-    chain_array.set_annotation("is_hotspot", [False] * len(chain_array))
-
-    return chain_array
 
 
 def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:

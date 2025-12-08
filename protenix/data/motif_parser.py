@@ -6,6 +6,9 @@ Parses MotifInput specifying:
 - Ligand specification (CCD code or SMILES)
 
 Generates a Motif object that can be used for generating atom arrays for model inference.
+
+TODO: For now, to avoid circular imports, we have copied this code to the end of array_builder.py.
+Sort out a way to tidy this (or delete this file).
 """
 
 from __future__ import annotations
@@ -17,7 +20,11 @@ import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
 
-from protenix.data.array_builder import build_motif_ligand, build_motif_residue
+from protenix.data.array_builder import (
+    build_motif,
+    build_motif_ligand,
+    build_motif_residue,
+)
 from protenix.data.json_parser_new import CCDLigand, MotifInput, SMILESLigand
 from protenix.data.parser import MMCIFParser
 
@@ -151,19 +158,4 @@ class Motif:
         Returns:
             AtomArray with is_motif and is_motif_related annotations
         """
-        arrays = []
-
-        for residue in self.residues:
-            arrays.append(residue.to_atom_array())
-
-        for ligand in self.ligands:
-            arrays.append(ligand.to_atom_array())
-
-        if not arrays:
-            raise ValueError("Motif has no residues or ligands")
-
-        combined = arrays[0]
-        for arr in arrays[1:]:
-            combined += arr
-
-        return combined
+        return build_motif(self)

@@ -19,7 +19,7 @@ import os
 import re
 from collections import defaultdict
 from io import StringIO
-from typing import Mapping, Sequence
+from typing import Mapping, Optional, Sequence
 
 import biotite.structure as struc
 import numpy as np
@@ -240,6 +240,7 @@ def save_atoms_to_cif(
     atom_array: AtomArray,
     entity_poly_type: dict[str, str],
     pdb_id: str,
+    field_in_b_factor_col: Optional[str] = None,
 ) -> None:
     """
     Save atom array data to a CIF file.
@@ -249,12 +250,17 @@ def save_atoms_to_cif(
         atom_array (AtomArray): The atom array to be saved.
         entity_poly_type: The entity poly type information.
         pdb_id: The PDB ID for the entry.
+        field_in_b_factor_col (Optional): Field in the AtomArray to use for the b-factor column.
     """
+    assert (
+        atom_array is not None
+    ), "Atom array is None at beginning of save_atoms_to_cif"
     cifwriter = CIFWriter(atom_array, entity_poly_type)
     cifwriter.save_to_cif(
         output_path=output_cif_file,
         entry_id=pdb_id,
         include_bonds=True,
+        field_in_b_factor_col=field_in_b_factor_col,
     )
 
 
@@ -264,6 +270,7 @@ def save_structure_cif(
     output_fpath: str,
     entity_poly_type: dict[str, str],
     pdb_id: str,
+    field_in_b_factor_col: Optional[str] = None,
 ):
     """
     Save the predicted structure to a CIF file.
@@ -274,6 +281,7 @@ def save_structure_cif(
         output_fpath (str): The output file path for saving the CIF file.
         entity_poly_type (dict[str, str]): The entity poly type information.
         pdb_id (str): The PDB ID for the entry.
+        field_in_b_factor_col (Optional): Field in the AtomArray to use for the b-factor column.
     """
     pred_atom_array = copy.deepcopy(atom_array)
     if isinstance(pred_coordinate, np.ndarray):
@@ -281,21 +289,10 @@ def save_structure_cif(
     else:
         pred_pose = pred_coordinate.float().cpu().numpy()
     pred_atom_array.coord = pred_pose
+
     save_atoms_to_cif(
-        output_fpath,
-        pred_atom_array,
-        entity_poly_type,
-        pdb_id,
+        output_fpath, pred_atom_array, entity_poly_type, pdb_id, field_in_b_factor_col
     )
-    # save pred coordinates wo unresolved atoms
-    if hasattr(atom_array, "is_resolved"):
-        pred_atom_array_wo_unresol = get_clean_data(pred_atom_array)
-        save_atoms_to_cif(
-            output_fpath.replace(".cif", "_wounresol.cif"),
-            pred_atom_array_wo_unresol,
-            entity_poly_type,
-            pdb_id,
-        )
 
 
 class CIFWriter:
@@ -366,7 +363,11 @@ class CIFWriter:
         return block_dict
 
     def save_to_cif(
-        self, output_path: str, entry_id: str = None, include_bonds: bool = False
+        self,
+        output_path: str,
+        entry_id: str = None,
+        include_bonds: bool = False,
+        field_in_b_factor_col: Optional[str] = None,
     ):
         """
         Save AtomArray to cif.
@@ -381,6 +382,8 @@ class CIFWriter:
                                             category.
                                             Inter-residue bonds will be written into the ``struct_conn``
                                             independent of this parameter.
+            extra_fields (Optional): List of extra fields from the AtomArray to save in the cif.
+
 
         """
         if entry_id is None:
@@ -397,15 +400,17 @@ class CIFWriter:
                 + "_predicted_by_protenix": block
             }
         )
-        # if self.atom_array.get_annotation("b_factor") is not None:
-        #     pdbx.set_structure(
-        #         cif,
-        #         self.atom_array,
-        #         include_bonds=include_bonds,
-        #         extra_fields=["b_factor"],
-        #     )
-        # else:
-        pdbx.set_structure(cif, self.atom_array, include_bonds=include_bonds)
+
+        if field_in_b_factor_col is not None:
+            self.atom_array.b_factor = self.atom_array.get_annotation(
+                field_in_b_factor_col
+            )
+
+        pdbx.set_structure(
+            cif,
+            self.atom_array,
+            include_bonds=include_bonds,
+        )
 
         block = cif.block
         atom_site = block.get("atom_site")

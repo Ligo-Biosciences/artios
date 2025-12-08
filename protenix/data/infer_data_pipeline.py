@@ -23,12 +23,10 @@ import torch
 from biotite.structure import AtomArray
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
-from protenix.data.data_pipeline import DataPipeline
+from protenix.data.json_parser_new import parse_input_dict
 from protenix.data.json_to_feature_new import SampleDictToFeatures
-from protenix.data.msa_featurizer import InferenceMSAFeaturizer
-from protenix.data.utils import data_type_transform, make_dummy_feature
+from protenix.data.utils import data_type_transform
 from protenix.utils.distributed import DIST_WRAPPER
-from protenix.utils.torch_utils import dict_to_tensor
 
 logger = logging.getLogger(__name__)
 
@@ -81,13 +79,13 @@ class InferenceDataset(Dataset):
 
     def process_one(
         self,
-        single_sample_dict: Mapping[str, Any],
+        sample_input: Mapping[str, Any],
     ) -> tuple[dict[str, torch.Tensor], AtomArray, dict[str, float]]:
         """
         Processes a single sample from the input JSON to generate features and statistics.
 
         Args:
-            single_sample_dict: A dictionary containing the sample data.
+            sample_input: A validated Pydantic input object (MotifInput or SequenceDesignInput).
 
         Returns:
             A tuple containing:
@@ -98,65 +96,41 @@ class InferenceDataset(Dataset):
         # general features
         t0 = time.time()
         sample2feat = SampleDictToFeatures(
-            single_sample_dict,
+            sample_input,
         )
         features_dict, atom_array, token_array = sample2feat.get_feature_dict()
 
         # is_hotspot = torch.zeros(features_dict["is_hotspot"].shape)
 
-        assert len(self.inputs) == 1, "Only one sample is supported currently"
-        # assert (
-        #     len(self.inputs[0]["target"]) == 1
-        # ), "Only one target is supported currently"
-
-        # initial_offset = 0
-        # for design in self.inputs[0]["design"]:
-        #     chain_key = list(design.keys())[0]
-        #     initial_offset += design[chain_key]["length"]
-
-        # hotspot_indices = []
-        # for target in self.inputs[0]["target"]:
-        #     chain_key = list(target.keys())[0]
-        #     hotspot_indices.extend(
-        #         [initial_offset + hotspot for hotspot in target[chain_key]["hotspots"]]
-        #     )
-
-        # is_hotspot[hotspot_indices] = 1.0
-        # is_hotspot = torch.zeros(features_dict["is_hotspot"].shape)
-        # features_dict["is_hotspot"] = is_hotspot
-
-        # features_dict["distogram_rep_atom_mask"] = torch.Tensor(
-        #     atom_array.distogram_rep_atom_mask
-        # ).long()
-        entity_poly_type = sample2feat.entity_poly_type
+        # entity_poly_type = sample2feat.entity_poly_type
         t1 = time.time()
 
-        # Msa features
-        entity_to_asym_id = DataPipeline.get_label_entity_id_to_asym_id_int(atom_array)
-        msa_features = (
-            InferenceMSAFeaturizer.make_msa_feature(
-                bioassembly=single_sample_dict["sequences"],
-                entity_to_asym_id=entity_to_asym_id,
-                token_array=token_array,
-                atom_array=atom_array,
-            )
-            if self.use_msa
-            else {}
-        )
+        # # Msa features
+        # entity_to_asym_id = DataPipeline.get_label_entity_id_to_asym_id_int(atom_array)
+        # msa_features = (
+        #     InferenceMSAFeaturizer.make_msa_feature(
+        #         bioassembly=sample_input["sequences"],
+        #         entity_to_asym_id=entity_to_asym_id,
+        #         token_array=token_array,
+        #         atom_array=atom_array,
+        #     )
+        #     if self.use_msa
+        #     else {}
+        # )
 
         # Make dummy features for not implemented features
-        dummy_feats = ["template"]
-        if len(msa_features) == 0:
-            dummy_feats.append("msa")
-        else:
-            msa_features = dict_to_tensor(msa_features)
-            features_dict.update(msa_features)
-        features_dict = make_dummy_feature(
-            features_dict=features_dict,
-            dummy_feats=dummy_feats,
-        )
+        # dummy_feats = ["template"]
+        # if len(msa_features) == 0:
+        #     dummy_feats.append("msa")
+        # else:
+        #     msa_features = dict_to_tensor(msa_features)
+        #     features_dict.update(msa_features)
+        # features_dict = make_dummy_feature(
+        #     features_dict=features_dict,
+        #     dummy_feats=dummy_feats,
+        # )
 
-        # Transform to right data type
+        # Transform to right data type TODO: work out if required
         feat = data_type_transform(feat_or_label_dict=features_dict)
 
         t2 = time.time()
@@ -167,7 +141,7 @@ class InferenceDataset(Dataset):
         # Add dimension related items
         N_token = feat["token_index"].shape[0]
         N_atom = feat["atom_to_token_idx"].shape[0]
-        N_msa = feat["msa"].shape[0]
+        # N_msa = feat["msa"].shape[0]
 
         stats = {}
         for mol_type in ["ligand", "protein", "dna", "rna"]:
@@ -183,7 +157,7 @@ class InferenceDataset(Dataset):
                 "N_asym": torch.tensor([N_asym]),
                 "N_token": torch.tensor([N_token]),
                 "N_atom": torch.tensor([N_atom]),
-                "N_msa": torch.tensor([N_msa]),
+                # "N_msa": torch.tensor([N_msa]),
             }
         )
 
@@ -212,7 +186,7 @@ class InferenceDataset(Dataset):
                 ]
             }
         )
-        data.update({"entity_poly_type": entity_poly_type})
+        # data.update({"entity_poly_type": entity_poly_type})
         t3 = time.time()
         time_tracker = {
             "crop": t1 - t0,
@@ -227,17 +201,24 @@ class InferenceDataset(Dataset):
 
     def __getitem__(self, index: int) -> tuple[dict[str, torch.Tensor], AtomArray, str]:
         try:
-            single_sample_dict = self.inputs[index]
-            sample_name = single_sample_dict["name"]
+            input_dict = self.inputs[index]
+
+            # Parse and validate the input dict into a Pydantic object
+            sample_input = parse_input_dict(input_dict)
+
+            sample_name = sample_input.name
             logger.info(f"Featurizing {sample_name}...")
 
             data, atom_array, token_array, _ = self.process_one(
-                single_sample_dict=single_sample_dict
+                sample_input=sample_input
             )
+            if atom_array is not None:
+                logger.info(f"DEBUG: atom_array length: {len(atom_array)}")
             error_message = ""
         except Exception as e:
             data, atom_array, token_array = {}, None, None
             error_message = f"{e}:\n{traceback.format_exc()}"
-        data["sample_name"] = single_sample_dict["name"]
+        # data["sample_name"] = sample_input.name
+        data["sample_name"] = "test"  # TODO: update me to work with new json!
         data["sample_index"] = index
         return data, atom_array, token_array, error_message

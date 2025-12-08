@@ -16,23 +16,26 @@ The model will design a protein that accommodates the motif geometry.
 ```json
 {
   "name": "my_motif_design",
-  "design": [
-    {
-      "length": 260
-    }
-  ],
-  "motif": {
-    "file": "path/to/motif.cif",
-    "ligands": [
+  "task": "motif",
+  "spec": {
+    "design": [
       {
-        "cif_res_name": "ZN",
-        "full_ligand": {"type": "ccd", "codes": ["ZN"]}
-      },
-      {
-        "cif_res_name": "AL5",
-        "full_ligand": {"type": "ccd", "codes": ["AL5"]}
+        "length": 260
       }
-    ]
+    ],
+    "motif": {
+      "cif_file": "path/to/motif.cif",
+      "ligands": [
+        {
+          "cif_res_name": "ZN",
+          "full_ligand": {"type": "ccd", "codes": ["ZN"]}
+        },
+        {
+          "cif_res_name": "AL5",
+          "full_ligand": {"type": "ccd", "codes": ["AL5"]}
+        }
+      ]
+    }
   }
 }
 ```
@@ -41,14 +44,17 @@ The model will design a protein that accommodates the motif geometry.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | No | Identifier for this design job |
-| `design` | Yes | List of protein chains to design |
-| `design[].length` | Yes | Number of residues in the designed protein (1-2000) |
-| `motif` | Yes | Motif specification |
-| `motif.file` | Yes | Path to the motif CIF file (.cif or .mmcif) |
-| `motif.ligands` | No | List of ligand mappings (protein residues are auto-detected) |
-| `motif.ligands[].cif_res_name` | Yes | Residue name as it appears in the motif CIF file |
-| `motif.ligands[].full_ligand` | Yes | Full ligand specification (see below) |
+| `name` | Yes | Identifier for this design job |
+| `task` | Yes | Task type, must be `"motif"` for motif scaffolding |
+| `spec` | Yes | Task-specific input data (see below) |
+| `spec.design` | Yes | List of protein chains to design |
+| `spec.design[].length` | Yes | Number of residues in the designed protein (1-2000) |
+| `spec.motif` | Yes | Motif specification |
+| `spec.motif.cif_file` | Yes | Path to the motif CIF file (.cif or .mmcif) |
+| `spec.motif.ligands` | No | List of ligand mappings (protein residues are auto-detected) |
+| `spec.motif.ligands[].cif_res_name` | Yes | Residue name as it appears in the motif CIF file |
+| `spec.motif.ligands[].full_ligand` | Yes | Full ligand specification (see below) |
+
 
 ## Motif CIF File
 
@@ -222,23 +228,26 @@ A design targeting the carbonic anhydrase active site with a zinc ion and sulfon
 ```json
 {
   "name": "carbonic_anhydrase_design",
-  "design": [
-    {
-      "length": 260
-    }
-  ],
-  "motif": {
-    "file": "motifs/carbonic_anhydrase_motif.cif",
-    "ligands": [
+  "task": "motif",
+  "spec": {
+    "design": [
       {
-        "cif_res_name": "ZN",
-        "full_ligand": {"type": "ccd", "codes": ["ZN"]}
-      },
-      {
-        "cif_res_name": "AL5",
-        "full_ligand": {"type": "ccd", "codes": ["AL5"]}
+        "length": 260
       }
-    ]
+    ],
+    "motif": {
+      "cif_file": "motifs/carbonic_anhydrase_motif.cif",
+      "ligands": [
+        {
+          "cif_res_name": "ZN",
+          "full_ligand": {"type": "ccd", "codes": ["ZN"]}
+        },
+        {
+          "cif_res_name": "AL5",
+          "full_ligand": {"type": "ccd", "codes": ["AL5"]}
+        }
+      ]
+    }
   }
 }
 ```
@@ -250,32 +259,35 @@ Designing with a custom sulfonamide not in CCD:
 ```json
 {
   "name": "custom_sulfonamide_design",
-  "design": [
-    {
-      "length": 260
-    }
-  ],
-  "motif": {
-    "file": "motifs/binding_site_motif.cif",
-    "ligands": [
+  "task": "motif",
+  "spec": {
+    "design": [
       {
-        "cif_res_name": "ZN",
-        "full_ligand": {"type": "ccd", "codes": ["ZN"]}
-      },
-      {
-        "cif_res_name": "LIG",
-        "full_ligand": {
-          "type": "smiles",
-          "smiles": "CC(C)c1ccc([S:1](=[O:2])(=[O:3])[N:4])cc1",
-          "atom_map": {
-            "S": 1,
-            "O1": 2,
-            "O2": 3,
-            "N": 4
+        "length": 260
+      }
+    ],
+    "motif": {
+      "cif_file": "motifs/binding_site_motif.cif",
+      "ligands": [
+        {
+          "cif_res_name": "ZN",
+          "full_ligand": {"type": "ccd", "codes": ["ZN"]}
+        },
+        {
+          "cif_res_name": "LIG",
+          "full_ligand": {
+            "type": "smiles",
+            "smiles": "CC(C)c1ccc([S:1](=[O:2])(=[O:3])[N:4])cc1",
+            "atom_map": {
+              "S": 1,
+              "O1": 2,
+              "O2": 3,
+              "N": 4
+            }
           }
         }
-      }
-    ]
+      ]
+    }
   }
 }
 ```

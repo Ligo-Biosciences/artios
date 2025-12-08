@@ -243,6 +243,7 @@ def save_outputs_backbone(
     pred_dict: dict,
     atom_array: AtomArray,
     pdb_id: str,
+    field_in_b_factor_col: Optional[str] = None,
 ):
     """
     Saves backbone-only outputs to CIFs.
@@ -258,6 +259,7 @@ def save_outputs_backbone(
         token_array: Input TokenArray (not used in backbone case but kept for consistency)
         pdb_id: PDB identifier for the structure
         ema_suffix: Optional suffix for EMA models (not used but kept for consistency)
+        field_in_b_factor_col (Optional): Field in the AtomArray to use for the b-factor column.
 
     Returns:
         List[Path]: List of paths to the saved CIF files
@@ -277,6 +279,7 @@ def save_outputs_backbone(
     ), f"Predicted coordinates must match input atom array size, got {coordinate.shape[1]=} and {len(atom_array)=}"
 
     for idx in range(coordinate.shape[0]):
+        assert atom_array is not None, f"Atom array is None for sample {idx}"
         sample_coords = coordinate[idx]  # [N_atom, 3]
 
         # Create a copy of the input atom_array with predicted coordinates
@@ -302,6 +305,7 @@ def save_outputs_backbone(
                 output_fpath=output_path,
                 entity_poly_type=None,
                 pdb_id=pdb_id,
+                field_in_b_factor_col=field_in_b_factor_col,
             )
             saved_files.append(output_path)
             print(f"Saved backbone sample {idx} to {output_path}")

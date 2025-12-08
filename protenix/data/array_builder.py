@@ -24,7 +24,7 @@ from biotite.structure import AtomArray
 from protenix.common.constants import BACKBONE_DEFS
 from protenix.common.residue_names import PROTEIN_COMMON_ONE_TO_THREE as PROTEIN_1to3
 from protenix.data import ccd
-from protenix.data.json_parser_new import (
+from protenix.data.json_parser import (
     Backbone,
     CCDLigand,
     MotifInput,

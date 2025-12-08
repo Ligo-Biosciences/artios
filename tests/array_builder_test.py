@@ -11,7 +11,7 @@ from protenix.data.array_builder import (
     build_motif_residue,
     build_sequence_design_structure,
 )
-from protenix.data.json_parser_new import (
+from protenix.data.json_parser import (
     CCDLigand,
     CIFFile,
     FixedResidue,

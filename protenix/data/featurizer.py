@@ -14,6 +14,7 @@ from protenix.common.constants import (
     get_all_elems,
 )
 from protenix.data.features import (
+    AtomPermInfo,
     ChainPermContext,
     EntityFeatures,
     IndexFeatures,
@@ -485,6 +486,8 @@ class Featurizer(object):
 
         restype = self.centre_atoms.cano_seq_resname
         restype_onehot = self.restype_onehot_encoded(restype)
+
+        # TODO: this part is a bit ugly with the reshapes etc.
         motif_restype = restype_onehot * torch.Tensor(
             is_motif_related_token * token_resolved
         ).unsqueeze(-1)  # [N_token, 32]
@@ -512,9 +515,6 @@ class Featurizer(object):
         features = {}
         token_features = self.get_token_context()
         features.update(token_features)
-
-        # bond_features = self.get_bond_features()
-        # features.update(bond_features)
 
         reference_features = self.get_reference_conformer_context()
         features.update(reference_features)
@@ -579,17 +579,8 @@ class Featurizer(object):
 
         return labels
 
-    def get_atom_permutation_list(
-        self,
-    ) -> list[list[int]]:
-        """
-        Generate info of permutations.
-
-        Returns:
-            List[List[int]]: a list of atom permutations.
-
-        # TODO: add this back in.
-        """
+    def get_atom_permutation_context(self) -> AtomPermInfo:
+        """Generate info of permutations."""
         atom_perm_list = []
         for i in self.cropped_atom_array.res_perm:
             # Decode list[str] -> list[list[int]]
@@ -645,7 +636,7 @@ class Featurizer(object):
             # Remove the columns related to the position changes of fixed atoms.
             fiedx_atom_res_perm = atom_res_perm[:, unchanged_columns_mask]
             fixed_atom_perm_list.extend(fiedx_atom_res_perm.tolist())
-        return fixed_atom_perm_list
+        return AtomPermInfo(perms=fixed_atom_perm_list)
 
     @staticmethod
     def get_lig_pocket_mask(

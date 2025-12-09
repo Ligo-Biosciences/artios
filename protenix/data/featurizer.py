@@ -71,6 +71,67 @@ class Featurizer(object):
         ).long()
         return atom_to_token_idx
 
+    @property
+    def backbone_atoms_tensor(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extract backbone atom coordinates and masks for all tokens.
+
+        The backbone atoms depend on the chain type:
+        - Proteins: N, CA, C, O, and virtual Cß (computed from N, CA, C)
+        - Nucleic acids: OP1, OP2, C1', C3', C4'
+        - Ligands: Centre atom only (other slots are zero)
+
+        Returns:
+            backbone_coords: Backbone atom coordinates [n_token, 5, 3]
+            backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
+        """
+        # Backbone atom definitions by molecule type
+        n_tokens = len(self.cropped_token_array)
+        backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
+        backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
+
+        # TODO: vectorized op with masking might be more appropriate here
+        # we do this in other parts of the codebase.
+        # Make this biotite native.
+
+        for token_idx, token in enumerate(self.cropped_token_array):
+            centre_atom = self.centre_atoms[token_idx]
+            mol_type = centre_atom.mol_type
+            is_standard = centre_atom.res_name in STD_RESIDUES
+
+            # Ligands or non-standard residues: use centre atom only
+            if mol_type == "ligand" or not is_standard:
+                backbone_coords[token_idx, 0] = centre_atom.coord
+                backbone_mask[token_idx, 0] = 1.0
+                continue
+
+            # Standard protein or nucleic acid
+            backbone_names = BACKBONE_DEFS[mol_type]
+            atom_name_map = {name: idx for idx, name in enumerate(token.atom_names)}
+            atom_coords = {}
+
+            # Extract backbone atoms
+            for bb_idx, atom_name in enumerate(backbone_names):
+                if atom_name in atom_name_map:
+                    local_idx = atom_name_map[atom_name]
+                    global_idx = token.atom_indices[local_idx]
+                    backbone_coords[token_idx, bb_idx] = self.cropped_atom_array.coord[
+                        global_idx
+                    ]
+                    backbone_mask[token_idx, bb_idx] = 1.0
+                    atom_coords[atom_name] = self.cropped_atom_array.coord[global_idx]
+
+            # Compute virtual Cβ for proteins
+            if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):
+                cb_coord = Featurizer.compute_virtual_cb(
+                    atom_coords["N"], atom_coords["CA"], atom_coords["C"]
+                )
+                backbone_coords[token_idx, 4] = cb_coord
+                backbone_mask[token_idx, 4] = 1.0
+
+        return torch.Tensor(backbone_coords), torch.Tensor(backbone_mask)
+
     @staticmethod
     def encoder(encode_def_list: list[str], input_list: list[str]) -> torch.Tensor:
         """
@@ -191,66 +252,6 @@ class Featurizer(object):
 
         return cb_coord
 
-    def get_backbone_atoms_tensor(
-        self,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Extract backbone atom coordinates and masks for all tokens.
-
-        The backbone atoms depend on the chain type:
-        - Proteins: N, CA, C, O, and virtual Cß (computed from N, CA, C)
-        - Nucleic acids: OP1, OP2, C1', C3', C4'
-        - Ligands: Centre atom only (other slots are zero)
-
-        Returns:
-            backbone_coords: Backbone atom coordinates [n_token, 5, 3]
-            backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
-        """
-        # Backbone atom definitions by molecule type
-        n_tokens = len(self.cropped_token_array)
-        backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
-        backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
-
-        # TODO: vectorized op with masking might be more appropriate here
-        # we do this in other parts of the codebase.
-        # Make this biotite native.
-
-        for token_idx, token in enumerate(self.cropped_token_array):
-            centre_atom = self.centre_atoms[token_idx]
-            mol_type = centre_atom.mol_type
-            is_standard = centre_atom.res_name in STD_RESIDUES
-
-            # Ligands or non-standard residues: use centre atom only
-            if mol_type == "ligand" or not is_standard:
-                backbone_coords[token_idx, 0] = centre_atom.coord
-                backbone_mask[token_idx, 0] = 1.0
-                continue
-
-            # Standard protein or nucleic acid
-            backbone_names = BACKBONE_DEFS[mol_type]
-            atom_name_map = {name: idx for idx, name in enumerate(token.atom_names)}
-            atom_coords = {}
-
-            # Extract backbone atoms
-            for bb_idx, atom_name in enumerate(backbone_names):
-                if atom_name in atom_name_map:
-                    local_idx = atom_name_map[atom_name]
-                    global_idx = token.atom_indices[local_idx]
-                    backbone_coords[token_idx, bb_idx] = self.cropped_atom_array.coord[
-                        global_idx
-                    ]
-                    backbone_mask[token_idx, bb_idx] = 1.0
-                    atom_coords[atom_name] = self.cropped_atom_array.coord[global_idx]
-
-            # Compute virtual Cβ for proteins
-            if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):
-                cb_coord = Featurizer.compute_virtual_cb(
-                    atom_coords["N"], atom_coords["CA"], atom_coords["C"]
-                )
-                backbone_coords[token_idx, 4] = cb_coord
-                backbone_mask[token_idx, 4] = 1.0
-
-        return torch.Tensor(backbone_coords), torch.Tensor(backbone_mask)
-
     def get_token_context(self) -> TokenContext:
         """
         Ref: AlphaFold3 SI Chapter 2.8
@@ -274,7 +275,7 @@ class Featurizer(object):
             token_bonds=self.get_bonds(),
             token_mask=torch.ones(len(self.cropped_token_array)).long(),
             centre_coordinates=torch.Tensor(self.centre_atoms.coord),
-            backbone_coordinates=self.get_backbone_atoms_tensor()[0],
+            backbone_coordinates=self.backbone_atoms_tensor[0],
         )
         return context
 
@@ -463,7 +464,7 @@ class Featurizer(object):
             ).bool(),
             atom_mask=torch.ones(len(self.cropped_atom_array)).bool(),
             is_resolved=torch.Tensor(self.cropped_atom_array.is_resolved).bool(),
-            backbone_mask=torch.Tensor(self.cropped_atom_array.backbone_mask).bool(),
+            backbone_mask=torch.Tensor(self.backbone_atoms_tensor[1]).bool(),
         )
 
     def get_motif_features(self) -> MotifFeatures:
@@ -475,27 +476,20 @@ class Featurizer(object):
         Returns:
             MotifFeatures: Motif features for motif scaffolding.
         """
-        # Atom features
         is_motif = self.cropped_atom_array.is_motif
         is_motif_related = self.cropped_atom_array.is_motif_related
 
-        # Token features
-        centre_atom_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
-        centre_atoms = self.cropped_atom_array[centre_atom_indices]
+        token_resolved = self.centre_atoms.is_resolved  # [N_token]
+        is_motif_token = self.centre_atoms.is_motif  # [N_token]
+        is_motif_related_token = self.centre_atoms.is_motif_related  # [N_token]
 
-        token_resolved = centre_atoms.is_resolved  # [N_token]
-        is_motif_token = centre_atoms.is_motif  # [N_token]
-        is_motif_related_token = centre_atoms.is_motif_related  # [N_token]
-
-        restype = centre_atoms.cano_seq_resname
+        restype = self.centre_atoms.cano_seq_resname
         restype_onehot = self.restype_onehot_encoded(restype)
         motif_restype = restype_onehot * torch.Tensor(
             is_motif_related_token * token_resolved
         ).unsqueeze(-1)  # [N_token, 32]
 
-        motif_coordinate = centre_atoms.coord * is_motif_token.reshape(
+        motif_coordinate = self.centre_atoms.coord * is_motif_token.reshape(
             -1, 1
         )  # [N_token, 3]
 
@@ -525,17 +519,11 @@ class Featurizer(object):
         reference_features = self.get_reference_conformer_context()
         features.update(reference_features)
 
-        extra_features = self.get_extra_features()
-        features.update(extra_features)
-
         chain_perm_features = self.get_chain_perm_features()
         features.update(chain_perm_features)
 
         mask_features = self.get_mask_features()
         features.update(mask_features)
-
-        mpnn_features = self.get_mpnn_features()
-        features.update(mpnn_features)
 
         motif_features = self.get_motif_features()
         features.update(motif_features)

@@ -68,27 +68,56 @@ class FeatureMeta:
     description: str = ""
 
 
-# TODO: should we have different classes for roles here?
-# e.g. Label, Feature, Mask etc. maybe
-def Feature(  # TODO: make this into a nice class instead of function
+def Feature(
     jaxtype,
     *,
     type: FeatureType,
     encoding: EncodingType | None = None,
-    role: FeatureRole = FeatureRole.INPUT,
     description: str = "",
 ):
-    """Annotate a jaxtyped tensor with feature metadata.
+    """Annotate a jaxtyped tensor as a model input feature."""
+    return Annotated[
+        jaxtype, FeatureMeta(encoding, type, FeatureRole.INPUT, description)
+    ]
 
-    Usage:
-        restype: Feature(
-            Int[Tensor, "n_token 32"],
-            encoding=EncodingType.ONE_HOT,
-            type=FeatureType.TOKEN,
-            description="Residue type one-hot encoding",
-        )
-    """
-    return Annotated[jaxtype, FeatureMeta(encoding, type, role, description)]
+
+def Label(
+    jaxtype,
+    *,
+    type: FeatureType,
+    encoding: EncodingType | None = None,
+    description: str = "",
+):
+    """Annotate a jaxtyped tensor as a supervision label."""
+    return Annotated[
+        jaxtype, FeatureMeta(encoding, type, FeatureRole.LABEL, description)
+    ]
+
+
+def Mask(
+    jaxtype,
+    *,
+    type: FeatureType,
+    encoding: EncodingType | None = None,
+    description: str = "",
+):
+    """Annotate a jaxtyped tensor as a mask for loss/attention."""
+    return Annotated[
+        jaxtype, FeatureMeta(encoding, type, FeatureRole.MASK, description)
+    ]
+
+
+def Auxiliary(
+    jaxtype,
+    *,
+    type: FeatureType,
+    encoding: EncodingType | None = None,
+    description: str = "",
+):
+    """Annotate a jaxtyped tensor as auxiliary data (not directly used by model)."""
+    return Annotated[
+        jaxtype, FeatureMeta(encoding, type, FeatureRole.AUXILIARY, description)
+    ]
 
 
 FeatureGroup = TypeVar("FeatureGroup", bound="FeatureGroup")
@@ -143,10 +172,9 @@ class TokenFeatures(FeatureGroup):
         description="Indicator for ligand-ligand and non-polymer bonds",
     )
 
-    token_mask: Feature(
+    token_mask: Mask(
         Bool[Tensor, "n_token"],
         type=FeatureType.TOKEN,
-        role=FeatureRole.MASK,
         description="Token is not padding mask (all true before pad)",
     )
 
@@ -160,38 +188,32 @@ class ReferenceFeatures(FeatureGroup):
         Float[Tensor, "n_atom 3"],
         type=FeatureType.ATOM,
         encoding=EncodingType.IDENTITY,
-        role=FeatureRole.INPUT,
         description="Reference conformer positions",
     )
-    ref_mask: Feature(
+    ref_mask: Mask(
         Int[Tensor, "n_atom"],
         type=FeatureType.ATOM,
         encoding=EncodingType.IDENTITY,
-        role=FeatureRole.MASK,
         description="Mask indicating atom slots used in conformer",
     )
     ref_element: Feature(
         Int[Tensor, "n_atom 128"],
         type=FeatureType.ATOM,
         encoding=EncodingType.ONE_HOT,
-        role=FeatureRole.INPUT,
     )
     ref_charge: Feature(
         Int[Tensor, "n_atom"],
         type=FeatureType.ATOM,
         encoding=EncodingType.IDENTITY,
-        role=FeatureRole.INPUT,
     )
     ref_atom_name_chars: Feature(
         Int[Tensor, "n_atom 4 64"],
         type=FeatureType.ATOM,
         encoding=EncodingType.ONE_HOT,
-        role=FeatureRole.INPUT,
     )
-    ref_space_uid: Feature(
+    ref_space_uid: Auxiliary(
         Int[Tensor, "n_atom"],
         type=FeatureType.ATOM,
-        role=FeatureRole.AUXILIARY,
         description="ID for each unique conformer",
     )
 
@@ -227,30 +249,28 @@ class ExtraFeatures(FeatureGroup):
     """
 
     # Atom-level
-    atom_to_token_idx: Feature(
+    atom_to_token_idx: Auxiliary(
         Int[Tensor, "n_atom"],
         type=FeatureType.ATOM,
-        role=FeatureRole.AUXILIARY,
         description="Token index for each atom.",
     )
-    atom_to_tokatom_idx: Feature(
+    atom_to_tokatom_idx: Auxiliary(
         Int[Tensor, "n_atom"],
         type=FeatureType.ATOM,
-        role=FeatureRole.AUXILIARY,
         description="Token atom (which atom within token) index for each atom",
     )
 
     # Indicators
-    is_protein: Feature(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    is_ligand: Feature(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    is_dna: Feature(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    is_rna: Feature(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    is_protein: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    is_ligand: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    is_dna: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    is_rna: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
 
     # Token-level
-    is_protein_token: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    is_ligand_token: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    is_dna_token: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    is_rna_token: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    is_protein_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    is_ligand_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    is_dna_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    is_rna_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
 
     # Global
     resolution: float
@@ -293,43 +313,37 @@ class MotifFeatures(FeatureGroup):
     """Motif features for motif scaffolding."""
 
     # Atom-level
-    is_motif: Feature(
+    is_motif: Mask(
         Bool[Tensor, "n_atom"],
         type=FeatureType.ATOM,
-        role=FeatureRole.MASK,
         description="Is motif atom.",
     )
-    is_motif_related: Feature(
+    is_motif_related: Mask(
         Bool[Tensor, "n_atom"],
         type=FeatureType.ATOM,
-        role=FeatureRole.MASK,
         description="Is a conformer (e.g. sidechain) with at least one atom in the motif.",
     )
 
     # Token-level
-    is_motif_token: Feature(
+    is_motif_token: Mask(
         Int[Tensor, "n_token"],
         type=FeatureType.TOKEN,
-        role=FeatureRole.MASK,
         description="Is motif token (has motif coordinates)",
     )
-    is_motif_related_token: Feature(
+    is_motif_related_token: Mask(
         Int[Tensor, "n_token"],
         type=FeatureType.TOKEN,
-        role=FeatureRole.MASK,
         description="Is a token related to a motif (e.g. sidechain, which are tokenized per-atom)",
     )
     motif_restype: Feature(
         Float[Tensor, "n_token 32"],
         type=FeatureType.TOKEN,
-        role=FeatureRole.MASK,
         description="Motif residue type",
     )
     motif_coordinate: Feature(
         Float[Tensor, "n_token 3"],
         type=FeatureType.TOKEN,
         encoding=EncodingType.IDENTITY,
-        role=FeatureRole.INPUT,
         description="Motif coordinates",
     )
 
@@ -343,31 +357,27 @@ class StructureLabels(FeatureGroup):
     """
 
     # Atom-level
-    coordinate: Feature(
+    coordinate: Label(
         Float[Tensor, "n_atom 3"],
         type=FeatureType.ATOM,
         encoding=EncodingType.IDENTITY,
-        role=FeatureRole.LABEL,
     )
-    coordinate_mask: Feature(
+    coordinate_mask: Mask(
         Bool[Tensor, "n_atom"],
         type=FeatureType.ATOM,
         encoding=EncodingType.IDENTITY,
-        role=FeatureRole.MASK,
     )
     # TODO: is atom loss mask even necessary?
-    atom_loss_mask: Feature(
+    atom_loss_mask: Mask(
         Bool[Tensor, "n_atom"],
         type=FeatureType.ATOM,
-        role=FeatureRole.MASK,
-        description="",
     )
 
     # Token-level
-    centre_coordinate: Feature(Float[Tensor, "n_token 3"], type=FeatureType.TOKEN)
-    has_centre_atom: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    token_loss_mask: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    dense_to_flat_atom_mask: Feature(
+    centre_coordinate: Label(Float[Tensor, "n_token 3"], type=FeatureType.TOKEN)
+    has_centre_atom: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    token_loss_mask: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    dense_to_flat_atom_mask: Mask(
         Bool[Tensor, "n_token n_dense_atoms"], type=FeatureType.TOKEN
     )
 

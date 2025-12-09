@@ -14,11 +14,13 @@ Feature metadata can be accessed via:
     FeatureMeta(encoding=Encoding.ONE_HOT, ...)
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import asdict, dataclass, fields
 from enum import Enum, auto
 from functools import partial
-from typing import Annotated, Callable, TypeVar
+from typing import Annotated, Callable
 
 import torch
 from torch import Tensor
@@ -122,14 +124,6 @@ def Auxiliary(
     ]
 
 
-# =============================================================================
-# Base feature group class
-# =============================================================================
-
-
-T = TypeVar("T", bound="FeatureGroup")
-
-
 @dataclass
 class FeatureGroup:
     """Base class with common utilities for feature containers."""
@@ -138,21 +132,10 @@ class FeatureGroup:
         """Convert to flat dictionary of tensors."""
         return {k: v for k, v in asdict(self).items() if torch.is_tensor(v)}
 
-    def to(self: T, device: torch.device | str) -> T:
-        """Move all tensors to specified device."""
-        kwargs = {}
-        for field in fields(self):
-            value = getattr(self, field.name)
-            if torch.is_tensor(value):
-                kwargs[field.name] = value.to(device)
-            else:
-                kwargs[field.name] = value
-        return type(self)(**kwargs)
-
     def pad(
-        self: T,
+        self,
         pad_fns: dict[FeatureType, Callable[[Tensor], Tensor]],
-    ) -> T:
+    ) -> FeatureGroup:
         """Pad all tensor fields using per-field feature type.
 
         Args:
@@ -170,11 +153,6 @@ class FeatureGroup:
             else:
                 padded_fields[field.name] = value
         return type(self)(**padded_fields)
-
-
-# =============================================================================
-# Token-level features [n_token, ...]
-# =============================================================================
 
 
 @typecheck
@@ -407,11 +385,6 @@ class StructureLabels(FeatureGroup):
     dense_to_flat_atom_mask: Mask(
         Bool[Tensor, "n_token n_dense_atoms"], type=FeatureType.TOKEN
     )
-
-
-# =============================================================================
-# Main container
-# =============================================================================
 
 
 @dataclass

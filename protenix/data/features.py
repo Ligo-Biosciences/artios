@@ -7,7 +7,7 @@ Example usage:
     >>> features = AllAtomFeatures.from_featurizer(featurizer)
     >>> features = features.to("cuda")
     >>> features.token.restype  # IDE autocomplete works
-    >>> features.to_dict()  # backward compatibility
+    >>> features.pad(n_token_pad=10, n_atom_pad=20)
 
 Feature metadata can be accessed via:
     >>> TokenFeatures.get_field_meta("restype")
@@ -17,12 +17,13 @@ Feature metadata can be accessed via:
 import logging
 from dataclasses import asdict, dataclass, fields
 from enum import Enum, auto
-from functools import cached_property
-from typing import Annotated, Any, TypeVar
+from functools import partial
+from typing import Annotated, Callable, TypeVar
 
 import torch
 from torch import Tensor
 
+from protenix.model.utils import pad_tensor
 from protenix.utils.typing import Bool, Float, Int, typecheck
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,8 @@ class FeatureRole(Enum):
 
 
 class FeatureType(Enum):
+    """Semantic categorization of features by their indexing dimension."""
+
     TOKEN = "TOKEN"
     TOKEN_PAIR = "TOKEN_PAIR"
     ATOM = "ATOM"
@@ -62,18 +65,16 @@ class FeatureMeta:
 
     Attributes:
         encoding: How the values are encoded (one-hot, continuous, etc.)
-        level: Granularity level (atom, token, pair, global)
-        role: Role in the model (input, label, mask, auxiliary)
+        type: Feature type (TOKEN, ATOM, etc.) for padding inference
         description: Human-readable description
     """
 
     encoding: EncodingType | None = None
     type: FeatureType | None = None
-    # role: FeatureRole = FeatureRole.INPUT
     description: str = ""
 
 
-def Feature(  # TODO: make this into a nice class instead of function
+def Feature(
     jaxtype,
     *,
     type: FeatureType,
@@ -91,10 +92,15 @@ def Feature(  # TODO: make this into a nice class instead of function
             description="Residue type one-hot encoding",
         )
     """
-    return Annotated[jaxtype, FeatureMeta(encoding, type, role, description)]
+    return Annotated[jaxtype, FeatureMeta(encoding, type, description)]
 
 
-FeatureGroup = TypeVar("FeatureGroup", bound="FeatureGroup")
+# =============================================================================
+# Base feature group class
+# =============================================================================
+
+
+T = TypeVar("T", bound="FeatureGroup")
 
 
 @dataclass
@@ -105,23 +111,43 @@ class FeatureGroup:
         """Convert to flat dictionary of tensors."""
         return {k: v for k, v in asdict(self).items() if torch.is_tensor(v)}
 
-    def pad(self, pad_fn: callable) -> FeatureGroup:
-        """Pad all tensor fields in the feature group.
+    def to(self: T, device: torch.device | str) -> T:
+        """Move all tensors to specified device."""
+        kwargs = {}
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if torch.is_tensor(value):
+                kwargs[field.name] = value.to(device)
+            else:
+                kwargs[field.name] = value
+        return type(self)(**kwargs)
+
+    def pad(
+        self: T,
+        pad_fns: dict[FeatureType, Callable[[Tensor], Tensor]],
+    ) -> T:
+        """Pad all tensor fields using per-field feature type.
 
         Args:
-            pad_fn (callable): Function that takes a tensor and returns a padded tensor
+            pad_fns: Dict mapping FeatureType to padding functions.
+                Each function takes a tensor and returns the padded tensor.
 
         Returns:
-            FeatureGroup: New instance with padded tensors
+            New instance with padded tensors.
         """
         padded_fields = {}
         for field in fields(self):
             value = getattr(self, field.name)
             if torch.is_tensor(value):
-                padded_fields[field.name] = pad_fn(value)
+                padded_fields[field.name] = pad_fns[field.type](value)
             else:
                 padded_fields[field.name] = value
         return type(self)(**padded_fields)
+
+
+# =============================================================================
+# Token-level features [n_token, ...]
+# =============================================================================
 
 
 @typecheck
@@ -173,6 +199,10 @@ class TokenFeatures(FeatureGroup):
         description="Indicator for ligand-ligand and non-polymer bonds",
     )
 
+    @property
+    def num_tokens(self) -> int:
+        return self.token_index.shape[0]
+
 
 # =============================================================================
 # Atom-level features [n_atom, ...]
@@ -198,7 +228,11 @@ class ReferenceFeatures(FeatureGroup):
     ref_atom_name_chars: Feature(
         Int[Tensor, "n_atom 4 64"], type=FeatureType.ATOM
     )  # character encoded
-    ref_space_uid: Feature(Int[Tensor, "n_atom"])
+    ref_space_uid: Feature(Int[Tensor, "n_atom"], type=FeatureType.ATOM)
+
+    @property
+    def num_atoms(self) -> int:
+        return self.ref_pos.shape[0]
 
 
 @typecheck
@@ -348,15 +382,6 @@ class StructureLabels(FeatureGroup):
     token_loss_mask: Bool[Tensor, "n_token"]
     dense_to_flat_atom_mask: Bool[Tensor, "n_token n_dense_atoms"]
 
-    def __post_init__(self):
-        """Validate label consistency."""
-        if torch.isnan(self.coordinate).any():
-            logger.error("NaN values found in coordinate labels")
-
-        # Check mask consistency
-        if not torch.all(self.coordinate_mask <= self.atom_loss_mask + 1):
-            logger.warning("coordinate_mask and atom_loss_mask may be inconsistent")
-
 
 # =============================================================================
 # Main container
@@ -375,6 +400,7 @@ class AllAtomFeatures:
         >>> features.token.restype.shape  # [n_token, 32]
         >>> features.reference.ref_pos.shape  # [n_atom, 3]
         >>> features.to("cuda")
+        >>> features.pad(n_token_pad=10, n_atom_pad=20)
     """
 
     token: TokenFeatures
@@ -385,84 +411,47 @@ class AllAtomFeatures:
     target: TargetFeatures
     mpnn: MPNNFeatures
 
-    def __post_init__(self):
-        """Validate cross-feature consistency."""
-        n_tokens = self.token.num_tokens
-        n_atoms = self.reference.num_atoms
+    def pad(self, n_max_tokens: int, n_max_atoms: int) -> "AllAtomFeatures":
+        """Pad all features to n_max_tokens/n_max_atoms.
 
-        # Validate token counts match
-        if self.mask.token_mask.shape[0] != n_tokens:
-            logger.error(
-                f"Token count mismatch: token={n_tokens}, "
-                f"mask={self.mask.token_mask.shape[0]}"
-            )
+        Uses the FeatureType from each field's annotation to determine
+        which dimensions to pad:
+        - TOKEN: pad dim 0 by n_token_pad
+        - TOKEN_PAIR: pad dims 0 and 1 by n_token_pad
+        - ATOM: pad dim 0 by n_atom_pad
+        - ATOM_PAIR: pad dims 0 and 1 by n_atom_pad
+        """
+        assert n_max_tokens >= self.num_tokens
+        assert n_max_atoms >= self.num_atoms
 
-        # Validate atom counts match
-        if self.mask.atom_mask.shape[0] != n_atoms:
-            logger.error(
-                f"Atom count mismatch: reference={n_atoms}, "
-                f"mask={self.mask.atom_mask.shape[0]}"
-            )
+        n_token_pad = n_max_tokens - self.num_tokens
+        n_atom_pad = n_max_atoms - self.num_atoms
 
-        # Validate atom_to_token_idx is in valid range
-        max_token_idx = self.extra.atom_to_token_idx.max()
-        if max_token_idx >= n_tokens:
-            logger.error(
-                f"atom_to_token_idx contains invalid index {max_token_idx} "
-                f"for {n_tokens} tokens"
-            )
+        pad_fns = {
+            FeatureType.TOKEN: partial(pad_tensor, pad_sizes=(n_token_pad,)),
+            FeatureType.TOKEN_PAIR: partial(
+                pad_tensor, pad_sizes=(n_token_pad, n_token_pad)
+            ),
+            FeatureType.ATOM: partial(pad_tensor, pad_sizes=(n_atom_pad,)),
+            FeatureType.ATOM_PAIR: partial(
+                pad_tensor, pad_sizes=(n_atom_pad, n_atom_pad)
+            ),
+        }
 
-    @cached_property
-    def num_tokens(self) -> int:
-        return self.token.num_tokens
+        kwargs = {}
+        for f in fields(self):
+            fg = getattr(self, f.name)
+            if isinstance(fg, FeatureGroup):
+                kwargs[f.name] = fg.pad(pad_fns)
+            else:
+                kwargs[f.name] = fg
 
-    @cached_property
-    def num_atoms(self) -> int:
-        return self.reference.num_atoms
+        return type(self)(**kwargs)
 
     @property
-    def device(self) -> torch.device:
-        return self.token.token_index.device
+    def num_tokens(self) -> int:
+        return self.token.token_index.shape[0]
 
-    def to(self, device: torch.device | str) -> "AllAtomFeatures":
-        """Move all features to specified device."""
-        return AllAtomFeatures(
-            token=self.token.to(device),
-            reference=self.reference.to(device),
-            chain_perm=self.chain_perm.to(device),
-            extra=self.extra.to(device),
-            mask=self.mask.to(device),
-            target=self.target.to(device),
-            mpnn=self.mpnn.to(device),
-        )
-
-    def to_dict(self) -> dict[str, Tensor]:
-        """Flatten all features to single dictionary.
-
-        Useful for backward compatibility with dict-based APIs.
-        """
-        result = {}
-        result.update(self.token.to_dict())
-        result.update(self.reference.to_dict())
-        result.update(self.chain_perm.to_dict())
-        result.update(self.extra.to_dict())
-        result.update(self.mask.to_dict())
-        result.update(self.target.to_dict())
-        result.update(self.mpnn.to_dict())
-        return result
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "AllAtomFeatures":
-        """Construct from flat dictionary.
-
-        Useful for loading from checkpoints or migrating from dict-based code.
-        """
-        return cls(
-            token=TokenFeatures.from_dict(d),
-            reference=ReferenceFeatures.from_dict(d),
-            chain_perm=ChainPermFeatures.from_dict(d),
-            extra=ExtraFeatures.from_dict(d),
-            mask=MaskFeatures.from_dict(d),
-            target=TargetFeatures.from_dict(d),
-            mpnn=MPNNFeatures.from_dict(d),
-        )
+    @property
+    def num_atoms(self) -> int:
+        return self.reference.ref_pos.shape[0]

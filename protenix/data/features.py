@@ -157,7 +157,7 @@ class FeatureGroup:
 
 @typecheck
 @dataclass
-class TokenFeatures(FeatureGroup):
+class TokenContext(FeatureGroup):  # TODO: TokenContext
     """Token-level features from AlphaFold3 SI Chapter 2.8.
 
     All tensors have shape [n_token, ...] where n_token is the number of tokens.
@@ -186,7 +186,7 @@ class TokenFeatures(FeatureGroup):
 
 @typecheck
 @dataclass
-class ReferenceFeatures(FeatureGroup):
+class ReferenceConformerContext(FeatureGroup):
     """Reference conformer features from AlphaFold3 SI Chapter 2.8."""
 
     ref_pos: Feature(
@@ -225,15 +225,15 @@ class ReferenceFeatures(FeatureGroup):
 
 @typecheck
 @dataclass
-class ChainPermFeatures(FeatureGroup):
+class ChainPermContext(FeatureGroup):
     """Chain permutation features for multi-chain alignment.
 
     Used for permutation-invariant training with symmetric chains.
     """
 
-    mol_id: Int[Tensor, "n_atom"]
-    mol_atom_index: Int[Tensor, "n_atom"]
-    entity_mol_id: Int[Tensor, "n_atom"]
+    mol_id: Auxiliary(Int[Tensor, "n_atom"], type=FeatureType.ATOM)
+    mol_atom_index: Auxiliary(Int[Tensor, "n_atom"], type=FeatureType.ATOM)
+    entity_mol_id: Auxiliary(Int[Tensor, "n_atom"], type=FeatureType.ATOM)
 
 
 class AtomPermFeatures(FeatureGroup):
@@ -402,9 +402,9 @@ class AllAtomFeatures:
         >>> features.pad(n_token_pad=10, n_atom_pad=20)
     """
 
-    token: TokenFeatures
-    reference: ReferenceFeatures
-    chain_perm: ChainPermFeatures
+    token: TokenContext
+    reference: ReferenceConformerContext
+    chain_perm: ChainPermContext
     extra: ExtraFeatures
     mask: MaskFeatures
     mpnn: MPNNFeatures

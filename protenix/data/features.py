@@ -183,6 +183,20 @@ class TokenContext(FeatureGroup):  # TODO: TokenContext
         description="Token is not padding mask (all true before pad)",
     )
 
+    centre_coordinates: Feature(
+        Float[Tensor, "n_token 3"],
+        type=FeatureType.TOKEN,
+        encoding=EncodingType.IDENTITY,
+        description="Centre coordinates of the structure.",
+    )
+
+    backbone_coordinates: Feature(
+        Float[Tensor, "n_token 5 3"],
+        type=FeatureType.TOKEN,
+        encoding=EncodingType.IDENTITY,
+        description="Backbone coordinates of the structure.",
+    )
+
 
 @typecheck
 @dataclass
@@ -247,13 +261,12 @@ class AtomPermFeatures(FeatureGroup):
 
 @typecheck
 @dataclass
-class ExtraFeatures(FeatureGroup):
-    """Additional features not in AlphaFold3 SI Table 5.
+class IndexFeatures(FeatureGroup):
+    """Atom-to-token index mappings and global features.
 
-    Contains atom-to-token mappings and molecule type indicators.
+    Contains auxiliary indexing information for relating atoms to tokens.
     """
 
-    # Atom-level
     atom_to_token_idx: Auxiliary(
         Int[Tensor, "n_atom"],
         type=FeatureType.ATOM,
@@ -265,20 +278,26 @@ class ExtraFeatures(FeatureGroup):
         description="Token atom (which atom within token) index for each atom",
     )
 
-    # Indicators
+
+@typecheck
+@dataclass
+class EntityFeatures(FeatureGroup):
+    """Molecule type indicators at atom and token level.
+
+    Boolean masks indicating which molecule type each atom/token belongs to.
+    """
+
+    # Atom-level indicators
     is_protein: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
     is_ligand: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
     is_dna: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
     is_rna: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
 
-    # Token-level
+    # Token-level indicators
     is_protein_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
     is_ligand_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
     is_dna_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
     is_rna_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-
-    # Global
-    resolution: float
 
 
 @typecheck
@@ -289,27 +308,10 @@ class MaskFeatures(FeatureGroup):
     Contains various masks at both token and atom level.
     """
 
-    # Atom-level [n_atom]
-    pae_rep_atom_mask: Bool[Tensor, "n_atom"]
-    plddt_m_rep_atom_mask: Bool[Tensor, "n_atom"]
-    modified_res_mask: Bool[Tensor, "n_atom"]
-    atom_mask: Bool[Tensor, "n_atom"]
-
-
-@typecheck
-@dataclass
-class MPNNFeatures(FeatureGroup):
-    """Features for MPNN-style sequence design.
-
-    Contains backbone coordinates and masks for protein design.
-    """
-
-    mpnn_centre_coordinate: Feature(Float[Tensor, "n_token 3"], type=FeatureType.TOKEN)
-    mpnn_centre_atom_mask: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    mpnn_backbone_coords: Feature(
-        Float[Tensor, "n_token 5 3"], type=FeatureType.TOKEN
-    )  # N, CA, C, O, CB
-    mpnn_backbone_mask: Feature(Bool[Tensor, "n_token 3"], type=FeatureType.TOKEN)
+    centre_atom_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    atom_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    is_resolved: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    backbone_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
 
 
 @typecheck
@@ -386,6 +388,8 @@ class StructureLabels(FeatureGroup):
         Bool[Tensor, "n_token n_dense_atoms"], type=FeatureType.TOKEN
     )
 
+    resolution: float
+
 
 @dataclass
 class AllAtomFeatures:
@@ -405,9 +409,10 @@ class AllAtomFeatures:
     token: TokenContext
     reference: ReferenceConformerContext
     chain_perm: ChainPermContext
-    extra: ExtraFeatures
     mask: MaskFeatures
-    mpnn: MPNNFeatures
+    motif: MotifFeatures
+    index: IndexFeatures
+    entity: EntityFeatures
 
     def pad(self, n_max_tokens: int, n_max_atoms: int) -> "AllAtomFeatures":
         """Pad all features to n_max_tokens/n_max_atoms.

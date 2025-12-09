@@ -13,6 +13,11 @@ from protenix.common.constants import (
     STD_RESIDUES_AND_GAP,
     get_all_elems,
 )
+from protenix.data.features import (
+    ChainPermContext,
+    ReferenceConformerContext,
+    TokenContext,
+)
 from protenix.data.tokenizer import TokenArray
 from protenix.utils.geometry import random_transform
 
@@ -37,6 +42,12 @@ class Featurizer(object):
         self.cropped_atom_array = cropped_atom_array
         self.ref_pos_augment = ref_pos_augment
         self.lig_atom_rename = lig_atom_rename
+
+        # TODO: not sure about this, rolling with it for now.
+        self.centre_atoms_indices = self.cropped_token_array.get_annotation(
+            "centre_atom_index"
+        )
+        self.centre_atoms = self.cropped_atom_array[self.centre_atoms_indices]
 
     @staticmethod
     def encoder(encode_def_list: list[str], input_list: list[str]) -> torch.Tensor:
@@ -226,38 +237,32 @@ class Featurizer(object):
 
         return torch.Tensor(backbone_coords), torch.Tensor(backbone_mask)
 
-    def get_token_features(self) -> dict[str, torch.Tensor]:
+    def get_token_context(self) -> TokenContext:
         """
         Ref: AlphaFold3 SI Chapter 2.8
 
-        Get token features.
-        The size of these features is [N_token].
+        Get token context.
+        The size of these features is [N_token] or [N_token, N_token].
 
         Returns:
-            Dict[str, torch.Tensor]: A dict of token features.
+            TokenContext
         """
-        token_features = {}
-
-        centre_atoms_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
-        centre_atoms = self.cropped_atom_array[centre_atoms_indices]
-
-        restype = centre_atoms.cano_seq_resname
+        restype = self.centre_atoms.cano_seq_resname
         restype_onehot = self.restype_onehot_encoded(restype)
 
-        token_features["token_index"] = torch.arange(0, len(self.cropped_token_array))
-        token_features["residue_index"] = torch.Tensor(
-            centre_atoms.res_id.astype(int)
-        ).long()
-        token_features["asym_id"] = torch.Tensor(centre_atoms.asym_id_int).long()
-        token_features["entity_id"] = torch.Tensor(centre_atoms.entity_id_int).long()
-        token_features["sym_id"] = torch.Tensor(centre_atoms.sym_id_int).long()
-        token_features["restype"] = restype_onehot
+        context = TokenContext(
+            token_index=torch.arange(0, len(self.cropped_token_array)),
+            residue_index=torch.Tensor(self.centre_atoms.res_id.astype(int)).long(),
+            asym_id=torch.Tensor(self.centre_atoms.asym_id_int).long(),
+            entity_id=torch.Tensor(self.centre_atoms.entity_id_int).long(),
+            sym_id=torch.Tensor(self.centre_atoms.sym_id_int).long(),
+            restype=restype_onehot,
+            token_bonds=self.get_bonds(),
+            token_mask=torch.ones(len(self.cropped_token_array)).long(),
+        )
+        return context
 
-        return token_features
-
-    def get_chain_perm_features(self) -> dict[str, torch.Tensor]:
+    def get_chain_perm_features(self) -> ChainPermContext:
         """
         The chain permutation use "entity_mol_id", "mol_id" and "mol_atom_index"
         instead of the "entity_id", "asym_id" and "residue_index".
@@ -265,20 +270,14 @@ class Featurizer(object):
         The shape of these features is [N_atom].
 
         Returns:
-            Dict[str, torch.Tensor]: A dict of chain permutation features.
+            ChainPermContext
         """
-
-        chain_perm_features = {}
-        chain_perm_features["mol_id"] = torch.Tensor(
-            self.cropped_atom_array.mol_id
-        ).long()
-        chain_perm_features["mol_atom_index"] = torch.Tensor(
-            self.cropped_atom_array.mol_atom_index
-        ).long()
-        chain_perm_features["entity_mol_id"] = torch.Tensor(
-            self.cropped_atom_array.entity_mol_id
-        ).long()
-        return chain_perm_features
+        chain_perm_context = ChainPermContext(
+            mol_id=torch.Tensor(self.cropped_atom_array.mol_id).long(),
+            mol_atom_index=torch.Tensor(self.cropped_atom_array.mol_atom_index).long(),
+            entity_mol_id=torch.Tensor(self.cropped_atom_array.entity_mol_id).long(),
+        )
+        return chain_perm_context
 
     def get_renamed_atom_names(self) -> np.ndarray:
         """
@@ -304,15 +303,14 @@ class Featurizer(object):
             new_atom_names[start:stop] = new_res_atom_names
         return new_atom_names
 
-    def get_reference_features(self) -> dict[str, torch.Tensor]:
+    def get_reference_conformer_context(self) -> ReferenceConformerContext:
         """
         Ref: AlphaFold3 SI Chapter 2.8
 
         Get reference features.
-        The size of these features is [N_atom].
 
         Returns:
-            Dict[str, torch.Tensor]: a dict of reference features.
+            ReferenceConformerContext
         """
         ref_pos = []
         for ref_space_uid in np.unique(self.cropped_atom_array.ref_space_uid):
@@ -326,53 +324,35 @@ class Featurizer(object):
             ref_pos.append(res_ref_pos)
         ref_pos = np.concatenate(ref_pos)
 
-        ref_features = {}
-        ref_features["ref_pos"] = torch.Tensor(ref_pos)
-        ref_features["ref_mask"] = torch.Tensor(self.cropped_atom_array.ref_mask).long()
-        ref_features["ref_element"] = Featurizer.elem_onehot_encoded(
-            self.cropped_atom_array.element
-        ).long()
-        ref_features["ref_charge"] = torch.Tensor(
-            self.cropped_atom_array.ref_charge
-        ).long()
-
         if self.lig_atom_rename:
             atom_names = self.get_renamed_atom_names()
         else:
             atom_names = self.cropped_atom_array.atom_name
 
-        ref_features["ref_atom_name_chars"] = Featurizer.ref_atom_name_chars_encoded(
-            atom_names
-        ).long()
-        ref_features["ref_space_uid"] = torch.Tensor(
-            self.cropped_atom_array.ref_space_uid
-        ).long()
+        ref_conf_context = ReferenceConformerContext(
+            ref_pos=torch.Tensor(ref_pos),
+            ref_mask=torch.Tensor(self.cropped_atom_array.ref_mask).long(),
+            ref_element=Featurizer.elem_onehot_encoded(
+                self.cropped_atom_array.element
+            ).long(),
+            ref_charge=torch.Tensor(self.cropped_atom_array.ref_charge).long(),
+            ref_atom_name_chars=Featurizer.ref_atom_name_chars_encoded(
+                atom_names
+            ).long(),
+            ref_space_uid=torch.Tensor(self.cropped_atom_array.ref_space_uid).long(),
+        )
 
-        # token_array_with_frame = self.get_token_frame(
-        #     token_array=self.cropped_token_array,
-        #     atom_array=self.cropped_atom_array,
-        #     ref_pos=ref_features["ref_pos"],
-        #     ref_mask=ref_features["ref_mask"],
-        # )
-        # ref_features["has_frame"] = torch.Tensor(
-        #     token_array_with_frame.get_annotation("has_frame")
-        # ).long()  # [N_token]
-        # ref_features["frame_atom_index"] = torch.Tensor(
-        #     token_array_with_frame.get_annotation("frame_atom_index")
-        # ).long()  # [N_token, 3]
-        return ref_features
+        return ref_conf_context
 
-    def get_bond_features(self) -> dict[str, torch.Tensor]:
+    def get_bonds(self) -> torch.Tensor:
         """
         Ref: AlphaFold3 SI Chapter 2.8
         A 2D matrix indicating if there is a bond between any atom in token i and token j,
         restricted to just polymer-ligand and ligand-ligand bonds and bonds less than 2.4 Å during training.
-        The size of bond feature is [N_token, N_token].
 
         Returns:
-            Dict[str, torch.Tensor]: A dict of bond features.
+            torch.Tensor of shape [n_token, n_token] indicating bonds between tokens
         """
-        bond_features = {}
         num_tokens = len(self.cropped_token_array)
         adj_matrix = self.cropped_atom_array.bonds.adjacency_matrix().astype(int)
 
@@ -413,8 +393,7 @@ class Featurizer(object):
                 if np.any(sub_matrix):
                     token_adj_matrix[i, j] = 1
                     token_adj_matrix[j, i] = 1
-        bond_features["token_bonds"] = torch.Tensor(token_adj_matrix)
-        return bond_features
+        return torch.Tensor(token_adj_matrix).long()
 
     def _get_atom_to_token_idx(self) -> torch.Tensor:
         """
@@ -691,13 +670,13 @@ class Featurizer(object):
             Dict[str, torch.Tensor]: a dict of features.
         """
         features = {}
-        token_features = self.get_token_features()
+        token_features = self.get_token_context()
         features.update(token_features)
 
         # bond_features = self.get_bond_features()
         # features.update(bond_features)
 
-        reference_features = self.get_reference_features()
+        reference_features = self.get_reference_conformer_context()
         features.update(reference_features)
 
         extra_features = self.get_extra_features()

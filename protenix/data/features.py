@@ -28,17 +28,12 @@ from protenix.utils.typing import Bool, Float, Int, typecheck
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Feature metadata types
-# =============================================================================
-
-
 class FeatureRole(Enum):
     """Role of the feature in the model."""
 
     INPUT = auto()
     LABEL = auto()
-    MASK = auto()
+    MASK = auto()  # masks can be input into model as well e.g. ref_mask
     AUXILIARY = auto()
 
 
@@ -69,10 +64,12 @@ class FeatureMeta:
 
     encoding: EncodingType | None = None
     type: FeatureType | None = None
-    # role: FeatureRole = FeatureRole.INPUT
+    role: FeatureRole = FeatureRole.INPUT
     description: str = ""
 
 
+# TODO: should we have different classes for roles here?
+# e.g. Label, Feature, Mask etc. maybe
 def Feature(  # TODO: make this into a nice class instead of function
     jaxtype,
     *,
@@ -132,39 +129,12 @@ class TokenFeatures(FeatureGroup):
     All tensors have shape [n_token, ...] where n_token is the number of tokens.
     """
 
-    token_index: Feature(
-        Int[Tensor, "n_token"],
-        type=FeatureType.TOKEN,
-        description="Token index in the sequence",
-    )
-    residue_index: Feature(
-        Int[Tensor, "n_token"],
-        type=FeatureType.TOKEN,
-        description="Residue index in the chain",
-    )
-    asym_id: Feature(
-        Int[Tensor, "n_token"],
-        type=FeatureType.TOKEN,
-        description="Asymmetric unit ID",
-    )
-    entity_id: Feature(
-        Int[Tensor, "n_token"],
-        encoding=EncodingType.IDENTITY,
-        type=FeatureType.TOKEN,
-        description="Entity ID",
-    )
-    sym_id: Feature(
-        Int[Tensor, "n_token"],
-        encoding=EncodingType.IDENTITY,
-        type=FeatureType.TOKEN,
-        description="Symmetry ID",
-    )
-    restype: Feature(
-        Int[Tensor, "n_token 32"],
-        encoding=EncodingType.ONE_HOT,
-        type=FeatureType.TOKEN,
-        description="Residue type one-hot encoding",
-    )
+    token_index: Feature(Int[Tensor, "n_token"], type=FeatureType.TOKEN)
+    residue_index: Feature(Int[Tensor, "n_token"], type=FeatureType.TOKEN)
+    asym_id: Feature(Int[Tensor, "n_token"], type=FeatureType.TOKEN)
+    entity_id: Feature(Int[Tensor, "n_token"], encoding=EncodingType.IDENTITY)
+    sym_id: Feature(Int[Tensor, "n_token"], encoding=EncodingType.IDENTITY)
+    restype: Feature(Int[Tensor, "n_token 32"], encoding=EncodingType.ONE_HOT)
 
     token_bonds: Feature(
         Int[Tensor, "n_token n_token"],
@@ -173,32 +143,57 @@ class TokenFeatures(FeatureGroup):
         description="Indicator for ligand-ligand and non-polymer bonds",
     )
 
-
-# =============================================================================
-# Atom-level features [n_atom, ...]
-# =============================================================================
+    token_mask: Feature(
+        Bool[Tensor, "n_token"],
+        type=FeatureType.TOKEN,
+        role=FeatureRole.MASK,
+        description="Token is not padding mask (all true before pad)",
+    )
 
 
 @typecheck
 @dataclass
 class ReferenceFeatures(FeatureGroup):
-    """Reference conformer features from AlphaFold3 SI Chapter 2.8.
+    """Reference conformer features from AlphaFold3 SI Chapter 2.8."""
 
-    All tensors have shape [n_atom, ...] where n_atom is the number of atoms.
-    """
-
-    ref_pos: Feature(Float[Tensor, "n_atom 3"], type=FeatureType.ATOM)
+    ref_pos: Feature(
+        Float[Tensor, "n_atom 3"],
+        type=FeatureType.ATOM,
+        encoding=EncodingType.IDENTITY,
+        role=FeatureRole.INPUT,
+        description="Reference conformer positions",
+    )
     ref_mask: Feature(
-        Int[Tensor, "n_atom"], type=FeatureType.ATOM
-    )  # TODO: should be boolean
+        Int[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        encoding=EncodingType.IDENTITY,
+        role=FeatureRole.MASK,
+        description="Mask indicating atom slots used in conformer",
+    )
     ref_element: Feature(
-        Int[Tensor, "n_atom 128"], type=FeatureType.ATOM
-    )  # one-hot encoded
-    ref_charge: Feature(Int[Tensor, "n_atom"], type=FeatureType.ATOM)
+        Int[Tensor, "n_atom 128"],
+        type=FeatureType.ATOM,
+        encoding=EncodingType.ONE_HOT,
+        role=FeatureRole.INPUT,
+    )
+    ref_charge: Feature(
+        Int[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        encoding=EncodingType.IDENTITY,
+        role=FeatureRole.INPUT,
+    )
     ref_atom_name_chars: Feature(
-        Int[Tensor, "n_atom 4 64"], type=FeatureType.ATOM
-    )  # character encoded
-    ref_space_uid: Feature(Int[Tensor, "n_atom"])
+        Int[Tensor, "n_atom 4 64"],
+        type=FeatureType.ATOM,
+        encoding=EncodingType.ONE_HOT,
+        role=FeatureRole.INPUT,
+    )
+    ref_space_uid: Feature(
+        Int[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        role=FeatureRole.AUXILIARY,
+        description="ID for each unique conformer",
+    )
 
 
 @typecheck
@@ -207,12 +202,20 @@ class ChainPermFeatures(FeatureGroup):
     """Chain permutation features for multi-chain alignment.
 
     Used for permutation-invariant training with symmetric chains.
-    All tensors have shape [n_atom].
     """
 
     mol_id: Int[Tensor, "n_atom"]
     mol_atom_index: Int[Tensor, "n_atom"]
     entity_mol_id: Int[Tensor, "n_atom"]
+
+
+class AtomPermFeatures(FeatureGroup):
+    """Atom permutation features for symmetric permutation
+
+    TODO: feature explanation
+    """
+
+    perms: list[list[int]]
 
 
 @typecheck
@@ -223,27 +226,34 @@ class ExtraFeatures(FeatureGroup):
     Contains atom-to-token mappings and molecule type indicators.
     """
 
-    # Atom-level [n_atom]
-    atom_to_token_idx: Int[Tensor, "n_atom"]
-    atom_to_tokatom_idx: Int[Tensor, "n_atom"]
-    is_protein: Int[Tensor, "n_atom"]
-    is_ligand: Int[Tensor, "n_atom"]
-    is_dna: Int[Tensor, "n_atom"]
-    is_rna: Int[Tensor, "n_atom"]
+    # Atom-level
+    atom_to_token_idx: Feature(
+        Int[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        role=FeatureRole.AUXILIARY,
+        description="Token index for each atom.",
+    )
+    atom_to_tokatom_idx: Feature(
+        Int[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        role=FeatureRole.AUXILIARY,
+        description="Token atom (which atom within token) index for each atom",
+    )
 
-    # Token-level [n_token]
-    is_protein_token: Bool[Tensor, "n_token"]
-    is_ligand_token: Bool[Tensor, "n_token"]
-    is_dna_token: Bool[Tensor, "n_token"]
-    is_rna_token: Bool[Tensor, "n_token"]
+    # Indicators
+    is_protein: Feature(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    is_ligand: Feature(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    is_dna: Feature(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    is_rna: Feature(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+
+    # Token-level
+    is_protein_token: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    is_ligand_token: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    is_dna_token: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    is_rna_token: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
 
     # Global
-    resolution: Float[Tensor, "1"]
-
-
-# =============================================================================
-# Mask features
-# =============================================================================
+    resolution: float
 
 
 @typecheck
@@ -260,34 +270,6 @@ class MaskFeatures(FeatureGroup):
     modified_res_mask: Bool[Tensor, "n_atom"]
     atom_mask: Bool[Tensor, "n_atom"]
 
-    # Token-level [n_token]
-    token_mask: Bool[Tensor, "n_token"]
-
-
-# =============================================================================
-# Target features (for conditional generation)
-# =============================================================================
-
-
-@typecheck
-@dataclass
-class TargetFeatures(FeatureGroup):
-    """Target-specific features for conditional generation.
-
-    Used when generating structures conditioned on a target molecule.
-    All tensors have shape [n_token, ...].
-    """
-
-    target_centre_coordinate: Float[Tensor, "n_token 3"]
-    target_restype: Float[Tensor, "n_token 32"]
-    is_target_token: Int[Tensor, "n_token"]
-    is_hotspot: Int[Tensor, "n_token"]
-
-
-# =============================================================================
-# MPNN features (for sequence design)
-# =============================================================================
-
 
 @typecheck
 @dataclass
@@ -297,15 +279,12 @@ class MPNNFeatures(FeatureGroup):
     Contains backbone coordinates and masks for protein design.
     """
 
-    mpnn_centre_coordinate: Float[Tensor, "n_token 3"]
-    mpnn_centre_atom_mask: Float[Tensor, "n_token"]
-    mpnn_backbone_coords: Float[Tensor, "n_token 5 3"]  # N, CA, C, O, CB
-    mpnn_backbone_mask: Float[Tensor, "n_token 5"]
-
-
-# =============================================================================
-# Motif features
-# =============================================================================
+    mpnn_centre_coordinate: Feature(Float[Tensor, "n_token 3"], type=FeatureType.TOKEN)
+    mpnn_centre_atom_mask: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    mpnn_backbone_coords: Feature(
+        Float[Tensor, "n_token 5 3"], type=FeatureType.TOKEN
+    )  # N, CA, C, O, CB
+    mpnn_backbone_mask: Feature(Bool[Tensor, "n_token 3"], type=FeatureType.TOKEN)
 
 
 @typecheck
@@ -313,20 +292,46 @@ class MPNNFeatures(FeatureGroup):
 class MotifFeatures(FeatureGroup):
     """Motif features for motif scaffolding."""
 
-    # Atom-level [n_atom]
-    is_motif: Bool[Tensor, "n_atom"]
-    is_motif_related: Bool[Tensor, "n_atom"]
+    # Atom-level
+    is_motif: Feature(
+        Bool[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        role=FeatureRole.MASK,
+        description="Is motif atom.",
+    )
+    is_motif_related: Feature(
+        Bool[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        role=FeatureRole.MASK,
+        description="Is a conformer (e.g. sidechain) with at least one atom in the motif.",
+    )
 
-    # Token-level [n_token]
-    is_motif_token: Int[Tensor, "n_token"]
-    is_motif_related_token: Int[Tensor, "n_token"]
-    motif_restype: Float[Tensor, "n_token 32"]
-    motif_coordinate: Float[Tensor, "n_token 3"]
-
-
-# =============================================================================
-# Labels (supervision signals)
-# =============================================================================
+    # Token-level
+    is_motif_token: Feature(
+        Int[Tensor, "n_token"],
+        type=FeatureType.TOKEN,
+        role=FeatureRole.MASK,
+        description="Is motif token (has motif coordinates)",
+    )
+    is_motif_related_token: Feature(
+        Int[Tensor, "n_token"],
+        type=FeatureType.TOKEN,
+        role=FeatureRole.MASK,
+        description="Is a token related to a motif (e.g. sidechain, which are tokenized per-atom)",
+    )
+    motif_restype: Feature(
+        Float[Tensor, "n_token 32"],
+        type=FeatureType.TOKEN,
+        role=FeatureRole.MASK,
+        description="Motif residue type",
+    )
+    motif_coordinate: Feature(
+        Float[Tensor, "n_token 3"],
+        type=FeatureType.TOKEN,
+        encoding=EncodingType.IDENTITY,
+        role=FeatureRole.INPUT,
+        description="Motif coordinates",
+    )
 
 
 @typecheck
@@ -337,16 +342,34 @@ class StructureLabels(FeatureGroup):
     Contains coordinates and masks for computing losses.
     """
 
-    # Atom-level [n_atom]
-    coordinate: Float[Tensor, "n_atom 3"]
-    coordinate_mask: Bool[Tensor, "n_atom"]
-    atom_loss_mask: Bool[Tensor, "n_atom"]
+    # Atom-level
+    coordinate: Feature(
+        Float[Tensor, "n_atom 3"],
+        type=FeatureType.ATOM,
+        encoding=EncodingType.IDENTITY,
+        role=FeatureRole.LABEL,
+    )
+    coordinate_mask: Feature(
+        Bool[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        encoding=EncodingType.IDENTITY,
+        role=FeatureRole.MASK,
+    )
+    # TODO: is atom loss mask even necessary?
+    atom_loss_mask: Feature(
+        Bool[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        role=FeatureRole.MASK,
+        description="",
+    )
 
-    # Token-level [n_token]
-    centre_coordinate: Float[Tensor, "n_token 3"]
-    has_centre_atom: Bool[Tensor, "n_token"]
-    token_loss_mask: Bool[Tensor, "n_token"]
-    dense_to_flat_atom_mask: Bool[Tensor, "n_token n_dense_atoms"]
+    # Token-level
+    centre_coordinate: Feature(Float[Tensor, "n_token 3"], type=FeatureType.TOKEN)
+    has_centre_atom: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    token_loss_mask: Feature(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    dense_to_flat_atom_mask: Feature(
+        Bool[Tensor, "n_token n_dense_atoms"], type=FeatureType.TOKEN
+    )
 
     def __post_init__(self):
         """Validate label consistency."""
@@ -356,11 +379,6 @@ class StructureLabels(FeatureGroup):
         # Check mask consistency
         if not torch.all(self.coordinate_mask <= self.atom_loss_mask + 1):
             logger.warning("coordinate_mask and atom_loss_mask may be inconsistent")
-
-
-# =============================================================================
-# Main container
-# =============================================================================
 
 
 @dataclass
@@ -382,7 +400,6 @@ class AllAtomFeatures:
     chain_perm: ChainPermFeatures
     extra: ExtraFeatures
     mask: MaskFeatures
-    target: TargetFeatures
     mpnn: MPNNFeatures
 
     def __post_init__(self):
@@ -432,7 +449,6 @@ class AllAtomFeatures:
             chain_perm=self.chain_perm.to(device),
             extra=self.extra.to(device),
             mask=self.mask.to(device),
-            target=self.target.to(device),
             mpnn=self.mpnn.to(device),
         )
 
@@ -447,7 +463,6 @@ class AllAtomFeatures:
         result.update(self.chain_perm.to_dict())
         result.update(self.extra.to_dict())
         result.update(self.mask.to_dict())
-        result.update(self.target.to_dict())
         result.update(self.mpnn.to_dict())
         return result
 
@@ -463,6 +478,5 @@ class AllAtomFeatures:
             chain_perm=ChainPermFeatures.from_dict(d),
             extra=ExtraFeatures.from_dict(d),
             mask=MaskFeatures.from_dict(d),
-            target=TargetFeatures.from_dict(d),
             mpnn=MPNNFeatures.from_dict(d),
         )

@@ -294,37 +294,31 @@ class MaskContext(Context):
     Contains various masks at both token and atom level.
     """
 
-    centre_atom_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    atom_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    is_resolved: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    backbone_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    atom_loss_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-
-
-@typecheck
-@dataclass
-class CoordinateContext(Context):
-    """All coordinate features."""
-
-    coordinate: Feature(
-        Float[Tensor, "n_atom 3"],
+    centre_atom_mask: Mask(
+        Bool[Tensor, "n_atom"],
         type=FeatureType.ATOM,
-        description="Coordinates of full structure",
-        encoding=EncodingType.IDENTITY,
+        description="Atom is centre atom of the token (0 for non-centre atoms)",
     )
-    centre_coordinate: Feature(
-        Float[Tensor, "n_token 3"],
-        type=FeatureType.TOKEN,
-        description="Coordinates of centre atoms",
-        encoding=EncodingType.IDENTITY,
+    atom_mask: Mask(
+        Bool[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        description="Atom is not padding (for attention masking)",
     )
-    backbone_coordinate: Feature(
-        Float[Tensor, "n_token 5 3"],
-        type=FeatureType.TOKEN,
-        description="Coordinates of backbone atoms",
-        encoding=EncodingType.IDENTITY,
+    is_resolved: Mask(
+        Bool[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        description="Atom is resolved in structure.",
     )
-    resolution: float
+    backbone_mask: Mask(
+        Bool[Tensor, "n_token 5"],
+        type=FeatureType.ATOM,
+        description="Mask for all backbone atoms",
+    )
+    atom_loss_mask: Mask(
+        Bool[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        description="Atom is resolved in structure and is in the token with a resolved centre atom.",
+    )
 
 
 @typecheck

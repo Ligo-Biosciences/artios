@@ -236,7 +236,7 @@ class ChainPermContext(Context):
     entity_mol_id: Auxiliary(Int[Tensor, "n_atom"], type=FeatureType.ATOM)
 
 
-class AtomPermContext(Context):
+class AtomPermInfo(Context):
     """Atom permutation features for symmetric permutation
 
     TODO: feature explanation

@@ -593,7 +593,9 @@ class NLLLoss(BaseLoss):
         """
         logits = pred_dict["logits"]  # [..., n_token, num_residue_types]
         gt_sequence = feat_dict["restype"]  # [..., n_token, num_residue_types]
-        mask = feat_dict["mpnn_centre_atom_mask"]  # [..., n_token]
+        mask = feat_dict[
+            "mpnn_centre_atom_mask"
+        ]  # [..., n_token] # TODO: be careful: before, this was the is_resolved mask.
 
         num_residue_types = gt_sequence.shape[-1]
 

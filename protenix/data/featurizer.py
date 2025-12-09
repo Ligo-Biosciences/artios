@@ -478,27 +478,20 @@ class Featurizer(object):
         Returns:
             MotifFeatures: Motif features for motif scaffolding.
         """
-        # Atom features
         is_motif = self.cropped_atom_array.is_motif
         is_motif_related = self.cropped_atom_array.is_motif_related
 
-        # Token features
-        centre_atom_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
-        centre_atoms = self.cropped_atom_array[centre_atom_indices]
+        token_resolved = self.centre_atoms.is_resolved  # [N_token]
+        is_motif_token = self.centre_atoms.is_motif  # [N_token]
+        is_motif_related_token = self.centre_atoms.is_motif_related  # [N_token]
 
-        token_resolved = centre_atoms.is_resolved  # [N_token]
-        is_motif_token = centre_atoms.is_motif  # [N_token]
-        is_motif_related_token = centre_atoms.is_motif_related  # [N_token]
-
-        restype = centre_atoms.cano_seq_resname
+        restype = self.centre_atoms.cano_seq_resname
         restype_onehot = self.restype_onehot_encoded(restype)
         motif_restype = restype_onehot * torch.Tensor(
             is_motif_related_token * token_resolved
         ).unsqueeze(-1)  # [N_token, 32]
 
-        motif_coordinate = centre_atoms.coord * is_motif_token.reshape(
+        motif_coordinate = self.centre_atoms.coord * is_motif_token.reshape(
             -1, 1
         )  # [N_token, 3]
 
@@ -528,17 +521,11 @@ class Featurizer(object):
         reference_features = self.get_reference_conformer_context()
         features.update(reference_features)
 
-        extra_features = self.get_extra_features()
-        features.update(extra_features)
-
         chain_perm_features = self.get_chain_perm_features()
         features.update(chain_perm_features)
 
         mask_features = self.get_mask_features()
         features.update(mask_features)
-
-        mpnn_features = self.get_mpnn_features()
-        features.update(mpnn_features)
 
         motif_features = self.get_motif_features()
         features.update(motif_features)

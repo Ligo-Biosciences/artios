@@ -308,10 +308,26 @@ class MaskFeatures(FeatureGroup):
     Contains various masks at both token and atom level.
     """
 
-    centre_atom_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    atom_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    is_resolved: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    backbone_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    centre_atom_mask: Mask(
+        Bool[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        description="Atom is centre atom of the token (0 for non-centre atoms)",
+    )
+    atom_mask: Mask(
+        Bool[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        description="Atom is not padding (for attention masking)",
+    )
+    is_resolved: Mask(
+        Bool[Tensor, "n_atom"],
+        type=FeatureType.ATOM,
+        description="Atom is resolved in structure.",
+    )
+    backbone_mask: Mask(
+        Bool[Tensor, "n_token 5"],
+        type=FeatureType.ATOM,
+        description="Mask for all backbone atoms",
+    )
 
 
 @typecheck

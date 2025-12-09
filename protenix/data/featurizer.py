@@ -57,9 +57,6 @@ class Featurizer(object):
 
     @property
     def atom_to_token_idx(self) -> torch.Tensor:
-        """
-        Get the mapping from atom index to token index.
-        """
         atom_to_token_idx_dict = {}
         for idx, token in enumerate(self.cropped_token_array.tokens):
             for atom_idx in token.atom_indices:

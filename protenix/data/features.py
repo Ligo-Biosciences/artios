@@ -362,6 +362,29 @@ class MotifContext(Context):
     )
 
 
+@typecheck
+@dataclass
+class CoordinateContext(Context):
+    """Coordinate features."""
+
+    coordinate: Feature(
+        Float[Tensor, "n_atom 3"],
+        type=FeatureType.ATOM,
+        description="Coordinates of full structure",
+    )
+    centre_coordinate: Feature(
+        Float[Tensor, "n_token 3"],
+        type=FeatureType.TOKEN,
+        description="Coordinates of centre atoms",
+    )
+    backbone_coordinate: Feature(
+        Float[Tensor, "n_token 5 3"],
+        type=FeatureType.TOKEN,
+        description="Coordinates of backbone atoms",
+    )
+    resolution: float
+
+
 @dataclass
 class AllAtomFeatures:
     """Container for all features needed for all-atom structure prediction.

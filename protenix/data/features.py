@@ -125,7 +125,7 @@ def Auxiliary(
 
 
 @dataclass
-class FeatureGroup:
+class Context:
     """Base class with common utilities for feature containers."""
 
     def to_dict(self) -> dict[str, Tensor]:
@@ -135,7 +135,7 @@ class FeatureGroup:
     def pad(
         self,
         pad_fns: dict[FeatureType, Callable[[Tensor], Tensor]],
-    ) -> FeatureGroup:
+    ) -> Context:
         """Pad all tensor fields using per-field feature type.
 
         Args:
@@ -157,7 +157,7 @@ class FeatureGroup:
 
 @typecheck
 @dataclass
-class TokenContext(FeatureGroup):  # TODO: TokenContext
+class TokenContext(Context):  # TODO: TokenContext
     """Token-level features from AlphaFold3 SI Chapter 2.8.
 
     All tensors have shape [n_token, ...] where n_token is the number of tokens.
@@ -183,24 +183,10 @@ class TokenContext(FeatureGroup):  # TODO: TokenContext
         description="Token is not padding mask (all true before pad)",
     )
 
-    centre_coordinates: Feature(
-        Float[Tensor, "n_token 3"],
-        type=FeatureType.TOKEN,
-        encoding=EncodingType.IDENTITY,
-        description="Centre coordinates of the structure.",
-    )
-
-    backbone_coordinates: Feature(
-        Float[Tensor, "n_token 5 3"],
-        type=FeatureType.TOKEN,
-        encoding=EncodingType.IDENTITY,
-        description="Backbone coordinates of the structure.",
-    )
-
 
 @typecheck
 @dataclass
-class ReferenceConformerContext(FeatureGroup):
+class ReferenceConformerContext(Context):
     """Reference conformer features from AlphaFold3 SI Chapter 2.8."""
 
     ref_pos: Feature(
@@ -239,7 +225,7 @@ class ReferenceConformerContext(FeatureGroup):
 
 @typecheck
 @dataclass
-class ChainPermContext(FeatureGroup):
+class ChainPermContext(Context):
     """Chain permutation features for multi-chain alignment.
 
     Used for permutation-invariant training with symmetric chains.
@@ -250,7 +236,7 @@ class ChainPermContext(FeatureGroup):
     entity_mol_id: Auxiliary(Int[Tensor, "n_atom"], type=FeatureType.ATOM)
 
 
-class AtomPermFeatures(FeatureGroup):
+class AtomPermContext(Context):
     """Atom permutation features for symmetric permutation
 
     TODO: feature explanation
@@ -261,7 +247,7 @@ class AtomPermFeatures(FeatureGroup):
 
 @typecheck
 @dataclass
-class IndexFeatures(FeatureGroup):
+class IndexContext(Context):
     """Atom-to-token index mappings and global features.
 
     Contains auxiliary indexing information for relating atoms to tokens.
@@ -281,7 +267,7 @@ class IndexFeatures(FeatureGroup):
 
 @typecheck
 @dataclass
-class EntityFeatures(FeatureGroup):
+class EntityContext(Context):
     """Molecule type indicators at atom and token level.
 
     Boolean masks indicating which molecule type each atom/token belongs to.
@@ -302,7 +288,7 @@ class EntityFeatures(FeatureGroup):
 
 @typecheck
 @dataclass
-class MaskFeatures(FeatureGroup):
+class MaskContext(Context):
     """Mask features for loss computation and attention.
 
     Contains various masks at both token and atom level.
@@ -312,11 +298,38 @@ class MaskFeatures(FeatureGroup):
     atom_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
     is_resolved: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
     backbone_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    atom_loss_mask: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
 
 
 @typecheck
 @dataclass
-class MotifFeatures(FeatureGroup):
+class CoordinateContext(Context):
+    """All coordinate features."""
+
+    coordinate: Feature(
+        Float[Tensor, "n_atom 3"],
+        type=FeatureType.ATOM,
+        description="Coordinates of full structure",
+        encoding=EncodingType.IDENTITY,
+    )
+    centre_coordinate: Feature(
+        Float[Tensor, "n_token 3"],
+        type=FeatureType.TOKEN,
+        description="Coordinates of centre atoms",
+        encoding=EncodingType.IDENTITY,
+    )
+    backbone_coordinate: Feature(
+        Float[Tensor, "n_token 5 3"],
+        type=FeatureType.TOKEN,
+        description="Coordinates of backbone atoms",
+        encoding=EncodingType.IDENTITY,
+    )
+    resolution: float
+
+
+@typecheck
+@dataclass
+class MotifContext(Context):
     """Motif features for motif scaffolding."""
 
     # Atom-level
@@ -355,42 +368,6 @@ class MotifFeatures(FeatureGroup):
     )
 
 
-@typecheck
-@dataclass
-class StructureLabels(FeatureGroup):
-    """Ground truth labels for structure prediction training.
-
-    Contains coordinates and masks for computing losses.
-    """
-
-    # Atom-level
-    coordinate: Label(
-        Float[Tensor, "n_atom 3"],
-        type=FeatureType.ATOM,
-        encoding=EncodingType.IDENTITY,
-    )
-    coordinate_mask: Mask(
-        Bool[Tensor, "n_atom"],
-        type=FeatureType.ATOM,
-        encoding=EncodingType.IDENTITY,
-    )
-    # TODO: is atom loss mask even necessary?
-    atom_loss_mask: Mask(
-        Bool[Tensor, "n_atom"],
-        type=FeatureType.ATOM,
-    )
-
-    # Token-level
-    centre_coordinate: Label(Float[Tensor, "n_token 3"], type=FeatureType.TOKEN)
-    has_centre_atom: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    token_loss_mask: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    dense_to_flat_atom_mask: Mask(
-        Bool[Tensor, "n_token n_dense_atoms"], type=FeatureType.TOKEN
-    )
-
-    resolution: float
-
-
 @dataclass
 class AllAtomFeatures:
     """Container for all features needed for all-atom structure prediction.
@@ -409,10 +386,11 @@ class AllAtomFeatures:
     token: TokenContext
     reference: ReferenceConformerContext
     chain_perm: ChainPermContext
-    mask: MaskFeatures
-    motif: MotifFeatures
-    index: IndexFeatures
-    entity: EntityFeatures
+    mask: MaskContext
+    motif: MotifContext
+    index: IndexContext
+    entity: EntityContext
+    coordinate: CoordinateContext
 
     def pad(self, n_max_tokens: int, n_max_atoms: int) -> "AllAtomFeatures":
         """Pad all features to n_max_tokens/n_max_atoms.
@@ -444,7 +422,7 @@ class AllAtomFeatures:
         kwargs = {}
         for f in fields(self):
             fg = getattr(self, f.name)
-            if isinstance(fg, FeatureGroup):
+            if isinstance(fg, Context):
                 kwargs[f.name] = fg.pad(pad_fns)
             else:
                 kwargs[f.name] = fg

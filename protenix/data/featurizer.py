@@ -15,10 +15,11 @@ from protenix.common.constants import (
 )
 from protenix.data.features import (
     ChainPermContext,
-    EntityFeatures,
-    IndexFeatures,
-    MaskFeatures,
-    MotifFeatures,
+    CoordinateContext,
+    EntityContext,
+    IndexContext,
+    MaskContext,
+    MotifContext,
     ReferenceConformerContext,
     TokenContext,
 )
@@ -277,8 +278,6 @@ class Featurizer(object):
             restype=restype_onehot,
             token_bonds=self.get_bonds(),
             token_mask=torch.ones(len(self.cropped_token_array)).long(),
-            centre_coordinates=torch.Tensor(self.centre_atoms.coord),
-            backbone_coordinates=self.backbone_atoms_tensor[0],
         )
         return context
 
@@ -415,24 +414,24 @@ class Featurizer(object):
                     token_adj_matrix[j, i] = 1
         return torch.Tensor(token_adj_matrix).long()
 
-    def get_index_features(self) -> IndexFeatures:
+    def get_index_features(self) -> IndexContext:
         """Get atom-to-token index mappings and global features.
 
         Returns:
-            IndexFeatures: Atom-to-token mappings.
+            IndexContext: Atom-to-token mappings.
         """
-        return IndexFeatures(
+        return IndexContext(
             atom_to_token_idx=self.atom_to_token_idx,
             atom_to_tokatom_idx=torch.Tensor(
                 self.cropped_atom_array.tokatom_idx
             ).long(),
         )
 
-    def get_entity_features(self) -> EntityFeatures:
+    def get_entity_features(self) -> EntityContext:
         """Get molecule type indicators at atom and token level.
 
         Returns:
-            EntityFeatures: Boolean masks for molecule types.
+            EntityContext: Boolean masks for molecule types.
         """
 
         def get_token_level_moltype(mol_type: str):
@@ -444,7 +443,7 @@ class Featurizer(object):
 
             return is_x_token
 
-        return EntityFeatures(
+        return EntityContext(
             is_protein=torch.Tensor(self.cropped_atom_array.is_protein).bool(),
             is_ligand=torch.Tensor(self.cropped_atom_array.is_ligand).bool(),
             is_dna=torch.Tensor(self.cropped_atom_array.is_dna).bool(),
@@ -455,29 +454,37 @@ class Featurizer(object):
             is_rna_token=get_token_level_moltype("rna"),
         )
 
-    def get_mask_features(self) -> MaskFeatures:
+    def get_mask_features(self) -> MaskContext:
         """Generate mask features for the cropped atom array.
 
         Returns:
-            MaskFeatures: Atom-level masks for loss computation and attention.
+            MaskContext: Atom-level masks for loss computation and attention.
         """
-        return MaskFeatures(
+        atom_is_resolved = self.cropped_atom_array.is_resolved.astype(int)
+        atom_in_token_w_resolved_centre_atom = self.centre_atoms.is_resolved[
+            self.atom_to_token_idx
+        ].astype(int)
+
+        return MaskContext(
             centre_atom_mask=torch.Tensor(
                 self.cropped_atom_array.centre_atom_mask
             ).bool(),
             atom_mask=torch.ones(len(self.cropped_atom_array)).bool(),
             is_resolved=torch.Tensor(self.cropped_atom_array.is_resolved).bool(),
             backbone_mask=torch.Tensor(self.backbone_atoms_tensor[1]).bool(),
+            atom_loss_mask=torch.Tensor(
+                atom_is_resolved * atom_in_token_w_resolved_centre_atom
+            ).bool(),
         )
 
-    def get_motif_features(self) -> MotifFeatures:
+    def get_motif_features(self) -> MotifContext:
         """Get features for motif training.
 
         We extract coordinates from the centre atoms to avoid creating heavy
         N_atom features when this method is called for all-atom models.
 
         Returns:
-            MotifFeatures: Motif features for motif scaffolding.
+            MotifContext: Motif features for motif scaffolding.
         """
         is_motif = self.cropped_atom_array.is_motif
         is_motif_related = self.cropped_atom_array.is_motif_related
@@ -496,13 +503,26 @@ class Featurizer(object):
             -1, 1
         )  # [N_token, 3]
 
-        return MotifFeatures(
+        return MotifContext(
             is_motif=torch.Tensor(is_motif).bool(),
             is_motif_related=torch.Tensor(is_motif_related).bool(),
             is_motif_token=torch.Tensor(is_motif_token).long(),
             is_motif_related_token=torch.Tensor(is_motif_related_token).long(),
             motif_restype=motif_restype.float(),
             motif_coordinate=torch.Tensor(motif_coordinate).float(),
+        )
+
+    def get_coordinates_features(self) -> CoordinateContext:
+        """Get coordinates features.
+
+        Returns:
+            CoordinateContext: Coordinates features.
+        """
+        return CoordinateContext(
+            coordinate=torch.Tensor(self.cropped_atom_array.coord).float(),
+            centre_coordinate=torch.Tensor(self.centre_atoms.coord),
+            backbone_coordinate=self.backbone_atoms_tensor[0],
+            resolution=float(self.cropped_atom_array.resolution[0]),
         )
 
     def get_all_input_features(self):
@@ -532,55 +552,6 @@ class Featurizer(object):
         features.update(motif_features)
 
         return features
-
-    def get_labels(self) -> dict[str, torch.Tensor]:
-        """
-        Get the input labels required for the training phase.
-
-        Returns:
-            Dict[str, torch.Tensor]: a dict of labels.
-
-        Raises:
-            ValueError: If any of the label tensors contain NaN values.
-        """
-        labels = {}
-
-        # Check coordinates
-        labels["coordinate"] = torch.Tensor(
-            self.cropped_atom_array.coord
-        )  # [N_atom, 3]
-
-        # Check coordinate mask
-        labels["coordinate_mask"] = torch.Tensor(
-            self.cropped_atom_array.is_resolved.astype(int)
-        ).long()  # [N_atom]
-
-        # Find centre atom indices
-        centre_atoms_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
-
-        # Does centre atom exist?
-        labels["has_centre_atom"] = torch.Tensor(
-            self.cropped_atom_array.is_resolved[centre_atoms_indices].astype(int)
-        ).long()  # [N_token]
-
-        # Get centre coordinates
-        labels["centre_coordinate"] = torch.Tensor(
-            self.cropped_atom_array.coord[centre_atoms_indices]
-        )  # [N_token, 3]
-
-        # Add loss masks
-        # TODO: these need better descriptions at least
-        atom_to_token_idx = self._get_atom_to_token_idx()  # [N_atom]
-        labels["atom_loss_mask"] = (
-            labels["coordinate_mask"] * labels["has_centre_atom"][atom_to_token_idx]
-        )  # [N_atom]
-        labels["token_loss_mask"] = labels["has_centre_atom"]  # [N_token]
-
-        labels["resolution"] = float(self.cropped_atom_array.resolution[0])
-
-        return labels
 
     def get_atom_permutation_list(
         self,

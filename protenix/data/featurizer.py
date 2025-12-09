@@ -552,7 +552,7 @@ class Featurizer(object):
 
     def get_atom_permutation_list(
         self,
-    ) -> list[list[int]]:
+    ) -> AtomPermInfo:
         """
         Generate info of permutations.
 

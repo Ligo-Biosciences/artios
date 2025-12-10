@@ -152,16 +152,12 @@ class Transformer(nn.Module):
     ) -> Float[Tensor, "... n c_a"]:
         """
         Args:
-            a (Tensor): single embedding
-                [..., N, c_a]
-            z (Tensor): pair embedding to be used for pair bias
-                [..., N, N, c_z]
-            pair_mask (Tensor): pair mask for attention
-                [..., N, N]
+            a: single embedding
+            z: pair embedding to be used for pair bias
+            pair_mask: pair mask for attention
 
         Returns:
-            Tensor: the output of Transformer
-                [..., N, c_a]
+            the output of Transformer
         """
         # Project and chunk pair bias
         z = self.z_layernorm(z)
@@ -416,7 +412,7 @@ class DiffusionTransformer(nn.Module):
         # DiT Tower
         for block in blocks:
             if self.checkpoint_grads:
-                a = torch.utils.checkpoint.checkpoint(block, a, use_reentrant=False)
+                a = checkpoint(block, a, use_reentrant=False)
             else:
                 a = block(a)
 
@@ -701,7 +697,7 @@ class LocalAttnTransformer(nn.Module):
         # LocalAttn Tower
         for block in blocks:
             if self.checkpoint_grads:
-                q = torch.utils.checkpoint.checkpoint(block, q, use_reentrant=False)
+                q = checkpoint(block, q, use_reentrant=False)
             else:
                 q = block(q)
 

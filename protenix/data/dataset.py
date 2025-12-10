@@ -38,6 +38,7 @@ from protenix.data.parser import AddAtomArrayAnnot
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
 from protenix.utils.cropping import CropData
 from protenix.utils.file_io import read_indices_csv
+from protenix.utils.geometry import random_transform
 from protenix.utils.logger import get_logger
 from protenix.utils.profiler import profile_function
 
@@ -598,16 +599,27 @@ class BaseSingleDataset(Dataset):
         )
         timings["crop"] = time.time() - t2
 
+        # Centre random augment
+        cropped_atom_array.coord = random_transform(
+            points=cropped_atom_array.coord,
+            max_translation=1.0,
+            apply_augmentation=True,
+            centralize=True,
+            mask=cropped_atom_array.is_resolved,
+        )
+
         t3 = time.time()
-        cropped_atom_array = self._assign_binding_target(
-            atom_array=cropped_atom_array,
-            train_with_binding_target=self.train_with_binding_target,
-            binding_target_train_rate=self.binding_target_train_rate,
+        cropped_atom_array = (
+            self._assign_binding_target(  # TODO: all references to targets can go
+                atom_array=cropped_atom_array,
+                train_with_binding_target=self.train_with_binding_target,
+                binding_target_train_rate=self.binding_target_train_rate,
+            )
         )
         timings["assign_binding_target"] = time.time() - t3
 
+        # Motif handling
         tmotif = time.time()
-        # motif work
         cropped_atom_array = self._get_motif(
             atom_array=cropped_atom_array,
         )
@@ -638,16 +650,8 @@ class BaseSingleDataset(Dataset):
         timings["motif"] = time.time() - tmotif
 
         t4 = time.time()
-        # context = self.get_context(
-        #     idx=idx,
-        #     token_array=cropped_token_array,
-        #     atom_array=cropped_atom_array,
-        #     bioassembly_dict_fpath=bioassembly_dict_fpath,
-        #     msa_features=cropped_msa_features,
-        #     template_features=cropped_template_features,
-        #     full_atom_array=bioassembly_dict["atom_array"],
-        #     is_spatial_crop="spatial" in crop_method.lower(),
-        # )
+
+        # Get context
         context = ContextGenerator(
             cropped_token_array=cropped_token_array,
             cropped_atom_array=cropped_atom_array,

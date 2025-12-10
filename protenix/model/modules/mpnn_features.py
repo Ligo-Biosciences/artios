@@ -388,6 +388,7 @@ class MPNNFeaturizer(nn.Module):
             edge_embedding: Edge features from backbone distances
             edge_index: Graph edge connectivity index
         """
+        # TODO: centre-random augment the backbone coordinates
         # Add coordinate noise during training
         if self.training:
             backbone_coords = (

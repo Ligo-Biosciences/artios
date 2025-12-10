@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import torch
-from einops import rearrange
+from einops import rearrange, repeat
 from torch import Tensor, nn
 from torch.nn import functional as F
 
@@ -310,10 +310,10 @@ class AtomAttentionEncoder(nn.Module):
         if self.has_s and s is not None:
             c_l = c_l + broadcast_token_to_atom(
                 x_token=self.linear_no_bias_s(self.layernorm_s(s)),
-                atom_to_token_idx=expand_at_dim(
+                atom_to_token_idx=repeat(
                     atom_to_token_idx,
-                    dim=-2,
-                    n=s.shape[-3],  # n_sample | 1
+                    "... n_atom -> ... n_sample n_atom",
+                    n_sample=s.shape[-3],  # n_sample | 1
                 ),
             )
             c_l = c_l * atom_mask[..., None]
@@ -322,10 +322,10 @@ class AtomAttentionEncoder(nn.Module):
         if self.has_z and z is not None:
             z_local_pairs = broadcast_token_to_local_atom_pair(
                 z_token=self.linear_no_bias_z(self.layernorm_z(z)),
-                atom_to_token_idx=expand_at_dim(
+                atom_to_token_idx=repeat(
                     atom_to_token_idx,
-                    dim=-2,
-                    n=z.shape[-4],  # n_sample | 1
+                    "... n_atom -> ... n_sample n_atom",
+                    n_sample=z.shape[-4],  # n_sample | 1
                 ),
                 num_queries=self.num_queries,
                 num_keys=self.num_keys,

@@ -271,7 +271,7 @@ class MPNNFeaturizer(nn.Module):
             x_atom=ligand_feats,
             atom_to_token_idx=context.index.atom_to_token_idx,
             atom_mask=context.mask.atom_mask,
-            n_token=context.basic.n_token,
+            n_token=context.basic.n_token,  # TODO: this is before padding!
         )  # [..., n_token, node_dim]
 
         # Embed entity flags

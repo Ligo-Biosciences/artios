@@ -1,5 +1,6 @@
 """Atom attention encoder and decoder modules."""
 
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import torch
@@ -23,7 +24,20 @@ from protenix.model.utils import (
 from protenix.utils.typing import Bool, Float, Int, typecheck
 
 
+@typecheck
+@dataclass
+class AtomAttentionSkipConnections:
+    """Skip connections from AtomAttentionEncoder for AtomAttentionDecoder."""
+
+    q: Float[Tensor, "... n_sample n_atom c_atom"]
+    c: Float[Tensor, "... #n_sample n_atom c_atom"]
+    p: Float[Tensor, "... #n_sample n_blocks n_queries n_keys c_atompair"]
+    local_attn_mask: Bool[Tensor, "... #n_sample n_blocks n_queries n_keys"]
+
+
 class AtomAttentionEncoder(nn.Module):
+    """Encode atom-wise features and coordinates into token-wise represenation."""
+
     def __init__(
         self,
         c_token: int,  # 384 or 768
@@ -232,22 +246,10 @@ class AtomAttentionEncoder(nn.Module):
         r_l: Optional[Float[Tensor, "... n_sample n_atom 3"]] = None,
         s: Optional[Float[Tensor, "... #n_sample n_token c_s"]] = None,
         z: Optional[Float[Tensor, "... #n_sample n_token n_token c_z"]] = None,
-        return_trunked_pair_mask: bool = False,
-    ) -> (
-        Tuple[
-            Float[Tensor, "... n_sample n_token c_token"],
-            Float[Tensor, "... #n_sample n_atom c_atom"],
-            Float[Tensor, "... #n_sample n_atom c_atom"],
-            Float[Tensor, "... #n_sample n_blocks n_queries n_keys c_atompair"],
-            Bool[Tensor, "... #n_sample n_blocks n_queries n_keys"],
-        ]
-        | Tuple[
-            Float[Tensor, "... n_sample n_token c_token"],
-            Float[Tensor, "... #n_sample n_atom c_atom"],
-            Float[Tensor, "... #n_sample n_atom c_atom"],
-            Float[Tensor, "... #n_sample n_blocks n_queries n_keys c_atompair"],
-        ]
-    ):
+    ) -> Tuple[
+        Float[Tensor, "... n_sample n_token c_token"],
+        AtomAttentionSkipConnections,
+    ]:
         """Encode atom features into token-level representations.
 
         Args:
@@ -255,14 +257,10 @@ class AtomAttentionEncoder(nn.Module):
             r_l: Noisy atom positions for diffusion.
             s: Single (token) embedding.
             z: Pair (token-token) embedding.
-            return_trunked_pair_mask: Whether to return the truncated pair mask.
 
         Returns:
             a: Token-level output.
-            q_l: Atom query representation.
-            c_l: Atom conditioning.
-            p_lm: Local atom pair representation.
-            trunked_pair_mask: (optional) Local attention mask.
+            skip: Skip connections for the decoder.
         """
         # Extract features from context
         atom_mask = context.mask.atom_mask
@@ -358,10 +356,13 @@ class AtomAttentionEncoder(nn.Module):
             n_token=n_token,
         )
 
-        if return_trunked_pair_mask:
-            return a, q_l, c_l, p_lm, trunked_pair_mask
-        else:
-            return a, q_l, c_l, p_lm
+        skip = AtomAttentionSkipConnections(
+            q=q_l,
+            c=c_l,
+            p=p_lm,
+            local_attn_mask=trunked_pair_mask,
+        )
+        return a, skip
 
 
 class AtomAttentionDecoder(nn.Module):
@@ -401,44 +402,37 @@ class AtomAttentionDecoder(nn.Module):
     def forward(
         self,
         a: Float[Tensor, "... n_sample n_token c_token"],
-        q_skip: Float[Tensor, "... n_sample n_atom c_atom"],
-        c_skip: Float[Tensor, "... #n_sample n_atom c_atom"],
-        p_skip: Float[Tensor, "... #n_sample n_blocks n_queries n_keys c_atompair"],
+        skip: AtomAttentionSkipConnections,
         atom_to_token_idx: Int[Tensor, "... n_atom"],
         atom_mask: Bool[Tensor, "... n_atom"],
-        trunked_pair_mask: Bool[Tensor, "... n_blocks n_queries n_keys"],
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
         """Decode atom features to coordinate updates.
 
         Args:
             a: Token-level representation from encoder.
-            q_skip: Atom query skip connection from encoder.
-            c_skip: Atom conditioning skip connection from encoder.
-            p_skip: Atom pair skip connection from encoder.
+            skip: Skip connections from encoder.
             atom_to_token_idx: Mapping from atoms to their parent tokens.
             atom_mask: Mask indicating valid atoms.
-            trunked_pair_mask: Local attention mask for atom pairs.
 
         Returns:
             Coordinate updates for each atom.
         """
-        # Add n_sample dimension
-        atom_mask = atom_mask.unsqueeze(-2)
-        trunked_pair_mask = trunked_pair_mask.unsqueeze(-4)
+        # Add n_sample and channel dim for broadcasting
+        atom_mask = rearrange(atom_mask, "... n_atom -> ... 1 n_atom 1")
 
         # Broadcast per-token activations to per-atom activations and add skip connection
-        q = q_skip + broadcast_token_to_atom(
+        q = skip.q + broadcast_token_to_atom(
             x_token=self.broadcast_linear(a),
             atom_to_token_idx=expand_at_dim(atom_to_token_idx, dim=-2, n=a.shape[-3]),
         )
-        q = q * atom_mask[..., None]
+        q = q * atom_mask
 
         # Local attention transformer
         q = self.atom_transformer(
-            q=q, c=c_skip, p=p_skip, trunked_pair_mask=trunked_pair_mask
+            q=q, c=skip.c, p=skip.p, trunked_pair_mask=skip.local_attn_mask
         )
 
         # Map to position updates
         r = self.final_linear(self.final_layernorm(q))
-        r = r * atom_mask[..., None]
+        r = r * atom_mask
         return r

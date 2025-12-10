@@ -1,5 +1,4 @@
 """
-
 Simple modulate function for absorbing AdaLN into the DiT block.
 
 Do we combine diffusion transformer and transfomer?
@@ -8,16 +7,15 @@ Deepmind's pattern is one custom class and one custom forward for every specific
 we follow.
 
 Cross attention and self attention are separated.
-
-TODO: add typechecking with
-
 """
 
 from functools import partial
 from typing import List, Tuple
 
 import torch
+from einops import rearrange
 from torch import Tensor, nn
+from torch.utils.checkpoint import checkpoint
 
 from protenix.model.modules.components import Attention, SwiGLU, Transition
 from protenix.model.modules.layout import (
@@ -29,7 +27,7 @@ from protenix.model.modules.primitives import (
     LayerNorm,
     LinearNoBias,
 )
-from protenix.model.utils import permute_final_dims
+from protenix.utils.typing import Bool, Float, typecheck
 
 
 class TransformerBlock(nn.Module):
@@ -67,34 +65,22 @@ class TransformerBlock(nn.Module):
         # MLP (with built-in layernorm)
         self.transition = Transition(c_in=c_a, n=4)
 
-    def _verify_inputs(self, a: Tensor, pair_bias: Tensor, pair_mask: Tensor):
-        """Verify the inputs to the transformer block."""
-        assert (
-            pair_bias.shape[-2:] == pair_mask.shape[-2:] == (a.shape[-2], a.shape[-2])
-        ), f"Pair bias and mask dimension mismatch. Expected [N, N], got {pair_bias.shape[-2:]} and {pair_mask.shape[-2:]}"
-
-        assert (
-            pair_bias.shape[-3] == self.num_heads
-        ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {pair_bias.shape[-3]}"
-
-    def forward(self, a: Tensor, pair_bias: Tensor, pair_mask: Tensor) -> Tensor:
+    @typecheck
+    def forward(
+        self,
+        a: Float[Tensor, "... n c_a"],
+        pair_bias: Float[Tensor, "... h n n"],
+        pair_mask: Bool[Tensor, "... n n"],
+    ) -> Float[Tensor, "... n c_a"]:
         """
         Args:
-            a (Tensor): the single feature aggregate per-atom representation
-                [..., N, c_a]
-            pair_bias (Tensor): pair embedding
-                [..., N, N, c_z]
-            pair_mask (Tensor): pair mask for the attention
-                [..., N, N]
+            a: the single feature aggregate per-atom representation
+            pair_bias: pair embedding
+            pair_mask: pair mask for the attention
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor]: Single and pair embeddings.
-                - a: [..., N, c_a]
-                - z: [..., N, N, c_z]
+            Single embeddings.
         """
-        self._verify_inputs(a, pair_bias=pair_bias, pair_mask=pair_mask)
-
-        # Attention
         attn_input = self.attn_layernorm(a)
         a = a + self.attention(
             q_x=attn_input,
@@ -102,8 +88,6 @@ class TransformerBlock(nn.Module):
             pair_bias=pair_bias,
             pair_mask=pair_mask,
         )
-
-        # MLP
         a = a + self.transition(a)
         return a
 
@@ -149,39 +133,6 @@ class Transformer(nn.Module):
             )
             self.blocks.append(block)
 
-    def _verify_inputs(self, a: Tensor, z: Tensor, pair_mask: Tensor):
-        """Verify the inputs to the transformer."""
-
-        n_token = a.shape[-2]
-        c_a = a.shape[-1]
-        c_z = z.shape[-1]
-
-        # check feature dims
-        assert (
-            c_a == self.c_a
-        ), f"Input token dimension mismatch. Expected {self.c_a}, got {c_a}"
-        assert (
-            c_z == self.c_z
-        ), f"Input pair bias dimension mismatch. Expected {self.c_z}, got {c_z}"
-
-        # check shared dims
-        assert z.shape[-3:-1] == (
-            n_token,
-            n_token,
-        ), f"Input pair bias dimension mismatch. Expected [N, N], got {z.shape[-3:-1]}"
-        assert (
-            pair_mask.shape[-2:]
-            == (
-                n_token,
-                n_token,
-            )
-        ), f"Input pair mask dimension mismatch. Expected [N, N], got {pair_mask.shape[-2:]}"
-
-        # check batch dims
-        assert (
-            len(a.shape[:-2]) == len(z.shape[:-3]) == len(pair_mask.shape[:-2])
-        ), "Batch dimension mismatch."
-
     def _prep_blocks(
         self, pair_biases: Tensor, pair_mask: Tensor
     ) -> List[TransformerBlock]:
@@ -192,7 +143,13 @@ class Transformer(nn.Module):
         ]
         return blocks
 
-    def forward(self, a: Tensor, z: Tensor, pair_mask: Tensor) -> Tensor:
+    @typecheck
+    def forward(
+        self,
+        a: Float[Tensor, "... n c_a"],
+        z: Float[Tensor, "... n n c_z"],
+        pair_mask: Bool[Tensor, "... n n"],
+    ) -> Float[Tensor, "... n c_a"]:
         """
         Args:
             a (Tensor): single embedding
@@ -206,23 +163,19 @@ class Transformer(nn.Module):
             Tensor: the output of Transformer
                 [..., N, c_a]
         """
-        self._verify_inputs(a, z, pair_mask)
-
         # Project and chunk pair bias
         z = self.z_layernorm(z)
         pair_bias_fused = self.z_proj(z)
-        pair_bias_fused = permute_final_dims(
-            pair_bias_fused, [2, 0, 1]
-        )  # [..., num_heads * num_blocks, N, N]
+        pair_bias_fused = rearrange(pair_bias_fused, "... i j nb -> ... nb i j")
         pair_biases = pair_bias_fused.chunk(self.num_blocks, dim=-3)
 
         # Prepare blocks
-        blocks = self._prep_blocks(pair_biases=pair_biases, pair_mask=pair_mask.bool())
+        blocks = self._prep_blocks(pair_biases=pair_biases, pair_mask=pair_mask)
 
         # Transformer tower
         for block in blocks:
             if self.checkpoint_grads:
-                a = torch.utils.checkpoint.checkpoint(block, a, use_reentrant=False)
+                a = checkpoint(block, a, use_reentrant=False)
             else:
                 a = block(a)
 
@@ -262,84 +215,37 @@ class DiTBlock(nn.Module):
             LinearNoBias(2 * c_token, c_token, init="default"),
         )
 
-    def _verify_inputs(
-        self,
-        a: Tensor,
-        scale_attn: Tensor,
-        shift_attn: Tensor,
-        gate_attn: Tensor,
-        scale_mlp: Tensor,
-        shift_mlp: Tensor,
-        gate_mlp: Tensor,
-        pair_bias: Tensor,
-        pair_mask: Tensor,
-    ) -> None:
-        """Verify the inputs to the transformer block."""
-        assert (
-            pair_bias.shape[-2:] == pair_mask.shape[-2:] == (a.shape[-2], a.shape[-2])
-        ), f"Pair bias and mask dimension mismatch. Expected [N, N], got {pair_bias.shape[-2:]} and {pair_mask.shape[-2:]}"
-
-        assert (
-            pair_bias.shape[-3] == self.num_heads
-        ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {pair_bias.shape[-3]}"
-
-        assert (
-            a.shape[-2:]
-            == scale_attn.shape[-2:]
-            == shift_attn.shape[-2:]
-            == gate_attn.shape[-2:]
-            == scale_mlp.shape[-2:]
-            == shift_mlp.shape[-2:]
-            == gate_mlp.shape[-2:]
-        ), "Shape mismatch between input and modulation parameters."
-
+    @typecheck
     def forward(
         self,
-        a: Tensor,
+        a: Float[Tensor, "... n c_token"],
         *,
-        scale_attn: Tensor,
-        shift_attn: Tensor,
-        gate_attn: Tensor,
-        scale_mlp: Tensor,
-        shift_mlp: Tensor,
-        gate_mlp: Tensor,
-        pair_bias: Tensor,
-        pair_mask: Tensor,
-    ):
+        scale_attn: Float[Tensor, "... n c_token"],
+        shift_attn: Float[Tensor, "... n c_token"],
+        gate_attn: Float[Tensor, "... n c_token"],
+        scale_mlp: Float[Tensor, "... n c_token"],
+        shift_mlp: Float[Tensor, "... n c_token"],
+        gate_mlp: Float[Tensor, "... n c_token"],
+        pair_bias: Float[Tensor, "... h n n"],
+        pair_mask: Bool[Tensor, "... n n"],
+    ) -> Float[Tensor, "... n c_token"]:
         """
         Forward pass of the transformer block.
 
         Args:
-            a (Tensor): Input token representations.
-                [..., N, c_token]
-            scale_attn (Tensor): attention scaling.
-                [..., N, c_token]
-            shift_attn (Tensor): attention shift.
-                [..., N, c_token]
-            gate_attn (Tensor): attention gating.
-                [..., N, c_token]
-            scale_mlp (Tensor): MLP scaling.
-                [..., N, c_token]
-            shift_mlp (Tensor): MLP shift.
-                [..., N, c_token]
-            gate_mlp (Tensor): MLP gating.
-                [..., N, c_token]
-            pair_bias (Tensor): Pairwise attention bias.
-                [..., num_heads, N, N]
-            pair_mask (Tensor): Pairwise attention mask.
-                [..., N, N]
+            a: Input token representations.
+            scale_attn: attention scaling.
+            shift_attn: attention shift.
+            gate_attn: attention gating.
+            scale_mlp: MLP scaling.
+            shift_mlp: MLP shift.
+            gate_mlp: MLP gating.
+            pair_bias: Pairwise attention bias.
+            pair_mask: Pairwise attention mask.
         """
-        self._verify_inputs(
-            a,
-            scale_attn,
-            shift_attn,
-            gate_attn,
-            scale_mlp,
-            shift_mlp,
-            gate_mlp,
-            pair_bias,
-            pair_mask,
-        )
+        assert (
+            pair_bias.shape[-3] == self.num_heads
+        ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {pair_bias.shape[-3]}"
 
         # Adaln + Attention
         attn_input = scale_attn * self.attn_layernorm(a) + shift_attn
@@ -458,66 +364,27 @@ class DiffusionTransformer(nn.Module):
 
         return blocks
 
-    def _verify_inputs(self, a: Tensor, s: Tensor, z: Tensor, pair_mask: Tensor):
-        """Verify the inputs to the transformer."""
-
-        n_token = a.shape[-2]
-        c_token = a.shape[-1]
-        c_s = s.shape[-1]
-        c_z = z.shape[-1]
-
-        # check feature dims
-        assert (
-            c_token == self.c_token
-        ), f"Input token dimension mismatch. Expected {self.c_token}, got {c_token}"
-        assert (
-            c_s == self.c_s
-        ), f"Input condition dimension mismatch. Expected {self.c_s}, got {c_s}"
-        assert (
-            c_z == self.c_z
-        ), f"Input pair bias dimension mismatch. Expected {self.c_z}, got {c_z}"
-
-        # check shared dims
-        assert s.shape[-2] == n_token, "Input condition dimension mismatch."
-        assert z.shape[-3:-1] == (
-            n_token,
-            n_token,
-        ), f"Input pair bias dimension mismatch. Expected [N, N], got {z.shape[-3:-1]}"
-        assert (
-            pair_mask.shape[-2:]
-            == (
-                n_token,
-                n_token,
-            )
-        ), f"Input pair mask dimension mismatch. Expected [N, N], got {pair_mask.shape[-2:]}"
-
-        # check batch dims
-        assert (
-            len(a.shape[:-2])
-            == len(s.shape[:-2])
-            == len(z.shape[:-3])
-            == len(pair_mask.shape[:-2])
-        ), "Batch dimension mismatch."
-
     # @profile_function("diffusion_transformer")
+    @typecheck
     @torch.compile
-    def forward(self, a: Tensor, s: Tensor, z: Tensor, pair_mask: Tensor):
+    def forward(
+        self,
+        a: Float[Tensor, "... n c_token"],
+        s: Float[Tensor, "... n c_s"],
+        z: Float[Tensor, "... n n c_z"],
+        pair_mask: Bool[Tensor, "... n n"],
+    ) -> Float[Tensor, "... n c_token"]:
         """
         Args:
-            a (Tensor): single representation
-                [..., N, c_token]
-            s (Tensor): single conditioning
-                [..., N, c_s]
-            z (Tensor): pair representation
-                [..., N, N, c_z]
+            a: single representation
+            s: single conditioning
+            z: pair representation
             pair_mask: pair mask for the attention
-                [..., N, N]
 
         Notes:
             We currently hand the DiT with an N_sample dimension in its inputs.
             For computational efficiency, z has only a 1 N_sample dimension.
         """
-        self._verify_inputs(a, s, z, pair_mask)
 
         # Conditioning
         s = self.condition_layernorm(s)
@@ -530,9 +397,7 @@ class DiffusionTransformer(nn.Module):
         # Project and chunk pair bias
         z = self.z_layernorm(z)
         pair_bias_fused = self.z_proj(z)
-        pair_bias_fused = permute_final_dims(
-            pair_bias_fused, [2, 0, 1]
-        )  # [..., num_heads * num_blocks, N, N]
+        pair_bias_fused = rearrange(pair_bias_fused, "... i j nb -> ... nb i j")
         # TODO: repeat pair_bias_fused so its N_sample dimension is N_sample, not just 1.
         pair_biases = pair_bias_fused.chunk(self.num_blocks, dim=-3)
 
@@ -605,95 +470,36 @@ class LocalAttnTransformerBlock(nn.Module):
             LinearNoBias(2 * c_atom, c_atom, init="default"),
         )
 
-    def _verify_inputs(
+    @typecheck
+    def forward(
         self,
-        q_l: Tensor,
-        scale_attn: Tensor,
-        shift_attn: Tensor,
-        gate_attn: Tensor,
-        scale_mlp: Tensor,
-        shift_mlp: Tensor,
-        gate_mlp: Tensor,
-        trunked_pair_bias: Tensor,
-        trunked_pair_mask: Tensor,
-    ):
-        """Verify the inputs to the transformer block."""
-        assert (
-            q_l.shape[-2::]
-            == scale_attn.shape[-2:]
-            == shift_attn.shape[-2:]
-            == gate_attn.shape[-2:]
-            == scale_mlp.shape[-2:]
-            == shift_mlp.shape[-2:]
-            == gate_mlp.shape[-2:]
-        ), "Shape mismatch between input and modulation parameters."
-        assert (
-            trunked_pair_bias.shape[-2:]
-            == trunked_pair_mask.shape[-2:]
-            == (self.num_queries, self.num_keys)
-        ), f"Pair bias and mask dimension mismatch. Expected [N_queries, N_keys], got {trunked_pair_bias.shape[-2:]} and {trunked_pair_mask.shape[-2:]}"
-
+        q_l: Float[Tensor, "... n_atom c_atom"],
+        *,
+        scale_attn: Float[Tensor, "... n_atom c_atom"],
+        shift_attn: Float[Tensor, "... n_atom c_atom"],
+        gate_attn: Float[Tensor, "... n_atom c_atom"],
+        scale_mlp: Float[Tensor, "... n_atom c_atom"],
+        shift_mlp: Float[Tensor, "... n_atom c_atom"],
+        gate_mlp: Float[Tensor, "... n_atom c_atom"],
+        trunked_pair_bias: Float[Tensor, "... n_subset h n_q n_k"],
+        trunked_pair_mask: Bool[Tensor, "... n_subset n_q n_k"],
+    ) -> Float[Tensor, "... n_atom c_atom"]:
+        """
+        Args:
+            q_l: atom representation
+            scale_attn: attention scaling
+            shift_attn: attention shift
+            gate_attn: attention gating
+            scale_mlp: MLP scaling
+            shift_mlp: MLP shift
+            gate_mlp: MLP gating
+            trunked_pair_bias: trunked pair bias
+            trunked_pair_mask: trunked pair mask
+        """
         assert (
             trunked_pair_bias.shape[-3] == self.num_heads
         ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {trunked_pair_bias.shape[-3]}"
 
-        assert (
-            len(q_l.shape[:-2])
-            == len(scale_attn.shape[:-2])
-            == len(shift_attn.shape[:-2])
-            == len(gate_attn.shape[:-2])
-            == len(scale_mlp.shape[:-2])
-            == len(shift_mlp.shape[:-2])
-            == len(gate_mlp.shape[:-2])
-            == len(trunked_pair_bias.shape[:-4])
-            == len(trunked_pair_mask.shape[:-3])
-        ), f"Number of batch dims should match. Expected {len(scale_attn.shape[:-2])}"
-
-    def forward(
-        self,
-        q_l: Tensor,
-        *,
-        scale_attn: Tensor,
-        shift_attn: Tensor,
-        gate_attn: Tensor,
-        scale_mlp: Tensor,
-        shift_mlp: Tensor,
-        gate_mlp: Tensor,
-        trunked_pair_bias: Tensor,
-        trunked_pair_mask: Tensor,
-    ):
-        """
-        Args:
-            q_l: atom representation
-                [..., N_atom, c_atom]
-            scale_attn: attention scaling
-                [..., N_atom, c_atom]
-            shift_attn: attention shift
-                [..., N_atom, c_atom]
-            gate_attn: attention gating
-                [..., N_atom, c_atom]
-            scale_mlp: MLP scaling
-                [..., N_atom, c_atom]
-            shift_mlp: MLP shift
-                [..., N_atom, c_atom]
-            gate_mlp: MLP gating
-                [..., N_atom, c_atom]
-            trunked_pair_bias: trunked pair bias
-                [..., N_subset, N_heads, N_queries, N_keys]
-            trunked_pair_mask: trunked pair mask
-                [..., N_subset, N_queries, N_keys]
-        """
-        self._verify_inputs(
-            q_l,
-            scale_attn,
-            shift_attn,
-            gate_attn,
-            scale_mlp,
-            shift_mlp,
-            gate_mlp,
-            trunked_pair_bias,
-            trunked_pair_mask,
-        )
         # AdaLN on q_l first
         attn_input = scale_attn * self.attn_layernorm(q_l) + shift_attn
 
@@ -706,25 +512,25 @@ class LocalAttnTransformerBlock(nn.Module):
             rearrange_dim=-2,
             num_keys=self.num_keys,
             num_queries=self.num_queries,
-        )  # [..., N_subset, N_key, c_atom]
+        )  # [..., n_subset, n_key, c_atom]
 
         attn_out = self.attention(
             q_x=q_x,
             kv_x=kv_x,
             pair_bias=trunked_pair_bias,
             pair_mask=trunked_pair_mask,
-        )  # [..., N_subset, N_query, c_atom]
+        )  # [..., n_subset, n_query, c_atom]
 
         # Rearrange back to atom from query layout
-        attn_out = attn_out.flatten(start_dim=-3, end_dim=-2)  # [..., N_atom, c_atom]
+        attn_out = rearrange(
+            attn_out, "... n_subset n_query c_atom -> ... (n_subset n_query) c_atom"
+        )
 
         # Gate the attention output and add as residual
         q_l = q_l + (gate_attn * attn_out)
 
-        # AdaLN on MLP inputs
+        # MLP with AdaLN
         mlp_input = scale_mlp * self.mlp_layernorm(q_l) + shift_mlp
-
-        # MLP, Gate the MLP output and add as residual
         mlp_output = self.mlp(mlp_input)
         q_l = q_l + (gate_mlp * mlp_output)
 
@@ -813,8 +619,6 @@ class LocalAttnTransformer(nn.Module):
 
         return attn_params, mlp_params
 
-    # TODO: add verify inputs here
-
     def _prep_blocks(
         self,
         *,
@@ -846,23 +650,24 @@ class LocalAttnTransformer(nn.Module):
         return blocks
 
     # @profile_function("atom_transformer")
+    @typecheck
     def forward(
         self,
         *,
-        q: Tensor,
-        c: Tensor,
-        p: Tensor,
-        trunked_pair_mask: Tensor,
-    ):
+        q: Float[Tensor, "... n_atom c_atom"],
+        c: Float[Tensor, "... n_atom c_cond"],
+        p: Float[Tensor, "... n_subsets n_queries n_keys c_atompair"],
+        trunked_pair_mask: Bool[Tensor, "... n_subsets n_queries n_keys"],
+    ) -> Float[Tensor, "... n_atom c_atom"]:
         """
         Args:
-            q: [..., N_atom, c_atom]
-            c: [..., N_atom, c_cond]
-            p: [..., N_subsets, N_queries, N_keys, c_atompair]
-            trunked_pair_mask: [..., N_subsets, N_queries, N_keys]
+            q: [..., n_atom, c_atom]
+            c: [..., n_atom, c_cond]
+            p: [..., n_subsets, n_queries, n_keys, c_atompair]
+            trunked_pair_mask: [..., n_subsets, n_queries, n_keys]
 
         Returns:
-            [..., N_atom, c_atom]
+            [..., n_atom, c_atom]
         """
 
         # Conditioning prep
@@ -875,11 +680,11 @@ class LocalAttnTransformer(nn.Module):
         p = self.p_layernorm(p)
         pair_bias_fused = self.p_proj(
             p
-        )  # [..., N_subsets, N_queries, N_keys, N_heads * num_blocks]
-        pair_bias_fused = permute_final_dims(pair_bias_fused, [2, 0, 1])
+        )  # [..., n_subsets, n_queries, n_keys, n_heads * num_blocks]
+        pair_bias_fused = rearrange(pair_bias_fused, "... i j nb -> ... nb i j")
         trunked_pair_biases = pair_bias_fused.chunk(
             self.num_blocks, dim=-3
-        )  # list of [..., N_subsets, N_heads, N_queries, N_keys]
+        )  # list of [..., n_subsets, n_heads, n_queries, n_keys]
 
         # Prepare blocks
         blocks = self._prep_blocks(

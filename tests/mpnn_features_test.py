@@ -1,7 +1,5 @@
 """Tests for MPNN featurizer modules."""
 
-import os
-
 import pytest
 import torch
 
@@ -10,6 +8,7 @@ from protenix.model.modules.mpnn_features import (
     GaussianRBF,
     MPNNFeaturizer,
 )
+from tests.context_utils import create_test_context
 
 
 class TestEdgeRelativePositionalEncoding:
@@ -250,44 +249,6 @@ class TestMPNNFeaturizer:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @pytest.fixture
-    def sample_data(self):
-        test_data_path = os.path.join(
-            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
-        )
-        return torch.load(test_data_path, weights_only=False)
-
-    @pytest.fixture
-    def extended_feature_dict(self, sample_data, device):
-        """Create extended feature dict with all required features."""
-        input_feature_dict = sample_data["input_feature_dict"]
-        basic = sample_data["basic"]
-        n_tokens = basic["N_token"]
-        n_atoms = basic["N_atom"]
-
-        # Add all required features
-        extended_dict = input_feature_dict.copy()
-
-        # Entity type features
-        extended_dict["is_protein_token"] = (
-            torch.randint(0, 2, (n_tokens,)).long().to(device)
-        )
-        extended_dict["is_ligand_token"] = (
-            torch.randint(0, 2, (n_tokens,)).long().to(device)
-        )
-        extended_dict["is_dna_token"] = (
-            torch.randint(0, 2, (n_tokens,)).long().to(device)
-        )
-        extended_dict["is_rna_token"] = (
-            torch.randint(0, 2, (n_tokens,)).long().to(device)
-        )
-
-        # Atom-level features
-        extended_dict["atom_mask"] = torch.ones(n_atoms).long().to(device)
-        extended_dict["is_ligand"] = torch.randint(0, 2, (n_atoms,)).long().to(device)
-
-        return extended_dict
-
-    @pytest.fixture
     def featurizer(self, device):
         """Create MPNNFeaturizer instance."""
         return MPNNFeaturizer(
@@ -296,9 +257,28 @@ class TestMPNNFeaturizer:
             positional_encoding_dim=16,
             num_rbf=16,
             num_neighbours=32,
-            max_relative_feats=32,
             coord_noise=0.0,  # Disable noise for testing
         ).to(device)
+
+    @pytest.fixture
+    def test_context(self, device):
+        """Create test context for testing."""
+        return create_test_context(
+            batch_size=1,
+            n_tokens=20,
+            n_atoms=100,
+            device=device,
+        )
+
+    @pytest.fixture
+    def test_context_batched(self, device):
+        """Create batched test context for testing."""
+        return create_test_context(
+            batch_size=2,
+            n_tokens=15,
+            n_atoms=75,
+            device=device,
+        )
 
     def test_compute_neighbour_graph(self, featurizer, device):
         """Test k-nearest neighbor graph computation."""
@@ -341,28 +321,26 @@ class TestMPNNFeaturizer:
         assert neighbor_dists.shape == (1, n_tokens, k)
         assert edge_index.shape == (1, n_tokens, k)
 
-    def test_compute_node_features(self, featurizer, extended_feature_dict, device):
+    def test_compute_node_features(self, featurizer, test_context, device):
         """Test node feature computation."""
-        node_feats = featurizer._compute_node_features(extended_feature_dict)
+        node_feats = featurizer._compute_node_features(test_context)
 
-        n_tokens = extended_feature_dict["residue_index"].shape[-1]
+        n_tokens = test_context.basic.n_token
 
         # Check output shape
-        assert node_feats.shape == (n_tokens, featurizer.node_dim)
+        assert node_feats.shape == (1, n_tokens, featurizer.node_dim)
         assert not torch.isnan(node_feats).any()
 
-    def test_compute_node_features_with_ligands(
-        self, featurizer, extended_feature_dict, device
-    ):
+    def test_compute_node_features_with_ligands(self, featurizer, test_context, device):
         """Test node features with ligand atoms present."""
+        n_atoms = test_context.basic.n_atom
         # Set some atoms as ligands
-        n_atoms = extended_feature_dict["ref_pos"].shape[-2]
-        extended_feature_dict["is_ligand"][: n_atoms // 2] = 1
+        test_context.entity.is_ligand[:, : n_atoms // 2] = True
 
-        node_feats = featurizer._compute_node_features(extended_feature_dict)
+        node_feats = featurizer._compute_node_features(test_context)
 
-        n_tokens = extended_feature_dict["residue_index"].shape[-1]
-        assert node_feats.shape == (n_tokens, featurizer.node_dim)
+        n_tokens = test_context.basic.n_token
+        assert node_feats.shape == (1, n_tokens, featurizer.node_dim)
         assert not torch.isnan(node_feats).any()
 
     def test_compute_backbone_distance_features(self, featurizer, device):
@@ -371,11 +349,13 @@ class TestMPNNFeaturizer:
 
         # Create synthetic backbone coordinates
         backbone_coords = torch.randn(batch_size, n_tokens, 5, 3).to(device)
-        backbone_mask = torch.ones(batch_size, n_tokens, 5).to(device)
+        backbone_mask = torch.ones(
+            batch_size, n_tokens, 5, dtype=torch.bool, device=device
+        )
 
         # Mask out some backbone atoms
-        backbone_mask[:, :, -1] = 0  # Mask last backbone atom for all tokens
-        backbone_mask[:, -3:, :] = 0  # Mask all backbone atoms for last 3 tokens
+        backbone_mask[:, :, -1] = False  # Mask last backbone atom for all tokens
+        backbone_mask[:, -3:, :] = False  # Mask all backbone atoms for last 3 tokens
 
         # Create edge index
         edge_index = torch.randint(0, n_tokens, (batch_size, n_tokens, n_neighbors)).to(
@@ -403,11 +383,11 @@ class TestMPNNFeaturizer:
         n_tokens, n_neighbors = 10, 5
 
         backbone_coords = torch.randn(1, n_tokens, 5, 3).to(device)
-        backbone_mask = torch.ones(1, n_tokens, 5).to(device)
+        backbone_mask = torch.ones(1, n_tokens, 5, dtype=torch.bool, device=device)
 
         # Completely mask out one token's backbone
         masked_token_idx = 5
-        backbone_mask[:, masked_token_idx, :] = 0
+        backbone_mask[:, masked_token_idx, :] = False
 
         edge_index = torch.randint(0, n_tokens, (1, n_tokens, n_neighbors)).to(device)
 
@@ -428,10 +408,10 @@ class TestMPNNFeaturizer:
         n_tokens, n_neighbors = 8, 4
 
         backbone_coords = torch.randn(1, n_tokens, 5, 3).to(device)
-        backbone_mask = torch.zeros(1, n_tokens, 5).to(device)
+        backbone_mask = torch.zeros(1, n_tokens, 5, dtype=torch.bool, device=device)
 
         # Only first backbone slot valid (simulating ligands)
-        backbone_mask[:, :, 0] = 1
+        backbone_mask[:, :, 0] = True
 
         edge_index = torch.randint(0, n_tokens, (1, n_tokens, n_neighbors)).to(device)
 
@@ -444,29 +424,12 @@ class TestMPNNFeaturizer:
         assert edge_feats.shape == (1, n_tokens, n_neighbors, featurizer.num_rbf * 25)
         assert not torch.isnan(edge_feats).any()
 
-    def test_forward_pass(self, featurizer, extended_feature_dict, device):
+    def test_forward_pass(self, featurizer, test_context, device):
         """Test complete forward pass through featurizer."""
-        n_tokens = extended_feature_dict["residue_index"].shape[-1]
-
-        # Create inputs
-        centre_atom_coord = torch.randn(1, n_tokens, 3).to(device)
-        centre_atom_mask = torch.ones(1, n_tokens).to(device)
-        backbone_coords = torch.randn(1, n_tokens, 5, 3).to(device)
-        backbone_mask = torch.ones(1, n_tokens, 5).to(device)
-
-        # Add batch dimension to feature dict tensors
-        for key in extended_feature_dict:
-            if isinstance(extended_feature_dict[key], torch.Tensor):
-                extended_feature_dict[key] = extended_feature_dict[key].unsqueeze(0)
+        n_tokens = test_context.basic.n_token
 
         # Forward pass
-        node_feats, edge_feats, edge_index = featurizer(
-            input_feature_dict=extended_feature_dict,
-            centre_atom_coord=centre_atom_coord,
-            centre_atom_mask=centre_atom_mask,
-            backbone_coords=backbone_coords,
-            backbone_mask=backbone_mask,
-        )
+        node_feats, edge_feats, edge_index = featurizer(test_context)
 
         # Check output shapes
         k = min(featurizer.num_neighbours, n_tokens)
@@ -478,27 +441,38 @@ class TestMPNNFeaturizer:
         assert not torch.isnan(node_feats).any()
         assert not torch.isnan(edge_feats).any()
 
-    def test_gradient_flow(self, featurizer, extended_feature_dict, device):
+    def test_forward_pass_batched(self, featurizer, test_context_batched, device):
+        """Test forward pass with batched input."""
+        batch_size = 2
+        n_tokens = test_context_batched.basic.n_token
+
+        # Forward pass
+        node_feats, edge_feats, edge_index = featurizer(test_context_batched)
+
+        # Check output shapes
+        k = min(featurizer.num_neighbours, n_tokens)
+        assert node_feats.shape == (batch_size, n_tokens, featurizer.node_dim)
+        assert edge_feats.shape == (batch_size, n_tokens, k, featurizer.edge_dim)
+        assert edge_index.shape == (batch_size, n_tokens, k)
+
+        # Check no NaN values
+        assert not torch.isnan(node_feats).any()
+        assert not torch.isnan(edge_feats).any()
+
+    def test_gradient_flow(self, featurizer, device):
         """Test that gradients flow through the featurizer."""
-        n_tokens = extended_feature_dict["residue_index"].shape[-1]
+        batch_size, n_tokens, n_atoms = 1, 15, 75
 
-        centre_atom_coord = torch.randn(1, n_tokens, 3, requires_grad=True).to(device)
-        centre_atom_mask = torch.ones(1, n_tokens).to(device)
-        backbone_coords = torch.randn(1, n_tokens, 5, 3, requires_grad=True).to(device)
-        backbone_mask = torch.ones(1, n_tokens, 5).to(device)
+        # Create mock context with requires_grad tensors
+        context = create_test_context(batch_size, n_tokens, n_atoms, device)
 
-        # Add batch dimension
-        for key in extended_feature_dict:
-            if isinstance(extended_feature_dict[key], torch.Tensor):
-                extended_feature_dict[key] = extended_feature_dict[key].unsqueeze(0)
-
-        node_feats, edge_feats, _ = featurizer(
-            extended_feature_dict,
-            centre_atom_coord,
-            centre_atom_mask,
-            backbone_coords,
-            backbone_mask,
+        # Make backbone coordinates require gradient
+        backbone_coords = torch.randn(
+            batch_size, n_tokens, 5, 3, requires_grad=True, device=device
         )
+        context.coordinate.backbone_coordinate = backbone_coords
+
+        node_feats, edge_feats, _ = featurizer(context)
 
         # Compute loss and backprop
         loss = node_feats.sum() + edge_feats.sum()

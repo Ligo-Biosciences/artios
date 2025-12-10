@@ -48,27 +48,50 @@ def angle_3p(a, b, c):
 
 
 def random_transform(
-    points, max_translation=1.0, apply_augmentation=False, centralize=True
+    points: np.ndarray,
+    max_translation: float = 1.0,
+    apply_augmentation: bool = False,
+    centralize: bool = True,
+    mask: np.ndarray | None = None,
+    eps: float = 1e-12,
 ) -> np.ndarray:
     """
     Randomly transform a set of 3D points.
 
     Args:
-        points (numpy.ndarray): The points to be transformed, shape=(N, 3)
-        max_translation (float): The maximum translation value. Default is 1.0.
-        apply_augmentation (bool): Whether to apply random rotation/translation on ref_pos
+        points: The points to be transformed, shape=(N, 3)
+        max_translation: The maximum translation value.
+        apply_augmentation: Whether to apply random rotation/translation
+        centralize: Whether to center the points
+        mask: Boolean mask for valid atoms, shape=(N,). If provided, only
+            masked atoms are used for computing the center of mass, and
+            unmasked coordinates are zeroed after transformation.
+        eps: Small value to avoid division by zero
 
     Returns:
-        numpy.ndarray: The transformed points.
+        The transformed points.
     """
+    # Expand mask to (N, 1) for broadcasting if provided
+    mask_expanded = None
+    if mask is not None:
+        mask_expanded = mask[:, np.newaxis].astype(points.dtype)
+
     if centralize:
-        points = points - points.mean(axis=0)
-    if not apply_augmentation:
-        return points
-    translation = np.random.uniform(-max_translation, max_translation, size=3)
-    R = Rotation.random().as_matrix()
-    transformed_points = np.dot(points + translation, R.T)
-    return transformed_points
+        if mask_expanded is None:
+            center = points.mean(axis=0)
+        else:
+            center = (points * mask_expanded).sum(axis=0) / (mask_expanded.sum() + eps)
+        points = points - center
+
+    if apply_augmentation:
+        translation = np.random.uniform(-max_translation, max_translation, size=3)
+        R = Rotation.random().as_matrix()
+        points = np.dot(points + translation, R.T)
+
+    if mask_expanded is not None:
+        points = points * mask_expanded
+
+    return points
 
 
 def compute_virtual_cb(

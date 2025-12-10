@@ -69,6 +69,15 @@ class ContextGenerator(object):
             ]
         ).long()
 
+        # Random augmentation of coordinates, excluding unresolved atoms
+        self.cropped_atom_array.coord = random_transform(
+            points=self.cropped_atom_array.coord,
+            max_translation=1.0,
+            apply_augmentation=True,
+            centralize=True,
+            mask=self.cropped_atom_array.is_resolved,
+        )
+
     @cached_property
     def centre_atoms_indices(self) -> np.ndarray:
         return self.cropped_token_array.get_annotation("centre_atom_index")

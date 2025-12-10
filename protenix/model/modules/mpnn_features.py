@@ -1,17 +1,22 @@
 """ """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple
+from typing import Tuple
 
 import torch
+from einops import rearrange
 from jaxtyping import Bool, Float, Int
 from torch import Tensor, nn
 
 import protenix.model.modules.message_passing as mp
+from protenix.data.features import FullContext
 from protenix.model.modules.embedders import RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.utils import average_atom_to_token, flatten_final_dims
 from protenix.utils.torch_utils import cdist
+from protenix.utils.typing import typecheck
 
 
 class EdgeRelativePositionalEncoding(nn.Module):
@@ -37,7 +42,7 @@ class EdgeRelativePositionalEncoding(nn.Module):
         sym_id: Int[Tensor, "batch n_token"],
         token_index: Int[Tensor, "batch n_token"],
         edge_index: Int[Tensor, "batch n_token neighbours"],
-    ):
+    ) -> Float[Tensor, "batch n_token neighbours c_z"]:
         """
         Args:
             asym_id: asymmetric unit IDs
@@ -47,8 +52,7 @@ class EdgeRelativePositionalEncoding(nn.Module):
             token_index: token indices
 
         Returns:
-            Tensor: relative position encoding
-                [batch, n_token, n_neighbours, c_z]
+            relative position encoding embeddings
         """
         p = self.relpos(
             asym_id=asym_id,
@@ -102,18 +106,12 @@ class GaussianRBF(nn.Module):
         """Apply RBF encoding to distances.
 
         Args:
-            distances: Pairwise distances [..., distance_pairs]
+            distances: Pairwise distances
 
         Returns:
-            RBF encoded distances [..., distance_pairs, num_kernels]
+            RBF encoded distances
         """
-        # Expand distances for broadcasting: [..., distance_pairs, 1]
-        distances = distances.unsqueeze(-1)
-
-        # Compute Gaussian: exp(-gamma * (d - center)^2)
-        # centers shape: [num_kernels]
-        rbf = torch.exp(-self.gamma * (distances - self.centers) ** 2)
-
+        rbf = torch.exp(-self.gamma * (distances[..., None] - self.centers) ** 2)
         return rbf
 
 
@@ -128,11 +126,11 @@ class BaseEdgeFeaturizer(nn.Module, ABC):
         super().__init__(*args, **kwargs)
 
     @abstractmethod
-    def forward(self, input_feature_dict: Dict[str, Tensor]) -> Tuple[Tensor, Tensor]:
+    def forward(self, context: FullContext) -> Tuple[Tensor, Tensor]:
         """Transform input data into feature representation.
 
         Args:
-            input_feature_dict: Input data tensor
+            context: Full context containing all features.
 
         Returns:
             Tensor: Feature representation of input data edges
@@ -203,6 +201,7 @@ class MPNNFeaturizer(nn.Module):
         self.edge_norm = LayerNorm(edge_dim)
         self.node_norm = LayerNorm(node_dim)
 
+    @typecheck
     def _compute_neighbour_graph(
         self,
         centre_atom_coords: Float[Tensor, "batch n_token 3"],
@@ -221,9 +220,9 @@ class MPNNFeaturizer(nn.Module):
             neighbour_dists: distances to k-nearest neighbour tokens
             edge_index: indices of the k-nearest neighbour tokens
         """
-        mask_2d = (
-            centre_atom_mask[..., :, None] * centre_atom_mask[..., None, :]
-        ).float()
+        mask_i = rearrange(centre_atom_mask, "... n -> ... n 1")
+        mask_j = rearrange(centre_atom_mask, "... n -> ... 1 n")
+        mask_2d = (mask_i & mask_j).float()
 
         pairwise_dist = cdist(centre_atom_coords, centre_atom_coords) * mask_2d
 
@@ -240,154 +239,172 @@ class MPNNFeaturizer(nn.Module):
 
         return neighbor_dists, edge_index
 
-    def _compute_node_features(self, input_feature_dict: Dict[str, Tensor]):
-        """Compute node features with ligand and entity features."""
-        # Grab data about the input
-        atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
-        atom_mask = input_feature_dict["atom_mask"]
-        n_token = input_feature_dict["residue_index"].shape[-1]
-        n_atom = input_feature_dict["ref_pos"].shape[-2]
-        batch_shape = input_feature_dict["ref_pos"].shape[:-2]
-        dtype = input_feature_dict["ref_pos"].dtype
+    @typecheck
+    def _compute_node_features(
+        self, context: FullContext
+    ) -> Float[Tensor, "batch n_token node_dim"]:
+        """Compute node features with ligand and entity features.
+
+        Args:
+            context: Full context containing all features.
+
+        Returns:
+            Node features tensor
+        """
+        dtype = context.reference.ref_pos.dtype
 
         # Compute node features
-        is_ligand = input_feature_dict["is_ligand"].unsqueeze(-1)  # [..., n_atom, 1]
-        ligand_feats = (
-            self.ligand_condition_embed(
-                torch.cat(
-                    [
-                        input_feature_dict[name]
-                        .reshape(*batch_shape, n_atom, self.ligand_input_feature[name])
-                        .to(dtype)
-                        for name in self.ligand_input_feature
-                    ],
-                    dim=-1,
-                )
-            )
-            * is_ligand
-        )  # [..., n_atom, node_dim]
+        is_ligand = context.entity.is_ligand.unsqueeze(-1)  # [..., n_atom, 1]
+
+        ligand_input = torch.cat(
+            [
+                rearrange(context.reference.ref_charge, "... n -> ... n 1").to(dtype),
+                rearrange(context.reference.ref_mask, "... n -> ... n 1").to(dtype),
+                context.reference.ref_element.to(dtype),
+            ],
+            dim=-1,
+        )
+        ligand_feats = self.ligand_condition_embed(ligand_input) * is_ligand
+        # [..., n_atom, node_dim]
 
         ligand_feats = average_atom_to_token(
             x_atom=ligand_feats,
-            atom_to_token_idx=atom_to_token_idx,
-            atom_mask=atom_mask,
-            n_token=n_token,
+            atom_to_token_idx=context.index.atom_to_token_idx,
+            atom_mask=context.mask.atom_mask,
+            n_token=context.basic.n_token,
         )  # [..., n_token, node_dim]
 
         # Embed entity flags
         entity_feats = self.entity_type_embed(
             torch.stack(
-                [input_feature_dict[name].to(dtype) for name in self.entity_features],
+                [
+                    getattr(context.entity, name).to(dtype)
+                    for name in self.entity_features
+                ],
                 dim=-1,
             )
         )  # [..., n_token, node_dim]
 
         # Embed non-protein entity restypes
-        not_protein = (1 - input_feature_dict["is_protein_token"].to(dtype)).unsqueeze(
-            -1
+        not_protein = rearrange(
+            1 - context.entity.is_protein_token.to(dtype), "... n -> ... n 1"
         )
-        non_protein_restypes = not_protein * self.non_protein_restype_embed(
-            input_feature_dict["restype"]
+        non_protein_restypes = self.non_protein_restype_embed(
+            context.token.restype * not_protein
         )
 
         node_feats = ligand_feats + entity_feats + non_protein_restypes
         return self.node_norm(node_feats)
 
+    @typecheck
     def _compute_backbone_distance_features(
         self,
         backbone_coords: Float[Tensor, "... n_token 5 3"],
-        backbone_mask: Float[Tensor, "... n_token 5"],
+        backbone_mask: Bool[Tensor, "... n_token 5"],
         edge_index: Int[Tensor, "... n_token neighbors"],
     ) -> Float[Tensor, "... n_token neighbors edge_dim"]:
         """Compute edge features from backbone atom distances.
 
         Args:
-            backbone_coords: Backbone atom coordinates [..., n_token, 5, 3]
-            backbone_mask: Mask for valid backbone atoms [..., n_token, 5]
-            edge_index: Neighbor indices [..., n_token, neighbors]
+            backbone_coords: Backbone atom coordinates
+            backbone_mask: Mask for valid backbone atoms
+            edge_index: Neighbor indices
 
         Returns:
-            Edge features from backbone distances [..., n_token, neighbors, edge_dim]
+            Edge features from backbone distances
         """
-        # Gather neighbor backbone coordinates and masks
-        # Flatten for gather [..., n_token, 15]
-        backbone_coords_flat = flatten_final_dims(backbone_coords, num_dims=2)
+        # Gather neighbor backbone coordinates
+        backbone_coords_flat = rearrange(backbone_coords, "... n b c -> ... n (b c)")
         neighbor_backbone_flat = mp.gather_nodes(backbone_coords_flat, edge_index)
-        neighbor_backbone_coords = neighbor_backbone_flat.unflatten(
-            dim=-1, sizes=(5, 3)
-        )
+        neighbor_backbone_coords = rearrange(
+            neighbor_backbone_flat, "... n k (b c) -> ... n k b c", b=5, c=3
+        )  # [..., n_token, neighbors, 5, 3]
 
-        # Gather neighbor masks [..., n_token, neighbors, 5]
         neighbor_backbone_mask = mp.gather_nodes(backbone_mask, edge_index)
+        # [..., n_token, neighbors, 5]
 
-        # Compute pairwise distances between all backbone atoms
-        bb_self = backbone_coords[..., None, :, None, :]
-        bb_neighbor = neighbor_backbone_coords[..., None, :, :]
-
-        # Distances [..., n_token, neighbors, 5, 5]
-        distances = torch.norm(bb_self - bb_neighbor, dim=-1)
-
-        # Create distance mask
-        # [..., n_token, 1, 5, 1] * [..., n_token, neighbors, 1, 5]
-        distance_mask = (
-            neighbor_backbone_mask[..., :, None, :] * backbone_mask[..., None, :, None]
+        # Compute pairwise distances between all backbone atom pairs
+        bb_self = rearrange(backbone_coords, "... n b c -> ... n 1 b 1 c")
+        bb_neighbor = rearrange(
+            neighbor_backbone_coords, "... n k b c -> ... n k 1 b c"
         )
+        distances = torch.norm(bb_self - bb_neighbor, dim=-1)
+        # [..., n_token, neighbors, 5, 5]
 
-        # Apply mask and flatten pairs [..., n_token, neighbors, 25]
+        # Create pairwise mask
+        mask_self = rearrange(backbone_mask, "... n b -> ... n 1 b 1")
+        mask_neighbor = rearrange(neighbor_backbone_mask, "... n k b -> ... n k 1 b")
+        distance_mask = mask_self * mask_neighbor
+        # [..., n_token, neighbors, 5, 5]
+
+        # Apply mask and flatten backbone pairs
         masked_distances = distances * distance_mask
         flat_distances = flatten_final_dims(masked_distances, 2)
-        # TODO: re-normalize the distances based on num elements in the mask
         flat_mask = flatten_final_dims(distance_mask, 2)
+        # [..., n_token, neighbors, 25]
 
-        # Apply RBF encoding [..., n_token, neighbors, 25, num_rbf]
+        # Apply RBF encoding
         rbf_features = self.rbf(flat_distances) * flat_mask[..., None]
-        rbf_flat = flatten_final_dims(rbf_features, 2)
-        return rbf_flat
+        # [..., n_token, neighbors, 25, num_rbf]
 
+        return rearrange(rbf_features, "... pairs rbf -> ... (pairs rbf)")
+
+    @typecheck
     def _compute_relpos_features(
         self,
-        input_feature_dict: Dict[str, Tensor],
+        context: FullContext,
         edge_index: Int[Tensor, "batch n_token neighbours"],
     ) -> Float[Tensor, "batch n_token neighbours edge_dim"]:
-        """Compute edge relpos features."""
+        """Compute edge relpos features.
+
+        Args:
+            context: Full context containing token features.
+            edge_index: Neighbor indices for edge computation.
+
+        Returns:
+            Edge relative position features.
+        """
         edge_relpos_feat = self.positional_encoder(
-            asym_id=input_feature_dict["asym_id"],
-            residue_index=input_feature_dict["residue_index"],
-            entity_id=input_feature_dict["entity_id"],
-            sym_id=input_feature_dict["sym_id"],
-            token_index=input_feature_dict["token_index"],
+            asym_id=context.token.asym_id,
+            residue_index=context.token.residue_index,
+            entity_id=context.token.entity_id,
+            sym_id=context.token.sym_id,
+            token_index=context.token.token_index,
             edge_index=edge_index,
         )
         return edge_relpos_feat
 
+    @typecheck
     def forward(
         self,
-        input_feature_dict: Dict[str, Tensor],
-        centre_atom_coord: Float[Tensor, "batch n_token 3"],
-        centre_atom_mask: Float[Tensor, "batch n_token"],
-        backbone_coords: Float[Tensor, "batch n_token 5 3"],
-        backbone_mask: Float[Tensor, "batch n_token 5"],
+        context: FullContext,
     ) -> Tuple[
         Float[Tensor, "batch n_token node_dim"],
         Float[Tensor, "batch n_token neighbours edge_dim"],
         Int[Tensor, "batch n_token neighbours"],
     ]:
-        """
-        Compute MPNN features and connectivity for general biomolecular graphs.
+        """Compute MPNN features and connectivity for general biomolecular graphs.
 
         Args:
-            input_feature_dict: Input feature dict with the following tensors:
-                - asym_id, residue_index, entity_id, sym_id, etc.
-            centre_atom_coord: Centre atom coordinates per token
-            centre_atom_mask: Mask for valid centre atoms
-            backbone_coords: Backbone atom coordinates per token [..., n_token, 5, 3]
-            backbone_mask: Mask for valid backbone atoms [..., n_token, 5]
+            context: Full context containing:
+                - coordinate: centre_coordinate, backbone_coordinate
+                - mask: centre_atom_mask (at token level), backbone_mask
+                - token: asym_id, residue_index, entity_id, sym_id, token_index, restype
+                - entity: is_protein_token, is_ligand_token, is_dna_token, is_rna_token, is_ligand
+                - reference: ref_pos, ref_mask, ref_element, ref_charge
+                - index: atom_to_token_idx
 
         Returns:
             node_embedding: Node features with entity and ligand information
             edge_embedding: Edge features from backbone distances
             edge_index: Graph edge connectivity index
         """
+        # Extract coordinates and masks from context
+        centre_atom_coord = context.coordinate.centre_coordinate
+        token_mask = context.mask.token_mask
+        backbone_coords = context.coordinate.backbone_coordinate
+        backbone_mask = context.mask.backbone_mask
+
         # TODO: centre-random augment the backbone coordinates
         # Add coordinate noise during training
         if self.training:
@@ -397,7 +414,7 @@ class MPNNFeaturizer(nn.Module):
 
         # Compute k-nearest neighbor graph
         _, edge_index = self._compute_neighbour_graph(
-            centre_atom_coords=centre_atom_coord, centre_atom_mask=centre_atom_mask
+            centre_atom_coords=centre_atom_coord, centre_atom_mask=token_mask
         )
 
         # Compute backbone distance edge features
@@ -408,18 +425,19 @@ class MPNNFeaturizer(nn.Module):
         )
         # Relpos
         edge_relpos_feats = self._compute_relpos_features(
-            input_feature_dict=input_feature_dict, edge_index=edge_index
+            context=context, edge_index=edge_index
         )
         edge_embedding = self.edge_norm(
             self.embed_edge(torch.cat([edge_dist_feats, edge_relpos_feats], dim=-1))
         )
         # Compute node features
-        node_embedding = self._compute_node_features(input_feature_dict)
+        node_embedding = self._compute_node_features(context)
 
-        # Apply masks
-        node_embedding = node_embedding * centre_atom_mask[..., None]
+        # Apply masks (convert to float for multiplication)
+        token_mask_float = token_mask.float()
+        node_embedding = node_embedding * token_mask_float[..., None]
         edge_embedding = edge_embedding * mp.gather_nodes(
-            centre_atom_mask[..., None], edge_index
+            token_mask_float[..., None], edge_index
         )
 
         return node_embedding, edge_embedding, edge_index

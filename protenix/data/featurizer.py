@@ -537,7 +537,7 @@ class ContextGenerator(object):
             token_array=self.cropped_token_array,
             pdb_id=self.pdb_id,
             bioassembly_dict_fpath=self.bioassembly_dict_fpath,
-            n_asym=len(torch.unique(self.cropped_atom_array.asym_id)),
+            n_asym=len(np.unique(self.centre_atoms.asym_id_int)),
             n_token=len(self.cropped_token_array),
             n_atom=len(self.cropped_atom_array),
         )

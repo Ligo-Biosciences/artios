@@ -453,3 +453,14 @@ class FullContext:
                 kwargs[f.name] = fg
 
         return type(self)(**kwargs)
+
+    def to_dict(self) -> dict[str, Tensor]:
+        """Convert all Context fields to a flat dictionary of tensors.
+
+        Returns:
+            Flat dictionary with all tensor fields from all sub-contexts.
+        """
+        result = {}
+        for f in fields(self):
+            result[f.name] = getattr(self, f.name).to_dict()
+        return result

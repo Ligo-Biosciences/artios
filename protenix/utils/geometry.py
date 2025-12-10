@@ -69,3 +69,31 @@ def random_transform(
     R = Rotation.random().as_matrix()
     transformed_points = np.dot(points + translation, R.T)
     return transformed_points
+
+
+def compute_virtual_cb(
+    n_coord: np.ndarray,
+    ca_coord: np.ndarray,
+    c_coord: np.ndarray,
+) -> np.ndarray:
+    """Compute virtual Cβ position using ideal geometry from ProteinMPNN.
+
+    Uses idealized bond lengths and angles to place Cβ in the correct
+    tetrahedral position relative to the N-CA-C backbone.
+
+    Args:
+        n_coord: N atom coordinates [..., 3]
+        ca_coord: CA atom coordinates [..., 3]
+        c_coord: C atom coordinates [..., 3]
+
+    Returns:
+        numpy.ndarray: Virtual Cβ coordinates
+
+    Reference:
+        ProteinMPNN implementation of virtual Cβ placement
+    """
+    n_ca = ca_coord - n_coord
+    ca_c = c_coord - ca_coord
+    cross = np.cross(n_ca, ca_c)
+    cb_coord = ca_coord + 0.568 * n_ca - 0.54068 * ca_c - 0.5827 * cross
+    return cb_coord

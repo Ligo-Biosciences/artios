@@ -5,6 +5,7 @@ from protenix.data.features import FullContext
 from protenix.model.modules.atom_attention import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
+    AtomAttentionSkipConnections,
 )
 from protenix.model.modules.layout import (
     rearrange_to_key_subset,
@@ -117,31 +118,31 @@ class TestAtomAttentionEncoder:
         )
 
         # Test full forward pass with FullContext
-        a, q_l, c_l, p_lm = atom_attention_encoder(context=context, r_l=r_l, s=s, z=z)
+        a, skip = atom_attention_encoder(context=context, r_l=r_l, s=s, z=z)
 
         # Check output shapes
         assert a.shape == (n_samples, n_tokens, atom_attention_encoder.c_token)
-        assert q_l.shape == (n_samples, n_atoms, atom_attention_encoder.c_atom)
-        assert c_l.shape == (n_samples, n_atoms, atom_attention_encoder.c_atom)
+        assert skip.q.shape == (n_samples, n_atoms, atom_attention_encoder.c_atom)
+        assert skip.c.shape == (n_samples, n_atoms, atom_attention_encoder.c_atom)
 
-        # Check p_lm shape (local attention format)
+        # Check skip.p shape (local attention format)
         n_blocks = (
             n_atoms + atom_attention_encoder.num_queries - 1
         ) // atom_attention_encoder.num_queries
-        expected_p_lm_shape = (
+        expected_p_shape = (
             1,
             n_blocks,
             atom_attention_encoder.num_queries,
             atom_attention_encoder.num_keys,
             atom_attention_encoder.c_atompair,
         )
-        assert p_lm.shape == expected_p_lm_shape
+        assert skip.p.shape == expected_p_shape
 
         # Check for NaN/Inf values
         assert torch.isfinite(a).all(), "a contains non-finite values"
-        assert torch.isfinite(q_l).all(), "q_l contains non-finite values"
-        assert torch.isfinite(c_l).all(), "c_l contains non-finite values"
-        assert torch.isfinite(p_lm).all(), "p_lm contains non-finite values"
+        assert torch.isfinite(skip.q).all(), "skip.q contains non-finite values"
+        assert torch.isfinite(skip.c).all(), "skip.c contains non-finite values"
+        assert torch.isfinite(skip.p).all(), "skip.p contains non-finite values"
 
     def test_atom_attention_encoder_without_optional_inputs(self, context, device):
         """Test forward pass without optional inputs (r_l, s, z)."""
@@ -164,18 +165,18 @@ class TestAtomAttentionEncoder:
         )
 
         # Test forward pass with FullContext, without optional inputs
-        a, q_l, c_l, p_lm = atom_attention_encoder(context=context)
+        a, skip = atom_attention_encoder(context=context)
 
         # Check output shapes
         assert a.shape == (1, n_tokens, atom_attention_encoder.c_token)
-        assert q_l.shape == (1, n_atoms, atom_attention_encoder.c_atom)
-        assert c_l.shape == (1, n_atoms, atom_attention_encoder.c_atom)
+        assert skip.q.shape == (1, n_atoms, atom_attention_encoder.c_atom)
+        assert skip.c.shape == (1, n_atoms, atom_attention_encoder.c_atom)
 
         # Check for finite values
         assert torch.isfinite(a).all(), "a contains non-finite values"
-        assert torch.isfinite(q_l).all(), "q_l contains non-finite values"
-        assert torch.isfinite(c_l).all(), "c_l contains non-finite values"
-        assert torch.isfinite(p_lm).all(), "p_lm contains non-finite values"
+        assert torch.isfinite(skip.q).all(), "skip.q contains non-finite values"
+        assert torch.isfinite(skip.c).all(), "skip.c contains non-finite values"
+        assert torch.isfinite(skip.p).all(), "skip.p contains non-finite values"
 
 
 class TestAtomAttentionDecoder:
@@ -232,44 +233,46 @@ class TestAtomAttentionDecoder:
         a = torch.randn(
             N_sample, n_tokens, atom_attention_decoder.c_token, device=device
         )
-        q_skip = torch.randn(
-            N_sample, n_atoms, atom_attention_decoder.c_atom, device=device
-        )
-        c_skip = torch.randn(1, n_atoms, atom_attention_decoder.c_atom, device=device)
 
-        # Calculate n_blocks for p_skip shape
+        # Calculate n_blocks for skip tensors
         n_blocks = (
             n_atoms + atom_attention_decoder.num_queries - 1
         ) // atom_attention_decoder.num_queries
-        p_skip = torch.randn(
-            1,
-            n_blocks,
-            atom_attention_decoder.num_queries,
-            atom_attention_decoder.num_keys,
-            atom_attention_decoder.c_atompair,
-            device=device,
-        )
 
         # Create atom_to_token_idx and atom_mask
         atom_to_token_idx = context.index.atom_to_token_idx
         atom_mask = context.mask.atom_mask
 
-        # Generate trunked_pair_mask using the same pattern as encoder
-        trunked_pair_mask = self._generate_trunked_pair_mask(
+        # Generate local_attn_mask using the same pattern as encoder
+        local_attn_mask = self._generate_trunked_pair_mask(
             atom_mask,
             atom_attention_decoder.num_queries,
             atom_attention_decoder.num_keys,
         )
 
+        # Create skip connections dataclass
+        skip = AtomAttentionSkipConnections(
+            q=torch.randn(
+                N_sample, n_atoms, atom_attention_decoder.c_atom, device=device
+            ),
+            c=torch.randn(1, n_atoms, atom_attention_decoder.c_atom, device=device),
+            p=torch.randn(
+                1,
+                n_blocks,
+                atom_attention_decoder.num_queries,
+                atom_attention_decoder.num_keys,
+                atom_attention_decoder.c_atompair,
+                device=device,
+            ),
+            local_attn_mask=local_attn_mask.unsqueeze(-4),
+        )
+
         # Forward pass
         r_update = atom_attention_decoder(
             a=a,
-            q_skip=q_skip,
-            c_skip=c_skip,
-            p_skip=p_skip,
+            skip=skip,
             atom_to_token_idx=atom_to_token_idx,
             atom_mask=atom_mask,
-            trunked_pair_mask=trunked_pair_mask,
         )
 
         # Check output shape
@@ -298,26 +301,11 @@ class TestAtomAttentionDecoder:
             atom_attention_decoder.c_token,
             device=device,
         )
-        q_skip = torch.randn(
-            batch_size, n_sample, n_atoms, atom_attention_decoder.c_atom, device=device
-        )
-        c_skip = torch.randn(
-            batch_size, n_sample, n_atoms, atom_attention_decoder.c_atom, device=device
-        )
 
-        # Calculate n_blocks for p_skip shape
+        # Calculate n_blocks for skip tensors
         n_blocks = (
             n_atoms + atom_attention_decoder.num_queries - 1
         ) // atom_attention_decoder.num_queries
-        p_skip = torch.randn(
-            batch_size,
-            1,
-            n_blocks,
-            atom_attention_decoder.num_queries,
-            atom_attention_decoder.num_keys,
-            atom_attention_decoder.c_atompair,
-            device=device,
-        )
 
         # Create batched atom_to_token_idx and atom_mask
         atom_to_token_idx = context.index.atom_to_token_idx.unsqueeze(0).expand(
@@ -325,22 +313,47 @@ class TestAtomAttentionDecoder:
         )
         atom_mask = context.mask.atom_mask.unsqueeze(0).expand(batch_size, -1)
 
-        # Generate batched trunked_pair_mask
-        trunked_pair_mask = self._generate_trunked_pair_mask(
+        # Generate batched local_attn_mask
+        local_attn_mask = self._generate_trunked_pair_mask(
             atom_mask,
             atom_attention_decoder.num_queries,
             atom_attention_decoder.num_keys,
         )
 
+        # Create batched skip connections dataclass
+        skip = AtomAttentionSkipConnections(
+            q=torch.randn(
+                batch_size,
+                n_sample,
+                n_atoms,
+                atom_attention_decoder.c_atom,
+                device=device,
+            ),
+            c=torch.randn(
+                batch_size,
+                n_sample,
+                n_atoms,
+                atom_attention_decoder.c_atom,
+                device=device,
+            ),
+            p=torch.randn(
+                batch_size,
+                1,
+                n_blocks,
+                atom_attention_decoder.num_queries,
+                atom_attention_decoder.num_keys,
+                atom_attention_decoder.c_atompair,
+                device=device,
+            ),
+            local_attn_mask=local_attn_mask.unsqueeze(-4),
+        )
+
         # Forward pass
         r_update = atom_attention_decoder(
             a=a,
-            q_skip=q_skip,
-            c_skip=c_skip,
-            p_skip=p_skip,
+            skip=skip,
             atom_to_token_idx=atom_to_token_idx,
             atom_mask=atom_mask,
-            trunked_pair_mask=trunked_pair_mask,
         )
 
         # Check output shape

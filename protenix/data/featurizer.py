@@ -69,11 +69,11 @@ class ContextGenerator(object):
             ]
         ).long()
 
-    @property
+    @cached_property
     def centre_atoms_indices(self) -> np.ndarray:
         return self.cropped_token_array.get_annotation("centre_atom_index")
 
-    @property
+    @cached_property
     def centre_atoms(self) -> AtomArray:
         return self.cropped_atom_array[self.centre_atoms_indices]
 

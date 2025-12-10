@@ -671,12 +671,12 @@ def _extract_backbone_atoms(
 
         # Extract backbone atoms
         for bb_idx, atom_name in enumerate(backbone_names):
-            local_idx = atom_name_map[atom_name]
-            global_idx = token.atom_indices[local_idx]
-            atom = atom_array[global_idx]
-            if atom.is_resolved and (atom_name in atom_name_map):
+            if atom_name in atom_name_map:
+                local_idx = atom_name_map[atom_name]
+                global_idx = token.atom_indices[local_idx]
+                atom = atom_array[global_idx]
                 backbone_coords[token_idx, bb_idx] = atom.coord
-                backbone_mask[token_idx, bb_idx] = 1.0
+                backbone_mask[token_idx, bb_idx] = atom.is_resolved.astype(int)
                 atom_coords[atom_name] = atom.coord
 
         # Compute virtual Cβ for proteins

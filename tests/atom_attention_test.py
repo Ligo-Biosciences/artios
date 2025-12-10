@@ -1,8 +1,7 @@
-import os
-
 import pytest
 import torch
 
+from protenix.data.features import FullContext
 from protenix.model.modules.atom_attention import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
@@ -11,6 +10,7 @@ from protenix.model.modules.layout import (
     rearrange_to_key_subset,
     rearrange_to_query_subset,
 )
+from tests.context_utils import load_sample_context
 
 
 class TestAtomAttentionEncoder:
@@ -19,17 +19,9 @@ class TestAtomAttentionEncoder:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @pytest.fixture
-    def sample_data(self):
-        test_data_path = os.path.join(
-            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
-        )
-        sample_data = torch.load(test_data_path, weights_only=False)
-
-        atom_mask = torch.randint(
-            low=0, high=2, size=(sample_data["input_feature_dict"]["ref_mask"].shape)
-        )
-        sample_data["input_feature_dict"]["atom_mask"] = atom_mask
-        return sample_data
+    def context(self, device) -> FullContext:
+        """Load sample data as FullContext."""
+        return load_sample_context(device=device)
 
     @pytest.fixture
     def atom_attention_encoder(self, device):
@@ -51,27 +43,16 @@ class TestAtomAttentionEncoder:
         return encoder.to(device)
 
     def test_per_atom_conditioning_shapes(
-        self, atom_attention_encoder, sample_data, device
+        self, atom_attention_encoder, context, device
     ):
         """Test that _per_atom_conditioning produces correct output shapes."""
-        input_feature_dict = sample_data["input_feature_dict"]
-        basic = sample_data["basic"]
-        n_atoms = basic["N_atom"]
+        n_atoms = context.basic.n_atom
 
-        # Move input data to device
-        input_feature_dict = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
-            for k, v in input_feature_dict.items()
-        }
-
-        # Call the method
-        c_l, p_lm = atom_attention_encoder._per_atom_conditioning(input_feature_dict)
+        # Call the method with ReferenceConformerContext
+        c_l, p_lm = atom_attention_encoder._per_atom_conditioning(context.reference)
 
         # Check c_l (atom single conditioning) shape
-        expected_c_l_shape = (
-            *input_feature_dict["ref_pos"].shape[:-1],
-            atom_attention_encoder.c_atom,
-        )
+        expected_c_l_shape = (n_atoms, atom_attention_encoder.c_atom)
         assert (
             c_l.shape == expected_c_l_shape
         ), f"Expected c_l shape {expected_c_l_shape}, got {c_l.shape}"
@@ -82,7 +63,6 @@ class TestAtomAttentionEncoder:
             n_atoms + atom_attention_encoder.num_queries - 1
         ) // atom_attention_encoder.num_queries
         expected_p_lm_shape = (
-            *input_feature_dict["ref_pos"].shape[:-2],
             n_blocks,
             atom_attention_encoder.num_queries,
             atom_attention_encoder.num_keys,
@@ -93,41 +73,25 @@ class TestAtomAttentionEncoder:
         ), f"Expected p_lm shape {expected_p_lm_shape}, got {p_lm.shape}"
 
     def test_per_atom_conditioning_no_nans(
-        self, atom_attention_encoder, sample_data, device
+        self, atom_attention_encoder, context, device
     ):
         """Test that _per_atom_conditioning produces no NaN values."""
-        input_feature_dict = sample_data["input_feature_dict"]
-
-        # Move input data to device
-        input_feature_dict = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
-            for k, v in input_feature_dict.items()
-        }
-
-        # Call the method
-        c_l, p_lm = atom_attention_encoder._per_atom_conditioning(input_feature_dict)
+        # Call the method with ReferenceConformerContext
+        c_l, p_lm = atom_attention_encoder._per_atom_conditioning(context.reference)
 
         # Check for NaN values
         assert not torch.isnan(c_l).any(), "c_l contains NaN values"
         assert not torch.isnan(p_lm).any(), "p_lm contains NaN values"
 
     def test_per_atom_conditioning_mask_application(
-        self, atom_attention_encoder, sample_data, device
+        self, atom_attention_encoder, context, device
     ):
         """Test that mask is properly applied to c_l."""
-        input_feature_dict = sample_data["input_feature_dict"]
-
-        # Move input data to device
-        input_feature_dict = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
-            for k, v in input_feature_dict.items()
-        }
-
-        # Call the method
-        c_l, _ = atom_attention_encoder._per_atom_conditioning(input_feature_dict)
+        # Call the method with ReferenceConformerContext
+        c_l, _ = atom_attention_encoder._per_atom_conditioning(context.reference)
 
         # Check that masked positions are zero
-        ref_mask = input_feature_dict["ref_mask"].unsqueeze(-1)
+        ref_mask = context.reference.ref_mask.unsqueeze(-1)
         masked_positions = ~ref_mask.bool()
 
         if masked_positions.any():
@@ -138,50 +102,27 @@ class TestAtomAttentionEncoder:
             ), "Masked positions in c_l should be zero"
 
     def test_atom_attention_encoder_forward_pass(
-        self, atom_attention_encoder, sample_data, device
+        self, atom_attention_encoder, context, device
     ):
         """Test the complete forward pass of AtomAttentionEncoder."""
-        input_feature_dict = sample_data["input_feature_dict"]
-        basic = sample_data["basic"]
-        n_atoms = basic["N_atom"]
-        n_tokens = basic["N_token"]
+        n_atoms = context.basic.n_atom
+        n_tokens = context.basic.n_token
         n_samples = 2
 
-        # Move input data to device
-        input_feature_dict = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
-            for k, v in input_feature_dict.items()
-        }
-
         # Create optional inputs for testing different branches
-        # Test with r_l (noisy coordinates)
         r_l = torch.randn(n_samples, n_atoms, 3, device=device)
-
-        # Test with s (single embedding)
         s = torch.randn(n_samples, n_tokens, atom_attention_encoder.c_s, device=device)
-
-        # Test with z (pair embedding)
         z = torch.randn(
             1, n_tokens, n_tokens, atom_attention_encoder.c_z, device=device
         )
 
-        # Test full forward pass
-        a, q_l, c_l, p_lm = atom_attention_encoder(
-            input_feature_dict=input_feature_dict, r_l=r_l, s=s, z=z
-        )
+        # Test full forward pass with FullContext
+        a, q_l, c_l, p_lm = atom_attention_encoder(context=context, r_l=r_l, s=s, z=z)
 
         # Check output shapes
-        assert (
-            a.shape == (n_samples, n_tokens, atom_attention_encoder.c_token)
-        ), f"Expected a shape ({n_samples}, {n_tokens}, {atom_attention_encoder.c_token}), got {a.shape}"
-
-        assert (
-            q_l.shape == (n_samples, n_atoms, atom_attention_encoder.c_atom)
-        ), f"Expected q_l shape ({n_samples}, {n_atoms}, {atom_attention_encoder.c_atom}), got {q_l.shape}"
-
-        assert (
-            c_l.shape == (n_samples, n_atoms, atom_attention_encoder.c_atom)
-        ), f"Expected c_l shape ({n_samples}, {n_atoms}, {atom_attention_encoder.c_atom}), got {c_l.shape}"
+        assert a.shape == (n_samples, n_tokens, atom_attention_encoder.c_token)
+        assert q_l.shape == (n_samples, n_atoms, atom_attention_encoder.c_atom)
+        assert c_l.shape == (n_samples, n_atoms, atom_attention_encoder.c_atom)
 
         # Check p_lm shape (local attention format)
         n_blocks = (
@@ -194,9 +135,7 @@ class TestAtomAttentionEncoder:
             atom_attention_encoder.num_keys,
             atom_attention_encoder.c_atompair,
         )
-        assert (
-            p_lm.shape == expected_p_lm_shape
-        ), f"Expected p_lm shape {expected_p_lm_shape}, got {p_lm.shape}"
+        assert p_lm.shape == expected_p_lm_shape
 
         # Check for NaN/Inf values
         assert torch.isfinite(a).all(), "a contains non-finite values"
@@ -204,18 +143,11 @@ class TestAtomAttentionEncoder:
         assert torch.isfinite(c_l).all(), "c_l contains non-finite values"
         assert torch.isfinite(p_lm).all(), "p_lm contains non-finite values"
 
-    def test_atom_attention_encoder_without_optional_inputs(self, sample_data, device):
+    def test_atom_attention_encoder_without_optional_inputs(self, context, device):
         """Test forward pass without optional inputs (r_l, s, z)."""
-        input_feature_dict = sample_data["input_feature_dict"]
-        basic = sample_data["basic"]
-        n_atoms = basic["N_atom"]
-        n_tokens = basic["N_token"]
+        n_atoms = context.basic.n_atom
+        n_tokens = context.basic.n_token
 
-        # Move input data to device
-        input_feature_dict = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
-            for k, v in input_feature_dict.items()
-        }
         atom_attention_encoder = AtomAttentionEncoder(
             c_token=384,
             has_coords=False,
@@ -231,23 +163,13 @@ class TestAtomAttentionEncoder:
             num_keys=128,
         )
 
-        # Test forward pass without optional inputs
-        a, q_l, c_l, p_lm = atom_attention_encoder(
-            input_feature_dict=input_feature_dict, r_l=None, s=None, z=None
-        )
+        # Test forward pass with FullContext, without optional inputs
+        a, q_l, c_l, p_lm = atom_attention_encoder(context=context)
 
-        # Check that outputs are still valid
-        assert (
-            a.shape == (1, n_tokens, atom_attention_encoder.c_token)
-        ), f"Expected a shape (..., {n_tokens}, {atom_attention_encoder.c_token}), got {a.shape}"
-
-        assert (
-            q_l.shape == (1, n_atoms, atom_attention_encoder.c_atom)
-        ), f"Expected q_l shape (..., {n_atoms}, {atom_attention_encoder.c_atom}), got {q_l.shape}"
-
-        assert (
-            c_l.shape == (1, n_atoms, atom_attention_encoder.c_atom)
-        ), f"Expected c_l shape (..., {n_atoms}, {atom_attention_encoder.c_atom}), got {c_l.shape}"
+        # Check output shapes
+        assert a.shape == (1, n_tokens, atom_attention_encoder.c_token)
+        assert q_l.shape == (1, n_atoms, atom_attention_encoder.c_atom)
+        assert c_l.shape == (1, n_atoms, atom_attention_encoder.c_atom)
 
         # Check for finite values
         assert torch.isfinite(a).all(), "a contains non-finite values"
@@ -262,18 +184,9 @@ class TestAtomAttentionDecoder:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @pytest.fixture
-    def sample_data(self):
-        test_data_path = os.path.join(
-            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
-        )
-        sample_data = torch.load(test_data_path, weights_only=False)
-
-        # Add atom_mask if not present
-        atom_mask = torch.randint(
-            low=0, high=2, size=(sample_data["input_feature_dict"]["ref_mask"].shape)
-        )
-        sample_data["input_feature_dict"]["atom_mask"] = atom_mask
-        return sample_data
+    def context(self, device) -> FullContext:
+        """Load sample data as FullContext."""
+        return load_sample_context(device=device)
 
     @pytest.fixture
     def atom_attention_decoder(self, device):
@@ -291,25 +204,28 @@ class TestAtomAttentionDecoder:
 
     def _generate_trunked_pair_mask(self, atom_mask, num_queries, num_keys):
         """Generate trunked pair mask using the same pattern as AtomAttentionEncoder."""
+        # Convert to bool if not already
+        atom_mask_bool = (
+            atom_mask.bool() if atom_mask.dtype != torch.bool else atom_mask
+        )
         queries_mask = rearrange_to_query_subset(
-            atom_mask, rearrange_dim=-1, num_queries=num_queries
+            atom_mask_bool, rearrange_dim=-1, num_queries=num_queries
         )  # [..., n_blocks, n_queries]
         keys_mask = rearrange_to_key_subset(
-            atom_mask,
+            atom_mask_bool,
             rearrange_dim=-1,
             num_keys=num_keys,
             num_queries=num_queries,
         )  # [..., n_blocks, n_keys]
-        trunked_pair_mask = queries_mask[..., :, None] * keys_mask[..., None, :]
+        trunked_pair_mask = queries_mask[..., :, None] & keys_mask[..., None, :]
         return trunked_pair_mask
 
     def test_atom_attention_decoder_forward_pass(
-        self, atom_attention_decoder, sample_data, device
+        self, atom_attention_decoder, context, device
     ):
         """Test the complete forward pass of AtomAttentionDecoder."""
-        basic = sample_data["basic"]
-        n_atoms = basic["N_atom"]
-        n_tokens = basic["N_token"]
+        n_atoms = context.basic.n_atom
+        n_tokens = context.basic.n_token
         N_sample = 2
 
         # Create input tensors
@@ -335,8 +251,8 @@ class TestAtomAttentionDecoder:
         )
 
         # Create atom_to_token_idx and atom_mask
-        atom_to_token_idx = torch.randint(0, n_tokens, (n_atoms,), device=device)
-        atom_mask = torch.ones(n_atoms, device=device)
+        atom_to_token_idx = context.index.atom_to_token_idx
+        atom_mask = context.mask.atom_mask
 
         # Generate trunked_pair_mask using the same pattern as encoder
         trunked_pair_mask = self._generate_trunked_pair_mask(
@@ -366,12 +282,11 @@ class TestAtomAttentionDecoder:
         assert torch.isfinite(r_update).all(), "r_update contains non-finite values"
 
     def test_atom_attention_decoder_with_batch_dims(
-        self, atom_attention_decoder, sample_data, device
+        self, atom_attention_decoder, context, device
     ):
         """Test AtomAttentionDecoder with batch dimensions."""
-        basic = sample_data["basic"]
-        n_atoms = basic["N_atom"]
-        n_tokens = basic["N_token"]
+        n_atoms = context.basic.n_atom
+        n_tokens = context.basic.n_token
         n_sample = 1
         batch_size = 2
 
@@ -405,10 +320,10 @@ class TestAtomAttentionDecoder:
         )
 
         # Create batched atom_to_token_idx and atom_mask
-        atom_to_token_idx = torch.randint(
-            0, n_tokens, (batch_size, n_atoms), device=device
+        atom_to_token_idx = context.index.atom_to_token_idx.unsqueeze(0).expand(
+            batch_size, -1
         )
-        atom_mask = torch.ones(batch_size, n_atoms, device=device)
+        atom_mask = context.mask.atom_mask.unsqueeze(0).expand(batch_size, -1)
 
         # Generate batched trunked_pair_mask
         trunked_pair_mask = self._generate_trunked_pair_mask(

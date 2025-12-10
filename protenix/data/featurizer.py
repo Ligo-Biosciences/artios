@@ -15,9 +15,11 @@ from protenix.common.constants import (
 )
 from protenix.data.features import (
     AtomPermInfo,
+    BasicContext,
     ChainPermContext,
     CoordinateContext,
     EntityContext,
+    FullContext,
     IndexContext,
     MaskContext,
     MotifContext,
@@ -28,11 +30,13 @@ from protenix.data.tokenizer import TokenArray
 from protenix.utils.geometry import random_transform
 
 
-class Featurizer(object):
+class ContextGenerator(object):
     def __init__(
         self,
         cropped_token_array: TokenArray,
         cropped_atom_array: AtomArray,
+        pdb_id: str,
+        bioassembly_dict_fpath: str,
         ref_pos_augment: bool = True,
         lig_atom_rename: bool = False,
     ) -> None:
@@ -44,8 +48,9 @@ class Featurizer(object):
             lig_atom_rename (bool): Boolean indicating whether rename atom name for ligand atoms
         """
         self.cropped_token_array = cropped_token_array
-
         self.cropped_atom_array = cropped_atom_array
+        self.pdb_id = pdb_id
+        self.bioassembly_dict_fpath = bioassembly_dict_fpath
         self.ref_pos_augment = ref_pos_augment
         self.lig_atom_rename = lig_atom_rename
 
@@ -126,7 +131,7 @@ class Featurizer(object):
 
             # Compute virtual Cβ for proteins
             if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):
-                cb_coord = Featurizer.compute_virtual_cb(
+                cb_coord = ContextGenerator.compute_virtual_cb(
                     atom_coords["N"], atom_coords["CA"], atom_coords["C"]
                 )
                 backbone_coords[token_idx, 4] = cb_coord
@@ -173,7 +178,7 @@ class Featurizer(object):
             torch.Tensor:  A Tensor of one-hot encoded residue types
         """
 
-        return Featurizer.encoder(list(STD_RESIDUES_AND_GAP.keys()), restype_list)
+        return ContextGenerator.encoder(list(STD_RESIDUES_AND_GAP.keys()), restype_list)
 
     @staticmethod
     def elem_onehot_encoded(elem_list: list[str]) -> torch.Tensor:
@@ -188,7 +193,7 @@ class Featurizer(object):
         Returns:
             torch.Tensor:  A Tensor of one-hot encoded elements
         """
-        return Featurizer.encoder(get_all_elems(), elem_list)
+        return ContextGenerator.encoder(get_all_elems(), elem_list)
 
     @staticmethod
     def ref_atom_name_chars_encoded(atom_names: list[str]) -> torch.Tensor:
@@ -279,7 +284,7 @@ class Featurizer(object):
         )
         return context
 
-    def get_chain_perm_features(self) -> ChainPermContext:
+    def get_chain_perm_context(self) -> ChainPermContext:
         """
         The chain permutation use "entity_mol_id", "mol_id" and "mol_atom_index"
         instead of the "entity_id", "asym_id" and "residue_index".
@@ -349,11 +354,11 @@ class Featurizer(object):
         ref_conf_context = ReferenceConformerContext(
             ref_pos=torch.Tensor(ref_pos),
             ref_mask=torch.Tensor(self.cropped_atom_array.ref_mask).long(),
-            ref_element=Featurizer.elem_onehot_encoded(
+            ref_element=ContextGenerator.elem_onehot_encoded(
                 self.cropped_atom_array.element
             ).long(),
             ref_charge=torch.Tensor(self.cropped_atom_array.ref_charge).long(),
-            ref_atom_name_chars=Featurizer.ref_atom_name_chars_encoded(
+            ref_atom_name_chars=ContextGenerator.ref_atom_name_chars_encoded(
                 atom_names
             ).long(),
             ref_space_uid=torch.Tensor(self.cropped_atom_array.ref_space_uid).long(),
@@ -412,7 +417,7 @@ class Featurizer(object):
                     token_adj_matrix[j, i] = 1
         return torch.Tensor(token_adj_matrix).long()
 
-    def get_index_features(self) -> IndexContext:
+    def get_index_context(self) -> IndexContext:
         """Get atom-to-token index mappings and global features.
 
         Returns:
@@ -425,7 +430,7 @@ class Featurizer(object):
             ).long(),
         )
 
-    def get_entity_features(self) -> EntityContext:
+    def get_entity_context(self) -> EntityContext:
         """Get molecule type indicators at atom and token level.
 
         Returns:
@@ -452,7 +457,7 @@ class Featurizer(object):
             is_rna_token=get_token_level_moltype("rna"),
         )
 
-    def get_mask_features(self) -> MaskContext:
+    def get_mask_context(self) -> MaskContext:
         """Generate mask features for the cropped atom array.
 
         Returns:
@@ -475,7 +480,7 @@ class Featurizer(object):
             ).bool(),
         )
 
-    def get_motif_features(self) -> MotifContext:
+    def get_motif_context(self) -> MotifContext:
         """Get features for motif training.
 
         We extract coordinates from the centre atoms to avoid creating heavy
@@ -512,7 +517,7 @@ class Featurizer(object):
             motif_coordinate=torch.Tensor(motif_coordinate).float(),
         )
 
-    def get_coordinates_features(self) -> CoordinateContext:
+    def get_coordinate_context(self) -> CoordinateContext:
         """Get coordinates features.
 
         Returns:
@@ -525,30 +530,31 @@ class Featurizer(object):
             resolution=float(self.cropped_atom_array.resolution[0]),
         )
 
-    def get_all_input_features(self):
-        """
-        Get input features from cropped data.
+    def get_basic_context(self) -> BasicContext:
+        """Get basic context information."""
+        return BasicContext(
+            atom_array=self.cropped_atom_array,
+            token_array=self.cropped_token_array,
+            pdb_id=self.pdb_id,
+            bioassembly_dict_fpath=self.bioassembly_dict_fpath,
+            n_asym=len(torch.unique(self.cropped_atom_array.asym_id)),
+            n_token=len(self.cropped_token_array),
+            n_atom=len(self.cropped_atom_array),
+        )
 
-        Returns:
-            Dict[str, torch.Tensor]: a dict of features.
-        """
-        features = {}
-        token_features = self.get_token_context()
-        features.update(token_features)
-
-        reference_features = self.get_reference_conformer_context()
-        features.update(reference_features)
-
-        chain_perm_features = self.get_chain_perm_features()
-        features.update(chain_perm_features)
-
-        mask_features = self.get_mask_features()
-        features.update(mask_features)
-
-        motif_features = self.get_motif_features()
-        features.update(motif_features)
-
-        return features
+    def get_full_context(self) -> FullContext:
+        """Get all context required for design pipeline."""
+        return FullContext(
+            token=self.get_token_context(),
+            reference=self.get_reference_conformer_context(),
+            chain_perm=self.get_chain_perm_context(),
+            mask=self.get_mask_context(),
+            motif=self.get_motif_context(),
+            index=self.get_index_context(),
+            entity=self.get_entity_context(),
+            coordinate=self.get_coordinate_context(),
+            basic=self.get_basic_context(),
+        )
 
     def get_atom_permutation_list(
         self,

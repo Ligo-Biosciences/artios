@@ -23,9 +23,11 @@ from functools import partial
 from typing import Annotated, Callable
 
 import torch
+from biotite.structure import AtomArray
 from torch import Tensor
 
-from protenix.model.utils import pad_tensor
+from protenix.data.padding_utils import pad_tensor
+from protenix.data.tokenizer import TokenArray
 from protenix.utils.typing import Bool, Float, Int, typecheck
 
 logger = logging.getLogger(__name__)
@@ -157,28 +159,32 @@ class Context:
 
 @typecheck
 @dataclass
-class TokenContext(Context):  # TODO: TokenContext
+class TokenContext(Context):
     """Token-level features from AlphaFold3 SI Chapter 2.8.
 
-    All tensors have shape [n_token, ...] where n_token is the number of tokens.
+    All tensors have shape [*batch, n_token, ...] where *batch is optional batch dims.
     """
 
-    token_index: Feature(Int[Tensor, "n_token"], type=FeatureType.TOKEN)
-    residue_index: Feature(Int[Tensor, "n_token"], type=FeatureType.TOKEN)
-    asym_id: Feature(Int[Tensor, "n_token"], type=FeatureType.TOKEN)
-    entity_id: Feature(Int[Tensor, "n_token"], encoding=EncodingType.IDENTITY)
-    sym_id: Feature(Int[Tensor, "n_token"], encoding=EncodingType.IDENTITY)
-    restype: Feature(Int[Tensor, "n_token 32"], encoding=EncodingType.ONE_HOT)
+    token_index: Feature(Int[Tensor, "*batch n_token"], type=FeatureType.TOKEN)
+    residue_index: Feature(Int[Tensor, "*batch n_token"], type=FeatureType.TOKEN)
+    asym_id: Feature(Int[Tensor, "*batch n_token"], type=FeatureType.TOKEN)
+    entity_id: Feature(Int[Tensor, "*batch n_token"], type=FeatureType.TOKEN)
+    sym_id: Feature(Int[Tensor, "*batch n_token"], type=FeatureType.TOKEN)
+    restype: Feature(
+        Int[Tensor, "*batch n_token 32"],
+        type=FeatureType.TOKEN,
+        encoding=EncodingType.ONE_HOT,
+    )
 
     token_bonds: Feature(
-        Int[Tensor, "n_token n_token"],
+        Int[Tensor, "*batch n_token n_token"],
         type=FeatureType.TOKEN_PAIR,
         encoding=EncodingType.IDENTITY,
         description="Indicator for ligand-ligand and non-polymer bonds",
     )
 
     token_mask: Mask(
-        Bool[Tensor, "n_token"],
+        Bool[Tensor, "*batch n_token"],
         type=FeatureType.TOKEN,
         description="Token is not padding mask (all true before pad)",
     )
@@ -190,34 +196,34 @@ class ReferenceConformerContext(Context):
     """Reference conformer features from AlphaFold3 SI Chapter 2.8."""
 
     ref_pos: Feature(
-        Float[Tensor, "n_atom 3"],
+        Float[Tensor, "*batch n_atom 3"],
         type=FeatureType.ATOM,
         encoding=EncodingType.IDENTITY,
         description="Reference conformer positions",
     )
     ref_mask: Mask(
-        Int[Tensor, "n_atom"],
+        Int[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         encoding=EncodingType.IDENTITY,
         description="Mask indicating atom slots used in conformer",
     )
     ref_element: Feature(
-        Int[Tensor, "n_atom 128"],
+        Int[Tensor, "*batch n_atom 128"],
         type=FeatureType.ATOM,
         encoding=EncodingType.ONE_HOT,
     )
     ref_charge: Feature(
-        Int[Tensor, "n_atom"],
+        Int[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         encoding=EncodingType.IDENTITY,
     )
     ref_atom_name_chars: Feature(
-        Int[Tensor, "n_atom 4 64"],
+        Int[Tensor, "*batch n_atom 4 64"],
         type=FeatureType.ATOM,
         encoding=EncodingType.ONE_HOT,
     )
     ref_space_uid: Auxiliary(
-        Int[Tensor, "n_atom"],
+        Int[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="ID for each unique conformer",
     )
@@ -231,13 +237,14 @@ class ChainPermContext(Context):
     Used for permutation-invariant training with symmetric chains.
     """
 
-    mol_id: Auxiliary(Int[Tensor, "n_atom"], type=FeatureType.ATOM)
-    mol_atom_index: Auxiliary(Int[Tensor, "n_atom"], type=FeatureType.ATOM)
-    entity_mol_id: Auxiliary(Int[Tensor, "n_atom"], type=FeatureType.ATOM)
+    mol_id: Auxiliary(Int[Tensor, "*batch n_atom"], type=FeatureType.ATOM)
+    mol_atom_index: Auxiliary(Int[Tensor, "*batch n_atom"], type=FeatureType.ATOM)
+    entity_mol_id: Auxiliary(Int[Tensor, "*batch n_atom"], type=FeatureType.ATOM)
 
 
-class AtomPermInfo(Context):
-    """Atom permutation features for symmetric permutation
+@dataclass
+class AtomPermInfo:
+    """Atom permutation features for symmetric permutation.
 
     TODO: feature explanation
     """
@@ -254,12 +261,12 @@ class IndexContext(Context):
     """
 
     atom_to_token_idx: Auxiliary(
-        Int[Tensor, "n_atom"],
+        Int[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="Token index for each atom.",
     )
     atom_to_tokatom_idx: Auxiliary(
-        Int[Tensor, "n_atom"],
+        Int[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="Token atom (which atom within token) index for each atom",
     )
@@ -274,16 +281,16 @@ class EntityContext(Context):
     """
 
     # Atom-level indicators
-    is_protein: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    is_ligand: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    is_dna: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
-    is_rna: Mask(Bool[Tensor, "n_atom"], type=FeatureType.ATOM)
+    is_protein: Mask(Bool[Tensor, "*batch n_atom"], type=FeatureType.ATOM)
+    is_ligand: Mask(Bool[Tensor, "*batch n_atom"], type=FeatureType.ATOM)
+    is_dna: Mask(Bool[Tensor, "*batch n_atom"], type=FeatureType.ATOM)
+    is_rna: Mask(Bool[Tensor, "*batch n_atom"], type=FeatureType.ATOM)
 
     # Token-level indicators
-    is_protein_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    is_ligand_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    is_dna_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
-    is_rna_token: Mask(Bool[Tensor, "n_token"], type=FeatureType.TOKEN)
+    is_protein_token: Mask(Bool[Tensor, "*batch n_token"], type=FeatureType.TOKEN)
+    is_ligand_token: Mask(Bool[Tensor, "*batch n_token"], type=FeatureType.TOKEN)
+    is_dna_token: Mask(Bool[Tensor, "*batch n_token"], type=FeatureType.TOKEN)
+    is_rna_token: Mask(Bool[Tensor, "*batch n_token"], type=FeatureType.TOKEN)
 
 
 @typecheck
@@ -295,27 +302,27 @@ class MaskContext(Context):
     """
 
     centre_atom_mask: Mask(
-        Bool[Tensor, "n_atom"],
+        Bool[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="Atom is centre atom of the token (0 for non-centre atoms)",
     )
     atom_mask: Mask(
-        Bool[Tensor, "n_atom"],
+        Bool[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="Atom is not padding (for attention masking)",
     )
     is_resolved: Mask(
-        Bool[Tensor, "n_atom"],
+        Bool[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="Atom is resolved in structure.",
     )
     backbone_mask: Mask(
-        Bool[Tensor, "n_token 5"],
-        type=FeatureType.ATOM,
+        Bool[Tensor, "*batch n_token 5"],
+        type=FeatureType.TOKEN,
         description="Mask for all backbone atoms",
     )
     atom_loss_mask: Mask(
-        Bool[Tensor, "n_atom"],
+        Bool[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="Atom is resolved in structure and is in the token with a resolved centre atom.",
     )
@@ -328,34 +335,34 @@ class MotifContext(Context):
 
     # Atom-level
     is_motif: Mask(
-        Bool[Tensor, "n_atom"],
+        Bool[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="Is motif atom.",
     )
     is_motif_related: Mask(
-        Bool[Tensor, "n_atom"],
+        Bool[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="Is a conformer (e.g. sidechain) with at least one atom in the motif.",
     )
 
     # Token-level
     is_motif_token: Mask(
-        Int[Tensor, "n_token"],
+        Int[Tensor, "*batch n_token"],
         type=FeatureType.TOKEN,
         description="Is motif token (has motif coordinates)",
     )
     is_motif_related_token: Mask(
-        Int[Tensor, "n_token"],
+        Int[Tensor, "*batch n_token"],
         type=FeatureType.TOKEN,
         description="Is a token related to a motif (e.g. sidechain, which are tokenized per-atom)",
     )
     motif_restype: Feature(
-        Float[Tensor, "n_token 32"],
+        Float[Tensor, "*batch n_token 32"],
         type=FeatureType.TOKEN,
         description="Motif residue type",
     )
     motif_coordinate: Feature(
-        Float[Tensor, "n_token 3"],
+        Float[Tensor, "*batch n_token 3"],
         type=FeatureType.TOKEN,
         encoding=EncodingType.IDENTITY,
         description="Motif coordinates",
@@ -368,37 +375,43 @@ class CoordinateContext(Context):
     """Coordinate features."""
 
     coordinate: Feature(
-        Float[Tensor, "n_atom 3"],
+        Float[Tensor, "*batch n_atom 3"],
         type=FeatureType.ATOM,
         description="Coordinates of full structure",
     )
     centre_coordinate: Feature(
-        Float[Tensor, "n_token 3"],
+        Float[Tensor, "*batch n_token 3"],
         type=FeatureType.TOKEN,
         description="Coordinates of centre atoms",
     )
     backbone_coordinate: Feature(
-        Float[Tensor, "n_token 5 3"],
+        Float[Tensor, "*batch n_token 5 3"],
         type=FeatureType.TOKEN,
         description="Coordinates of backbone atoms",
     )
-    resolution: float
+    resolution: float | list[float]
 
 
 @dataclass
-class AllAtomFeatures:
-    """Container for all features needed for all-atom structure prediction.
+class BasicContext:
+    """Contains basic metadata about the sample.
 
-    This is the main interface for passing features through the model.
-    Provides type-safe access to feature groups with IDE autocomplete.
-
-    Example:
-        >>> features = AllAtomFeatures.from_featurizer(featurizer)
-        >>> features.token.restype.shape  # [n_token, 32]
-        >>> features.reference.ref_pos.shape  # [n_atom, 3]
-        >>> features.to("cuda")
-        >>> features.pad(n_token_pad=10, n_atom_pad=20)
+    Note: This context contains non-tensor fields that become lists when batched.
     """
+
+    atom_array: AtomArray | list[AtomArray]
+    token_array: TokenArray | list[TokenArray]
+
+    pdb_id: str | list[str]
+    bioassembly_dict_fpath: str | list[str]
+    n_asym: int | list[int]
+    n_token: int | list[int]
+    n_atom: int | list[int]
+
+
+@dataclass
+class FullContext:
+    """Container for context required for Ligo's design pipeline."""
 
     token: TokenContext
     reference: ReferenceConformerContext
@@ -408,22 +421,18 @@ class AllAtomFeatures:
     index: IndexContext
     entity: EntityContext
     coordinate: CoordinateContext
+    basic: BasicContext
 
-    def pad(self, n_max_tokens: int, n_max_atoms: int) -> "AllAtomFeatures":
-        """Pad all features to n_max_tokens/n_max_atoms.
+    def pad(self, n_max_atoms: int, n_max_tokens: int) -> FullContext:
+        """Pad all features to n_max_tokens/n_max_atoms."""
+        current_n_token = self.basic.n_token
+        current_n_atom = self.basic.n_atom
 
-        Uses the FeatureType from each field's annotation to determine
-        which dimensions to pad:
-        - TOKEN: pad dim 0 by n_token_pad
-        - TOKEN_PAIR: pad dims 0 and 1 by n_token_pad
-        - ATOM: pad dim 0 by n_atom_pad
-        - ATOM_PAIR: pad dims 0 and 1 by n_atom_pad
-        """
-        assert n_max_tokens >= self.num_tokens
-        assert n_max_atoms >= self.num_atoms
+        assert n_max_tokens >= current_n_token
+        assert n_max_atoms >= current_n_atom
 
-        n_token_pad = n_max_tokens - self.num_tokens
-        n_atom_pad = n_max_atoms - self.num_atoms
+        n_token_pad = n_max_tokens - current_n_token
+        n_atom_pad = n_max_atoms - current_n_atom
 
         pad_fns = {
             FeatureType.TOKEN: partial(pad_tensor, pad_sizes=(n_token_pad,)),
@@ -445,11 +454,3 @@ class AllAtomFeatures:
                 kwargs[f.name] = fg
 
         return type(self)(**kwargs)
-
-    @property
-    def num_tokens(self) -> int:
-        return self.token.token_index.shape[0]
-
-    @property
-    def num_atoms(self) -> int:
-        return self.reference.ref_pos.shape[0]

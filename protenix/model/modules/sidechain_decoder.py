@@ -1,9 +1,8 @@
-from typing import Dict
-
 import torch
-from jaxtyping import Float
+from einops import rearrange, repeat
 from torch import Tensor, nn
 
+from protenix.data.features import FullContext
 from protenix.model.modules.atom_attention import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
@@ -11,29 +10,30 @@ from protenix.model.modules.atom_attention import (
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.modules.transformer import DiffusionTransformer
-from protenix.model.utils import (
-    centre_random_augmentation,
-    expand_at_dim,
-)
+from protenix.model.utils import centre_random_augmentation
+from protenix.utils.typing import Float, typecheck
 
 
 class SidechainDecoder(nn.Module):
-    """A lightweight non-equivariant sidechain decoder for allatom sequence design."""
+    """A lightweight non-equivariant sidechain decoder for all-atom sequence design."""
 
     def __init__(
         self,
-        node_dim,
+        c_s: int = 384,
         c_token: int = 384,
         c_atom: int = 128,
         c_atompair: int = 16,
+        c_z: int = 32,
         atom_encoder: dict[str, int] = {"num_blocks": 3, "num_heads": 4},
         transformer: dict[str, int] = {"num_blocks": 10, "num_heads": 12},
         atom_decoder: dict[str, int] = {"num_blocks": 3, "num_heads": 4},
         num_queries: int = 32,
         num_keys: int = 128,
+        sigma_coord: float = 10.0,
     ) -> None:
         super().__init__()
-        self.relpos = RelativePositionEncoding(r_max=32, s_max=2, c_z=32)
+        self.sigma_coord = sigma_coord
+        self.relpos = RelativePositionEncoding(r_max=32, s_max=2, c_z=c_z)
 
         # Encoder
         self.atom_attention_encoder = AtomAttentionEncoder(
@@ -43,25 +43,23 @@ class SidechainDecoder(nn.Module):
             has_s=True,
             c_atom=c_atom,
             c_atompair=c_atompair,
-            c_s=node_dim,
-            c_z=32,
+            c_s=c_s,
+            c_z=c_z,
             num_queries=num_queries,
             num_keys=num_keys,
         )
 
         # Single conditioning embedding
-        self.embed_restype = LinearNoBias(32, node_dim)
-        self.fourier_embedding = FourierEmbedding(c=node_dim)
-        self.embed_timestep = LinearNoBias(node_dim, node_dim)
-        self.layernorm_s = LayerNorm(2 * node_dim)
-        self.proj_s = LinearNoBias(2 * node_dim, node_dim)
+        self.embed_restype = LinearNoBias(32, c_s)
+        self.fourier_embedding = FourierEmbedding(c=c_s)
+        self.embed_timestep = LinearNoBias(c_s, c_s)
 
         # DiT
         self.diffusion_transformer = DiffusionTransformer(
             **transformer,
             c_token=c_token,
-            c_s=node_dim,
-            c_z=32,
+            c_s=c_s,
+            c_z=c_z,
         )
         self.layernorm_a = LayerNorm(c_token)
 
@@ -75,85 +73,85 @@ class SidechainDecoder(nn.Module):
             num_keys=num_keys,
         )
 
-    def c_out(self, timestep) -> Tensor:
+    def c_out(self, timestep: Tensor) -> Tensor:
         return 1 - timestep
 
-    @torch.compile
+    @typecheck
     def forward(
         self,
-        input_feature_dict: Dict[str, Tensor],
+        context: FullContext,
         x_noisy: Float[Tensor, "... n_sample n_atom 3"],
-        node_emb: Float[Tensor, "... n_token node_dim"],
         timestep: Float[Tensor, "... n_sample"],
-        # residual_centre_atoms: Float[Tensor, "... n_sample n_atom 3"],
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
-        """All-atom denoiser forward pass."""
-        # Grab mask and indices
-        atom_mask = input_feature_dict["atom_mask"]
-        atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
-        n_token = node_emb.shape[-2]
+        """All-atom denoiser forward pass.
+
+        Args:
+            context: Full feature context.
+            x_noisy: Noisy atom coordinates.
+            timestep: Diffusion timestep.
+
+        Returns:
+            Denoised atom coordinates.
+        """
+        # Extract features from context
+        dtype = context.reference.ref_pos.dtype
+        atom_mask = context.mask.atom_mask
+        atom_to_token_idx = context.index.atom_to_token_idx
+        token_mask = context.mask.token_mask
+        restype = context.token.restype
+        n_token = restype.shape[-2]
 
         # Compute pair mask
-        token_mask = input_feature_dict["token_mask"]  # [..., n_token]
-        token_mask = token_mask.unsqueeze(-2)  # add N_sample dim
-        pair_mask = token_mask[..., :, None] * token_mask[..., None, :]
-        # [..., 1, n_token, n_token]
+        token_mask = token_mask.unsqueeze(-2)  # add n_sample dim
+        mask_i = rearrange(token_mask, "... n -> ... n 1")
+        mask_j = rearrange(token_mask, "... n -> ... 1 n")
+        pair_mask = mask_i & mask_j
 
+        # Compute relative position encoding
         z = self.relpos(
-            asym_id=input_feature_dict["asym_id"],
-            residue_index=input_feature_dict["residue_index"],
-            entity_id=input_feature_dict["entity_id"],
-            sym_id=input_feature_dict["sym_id"],
-            token_index=input_feature_dict["token_index"],
-        )  # [..., n_token, n_token, c_z]
-        z = z.unsqueeze(-4)  # N_sample dim
+            asym_id=context.token.asym_id,
+            residue_index=context.token.residue_index,
+            entity_id=context.token.entity_id,
+            sym_id=context.token.sym_id,
+            token_index=context.token.token_index,
+        )
+        z = rearrange(z, "... i j c -> ... 1 i j c")
 
-        # Compute sequence and node embeddings
-        seq_emb = self.embed_restype(input_feature_dict["restype"])
-        s = torch.cat([seq_emb, node_emb], dim=-1)
-        s = self.layernorm_s(s)
-        s = self.proj_s(s)  # [..., n_token, c_token]
+        # Compute sequence embedding
+        s = self.embed_restype(restype.to(dtype))
 
         # Add timestep embedding
         timestep_emb = self.embed_timestep(
             self.fourier_embedding(t_hat_timestep=2 * timestep - 1)
-        ).to(z.dtype)  # [..., n_sample, node_dim]
-        s = s.unsqueeze(-3) + expand_at_dim(timestep_emb, dim=-2, n=n_token)
-        # [..., n_sample, n_token, c_token]
+        ).to(z.dtype)
+        s = rearrange(s, "... n c -> ... 1 n c")
+        s = s + repeat(timestep_emb, "... n_sample c -> ... n_sample n c", n=n_token)
 
         # Encode atoms
-        a, q_l, c_l, p_lm, trunked_pair_mask = self.atom_attention_encoder(
-            input_feature_dict=input_feature_dict,
-            r_l=x_noisy / 10.0,  # TODO: hardcoded
+        a, skip = self.atom_attention_encoder(
+            context=context,
+            r_l=x_noisy / self.sigma_coord,
             s=s,
             z=z,
-            return_trunked_pair_mask=True,
         )
 
         a = self.diffusion_transformer(a=a, s=s, z=z, pair_mask=pair_mask)
         a = self.layernorm_a(a)
 
         # Decode atoms
-        # TODO: the atom attention encoder and decoder have different signatures.
-        # This is resulting in a lot of shape wrangling which I don't like.
         r_update = self.atom_attention_decoder(
             a=a,
-            q_skip=q_l,
-            c_skip=c_l,
-            p_skip=p_lm,
+            skip=skip,
             atom_to_token_idx=atom_to_token_idx,
             atom_mask=atom_mask,
-            trunked_pair_mask=trunked_pair_mask.squeeze(-4),
-        )  # [..., n_sample, n_atom, 3]
-
+        )
         denoised_atoms = x_noisy + r_update * self.c_out(timestep[..., None, None])
-
         return denoised_atoms
 
+    @typecheck
     def sample(
         self,
-        input_feature_dict: Dict[str, Tensor],
-        node_emb: Float[Tensor, "... n_token node_dim"],
+        context: FullContext,
         timesteps: Float[Tensor, "n_steps"],
         residual_centre_atoms: Float[Tensor, "... n_sample n_atom 3"],
         stoch_type: str = "deterministic",
@@ -161,69 +159,57 @@ class SidechainDecoder(nn.Module):
         gamma: float = 1.0,
         n_sample: int = 1,
         sigma_data: float = 1.0,
-        eps: float = 1e-8,
+        eps: float = 1e-5,
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
         """All-atom denoising sampling using diffusion process.
 
-        Performs iterative denoising of atom coordinates through a diffusion sampling
-        process with configurable stochasticity schedules and integration methods.
-
         Args:
-            input_feature_dict (Dict[str, Tensor]): input feature dict
-            node_emb: Node embeddings from MPNN
-            timesteps: Diffusion timesteps for sampling
-            residual_centre_atoms: Residue center atom coordinates for residual connection
-            stoch_type (str, optional): Type of stochasticity schedule.
-                Options include "deterministic", "constant", "non_singular", "zero_ends".
-            alpha: Controls the level of noise added during sampling. Defaults to 1.0.
-            gamma: Scaling factor for stochastic noise term. Defaults to 1.0.
-            n_sample: Number of samples to generate. Defaults to 1.
+            context: Full feature context.
+            timesteps: Diffusion timesteps for sampling.
+            residual_centre_atoms: Residue center atom coordinates for residual connection.
+            stoch_type: Type of stochasticity schedule.
+                Options: "deterministic", "constant", "non_singular", "zero_ends".
+            alpha: Controls the level of noise added during sampling.
+            gamma: Scaling factor for stochastic noise term.
+            n_sample: Number of samples to generate.
+            sigma_data: Standard deviation for initial noise.
+            eps: Small constant for numerical stability.
 
         Returns:
-            Float[Tensor, "... n_sample n_atom 3"]: Denoised atom coordinates
+            Denoised atom coordinates.
         """
-        N_atom = input_feature_dict["atom_to_token_idx"].size(-1)
-        batch_shape = input_feature_dict["residue_index"].shape[:-1]
-        device = input_feature_dict["residue_index"].device
-        dtype = torch.float32  # input_feature_dict["residue_index"].dtype
+        n_atom = context.index.atom_to_token_idx.shape[-1]
+        batch_shape = context.token.residue_index.shape[:-1]
+        device = context.token.residue_index.device
+        dtype = torch.float32
 
-        def _calculate_velocity_and_score(x_noisy, t_cur):
-            """Calculate velocity and scaled score for the diffusion process for a single timestep."""
+        def _calculate_velocity_and_score(
+            x_noisy: Tensor, t_cur: Tensor
+        ) -> tuple[Tensor, Tensor]:
+            """Calculate velocity and scaled score for a single timestep."""
             coords_pred = self.forward(
-                input_feature_dict=input_feature_dict,
+                context=context,
                 x_noisy=x_noisy,
-                node_emb=node_emb,
-                timestep=t_cur,  # [..., n_sample]
+                timestep=t_cur,
             )
 
-            # Calculate velocity
-            t_cur_expanded = t_cur[..., None, None]  # [..., n_sample, 1, 1]
-            velocity_pred = (coords_pred - x_noisy) / torch.clamp(
-                1 - t_cur_expanded, min=eps
-            )
-
-            # Predict score (division by 1-t absorbed into the stochasticity schedule for numerics)
-            scaled_score = t_cur_expanded * velocity_pred - x_noisy
+            t_cur_ = repeat(t_cur, "... -> ... 1 1")
+            velocity_pred = (coords_pred - x_noisy) / torch.clamp(1 - t_cur_, min=eps)
+            scaled_score = t_cur_ * velocity_pred - x_noisy
             return velocity_pred, scaled_score
 
-        # Stochasticity schedule g (scaled by 1/(1-t) for numerical stability)
-        # We also normalise by the functions' integral over [0,1].
-        # This allows for the parameter alpha to fully control the level of noise added.
-        # Now, the area under the noise schedule is equal to alpha.
+        # Stochasticity schedules
         stoch_schedules = {
             "deterministic": lambda t: torch.zeros_like(t),
             "constant": lambda t: torch.ones_like(t)
             * (0.5 * (alpha**2))
             / torch.clamp(1 - t, min=eps),
             "non_singular": lambda t: torch.where(
-                t > 0.95,  # do not noise close to 1 for ligand's sake
+                t > 0.95,
                 torch.zeros_like(t),
                 4 * torch.ones_like(t) * 0.5 * (alpha**2),
-            ),  # int_{0}^{1}(non_sing) = 1/4
-            "zero_ends": lambda t: 12
-            * 0.5
-            * (alpha**2)
-            * t,  # int_{0}^{1}(zero_ends) = 1/12
+            ),
+            "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t,
         }
 
         if stoch_type not in stoch_schedules:
@@ -233,9 +219,9 @@ class SidechainDecoder(nn.Module):
 
         # Generate starting noise
         x_0 = sigma_data * torch.randn(
-            size=(*batch_shape, n_sample, N_atom, 3), device=device, dtype=dtype
-        )  # [..., N_sample, N_atom, 3]
-        x_0 = x_0 + residual_centre_atoms  # move noise to around centre atoms
+            size=(*batch_shape, n_sample, n_atom, 3), device=device, dtype=dtype
+        )
+        x_0 = x_0 + residual_centre_atoms
 
         # Initialise Euler/Euler-Maruyama
         x = x_0
@@ -243,36 +229,26 @@ class SidechainDecoder(nn.Module):
 
         # Sampling loop
         for i, (t_cur, t_next) in enumerate(zip(timesteps[:-1], timesteps[1:])):
-            # Shape wrangling for current timestep
-            t = t_cur.new_full((batch_shape + (n_sample,)), t_cur).to(
-                dtype
-            )  # [..., N_sample]
+            t = t_cur.new_full((*batch_shape, n_sample), t_cur).to(dtype)
 
-            # Generate noise (for stochastic sampling)
             if stoch_type != "deterministic":
                 noise = torch.randn_like(x)
 
-            # Stochastic schedule at current time step.
             g_t = g[i]
 
-            # Centre and rotate coords [..., N_sample, N_atom, 3]
+            # Centre and rotate coords
             x = (
                 centre_random_augmentation(x_input_coords=x, N_sample=1)
                 .squeeze(dim=-3)
                 .to(dtype)
             )
 
-            # Calculate velocity and scaled score
             velocity_pred, scaled_score = _calculate_velocity_and_score(
-                x_noisy=x,
-                t_cur=t,
+                x_noisy=x, t_cur=t
             )
 
-            # Calculate update
             step = t_next - t_cur
             update = step * (velocity_pred.to(torch.float64) + g_t * scaled_score)
-
-            # Euler step
             x = x + update + torch.sqrt(2 * step * g_t * gamma) * noise
 
         return x

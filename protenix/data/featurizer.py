@@ -1,5 +1,6 @@
 import copy
 from collections import defaultdict
+from functools import cached_property
 from typing import Union
 
 import numpy as np
@@ -25,7 +26,7 @@ from protenix.data.features import (
     TokenContext,
 )
 from protenix.data.tokenizer import TokenArray
-from protenix.utils.geometry import random_transform
+from protenix.utils.geometry import compute_virtual_cb, random_transform
 
 
 class Featurizer(object):
@@ -49,6 +50,20 @@ class Featurizer(object):
         self.ref_pos_augment = ref_pos_augment
         self.lig_atom_rename = lig_atom_rename
 
+        # Make atom -> token index
+        atom_to_token_idx_dict = {}
+        for idx, token in enumerate(self.cropped_token_array.tokens):
+            for atom_idx in token.atom_indices:
+                atom_to_token_idx_dict[atom_idx] = idx
+
+        # Ensure the order of the atom_to_token_idx is the same as the atom_array
+        self.atom_to_token_idx = torch.Tensor(
+            [
+                atom_to_token_idx_dict[atom_idx]
+                for atom_idx in range(len(self.cropped_atom_array))
+            ]
+        ).long()
+
     @property
     def centre_atoms_indices(self) -> np.ndarray:
         return self.cropped_token_array.get_annotation("centre_atom_index")
@@ -56,83 +71,6 @@ class Featurizer(object):
     @property
     def centre_atoms(self) -> AtomArray:
         return self.cropped_atom_array[self.centre_atoms_indices]
-
-    @property
-    def atom_to_token_idx(self) -> torch.Tensor:
-        atom_to_token_idx_dict = {}
-        for idx, token in enumerate(self.cropped_token_array.tokens):
-            for atom_idx in token.atom_indices:
-                atom_to_token_idx_dict[atom_idx] = idx
-
-        # Ensure the order of the atom_to_token_idx is the same as the atom_array
-        atom_to_token_idx = torch.Tensor(
-            [
-                atom_to_token_idx_dict[atom_idx]
-                for atom_idx in range(len(self.cropped_atom_array))
-            ]
-        ).long()
-        return atom_to_token_idx
-
-    @property
-    def backbone_atoms_tensor(
-        self,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Extract backbone atom coordinates and masks for all tokens.
-
-        The backbone atoms depend on the chain type:
-        - Proteins: N, CA, C, O, and virtual Cß (computed from N, CA, C)
-        - Nucleic acids: OP1, OP2, C1', C3', C4'
-        - Ligands: Centre atom only (other slots are zero)
-
-        Returns:
-            backbone_coords: Backbone atom coordinates [n_token, 5, 3]
-            backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
-        """
-        # Backbone atom definitions by molecule type
-        n_tokens = len(self.cropped_token_array)
-        backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
-        backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
-
-        # TODO: vectorized op with masking might be more appropriate here
-        # we do this in other parts of the codebase.
-        # Make this biotite native.
-
-        for token_idx, token in enumerate(self.cropped_token_array):
-            centre_atom = self.centre_atoms[token_idx]
-            mol_type = centre_atom.mol_type
-            is_standard = centre_atom.res_name in STD_RESIDUES
-
-            # Ligands or non-standard residues: use centre atom only
-            if mol_type == "ligand" or not is_standard:
-                backbone_coords[token_idx, 0] = centre_atom.coord
-                backbone_mask[token_idx, 0] = 1.0
-                continue
-
-            # Standard protein or nucleic acid
-            backbone_names = BACKBONE_DEFS[mol_type]
-            atom_name_map = {name: idx for idx, name in enumerate(token.atom_names)}
-            atom_coords = {}
-
-            # Extract backbone atoms
-            for bb_idx, atom_name in enumerate(backbone_names):
-                if atom_name in atom_name_map:
-                    local_idx = atom_name_map[atom_name]
-                    global_idx = token.atom_indices[local_idx]
-                    backbone_coords[token_idx, bb_idx] = self.cropped_atom_array.coord[
-                        global_idx
-                    ]
-                    backbone_mask[token_idx, bb_idx] = 1.0
-                    atom_coords[atom_name] = self.cropped_atom_array.coord[global_idx]
-
-            # Compute virtual Cβ for proteins
-            if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):
-                cb_coord = Featurizer.compute_virtual_cb(
-                    atom_coords["N"], atom_coords["CA"], atom_coords["C"]
-                )
-                backbone_coords[token_idx, 4] = cb_coord
-                backbone_mask[token_idx, 4] = 1.0
-
-        return torch.Tensor(backbone_coords), torch.Tensor(backbone_mask)
 
     @staticmethod
     def encoder(encode_def_list: list[str], input_list: list[str]) -> torch.Tensor:
@@ -219,40 +157,24 @@ class Featurizer(object):
         onehot_tensor = torch.Tensor(mol_encode).long()
         return onehot_tensor
 
-    @staticmethod
-    def compute_virtual_cb(
-        n_coord: np.ndarray,
-        ca_coord: np.ndarray,
-        c_coord: np.ndarray,
-    ) -> np.ndarray:
-        """Compute virtual Cβ position using ideal geometry from ProteinMPNN.
+    @cached_property
+    def backbone_atoms_tensor(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extract backbone atom coordinates and masks for all tokens.
 
-        Uses idealized bond lengths and angles to place Cβ in the correct
-        tetrahedral position relative to the N-CA-C backbone.
-
-        Args:
-            n_coord: N atom coordinates [..., 3]
-            ca_coord: CA atom coordinates [..., 3]
-            c_coord: C atom coordinates [..., 3]
+        The backbone atoms depend on the chain type:
+        - Proteins: N, CA, C, O, and virtual Cβ (computed from N, CA, C)
+        - Nucleic acids: OP1, OP2, C1', C3', C4'
+        - Ligands: Centre atom only (other slots are zero)
 
         Returns:
-            Virtual Cβ coordinates [..., 3]
-
-        Reference:
-            ProteinMPNN implementation of virtual Cβ placement
-        # TODO: not sure this is where this function belongs.
+            backbone_coords: Backbone atom coordinates [n_token, 5, 3]
+            backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
         """
-        # Backbone bond vectors
-        n_ca = ca_coord - n_coord
-        ca_c = c_coord - ca_coord
-
-        # Cross product gives direction perpendicular to peptide plane
-        cross = np.cross(n_ca, ca_c)
-
-        # Idealized Cß
-        cb_coord = ca_coord + 0.568 * n_ca - 0.54068 * ca_c - 0.5827 * cross
-
-        return cb_coord
+        return _extract_backbone_atoms(
+            self.cropped_token_array,
+            self.cropped_atom_array,
+            self.centre_atoms,
+        )
 
     def get_token_context(self) -> TokenContext:
         """
@@ -703,3 +625,61 @@ class Featurizer(object):
             np.array(pocket_mask_list).astype(int)
         ).long()
         return ligand_mask_by_pockets, pocket_mask_by_pockets
+
+
+def _extract_backbone_atoms(
+    token_array: TokenArray,
+    atom_array: AtomArray,
+    centre_atoms: AtomArray,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Extract backbone atom coordinates and masks for all tokens.
+
+    Args:
+        token_array: TokenArray with atom_indices and atom_names annotations
+        atom_array: Full AtomArray with coordinates and is_resolved
+        centre_atoms: Centre atoms for each token
+
+    Returns:
+        backbone_coords: Backbone atom coordinates [n_token, 5, 3]
+        backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
+    # NOTE: out of sight, out of mind.
+    """
+    n_tokens = len(token_array)
+    backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
+    backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
+
+    for token_idx, token in enumerate(token_array):
+        centre_atom = centre_atoms[token_idx]
+        mol_type = centre_atom.mol_type
+        is_standard = centre_atom.res_name in STD_RESIDUES
+
+        # Ligands or non-standard residues: use centre atom only
+        if centre_atom.is_resolved and (mol_type == "ligand" or not is_standard):
+            backbone_coords[token_idx, 0] = centre_atom.coord
+            backbone_mask[token_idx, 0] = 1.0
+            continue
+
+        # Standard protein or nucleic acid
+        backbone_names = BACKBONE_DEFS[mol_type]
+        atom_name_map = {name: idx for idx, name in enumerate(token.atom_names)}
+        atom_coords = {}
+
+        # Extract backbone atoms
+        for bb_idx, atom_name in enumerate(backbone_names):
+            local_idx = atom_name_map[atom_name]
+            global_idx = token.atom_indices[local_idx]
+            atom = atom_array[global_idx]
+            if atom.is_resolved and (atom_name in atom_name_map):
+                backbone_coords[token_idx, bb_idx] = atom.coord
+                backbone_mask[token_idx, bb_idx] = 1.0
+                atom_coords[atom_name] = atom.coord
+
+        # Compute virtual Cβ for proteins
+        if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):
+            cb_coord = compute_virtual_cb(
+                atom_coords["N"], atom_coords["CA"], atom_coords["C"]
+            )
+            backbone_coords[token_idx, 4] = cb_coord
+            backbone_mask[token_idx, 4] = 1.0
+
+    return torch.Tensor(backbone_coords), torch.Tensor(backbone_mask)

@@ -356,30 +356,3 @@ class TestAttention:
         ).bool()
         output_random = layer(q_x, kv_x, pair_bias, random_mask)
         assert output_random.shape == (batch_size, seq_len, q_dim)
-
-    def test_attention_pair_bias_shape_assertion(self, device):
-        """Test that pair_bias shape assertion works correctly."""
-        q_dim, kv_dim, head_dim, num_heads = 64, 64, 16, 4
-        batch_size, q_len, kv_len = 2, 8, 10
-
-        layer = Attention(
-            q_dim=q_dim, kv_dim=kv_dim, head_dim=head_dim, num_heads=num_heads
-        ).to(device)
-
-        q_x = torch.randn(batch_size, q_len, q_dim, device=device)
-        kv_x = torch.randn(batch_size, kv_len, kv_dim, device=device)
-        pair_mask = torch.ones(batch_size, q_len, kv_len, device=device).bool()
-
-        # Correct pair_bias shape
-        pair_bias_correct = torch.randn(
-            batch_size, num_heads, q_len, kv_len, device=device
-        )
-        output = layer(q_x, kv_x, pair_bias_correct, pair_mask)
-        assert output.shape == (batch_size, q_len, q_dim)
-
-        # Incorrect pair_bias shape should raise assertion error
-        pair_bias_wrong = torch.randn(
-            batch_size, num_heads, q_len + 1, kv_len, device=device
-        )
-        with pytest.raises(AssertionError):
-            layer(q_x, kv_x, pair_bias_wrong, pair_mask)

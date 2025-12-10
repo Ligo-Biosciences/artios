@@ -1,14 +1,14 @@
-"""
-
-TODO: re-write this logic to make it look cleaner.
-
-"""
+"""Message-passing utilities."""
 
 import torch
-from jaxtyping import Float, Int
+from einops import rearrange
 from torch import Tensor
 
+from protenix.model.utils import expand_at_dim
+from protenix.utils.typing import Float, Int, typecheck
 
+
+@typecheck
 def gather_nodes(
     h_nodes: Float[Tensor, "batch nodes features"],
     edge_idx: Int[Tensor, "batch nodes neighbours"],
@@ -16,41 +16,48 @@ def gather_nodes(
     """Gather node features at specified neighbor indices.
 
     Args:
-        h_nodes (Float[Tensor, "batch nodes features"]): Node features
-        edge_idx (Int[Tensor, "batch nodes k"]): Neighbor indices
+        h_nodes: Node features
+        edge_idx: Neighbor indices
 
     Returns:
-        Float[Tensor, "batch nodes k features"]: Neighbor node features
+        Neighbor node features
     """
-    edges_flat = edge_idx.view((edge_idx.shape[0], -1))
-    edges_flat = edges_flat.unsqueeze(-1).expand(-1, -1, h_nodes.size(2))
+    # Flatten neighbor indices
+    edges_flat = rearrange(edge_idx, "b n k -> b (n k)")
 
+    # Gather
+    edges_flat = expand_at_dim(edges_flat, dim=-1, n=h_nodes.shape[-1])
     neighbors = torch.gather(h_nodes, 1, edges_flat)
-    neighbors = neighbors.view(*edge_idx.shape[:3], -1)
 
+    # Split
+    neighbors = rearrange(neighbors, "b (n k) f -> b n k f", k=edge_idx.size(-1))
     return neighbors
 
 
+@typecheck
 def gather_edges(
     pairwise_edges: Float[Tensor, "batch nodes nodes features"],
     edge_idx: Int[Tensor, "batch nodes neighbours"],
 ) -> Float[Tensor, "batch nodes neighbours features"]:
     """Gather edge features at specified neighbor indices.
 
+    Takes pairwise edge features [B, N, N, C] and gathers them at neighbor indices [B, N, K]
+    to produce neighbor edge features [B, N, K, C].
+
     Args:
-        h_edges (Float[Tensor, "batch nodes neighbours features"]): Edge features
-        edge_idx (Int[Tensor, "batch nodes neighbours"]): Neighbor indices
+        pairwise_edges: Pairwise edge features for all node pairs
+        edge_idx: Neighbor indices for each node
 
     Returns:
-        Float[Tensor, "batch nodes neighbours features"]: Neighbor edge features
+        Neighbor edge features gathered at specified indices
     """
-    # Features [B,N,N,C] at Neighbor indices [B,N,K] => Neighbor features [B,N,K,C]
-    edges_flat = edge_idx.unsqueeze(-1).expand(-1, -1, -1, pairwise_edges.size(-1))
+    edges_flat = expand_at_dim(edge_idx, dim=-1, n=pairwise_edges.shape[-1])
     edge_features = torch.gather(pairwise_edges, 2, edges_flat)
 
     return edge_features
 
 
+@typecheck
 def augment_edges_with_nb_feats(
     edge_feats: Float[Tensor, "batch nodes neighbours edge_features"],
     features: Float[Tensor, "batch nodes node_features"],

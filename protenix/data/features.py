@@ -183,12 +183,6 @@ class TokenContext(Context):
         description="Indicator for ligand-ligand and non-polymer bonds",
     )
 
-    token_mask: Mask(
-        Bool[Tensor, "*batch n_token"],
-        type=FeatureType.TOKEN,
-        description="Token is not padding mask (all true before pad)",
-    )
-
 
 @typecheck
 @dataclass
@@ -325,6 +319,11 @@ class MaskContext(Context):
         Bool[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="Atom is resolved in structure and is in the token with a resolved centre atom.",
+    )
+    token_mask: Mask(
+        Bool[Tensor, "*batch n_token"],
+        type=FeatureType.TOKEN,
+        description="Token is not padding mask (all true before pad)",
     )
 
 

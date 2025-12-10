@@ -30,21 +30,16 @@ from torch.utils.data import Dataset
 
 from protenix.common.constants import BACKBONE_DEFS, EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
-from protenix.data.featurizer import Featurizer
+from protenix.data.featurizer import ContextGenerator
 from protenix.data.filter import Filter
 from protenix.data.motif_maker import MotifMaker
 from protenix.data.msa_featurizer import MSAFeaturizer
 from protenix.data.parser import AddAtomArrayAnnot
 from protenix.data.tokenizer import AtomArrayTokenizer, TokenArray
-from protenix.data.utils import (
-    data_type_transform,
-    make_dummy_feature,
-)
 from protenix.utils.cropping import CropData
 from protenix.utils.file_io import read_indices_csv
 from protenix.utils.logger import get_logger
 from protenix.utils.profiler import profile_function
-from protenix.utils.torch_utils import dict_to_tensor
 
 logger = get_logger(__name__)
 
@@ -643,91 +638,26 @@ class BaseSingleDataset(Dataset):
         timings["motif"] = time.time() - tmotif
 
         t4 = time.time()
-        feat, label, label_full = self.get_feature_and_label(
-            idx=idx,
-            token_array=cropped_token_array,
-            atom_array=cropped_atom_array,
-            msa_features=cropped_msa_features,
-            template_features=cropped_template_features,
-            full_atom_array=bioassembly_dict["atom_array"],
-            is_spatial_crop="spatial" in crop_method.lower(),
-        )
-        timings["get_feature_and_label"] = time.time() - t4
-
-        # Basic info, e.g. dimension related items
-        basic_info = {
-            "pdb_id": (
-                bioassembly_dict["pdb_id"]
-                if self.is_distillation is False
-                else sample_indice["pdb_id"]
-            ),
-            "N_asym": torch.tensor([len(torch.unique(feat["asym_id"]))]),
-            "N_token": torch.tensor([feat["token_index"].shape[0]]),
-            "N_atom": torch.tensor([feat["atom_to_token_idx"].shape[0]]),
-            "N_msa": torch.tensor([feat["msa"].shape[0]]),
-            "bioassembly_dict_fpath": bioassembly_dict_fpath,
-            "N_msa_prot_pair": torch.tensor([feat["prot_pair_num_alignments"]]),
-            "N_msa_prot_unpair": torch.tensor([feat["prot_unpair_num_alignments"]]),
-            "N_msa_rna_pair": torch.tensor([feat["rna_pair_num_alignments"]]),
-            "N_msa_rna_unpair": torch.tensor([feat["rna_unpair_num_alignments"]]),
-        }
-
-        for mol_type in ("protein", "ligand", "rna", "dna"):
-            abbr = {"protein": "prot", "ligand": "lig"}
-            abbr_type = abbr.get(mol_type, mol_type)
-            mol_type_mask = feat[f"is_{mol_type}"].bool()
-            n_atom = int(mol_type_mask.sum(dim=-1).item())
-            n_token = len(torch.unique(feat["atom_to_token_idx"][mol_type_mask]))
-            basic_info[f"N_{abbr_type}_atom"] = torch.tensor([n_atom])
-            basic_info[f"N_{abbr_type}_token"] = torch.tensor([n_token])
-
-        # Add chain level chain_id
-        asymn_id_to_chain_id = {
-            atom.asym_id_int: atom.chain_id for atom in cropped_atom_array
-        }
-        chain_id_list = [
-            asymn_id_to_chain_id[asymn_id_int]
-            for asymn_id_int in sorted(asymn_id_to_chain_id.keys())
-        ]
-        basic_info["chain_id"] = chain_id_list
-
-        # Get padding length
-        # TODO: to be moved to collate_fn()
-        # current_n_atom = feat["atom_to_token_idx"].shape[0]
-        # max_n_atom = get_atom_padding_length(
-        #     current_n_atom, self.bin_ends, self.cropping_configs["crop_size"]
+        # context = self.get_context(
+        #     idx=idx,
+        #     token_array=cropped_token_array,
+        #     atom_array=cropped_atom_array,
+        #     bioassembly_dict_fpath=bioassembly_dict_fpath,
+        #     msa_features=cropped_msa_features,
+        #     template_features=cropped_template_features,
+        #     full_atom_array=bioassembly_dict["atom_array"],
+        #     is_spatial_crop="spatial" in crop_method.lower(),
         # )
+        context = ContextGenerator(
+            cropped_token_array=cropped_token_array,
+            cropped_atom_array=cropped_atom_array,
+            ref_pos_augment=self.ref_pos_augment,
+            lig_atom_rename=self.lig_atom_rename,
+            bioassembly_dict_fpath=bioassembly_dict_fpath,
+            pdb_id=bioassembly_dict["pdb_id"],
+        ).get_full_context()
 
-        # assert current_n_atom > 1, "Crop has <= 1 atom."
-        # # Pad features and labels
-        # # TODO: remove padding!!
-        # t5 = time.time()
-        # pad_args = {
-        #     "current_n_atom": current_n_atom,
-        #     "max_n_atom": max_n_atom,
-        #     "current_n_token": feat["token_index"].shape[0],
-        #     "max_n_token": self.cropping_configs["crop_size"],
-        #     "current_n_msa": feat["msa"].shape[0],
-        #     "max_n_msa": self.padding["max_n_msa"],
-        #     "current_n_template": feat.get("template_restype", np.array([1])).shape[0],
-        #     "max_n_template": self.padding["max_n_template"],
-        #     "current_n_pocket": 1,
-        #     "max_n_pocket": self.padding["max_n_pocket"],
-        # }
-        # feat = pad_features_dict(feat, **pad_args)
-        # label = pad_features_dict(label, **pad_args)
-        # timings["padding"] = time.time() - t5
-
-        data = {
-            "input_feature_dict": feat,
-            "label_dict": label,
-            "label_full_dict": label_full,
-            "basic": basic_info,
-        }
-
-        if return_atom_token_array:
-            data["cropped_atom_array"] = cropped_atom_array
-            data["cropped_token_array"] = cropped_token_array
+        timings["get_feature_and_label"] = time.time() - t4
 
         # Log if process_one took too long
         total_time = time.time() - process_start
@@ -743,7 +673,7 @@ class BaseSingleDataset(Dataset):
                 f"padding={timings.get('padding', 0):.3f}s"
             )
 
-        return data
+        return context
 
     @profile_function("dataset.crop")
     def crop(
@@ -957,11 +887,13 @@ class BaseSingleDataset(Dataset):
         return AddAtomArrayAnnot.update_centre_atom_mask_to_include_motif(atom_array)
 
     @profile_function("dataset.get_feature_and_label")
-    def get_feature_and_label(
+    def get_context(
         self,
         idx: int,
         token_array: TokenArray,
         atom_array: AtomArray,
+        pdb_id: str,
+        bioassembly_dict_fpath: str,
         msa_features: dict[str, Any],
         template_features: dict[str, Any],
         full_atom_array: AtomArray,
@@ -977,6 +909,8 @@ class BaseSingleDataset(Dataset):
             idx: Index of the data point.
             token_array: Token array representing the amino acid sequence.
             atom_array: Atom array containing atomic information.
+            pdb_id: PDB ID of the sample.
+            bioassembly_dict_fpath: Path to the bioassembly dictionary.
             msa_features: Dictionary of MSA features.
             template_features: Dictionary of template features.
             full_atom_array: Full atom array containing all atoms.
@@ -988,27 +922,20 @@ class BaseSingleDataset(Dataset):
         Raises:
             ValueError: If the ligand cannot be found in the data point.
         """
-        # Get feature and labels from Featurizer
-        feat = Featurizer(
+        context = ContextGenerator(
             cropped_token_array=token_array,
             cropped_atom_array=atom_array,
             ref_pos_augment=self.ref_pos_augment,
             lig_atom_rename=self.lig_atom_rename,
-        )
-        features_dict = feat.get_all_input_features()
-        labels_dict = feat.get_labels()
+            bioassembly_dict_fpath=bioassembly_dict_fpath,
+            pdb_id=pdb_id,
+        ).get_full_context()
+
+        # labels_dict = feat.get_labels()
 
         # Permutation list for atom permutation
         # TODO: for symmetric permutation, this will be required.
         # features_dict["atom_perm_list"] = feat.get_atom_permutation_list()
-
-        # Labels for multi-chain permutation
-        # Note: the returned full_atom_array may contain fewer atoms than the input
-        # label_full_dict, full_atom_array = Featurizer.get_gt_full_complex_features(
-        #     atom_array=full_atom_array,
-        #     cropped_atom_array=atom_array,
-        #     get_cropped_asym_only=is_spatial_crop,
-        # )
 
         # Masks for Pocket Metrics
         # if self.find_pocket:
@@ -1067,32 +994,10 @@ class BaseSingleDataset(Dataset):
         #     labels_dict["chain_1_mask"] = chain_1_mask  # [N_eval, N_atom]
         #     labels_dict["chain_2_mask"] = chain_2_mask  # [N_eval, N_atom]
 
-        # Make dummy features for not implemented features
-        dummy_feats = []
-        if len(msa_features) == 0:
-            dummy_feats.append("msa")
-        else:
-            msa_features = dict_to_tensor(msa_features)
-            features_dict.update(msa_features)
-        if len(template_features) == 0:
-            dummy_feats.append("template")
-        else:
-            template_features = dict_to_tensor(template_features)
-            features_dict.update(template_features)
+        # Transform to right data type TODO: work out if required
+        # context = data_type_transform(feat_or_label_dict=context)
 
-        features_dict = make_dummy_feature(
-            features_dict=features_dict, dummy_feats=dummy_feats
-        )
-        # Transform to right data type
-        features_dict = data_type_transform(feat_or_label_dict=features_dict)
-        labels_dict = data_type_transform(feat_or_label_dict=labels_dict)
-
-        # Is_distillation
-        features_dict["is_distillation"] = torch.tensor([self.is_distillation])
-        if self.is_distillation is True:
-            features_dict["resolution"] = torch.tensor([-1.0])
-        # return features_dict, labels_dict, label_full_dict
-        return features_dict, labels_dict, {}
+        return context
 
 
 def get_msa_featurizer(configs, dataset_name: str, stage: str) -> Optional[Callable]:

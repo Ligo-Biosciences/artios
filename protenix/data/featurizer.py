@@ -280,7 +280,6 @@ class ContextGenerator(object):
             sym_id=torch.Tensor(self.centre_atoms.sym_id_int).long(),
             restype=restype_onehot,
             token_bonds=self.get_bonds(),
-            token_mask=torch.ones(len(self.cropped_token_array)).long(),
         )
         return context
 
@@ -478,6 +477,7 @@ class ContextGenerator(object):
             atom_loss_mask=torch.Tensor(
                 atom_is_resolved * atom_in_token_w_resolved_centre_atom
             ).bool(),
+            token_mask=torch.ones(len(self.cropped_token_array)).bool(),
         )
 
     def get_motif_context(self) -> MotifContext:

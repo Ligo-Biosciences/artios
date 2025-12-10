@@ -1,4 +1,6 @@
-from typing import Dict, Optional, Tuple, Union
+from __future__ import annotations
+
+from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -7,6 +9,7 @@ from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint
 from tqdm import tqdm
 
+from protenix.data.features import FullContext
 from protenix.model import utils
 from protenix.model.modules import message_passing as mp
 from protenix.model.modules.mpnn_features import MPNNFeaturizer
@@ -350,11 +353,7 @@ class MPNN(nn.Module):
 
     def run_encoder_trunk(
         self,
-        backbone_coords: Float[Tensor, "batch n_token 5 3"],
-        backbone_mask: Float[Tensor, "batch n_token 5"],
-        centre_atom_coord: Float[Tensor, "batch n_token 3"],
-        centre_atom_mask: Float[Tensor, "batch n_token"],
-        input_feature_dict: Dict[str, Tensor],
+        context: FullContext,
     ) -> Tuple[
         Float[Tensor, "batch n_token node_dim"],
         Float[Tensor, "batch n_token neighbours edge_dim"],
@@ -364,12 +363,7 @@ class MPNN(nn.Module):
         """Runs the encoder trunk of the model. The encoder's output is cached between decoder steps.
 
         Args:
-            backbone_coords: Backbone atom coordinates per token
-            backbone_mask: Mask for valid backbone atoms
-            centre_atom_coord: Centre atom coordinates per token
-            centre_atom_mask: Mask for valid centre atoms
-            input_feature_dict: Input feature dict with the following tensors:
-                - asym_id, residue_index, entity_id, sym_id, etc.
+            context: Full context containing all required features.
 
         Returns:
             Tuple containing:
@@ -378,14 +372,11 @@ class MPNN(nn.Module):
                 edge_index: Graph edge connectivity [..., n_token, neighbours]
                 edge_mask: Edge mask for valid edges [..., n_token, neighbours]
         """
+        # Extract centre atom mask from context
+        centre_atom_mask = context.mask.token_mask.float()
+
         # Initialize features
-        node_feats, edge_feats, edge_index = self.featurizer(
-            input_feature_dict=input_feature_dict,
-            centre_atom_coord=centre_atom_coord,
-            centre_atom_mask=centre_atom_mask,
-            backbone_coords=backbone_coords,
-            backbone_mask=backbone_mask,
-        )
+        node_feats, edge_feats, edge_index = self.featurizer(context)
 
         # Make attention masks
         edge_mask = mp.gather_nodes(
@@ -410,12 +401,7 @@ class MPNN(nn.Module):
 
     def forward(
         self,
-        backbone_coords: Float[Tensor, "batch n_token 5 3"],
-        backbone_mask: Float[Tensor, "batch n_token 5"],
-        centre_atom_coord: Float[Tensor, "batch n_token 3"],
-        centre_atom_mask: Float[Tensor, "batch n_token"],
-        restype: Float[Tensor, "batch seqlen 32"],
-        input_feature_dict: Dict[str, Tensor],
+        context: FullContext,
         decoding_order: Optional[Float[Tensor, "batch seqlen"]] = None,
         zero_shot: bool = False,
         seed: Optional[int] = None,
@@ -430,13 +416,7 @@ class MPNN(nn.Module):
         probabilities using masked attention.
 
         Args:
-            backbone_coords: backbone coordinates for each token
-            backbone_mask: backbone mask for each token (which backbone atoms are valid)
-            centre_atom_coord: centre atom coordinate for each token
-            centre_atom_mask: centre atom mask is resolved mask
-            restype: one-hot encoded residue types
-            input_feature_dict: Input feature dict with the following tensors:
-                - asym_id, residue_index, entity_id, sym_id, etc.
+            context: Full context containing all required features.
             decoding_order: Permutation defining generation order
             zero_shot: whether to use zero-shot mode. Defaults to False
             seed: seed for deterministic sampling
@@ -444,21 +424,16 @@ class MPNN(nn.Module):
         Returns:
             Output dictionary
         """
+        # Extract required data from context
+        centre_atom_coord = context.coordinate.centre_coordinate
+        centre_atom_mask = context.mask.token_mask.float()
+        restype = context.token.restype
 
         # Run encoder trunk
-        node_feats, edge_feats, edge_idx, edge_mask = self.run_encoder_trunk(
-            backbone_coords=backbone_coords,
-            backbone_mask=backbone_mask,
-            centre_atom_coord=centre_atom_coord,
-            centre_atom_mask=centre_atom_mask,
-            input_feature_dict=input_feature_dict,
-        )
+        node_feats, edge_feats, edge_idx, edge_mask = self.run_encoder_trunk(context)
 
         # Optionally prepare random decoding order
         if decoding_order is None:
-            # decoding_order = self._generate_random_decoding_order(
-            #     node_feats=node_feats, seed=seed
-            # )
             decoding_order = self._generate_random_spatially_smooth_decoding_order(
                 centre_atom_coords=centre_atom_coord,
                 centre_atom_mask=centre_atom_mask,
@@ -533,11 +508,7 @@ class MPNN(nn.Module):
 
     def sample(
         self,
-        backbone_coords: Float[Tensor, "batch n_token 5 3"],
-        backbone_mask: Float[Tensor, "batch n_token 5"],
-        centre_atom_coord: Float[Tensor, "batch n_token 3"],
-        centre_atom_mask: Float[Tensor, "batch n_token"],
-        input_feature_dict: Dict[str, Tensor],
+        context: FullContext,
         decoding_order: Optional[Float[Tensor, "batch n_token"]] = None,
         temperature: float = 1.0,
         show_progress: bool = False,
@@ -553,14 +524,8 @@ class MPNN(nn.Module):
         """Sample protein sequence autoregressively from the model.
 
         Args:
-            backbone_coords: backbone coordinates for each token
-            backbone_mask: backbone mask for each token (which backbone atoms are valid)
-            centre_atom_coord: centre atom coordinate for each token
-            centre_atom_mask: centre atom mask is resolved mask
-            input_feature_dict: Input feature dict with the following tensors:
-                - asym_id, residue_index, entity_id, sym_id, etc.
+            context: Full context containing all required features.
             decoding_order: Permutation defining generation order
-            zero_shot: whether to use zero-shot mode. Defaults to False
             temperature: sampling temperature
             show_progress: show progress during sampling
             return_logits: whether to return the logits or not
@@ -577,17 +542,15 @@ class MPNN(nn.Module):
                 sequence_ids: sampled sequence as one-hot encoded tensor
         """
         assert temperature >= 0, "Temperature must be non-negative"
-        restype_shape = input_feature_dict["restype"].shape
-        restype_dtype = input_feature_dict["restype"].dtype
+
+        # Extract required data from context
+        centre_atom_coord = context.coordinate.centre_coordinate
+        centre_atom_mask = context.mask.token_mask.float()
+        restype_shape = context.token.restype.shape
+        restype_dtype = context.token.restype.dtype
 
         # Run encoder trunk
-        node_feats, edge_feats, edge_idx, edge_mask = self.run_encoder_trunk(
-            backbone_coords=backbone_coords,
-            backbone_mask=backbone_mask,
-            centre_atom_coord=centre_atom_coord,
-            centre_atom_mask=centre_atom_mask,
-            input_feature_dict=input_feature_dict,
-        )
+        node_feats, edge_feats, edge_idx, edge_mask = self.run_encoder_trunk(context)
 
         # Optionally prepare random decoding order
         if decoding_order is None:
@@ -610,13 +573,13 @@ class MPNN(nn.Module):
 
         restype = torch.zeros(
             restype_shape,
-            device=backbone_coords.device,
+            device=centre_atom_coord.device,
             dtype=restype_dtype,
         )
         logits_at_timestep = torch.zeros(
             restype_shape,
-            device=backbone_coords.device,
-            dtype=backbone_coords.dtype,
+            device=centre_atom_coord.device,
+            dtype=centre_atom_coord.dtype,
         )
 
         timestep_range = range(decoding_order.shape[-1])

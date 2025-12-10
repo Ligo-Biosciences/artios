@@ -391,8 +391,9 @@ class CoordinateContext(Context):
     resolution: float | list[float]
 
 
+@typecheck
 @dataclass
-class BasicContext:
+class BasicContext(Context):
     """Contains basic metadata about the sample.
 
     Note: This context contains non-tensor fields that become lists when batched.

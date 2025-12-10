@@ -21,6 +21,7 @@ from ml_collections.config_dict import ConfigDict
 from torch.utils.data import DataLoader, DistributedSampler, Sampler
 
 from protenix.data.data_collator import DataCollatorWithPadding
+from protenix.data.data_collator_new import CollateContexts
 from protenix.data.dataset import Dataset, get_datasets
 from protenix.utils.logger import get_logger
 
@@ -360,10 +361,7 @@ def get_dataloaders(
             batch_size=configs.batch_size,
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
-            collate_fn=DataCollatorWithPadding(
-                max_n_msa=configs.data.padding.max_n_msa,
-                max_n_template=configs.data.padding.max_n_template,
-                max_n_pocket=configs.data.padding.max_n_pocket,
+            collate_fn=CollateContexts(
                 atom_bin_ends=configs.data.padding.atom_bin_ends,
                 token_bin_ends=configs.data.padding.token_bin_ends,
                 crop_size=configs.train_crop_size,
@@ -391,17 +389,13 @@ def get_dataloaders(
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             sampler=test_sampler,
-            collate_fn=DataCollatorWithPadding(  # TODO: this will currently fail for the VAE or diffusion training.
-                max_n_msa=configs.data.padding.max_n_msa,
-                max_n_template=configs.data.padding.max_n_template,
-                max_n_pocket=configs.data.padding.max_n_pocket,
+            collate_fn=CollateContexts(
                 atom_bin_ends=configs.data.padding.atom_bin_ends,
                 token_bin_ends=configs.data.padding.token_bin_ends,
                 crop_size=configs.train_crop_size,
                 motif_training=configs.data.motif_training.motif_train_rate > 0.0,
                 max_motif_residues=configs.data.motif_training.max_motif_residues,
             ),
-            # lambda batch: batch[0],
         )
     logger.info(
         f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}"

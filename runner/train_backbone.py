@@ -38,7 +38,7 @@ from configs.configs_data import data_configs
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
-from protenix.data.featurizer import Featurizer
+from protenix.data.featurizer import ContextGenerator
 from protenix.data.utils import save_structure_cif
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.allatom_mpnn import AllatomMPNN
@@ -609,7 +609,7 @@ class ArtiosBackboneTrainer(object):
                         mpnn_batch["cropped_atom_array"] = cropped_atom_array
                         mpnn_batch["cropped_token_array"] = cropped_token_array
 
-                        mpnn_featurizer = Featurizer(
+                        mpnn_featurizer = ContextGenerator(
                             cropped_token_array=cropped_token_array,
                             cropped_atom_array=cropped_atom_array,
                             ref_pos_augment=True,

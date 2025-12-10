@@ -17,7 +17,6 @@ from typing import Optional, Union
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from scipy.spatial.transform import Rotation
 from torch import Tensor
 
@@ -444,35 +443,6 @@ def pad_at_dim(
         pad_skip = (0, 0) * k
         pad = (*pad_skip, *pad)
     return nn.functional.pad(x, pad=pad, value=value)
-
-
-def pad_tensor(tensor: Tensor, pad_sizes: tuple[int, ...]) -> Tensor:
-    """Pad tensor on leading dimensions.
-
-    Args:
-        tensor: Input tensor to pad.
-        pad_sizes: Tuple of pad amounts for each leading dimension.
-            E.g., (5,) pads dim 0 by 5, (5, 10) pads dim 0 by 5 and dim 1 by 10.
-
-    Returns:
-        Padded tensor with zeros appended to specified dimensions.
-    """
-    if not pad_sizes or all(p == 0 for p in pad_sizes):
-        return tensor
-
-    ndim = tensor.ndim
-
-    # F.pad expects: (last_dim_left, last_dim_right, ..., first_dim_left, first_dim_right)
-    # We only pad on the right side of leading dimensions
-    padding = [0] * (2 * ndim)
-
-    for i, pad_size in enumerate(pad_sizes):
-        # dim 0 -> positions [-2, -1] in padding tuple
-        # dim 1 -> positions [-4, -3]
-        pos = 2 * (ndim - 1 - i)
-        padding[pos + 1] = pad_size
-
-    return F.pad(tensor, padding)
 
 
 def reshape_at_dim(

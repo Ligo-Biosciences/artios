@@ -20,7 +20,7 @@ import logging
 from dataclasses import asdict, dataclass, fields
 from enum import Enum, auto
 from functools import partial
-from typing import Annotated, Callable
+from typing import Annotated, Callable, get_args, get_type_hints
 
 import torch
 from biotite.structure import AtomArray
@@ -147,13 +147,20 @@ class Context:
         Returns:
             New instance with padded tensors.
         """
+        type_hints = get_type_hints(type(self), include_extras=True)
+
         padded_fields = {}
         for field in fields(self):
             value = getattr(self, field.name)
-            if torch.is_tensor(value):
-                padded_fields[field.name] = pad_fns[field.type](value)
-            else:
+
+            if not torch.is_tensor(value):
                 padded_fields[field.name] = value
+                continue
+
+            ann = type_hints(field.name)
+            feature_type = get_args(ann)[1].type
+            padded_fields[field.name] = pad_fns[feature_type](value)
+
         return type(self)(**padded_fields)
 
 
@@ -391,8 +398,9 @@ class CoordinateContext(Context):
     resolution: float | list[float]
 
 
+@typecheck
 @dataclass
-class BasicContext:
+class BasicContext(Context):
     """Contains basic metadata about the sample.
 
     Note: This context contains non-tensor fields that become lists when batched.
@@ -453,3 +461,16 @@ class FullContext:
                 kwargs[f.name] = fg
 
         return type(self)(**kwargs)
+
+    def to_dict(self) -> dict[str, Tensor]:
+        """Convert all Context fields to a flat dictionary of tensors.
+
+        Returns:
+            Flat dictionary with all tensor fields from all sub-contexts.
+        """
+        result = {}
+        for f in fields(self):
+            result[f.name] = getattr(self, f.name).to_dict()
+        return result
+
+    # TODO: add a from_dict

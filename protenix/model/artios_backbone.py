@@ -3,6 +3,7 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 
+from protenix.data.features import FullContext
 from protenix.model.generator_backbone import (
     LaProteinaCoordScheduler,
     TrainingTimestepSampler,
@@ -10,6 +11,7 @@ from protenix.model.generator_backbone import (
     sample_noising,
 )
 from protenix.model.modules.diffusion_backbone import DiffusionModule
+from protenix.model.output import ModelOutput
 from protenix.utils.torch_utils import autocasting_disable_decorator
 
 
@@ -65,8 +67,7 @@ class ArtiosBackbone(nn.Module):
 
     def main_inference_loop(
         self,
-        input_feature_dict: dict[str, Any],
-        mode: str,
+        context: FullContext,
         inplace_safe: bool = False,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
         """
@@ -75,35 +76,29 @@ class ArtiosBackbone(nn.Module):
         Returns:
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
         """
-        device = input_feature_dict["residue_index"].device
-        dtype = input_feature_dict["residue_index"].dtype
+        device = context.token.residue_index.device
+        dtype = context.token.residue_index.dtype
 
         N_sample = self.configs.sample_diffusion["N_sample"]
         N_step = self.configs.sample_diffusion["N_step"]
 
-        log_dict = {}
-        pred_dict = {}
-        time_tracker = {}  # TODO: remove this
-
-        # Generate timesteps for solving the FM SDE
         timesteps = self.inference_timestep_scheduler(
             N_step=N_step, device=device, dtype=dtype
         )
 
-        pred_dict["coordinate"] = self.sample_diffusion(
+        pred = self.sample_diffusion(
             denoise_net=self.diffusion_module,
-            input_feature_dict=input_feature_dict,
+            context=context,
             timesteps=timesteps,
             N_sample=N_sample,
             inplace_safe=inplace_safe,
         )
 
-        return pred_dict, log_dict, time_tracker
+        return ModelOutput(coordinate=pred)
 
     def main_train_loop(
         self,
-        input_feature_dict: dict[str, Any],
-        label_dict: dict,
+        context: FullContext,
         inplace_safe: bool = False,
         seed: Optional[int] = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
@@ -111,8 +106,7 @@ class ArtiosBackbone(nn.Module):
         Main training (and evaluation) loop for the Artios All-Atom model.
 
         Args:
-            input_feature_dict (dict[str, Any]): Input features dictionary.
-            label_dict (dict): Label dictionary (cropped).
+            context (FullContext): Full context containing all features and labels.
             inplace_safe (bool): Whether to use inplace operations safely. Defaults to False.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
@@ -120,10 +114,7 @@ class ArtiosBackbone(nn.Module):
             tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
                 Prediction, updated label, and log dictionaries.
         """
-        log_dict = {}
-        pred_dict = {}
-
-        device = label_dict["coordinate"].device
+        device = context.coordinate.coordinate.device
 
         N_sample = self.diffusion_batch_size
         generator = (
@@ -132,97 +123,67 @@ class ArtiosBackbone(nn.Module):
 
         # Noising
         noisy_coords, timestep, _ = sample_noising(
-            input=label_dict["coordinate"],
-            mask=label_dict["coordinate_mask"],
+            input=context.coordinate.coordinate,
+            mask=context.mask.is_resolved,
             timestep_sampler=self.timestep_sampler,
             num_sample=N_sample,
             scale=self.sigma_coord,
             generator=generator,
         )
 
-        # With CFG drop probability, train the unconditional model
-        if torch.rand(1).item() < self.cfg_drop_probability:
-            input_feature_dict["is_ligand"] = torch.zeros_like(
-                input_feature_dict["is_ligand"]
-            )
-            input_feature_dict["is_ligand_token"] = torch.zeros_like(
-                input_feature_dict["is_ligand_token"]
-            )
-            input_feature_dict["is_target_token"] = torch.zeros_like(
-                input_feature_dict["is_target_token"]
-            )
-            input_feature_dict["is_hotspot"] = torch.zeros_like(
-                input_feature_dict["is_hotspot"]
-            )
-            input_feature_dict["is_motif_related"] = torch.zeros_like(
-                input_feature_dict["is_motif_related"]
-            )
-            input_feature_dict["is_motif_related_token"] = torch.zeros_like(
-                input_feature_dict["is_motif_related_token"]
-            )
+        # # With CFG drop probability, train the unconditional model
+        # if torch.rand(1).item() < self.cfg_drop_probability:
+        #     context.entity.is_ligand = torch.zeros_like(context.entity.is_ligand)
+        #     context.entity.is_ligand_token = torch.zeros_like(context.entity.is_ligand_token)
+        #     context.entity.is_target_token = torch.zeros_like(context.entity.is_target_token)
+        #     context.entity.is_hotspot = torch.zeros_like(context.entity.is_hotspot)
+        #     context.entity.is_motif_related = torch.zeros_like(context.entity.is_motif_related)
+        #     context.entity.is_motif_related_token = torch.zeros_like(context.entity.is_motif_related_token)
 
         # Denoising
         pred = self.diffusion_module(
-            r_noisy=noisy_coords,
+            r_noisy=noisy_coords,  # TODO: can we maintain one of r_noisy or noisy_coords plz?
             timestep=timestep,
-            input_feature_dict=input_feature_dict,
+            context=context,
             inplace_safe=inplace_safe,
         )
 
-        pred_dict.update(
-            {
-                "timestep": timestep,
-                "coordinate": pred,
-            }
-        )
-
-        return pred_dict, label_dict, log_dict
+        return ModelOutput(coordinate=pred, timestep=timestep)
 
     def forward(
         self,
-        input_feature_dict: dict[str, Any],
-        label_dict: dict[str, Any],
-        mode: str = "inference",
-        label_full_dict: Optional[dict[str, Any]] = None,
+        context: FullContext,
+        mode: str,
+        *,
         current_step: Optional[int] = None,
         seed: Optional[int] = None,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
+    ) -> ModelOutput:
         """
-        Forward pass of the Artios model.
+        Forward pass of the Artios backbone model.
 
         Args:
-            input_feature_dict (dict[str, Any]): Input features dictionary.
-            label_dict (dict[str, Any]): Label dictionary (cropped).
-            label_full_dict (dict[str, Any]): Label dictionary (full).
-            mode (str): Mode of operation ('train', 'inference', 'eval'). Defaults to 'inference'.
+            context (FullContext): Full context containing all features and labels.
+            mode (str): Mode of operation ('train', 'inference', 'eval').
             current_step (Optional[int]): Current training step. Defaults to None.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
-            tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
-                Prediction, updated label, and log dictionaries.
+            ModelOutput: Model output containing the prediction and timestep.
         """
 
         assert mode in ["train", "inference", "eval"]
         inplace_safe = not (self.training or torch.is_grad_enabled())
-        # chunk_size = self.configs.infer_setting.chunk_size if inplace_safe else None
 
         if mode == "train" or mode == "eval":
-            # nc_rng = np.random.RandomState(current_step)
-            assert label_dict is not None
-
-            pred_dict, label_dict, log_dict = self.main_train_loop(
-                input_feature_dict=input_feature_dict,
-                label_dict=label_dict,
+            output = self.main_train_loop(
+                context=context,
                 inplace_safe=inplace_safe,
                 seed=seed,
             )
         elif mode == "inference":
-            pred_dict, log_dict, time_tracker = self.main_inference_loop(
-                input_feature_dict=input_feature_dict,
-                mode=mode,
+            output = self.main_inference_loop(
+                context=context,
                 inplace_safe=False,
             )
-            log_dict.update({"time": time_tracker})
 
-        return pred_dict, label_dict, log_dict
+        return output

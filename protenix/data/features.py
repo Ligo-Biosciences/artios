@@ -134,6 +134,25 @@ class Context:
         """Convert to flat dictionary of tensors."""
         return {k: v for k, v in asdict(self).items() if torch.is_tensor(v)}
 
+    @classmethod
+    def from_dict(cls, d: dict[str, Tensor], **extra_kwargs) -> Context:
+        """Create instance from dictionary of tensors.
+
+        Args:
+            d: Dictionary mapping field names to tensors.
+            **extra_kwargs: Additional non-tensor fields to set.
+
+        Returns:
+            New instance with fields populated from dict.
+        """
+        kwargs = {}
+        for field in fields(cls):
+            if field.name in d:
+                kwargs[field.name] = d[field.name]
+            elif field.name in extra_kwargs:
+                kwargs[field.name] = extra_kwargs[field.name]
+        return cls(**kwargs)
+
     def pad(
         self,
         pad_fns: dict[FeatureType, Callable[[Tensor], Tensor]],
@@ -223,7 +242,7 @@ class ReferenceConformerContext(Context):
         type=FeatureType.ATOM,
         encoding=EncodingType.ONE_HOT,
     )
-    ref_space_uid: Auxiliary(
+    ref_space_uid: Auxiliary(  # TODO: i think this is an index
         Int[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="ID for each unique conformer",
@@ -404,10 +423,12 @@ class BasicContext(Context):
     """Contains basic metadata about the sample.
 
     Note: This context contains non-tensor fields that become lists when batched.
+    The atom_array and token_array fields can be None when loading from serialized
+    data (e.g., from_dict).
     """
 
-    atom_array: AtomArray | list[AtomArray]
-    token_array: TokenArray | list[TokenArray]
+    atom_array: AtomArray | list[AtomArray] | list[None] | None
+    token_array: TokenArray | list[TokenArray] | list[None] | None
 
     pdb_id: str | list[str]
     bioassembly_dict_fpath: str | list[str]
@@ -462,15 +483,83 @@ class FullContext:
 
         return type(self)(**kwargs)
 
-    def to_dict(self) -> dict[str, Tensor]:
-        """Convert all Context fields to a flat dictionary of tensors.
+    def to_dict(self) -> dict[str, dict[str, Tensor]]:
+        """Convert all Context fields to a nested dictionary of tensors.
 
         Returns:
-            Flat dictionary with all tensor fields from all sub-contexts.
+            Nested dictionary with all tensor fields from all sub-contexts.
         """
         result = {}
         for f in fields(self):
             result[f.name] = getattr(self, f.name).to_dict()
         return result
 
-    # TODO: add a from_dict
+    @classmethod
+    def from_dict(
+        cls,
+        d: dict[str, dict[str, Tensor]],
+        resolution: float | list[float] = 0.0,
+        basic_context: BasicContext | None = None,
+    ) -> FullContext:
+        """Create FullContext from nested dictionary of tensors.
+
+        This is the inverse of `to_dict()`. Since `to_dict()` only saves tensor
+        fields, non-tensor fields (BasicContext, resolution) must be provided
+        separately or will use defaults.
+
+        Args:
+            d: Nested dictionary mapping context names to dicts of tensors.
+            resolution: Resolution value for CoordinateContext.
+            basic_context: Optional BasicContext. If None, creates placeholder.
+
+        Returns:
+            New FullContext instance.
+
+        Example:
+            >>> data = torch.load("batch.pt")
+            >>> context = FullContext.from_dict(data)
+        """
+        # Create sub-contexts from their dictionaries
+        token = TokenContext.from_dict(d.get("token", {}))
+        reference = ReferenceConformerContext.from_dict(d.get("reference", {}))
+        chain_perm = ChainPermContext.from_dict(d.get("chain_perm", {}))
+        mask = MaskContext.from_dict(d.get("mask", {}))
+        motif = MotifContext.from_dict(d.get("motif", {}))
+        index = IndexContext.from_dict(d.get("index", {}))
+        entity = EntityContext.from_dict(d.get("entity", {}))
+        coordinate = CoordinateContext.from_dict(
+            d.get("coordinate", {}), resolution=resolution
+        )
+
+        # BasicContext requires non-tensor fields - use placeholder if not provided
+        if basic_context is None:
+            # Infer dimensions from tensor shapes
+            n_token = (
+                token.token_index.shape[-1] if token.token_index is not None else 0
+            )
+            n_atom = mask.atom_mask.shape[-1] if mask.atom_mask is not None else 0
+            batch_size = (
+                token.token_index.shape[0] if token.token_index.dim() > 1 else 1
+            )
+
+            basic_context = BasicContext(
+                atom_array=[None] * batch_size,  # type: ignore
+                token_array=[None] * batch_size,  # type: ignore
+                pdb_id=["unknown"] * batch_size,
+                bioassembly_dict_fpath=[""] * batch_size,
+                n_asym=[1] * batch_size,
+                n_token=[int(n_token)] * batch_size,
+                n_atom=[int(n_atom)] * batch_size,
+            )
+
+        return cls(
+            token=token,
+            reference=reference,
+            chain_perm=chain_perm,
+            mask=mask,
+            motif=motif,
+            index=index,
+            entity=entity,
+            coordinate=coordinate,
+            basic=basic_context,
+        )

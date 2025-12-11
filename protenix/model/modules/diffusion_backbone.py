@@ -189,7 +189,7 @@ class DiffusionConditioning(nn.Module):
 
         # Compute v_lm mask
         token_ref_space_uid = average_atom_to_token(
-            x_atom=context.reference.ref_space_uid.unsqueeze(-1),
+            x_atom=context.reference.ref_space_uid.float().unsqueeze(-1),
             atom_to_token_idx=atom_to_token_idx,
             atom_mask=atom_mask,
             n_token=n_token,
@@ -268,7 +268,7 @@ class DiffusionConditioning(nn.Module):
         motif_coord_augment = centre_random_augmentation(
             motif_coord,
             mask=is_motif_token,
-            N_sample=1,
+            n_sample=1,
             s_trans=1.0,  # TODO: increase s_trans?
         ).squeeze(-3)  # [..., N_token, 3]
 

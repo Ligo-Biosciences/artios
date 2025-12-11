@@ -423,8 +423,8 @@ class ContextGenerator(object):
         return MotifContext(
             is_motif=torch.Tensor(is_motif).bool(),
             is_motif_related=torch.Tensor(is_motif_related).bool(),
-            is_motif_token=torch.Tensor(is_motif_token).long(),
-            is_motif_related_token=torch.Tensor(is_motif_related_token).long(),
+            is_motif_token=torch.Tensor(is_motif_token).bool(),
+            is_motif_related_token=torch.Tensor(is_motif_related_token).bool(),
             motif_restype=motif_restype.float(),
             motif_coordinate=torch.Tensor(motif_coordinate).float(),
         )

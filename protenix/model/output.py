@@ -1,11 +1,12 @@
 from dataclasses import dataclass
-from typing import Optional, typecheck
+from typing import Optional
 
 from biotite.structure import AtomArray
 from jaxtyping import Float
 from torch import Tensor
 
 from protenix.data.utils import save_structure_cif
+from protenix.utils.typing import typecheck
 
 
 @typecheck

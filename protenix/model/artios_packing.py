@@ -10,7 +10,7 @@ from protenix.model.generator_backbone import (
     TrainingTimestepSampler,
     sample_local_noising,
 )
-from protenix.model.modules.sidechain_decoder import SidechainPacker
+from protenix.model.modules.sidechain_packer import SidechainPacker
 from protenix.model.output import ModelOutput
 from protenix.model.utils import broadcast_token_to_atom
 

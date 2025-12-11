@@ -64,6 +64,7 @@ dependencies = [
     "rapidgzip>=0.15.2",
     "beartype>=0.22.6",
     "pydantic>=2.12.5",
+    "einops>=0.8.1",
 ]
 
 [project.optional-dependencies]

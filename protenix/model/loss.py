@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from operator import attrgetter
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -241,9 +242,9 @@ class MSELoss(BaseLoss):
         """
         Retrieves the predicted, target and mask tensor.
         """
-        pred_tensor = getattr(output, self.pred_key)
-        true_tensor = getattr(context, self.true_key)
-        valid_mask = getattr(context, self.mask_key)
+        pred_tensor = attrgetter(self.pred_key)(output)
+        true_tensor = attrgetter(self.true_key)(context)
+        valid_mask = attrgetter(self.mask_key)(context)
         return pred_tensor, true_tensor, valid_mask
 
     def _extract_entity_masks(
@@ -251,12 +252,12 @@ class MSELoss(BaseLoss):
         context: FullContext,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Retrieves the entity masks."""
-        is_protein = getattr(context, self.protein_mask_key)
-        is_dna = getattr(context, self.dna_mask_key)
-        is_rna = getattr(context, self.rna_mask_key)
-        is_ligand = getattr(context, self.ligand_mask_key)
-        is_motif = getattr(context, self.motif_mask_key)
-        is_motif_related = getattr(context, self.motif_related_mask_key)
+        is_protein = attrgetter(self.protein_mask_key)(context)
+        is_dna = attrgetter(self.dna_mask_key)(context)
+        is_rna = attrgetter(self.rna_mask_key)(context)
+        is_ligand = attrgetter(self.ligand_mask_key)(context)
+        is_motif = attrgetter(self.motif_mask_key)(context)
+        is_motif_related = attrgetter(self.motif_related_mask_key)(context)
         return is_protein, is_dna, is_rna, is_ligand, is_motif, is_motif_related
 
     def _calculate_per_sample_scale(
@@ -265,7 +266,7 @@ class MSELoss(BaseLoss):
     ) -> Tensor:
         """Calculates the per-sample scale."""
         sqrt2 = 1.414
-        timestep = getattr(output, self.timestep_key)
+        timestep = attrgetter(self.timestep_key)(output)
         timestep = torch.clamp(timestep, max=self.timestep_scale_clamp)
         return 1 / (sqrt2 * (self.sigma * (1 - timestep)) ** 2)
 
@@ -508,8 +509,8 @@ class NLLLoss(BaseLoss):
 
         # Label smoothing
         gt_sequence_smoothed = gt_sequence + (self.label_smoothing / num_residue_types)
-        gt_sequence_smoothed = gt_sequence / (
-            gt_sequence.sum(dim=-1, keepdim=True) + 1e-3
+        gt_sequence_smoothed = gt_sequence_smoothed / (
+            gt_sequence_smoothed.sum(dim=-1, keepdim=True) + 1e-3
         )
 
         # Calculate weights

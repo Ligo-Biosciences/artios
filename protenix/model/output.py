@@ -13,9 +13,7 @@ from protenix.utils.typing import typecheck
 @dataclass
 class ModelOutput:
     coordinate: Optional[Float[Tensor, "batch n_sample n_atom 3"]] = None
-    seq_logits: Optional[Float[Tensor, "batch n_sample n_token num_residue_types"]] = (
-        None
-    )
+    seq_logits: Optional[Float[Tensor, "batch n_token num_residue_types"]] = None
     timestep: Optional[Float[Tensor, "batch n_sample"]] = None
 
     def output_to_cif(

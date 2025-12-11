@@ -176,11 +176,7 @@ class Context:
                 padded_fields[field.name] = value
                 continue
 
-            try:
-                ann = type_hints[field.name]
-            except Exception as e:
-                print("couldn't get type hints for field", field.name)
-                raise e
+            ann = type_hints[field.name]
             feature_type = get_args(ann)[1].type
             padded_fields[field.name] = pad_fns[feature_type](value)
 

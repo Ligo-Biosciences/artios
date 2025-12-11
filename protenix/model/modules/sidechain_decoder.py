@@ -3,6 +3,13 @@ from einops import rearrange, repeat
 from torch import Tensor, nn
 
 from protenix.data.features import FullContext
+from protenix.model.generator import (
+    Deterministic,
+    FlowMatchingSampler,
+    InferenceTimestepScheduler,
+    StochasticitySchedule,
+    VelocityScorePredictor,
+)
 from protenix.model.modules.atom_attention import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
@@ -10,7 +17,6 @@ from protenix.model.modules.atom_attention import (
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.modules.transformer import DiffusionTransformer
-from protenix.model.utils import centre_random_augmentation
 from protenix.utils.typing import Float, typecheck
 
 
@@ -148,32 +154,61 @@ class SidechainDecoder(nn.Module):
         denoised_atoms = x_noisy + r_update * self.c_out(timestep[..., None, None])
         return denoised_atoms
 
+    def as_predictor(
+        self,
+        context: FullContext,
+        eps: float = 1e-5,
+    ) -> VelocityScorePredictor:
+        """Create a VelocityScorePredictor bound to this decoder and context.
+
+        Args:
+            context: Full feature context to use for predictions.
+            eps: Small constant for numerical stability.
+
+        Returns:
+            A callable satisfying VelocityScorePredictor protocol.
+        """
+
+        def predictor(
+            x_noisy: Float[Tensor, "... n_atom 3"],
+            timestep: Float[Tensor, "..."],
+        ) -> tuple[Float[Tensor, "... n_atom 3"], Float[Tensor, "... n_atom 3"]]:
+            coords_pred = self.forward(
+                context=context,
+                x_noisy=x_noisy,
+                timestep=timestep,
+            )
+
+            t = repeat(timestep, "... -> ... 1 1")
+            velocity = (coords_pred - x_noisy) / torch.clamp(1 - t, min=eps)
+            score = t * velocity - x_noisy
+            return velocity, score
+
+        return predictor
+
     @typecheck
     def sample(
         self,
         context: FullContext,
-        timesteps: Float[Tensor, "n_steps"],
+        timestep_scheduler: InferenceTimestepScheduler,
+        n_steps: int,
         residual_centre_atoms: Float[Tensor, "... n_sample n_atom 3"],
-        stoch_type: str = "deterministic",
-        alpha: float = 1.0,
+        stochasticity: StochasticitySchedule = Deterministic(),
         gamma: float = 1.0,
         n_sample: int = 1,
         sigma_data: float = 1.0,
-        eps: float = 1e-5,
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
-        """All-atom denoising sampling using diffusion process.
+        """All-atom denoising sampling using flow matching.
 
         Args:
             context: Full feature context.
-            timesteps: Diffusion timesteps for sampling.
+            timestep_scheduler: Scheduler for generating timestep sequence.
+            n_steps: Number of integration steps.
             residual_centre_atoms: Residue center atom coordinates for residual connection.
-            stoch_type: Type of stochasticity schedule.
-                Options: "deterministic", "constant", "non_singular", "zero_ends".
-            alpha: Controls the level of noise added during sampling.
-            gamma: Scaling factor for stochastic noise term.
+            stochasticity: Schedule defining g(t) in the SDE.
+            gamma: Temperature parameter for the stochastic term.
             n_sample: Number of samples to generate.
             sigma_data: Standard deviation for initial noise.
-            eps: Small constant for numerical stability.
 
         Returns:
             Denoised atom coordinates.
@@ -183,72 +218,24 @@ class SidechainDecoder(nn.Module):
         device = context.token.residue_index.device
         dtype = torch.float32
 
-        def _calculate_velocity_and_score(
-            x_noisy: Tensor, t_cur: Tensor
-        ) -> tuple[Tensor, Tensor]:
-            """Calculate velocity and scaled score for a single timestep."""
-            coords_pred = self.forward(
-                context=context,
-                x_noisy=x_noisy,
-                timestep=t_cur,
-            )
-
-            t_cur_ = repeat(t_cur, "... -> ... 1 1")
-            velocity_pred = (coords_pred - x_noisy) / torch.clamp(1 - t_cur_, min=eps)
-            scaled_score = t_cur_ * velocity_pred - x_noisy
-            return velocity_pred, scaled_score
-
-        # Stochasticity schedules
-        stoch_schedules = {
-            "deterministic": lambda t: torch.zeros_like(t),
-            "constant": lambda t: torch.ones_like(t)
-            * (0.5 * (alpha**2))
-            / torch.clamp(1 - t, min=eps),
-            "non_singular": lambda t: torch.where(
-                t > 0.95,
-                torch.zeros_like(t),
-                4 * torch.ones_like(t) * 0.5 * (alpha**2),
-            ),
-            "zero_ends": lambda t: 12 * 0.5 * (alpha**2) * t,
-        }
-
-        if stoch_type not in stoch_schedules:
-            raise ValueError(f"Invalid stochasticity type: {stoch_type}")
-
-        g = stoch_schedules[stoch_type](timesteps)
-
-        # Generate starting noise
-        x_0 = sigma_data * torch.randn(
+        # Generate initial noise with residual offset
+        x_init = sigma_data * torch.randn(
             size=(*batch_shape, n_sample, n_atom, 3), device=device, dtype=dtype
         )
-        x_0 = x_0 + residual_centre_atoms
+        x_init = x_init + residual_centre_atoms
 
-        # Initialise Euler/Euler-Maruyama
-        x = x_0
-        noise = torch.zeros_like(x)
+        # Create sampler and predictor
+        sampler = FlowMatchingSampler(
+            timestep_scheduler=timestep_scheduler,
+            stochasticity=stochasticity,
+            gamma=gamma,
+            second_order=False,
+            centre_coords=True,
+        )
+        predictor = self.as_predictor(context)
 
-        # Sampling loop
-        for i, (t_cur, t_next) in enumerate(zip(timesteps[:-1], timesteps[1:])):
-            t = t_cur.new_full((*batch_shape, n_sample), t_cur).to(dtype)
-
-            if stoch_type != "deterministic":
-                noise = torch.randn_like(x)
-
-            g_t = g[i]
-
-            # Centre and rotate coords
-            x = (
-                centre_random_augmentation(x_input_coords=x, n_sample=1)
-                .squeeze(dim=-3)
-                .to(dtype)
-            )
-
-            velocity_pred, scaled_score = _calculate_velocity_and_score(
-                x_noisy=x, t_cur=t
-            )
-
-            step = t_next - t_cur
-            update = step * (velocity_pred.to(torch.float64) + g_t * scaled_score)
-            x = x + update + torch.sqrt(2 * step * g_t * gamma) * noise
-
-        return x
+        return sampler.sample(
+            predictor=predictor,
+            x_init=x_init,
+            n_steps=n_steps,
+        )

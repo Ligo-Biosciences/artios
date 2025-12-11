@@ -4,15 +4,17 @@ import torch
 import torch.nn as nn
 
 from protenix.data.features import FullContext
-from protenix.model.generator_backbone import (
+from protenix.model.generator import (
+    FlowMatchingSampler,
     LaProteinaCoordScheduler,
-    TrainingTimestepSampler,
-    sample_diffusion,
+    ProteinaCoordSampler,
+    StochasticitySchedule,
+    VelocityScorePredictor,
     sample_noising,
+    stochasticity_from_config,
 )
 from protenix.model.modules.diffusion_backbone import DiffusionModule
 from protenix.model.output import ModelOutput
-from protenix.utils.torch_utils import autocasting_disable_decorator
 
 
 class ArtiosBackbone(nn.Module):
@@ -22,15 +24,22 @@ class ArtiosBackbone(nn.Module):
 
         self.N_model_seed = self.configs.model.N_model_seed
 
-        # Fixed eval generator for reproducibility
-        # self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
+        # Training timestep sampler
+        self.timestep_sampler = ProteinaCoordSampler(**configs.train_timestep_sampler)
 
-        self.timestep_sampler = TrainingTimestepSampler(
-            **configs.train_timestep_sampler
-        )
-
+        # Inference timestep scheduler
         self.inference_timestep_scheduler = LaProteinaCoordScheduler(
             **configs.inference_timestep_scheduler.la_proteina.coord
+        )
+
+        # Stochasticity schedule for inference
+        sample_cfg = configs.sample_diffusion
+        self.stochasticity: StochasticitySchedule = stochasticity_from_config(
+            stoch_type=sample_cfg.get("stoch_type", "deterministic"),
+            alpha=sample_cfg.get("alpha", 1.0),
+            beta_mean=sample_cfg.get("beta_mean", 0.5),
+            beta_std=sample_cfg.get("beta_std", 0.224),
+            cutoff=sample_cfg.get("cutoff", 0.95),
         )
 
         self.diffusion_batch_size = self.configs.diffusion_batch_size
@@ -39,59 +48,89 @@ class ArtiosBackbone(nn.Module):
         self.diffusion_module = DiffusionModule(**configs.model.diffusion_module)
         self.sigma_coord = configs.sigma_coord
 
-    def sample_diffusion(self, **kwargs) -> torch.Tensor:
-        """
-        Samples diffusion process based on the provided configurations.
+    def _make_predictor(
+        self,
+        context: FullContext,
+        inplace_safe: bool = False,
+        eps: float = 1e-5,
+    ) -> VelocityScorePredictor:
+        """Create a VelocityScorePredictor bound to this model and context.
+
+        Args:
+            context: Full feature context for predictions.
+            inplace_safe: Whether to use inplace operations safely.
+            eps: Small constant for numerical stability.
 
         Returns:
-        torch.Tensor: The result of the diffusion sampling process.
+            A callable satisfying VelocityScorePredictor protocol.
         """
-        _configs = {
-            key: self.configs.sample_diffusion.get(key)
-            for key in [
-                "sigma_coord",
-                "stoch_type",
-                "alpha",
-                "gamma",
-                "second_order",
-                "guidance_weight",
-                "beta_mean",
-                "beta_std",
-                "lower_guidance_limit",
-                "upper_guidance_limit",
-            ]
-        }
-        return autocasting_disable_decorator(self.configs.skip_amp.sample_diffusion)(
-            sample_diffusion
-        )(**_configs, **kwargs)
+
+        def predictor(
+            x_noisy: torch.Tensor,
+            timestep: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            # Run diffusion module
+            pred = self.diffusion_module(
+                r_noisy=x_noisy,
+                timestep=timestep,
+                context=context,
+                inplace_safe=inplace_safe,
+            )
+
+            # Compute velocity and score
+            t = timestep[..., None, None]
+            velocity = (pred - x_noisy) / torch.clamp(1 - t, min=eps)
+            score = t * velocity - x_noisy
+            return velocity, score
+
+        return predictor
 
     def main_inference_loop(
         self,
         context: FullContext,
         inplace_safe: bool = False,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
-        """
-        Main inference loop for ArtiosBackbone.
+    ) -> ModelOutput:
+        """Main inference loop for ArtiosBackbone.
+
+        Args:
+            context: Full feature context.
+            inplace_safe: Whether to use inplace operations safely.
 
         Returns:
-            tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
+            ModelOutput containing predicted coordinates.
         """
         device = context.token.residue_index.device
-        dtype = context.token.residue_index.dtype
+        dtype = torch.float32
 
-        N_sample = self.configs.sample_diffusion["N_sample"]
-        N_step = self.configs.sample_diffusion["N_step"]
+        n_sample = self.configs.sample_diffusion["N_sample"]
+        n_steps = self.configs.sample_diffusion["N_step"]
+        gamma = self.configs.sample_diffusion.get("gamma", 1.0)
+        second_order = self.configs.sample_diffusion.get("second_order", False)
 
-        timesteps = self.inference_timestep_scheduler(
-            N_step=N_step, device=device, dtype=dtype
+        # Get dimensions for initial noise
+        batch_shape = context.token.residue_index.shape[:-1]
+        n_atom = context.reference.ref_pos.shape[-2]
+
+        # Generate initial noise
+        x_init = self.sigma_coord * torch.randn(
+            size=(*batch_shape, n_sample, n_atom, 3), device=device, dtype=dtype
         )
 
-        pred = self.sample_diffusion(
-            denoise_net=self.diffusion_module,
-            context=context,
-            timesteps=timesteps,
-            N_sample=N_sample,
-            inplace_safe=inplace_safe,
+        # Create sampler and predictor
+        sampler = FlowMatchingSampler(
+            timestep_scheduler=self.inference_timestep_scheduler,
+            stochasticity=self.stochasticity,
+            gamma=gamma,
+            second_order=second_order,
+            centre_coords=True,
+        )
+        predictor = self._make_predictor(context, inplace_safe=inplace_safe)
+
+        # Sample
+        pred = sampler.sample(
+            predictor=predictor,
+            x_init=x_init,
+            n_steps=n_steps,
         )
 
         return ModelOutput(coordinate=pred)

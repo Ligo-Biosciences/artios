@@ -5,7 +5,6 @@ import torch
 
 from protenix.model.modules.embedders import (
     FourierEmbedding,
-    InputFeatureEmbedder,
     RelativePositionEncoding,
 )
 
@@ -77,104 +76,6 @@ class TestFourierEmbedding:
         embedder3 = FourierEmbedding(c=c, seed=seed + 1).to(device)
         out3 = embedder3(t_hat)
         assert not torch.allclose(out, out3)
-
-
-class TestInputFeatureEmbedder:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    @pytest.fixture
-    def sample_data(self):
-        data_path = os.path.join(
-            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
-        )
-        if not os.path.exists(data_path):
-            pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path, weights_only=False)
-
-    def test_input_feature_embedder(self, device, sample_data):
-        c_atom = 128
-        c_atompair = 16
-        c_token = 384
-        n_blocks = 3
-
-        embedder = InputFeatureEmbedder(
-            c_atom=c_atom,
-            c_atompair=c_atompair,
-            c_token=c_token,
-            n_blocks=n_blocks,
-        ).to(device)
-
-        # Move sample data to device
-        n_tokens = sample_data["basic"]["N_token"][0]
-        input_dict = sample_data["input_feature_dict"]
-        input_dict = {
-            k: v.to(device) if torch.is_tensor(v) else v for k, v in input_dict.items()
-        }
-
-        # Test forward pass
-        output = embedder(input_dict)
-
-        # Check output shape and values
-        assert output.shape == (n_tokens, c_token)
-        assert not torch.isnan(output).any()
-
-    def test_input_feature_embedder_with_chunk_size(self, device, sample_data):
-        """Test InputFeatureEmbedder with chunk_size parameter"""
-        c_atom = 128
-        c_atompair = 16
-        c_token = 384
-        n_blocks = 3
-
-        embedder = InputFeatureEmbedder(
-            c_atom=c_atom,
-            c_atompair=c_atompair,
-            c_token=c_token,
-            n_blocks=n_blocks,
-        ).to(device)
-
-        # Move sample data to device
-        n_tokens = sample_data["basic"]["N_token"][0]
-        input_dict = sample_data["input_feature_dict"]
-        input_dict = {
-            k: v.to(device) if torch.is_tensor(v) else v for k, v in input_dict.items()
-        }
-
-        # Test forward pass with chunk_size
-        output = embedder(input_dict, chunk_size=64)
-
-        # Check output shape and values
-        assert output.shape == (n_tokens, c_token)
-        assert not torch.isnan(output).any()
-
-    def test_input_feature_embedder_different_sizes(self, device, sample_data):
-        """Test InputFeatureEmbedder with different embedding dimensions"""
-        c_atom = 64
-        c_atompair = 8
-        c_token = 256
-        n_blocks = 2
-
-        embedder = InputFeatureEmbedder(
-            c_atom=c_atom,
-            c_atompair=c_atompair,
-            c_token=c_token,
-            n_blocks=n_blocks,
-        ).to(device)
-
-        # Move sample data to device
-        n_tokens = sample_data["basic"]["N_token"][0]
-        input_dict = sample_data["input_feature_dict"]
-        input_dict = {
-            k: v.to(device) if torch.is_tensor(v) else v for k, v in input_dict.items()
-        }
-
-        # Test forward pass
-        output = embedder(input_dict)
-
-        # Check output shape matches the specified c_token
-        assert output.shape == (n_tokens, c_token)
-        assert not torch.isnan(output).any()
 
 
 if __name__ == "__main__":

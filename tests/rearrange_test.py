@@ -1,6 +1,6 @@
 import torch
 
-from protenix.model.modules.rearrange import (
+from protenix.model.modules.layout import (
     _get_key_trunk_indices,
     rearrange_to_key_subset,
     rearrange_to_query_subset,

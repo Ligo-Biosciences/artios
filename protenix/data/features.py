@@ -177,7 +177,7 @@ class Context:
                 continue
 
             try:
-                ann = type_hints(field.name)
+                ann = type_hints[field.name]
             except Exception as e:
                 print("couldn't get type hints for field", field.name)
                 raise e

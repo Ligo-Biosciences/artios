@@ -504,9 +504,9 @@ def sample_latent_diffusion(
         g_coord_t = g_coord[i]
         g_latent_t = g_latent[i]
 
-        # Centre and rotate coords [..., N_sample, N_atom, 3]
+        # Centre and rotate coords [..., n_sample, n_atom, 3]
         r = (
-            centre_random_augmentation(x_input_coords=r, N_sample=1)
+            centre_random_augmentation(x_input_coords=r, n_sample=1)
             .squeeze(dim=-3)
             .to(dtype)
         )

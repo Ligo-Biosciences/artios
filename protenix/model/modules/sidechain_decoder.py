@@ -238,7 +238,7 @@ class SidechainDecoder(nn.Module):
 
             # Centre and rotate coords
             x = (
-                centre_random_augmentation(x_input_coords=x, N_sample=1)
+                centre_random_augmentation(x_input_coords=x, n_sample=1)
                 .squeeze(dim=-3)
                 .to(dtype)
             )

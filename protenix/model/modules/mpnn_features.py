@@ -14,7 +14,7 @@ import protenix.model.modules.message_passing as mp
 from protenix.data.features import FullContext
 from protenix.model.modules.embedders import RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
-from protenix.model.utils import average_atom_to_token, flatten_final_dims
+from protenix.model.utils import average_atom_to_token
 from protenix.utils.torch_utils import cdist
 from protenix.utils.typing import typecheck
 
@@ -339,8 +339,8 @@ class MPNNFeaturizer(nn.Module):
 
         # Apply mask and flatten backbone pairs
         masked_distances = distances * distance_mask
-        flat_distances = flatten_final_dims(masked_distances, 2)
-        flat_mask = flatten_final_dims(distance_mask, 2)
+        flat_distances = rearrange(masked_distances, "... r d - > ... (r d)")
+        flat_mask = rearrange(distance_mask, "... r d - > ... (r d)")
         # [..., n_token, neighbors, 25]
 
         # Apply RBF encoding

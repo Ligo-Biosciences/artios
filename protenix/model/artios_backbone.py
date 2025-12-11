@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -69,12 +69,12 @@ class ArtiosBackbone(nn.Module):
         self,
         context: FullContext,
         inplace_safe: bool = False,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
+    ) -> ModelOutput:
         """
         Main inference loop for ArtiosBackbone.
 
         Returns:
-            tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]: Prediction, log, and time dictionaries.
+            ModelOutput: Model output containing the prediction.
         """
         device = context.token.residue_index.device
         dtype = context.token.residue_index.dtype
@@ -101,7 +101,7 @@ class ArtiosBackbone(nn.Module):
         context: FullContext,
         inplace_safe: bool = False,
         seed: Optional[int] = None,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
+    ) -> ModelOutput:
         """
         Main training (and evaluation) loop for the Artios All-Atom model.
 
@@ -111,8 +111,7 @@ class ArtiosBackbone(nn.Module):
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
-            tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
-                Prediction, updated label, and log dictionaries.
+            ModelOutput: Model output containing the prediction.
         """
         device = context.coordinate.coordinate.device
 

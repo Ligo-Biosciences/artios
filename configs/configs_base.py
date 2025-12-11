@@ -218,7 +218,9 @@ model_configs = {
             "dropout": 0.0,
             "coord_noise": 0.1,
         },
-        "sidechain_decoder": {
+    },
+    "artios_packing": {
+        "model": {  # TODO: these configs will be tidier once Hydra in
             "c_token": 768,
             "atom_encoder": {
                 "num_blocks": 3,
@@ -232,6 +234,27 @@ model_configs = {
                 "num_blocks": 3,
                 "num_heads": 4,
             },
+        },
+        "train_timestep_sampler": {  # uniform
+            "alpha": 1.0,
+            "beta": 1.0,
+        },
+        "inference_timestep_scheduler": {
+            "la_proteina": {
+                "coord": {
+                    "scale": 10.0,
+                },
+            },
+        },
+        "sample_diffusion": {
+            "local_sigma_coord": 1.0,
+            "alpha": 1.0,
+            "stoch_type": "deterministic",
+            "gamma": 1.0,
+            "sigma_coord": 1.0,
+            "N_sample": 10,
+            "N_step": 200,
+            "eps": 1e-5,
         },
     },
 }

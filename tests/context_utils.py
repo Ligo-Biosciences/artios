@@ -87,8 +87,8 @@ def load_sample_context(device: torch.device | None = None) -> FullContext:
     motif = MotifContext(
         is_motif=torch.zeros(n_atoms, dtype=torch.bool, device=device),
         is_motif_related=torch.zeros(n_atoms, dtype=torch.bool, device=device),
-        is_motif_token=torch.zeros(n_tokens, dtype=torch.long, device=device),
-        is_motif_related_token=torch.zeros(n_tokens, dtype=torch.long, device=device),
+        is_motif_token=torch.zeros(n_tokens, dtype=torch.bool, device=device),
+        is_motif_related_token=torch.zeros(n_tokens, dtype=torch.bool, device=device),
         motif_restype=torch.zeros(n_tokens, 32, device=device),
         motif_coordinate=torch.zeros(n_tokens, 3, device=device),
     )
@@ -226,10 +226,10 @@ def create_test_context(
             batch_size, n_atoms, dtype=torch.bool, device=device
         ),
         is_motif_token=torch.zeros(
-            batch_size, n_tokens, dtype=torch.long, device=device
+            batch_size, n_tokens, dtype=torch.bool, device=device
         ),
         is_motif_related_token=torch.zeros(
-            batch_size, n_tokens, dtype=torch.long, device=device
+            batch_size, n_tokens, dtype=torch.bool, device=device
         ),
         motif_restype=torch.zeros(batch_size, n_tokens, 32, device=device),
         motif_coordinate=torch.zeros(batch_size, n_tokens, 3, device=device),

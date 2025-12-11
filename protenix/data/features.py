@@ -372,12 +372,12 @@ class MotifContext(Context):
 
     # Token-level
     is_motif_token: Mask(
-        Int[Tensor, "*batch n_token"],
+        Bool[Tensor, "*batch n_token"],
         type=FeatureType.TOKEN,
         description="Is motif token (has motif coordinates)",
     )
     is_motif_related_token: Mask(
-        Int[Tensor, "*batch n_token"],
+        Bool[Tensor, "*batch n_token"],
         type=FeatureType.TOKEN,
         description="Is a token related to a motif (e.g. sidechain, which are tokenized per-atom)",
     )

@@ -11,6 +11,13 @@ from jaxtyping import Float
 from torch import Tensor
 
 from protenix.data.features import FullContext
+from protenix.model.generator import (
+    Deterministic,
+    FlowMatchingSampler,
+    InferenceTimestepScheduler,
+    StochasticitySchedule,
+    VelocityScorePredictor,
+)
 from protenix.model.modules.components import Transition
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
@@ -502,6 +509,94 @@ class DiffusionModule(nn.Module):
         """
         q_atom = q_atom + self.readout_transition(q_atom)
         return self.readout_linear(self.readout_layernorm(q_atom))
+
+    def as_predictor(
+        self,
+        context: FullContext,
+        inplace_safe: bool = False,
+        eps: float = 1e-5,
+    ) -> VelocityScorePredictor:
+        """Create a VelocityScorePredictor bound to this module and context.
+
+        Args:
+            context: Full feature context to use for predictions.
+            inplace_safe: Whether to use inplace operations safely.
+            eps: Small constant for numerical stability.
+
+        Returns:
+            A callable satisfying VelocityScorePredictor protocol.
+        """
+
+        def predictor(
+            x_noisy: Float[Tensor, "... n_atom 3"],
+            timestep: Float[Tensor, "..."],
+        ) -> tuple[Float[Tensor, "... n_atom 3"], Float[Tensor, "... n_atom 3"]]:
+            coords_pred = self.forward(
+                r_noisy=x_noisy,
+                timestep=timestep,
+                context=context,
+                inplace_safe=inplace_safe,
+            )
+
+            t = repeat(timestep, "... -> ... 1 1")
+            velocity = (coords_pred - x_noisy) / torch.clamp(1 - t, min=eps)
+            score = t * velocity - x_noisy
+            return velocity, score
+
+        return predictor
+
+    @typecheck
+    def sample(
+        self,
+        context: FullContext,
+        timestep_scheduler: InferenceTimestepScheduler,
+        n_steps: int,
+        stochasticity: StochasticitySchedule = Deterministic(),
+        gamma: float = 1.0,
+        n_sample: int = 1,
+        second_order: bool = False,
+        inplace_safe: bool = False,
+    ) -> Float[Tensor, "... n_sample n_atom 3"]:
+        """Backbone denoising sampling using flow matching.
+
+        Args:
+            context: Full feature context.
+            timestep_scheduler: Scheduler for generating timestep sequence.
+            n_steps: Number of integration steps.
+            stochasticity: Schedule defining g(t) in the SDE.
+            gamma: Temperature parameter for the stochastic term.
+            n_sample: Number of samples to generate.
+            second_order: Whether to use second-order integration.
+            inplace_safe: Whether to use inplace operations safely.
+
+        Returns:
+            Denoised atom coordinates.
+        """
+        n_atom = context.reference.ref_pos.shape[-2]
+        batch_shape = context.token.residue_index.shape[:-1]
+        device = context.token.residue_index.device
+        dtype = torch.float32
+
+        # Generate initial noise
+        x_init = self.sigma_coord * torch.randn(
+            size=(*batch_shape, n_sample, n_atom, 3), device=device, dtype=dtype
+        )
+
+        # Create sampler and predictor
+        sampler = FlowMatchingSampler(
+            timestep_scheduler=timestep_scheduler,
+            stochasticity=stochasticity,
+            gamma=gamma,
+            second_order=second_order,
+            centre_coords=True,
+        )
+        predictor = self.as_predictor(context, inplace_safe=inplace_safe)
+
+        return sampler.sample(
+            predictor=predictor,
+            x_init=x_init,
+            n_steps=n_steps,
+        )
 
     @typecheck
     def f_forward(

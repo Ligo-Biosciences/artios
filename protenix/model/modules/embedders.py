@@ -46,7 +46,7 @@ class RelativePositionEncoding(nn.Module):
         entity_id: Int[Tensor, "*batch n_token"],
         sym_id: Int[Tensor, "*batch n_token"],
         token_index: Int[Tensor, "*batch n_token"],
-    ) -> Float[Tensor, "*batch n_token n_token {self.c_z}"]:
+    ) -> Float[Tensor, "*batch n_token n_token c_z"]:
         # Pairwise equality masks
         asym_i = rearrange(asym_id, "... n -> ... n 1")
         asym_j = rearrange(asym_id, "... n -> ... 1 n")

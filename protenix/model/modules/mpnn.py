@@ -31,6 +31,7 @@ from protenix.model.modules.primitives import LinearNoBias
 from protenix.utils.typing import Bool, Num, typecheck
 
 
+@typecheck
 @dataclass
 class EncoderOutput:
     """Output from the MPNN encoder.
@@ -45,9 +46,10 @@ class EncoderOutput:
     node_feats: Float[Tensor, "... n_token node_dim"]
     edge_feats: Float[Tensor, "... n_token neighbours edge_dim"]
     edge_index: Int[Tensor, "... n_token neighbours"]
-    edge_mask: Float[Tensor, "... n_token neighbours"]
+    edge_mask: Bool[Tensor, "... n_token neighbours"]
 
 
+@typecheck
 @dataclass
 class DecodingMasks:
     """Attention masks for autoregressive decoding.

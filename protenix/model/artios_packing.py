@@ -71,7 +71,6 @@ class ArtiosPacking(nn.Module):
             n_sample=N_sample,
         )
 
-        # Build stochasticity schedule from config
         stochasticity = stochasticity_from_config(
             stoch_type=self.sampling_configs.stoch_type,
             alpha=self.sampling_configs.alpha,

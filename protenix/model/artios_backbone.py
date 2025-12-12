@@ -11,12 +11,11 @@ from protenix.model.generator import (
     ProteinaCoordSampler,
     StochasticitySchedule,
     VelocityScorePredictor,
-    sample_noising,
     stochasticity_from_config,
 )
 from protenix.model.modules.diffusion_backbone import DiffusionModule
 from protenix.model.output import ModelOutput
-from protenix.model.utils import Mode
+from protenix.model.utils import Mode, centre_random_augmentation, noise_w_flow_matching
 
 
 class ArtiosBackbone(nn.Module):
@@ -27,7 +26,9 @@ class ArtiosBackbone(nn.Module):
         self.N_model_seed = self.configs.model.N_model_seed
 
         # Training timestep sampler
-        self.timestep_sampler = ProteinaCoordSampler(**configs.train_timestep_sampler)
+        self.timestep_sampler = ProteinaCoordSampler(
+            **configs.train_timestep_sampler.coord
+        )
 
         # Inference timestep scheduler
         self.inference_timestep_scheduler = LaProteinaCoordScheduler(
@@ -155,34 +156,45 @@ class ArtiosBackbone(nn.Module):
             ModelOutput: Model output containing the prediction.
         """
         device = context.coordinate.coordinate.device
+        dtype = context.coordinate.coordinate.dtype
+        batch_shape = context.coordinate.coordinate.shape[:-2]
 
-        N_sample = self.diffusion_batch_size
+        n_sample = self.diffusion_batch_size
         generator = (
             torch.Generator(device).manual_seed(seed) if not self.training else None
         )
 
-        # Noising
-        noisy_coords, timestep, _ = sample_noising(
-            input=context.coordinate.coordinate,
+        # Augment target coordinates
+        x_target_augment = centre_random_augmentation(
+            x_input_coords=context.coordinate.coordinate,
+            n_sample=n_sample,
             mask=context.mask.is_resolved,
-            timestep_sampler=self.timestep_sampler,
-            num_sample=N_sample,
-            scale=self.sigma_coord,
-            generator=generator,
+        ).to(dtype)
+
+        # Generate timesteps
+        timestep = self.timestep_sampler.sample(
+            size=(*batch_shape, n_sample), device=device, generator=generator
+        ).to(dtype)
+
+        # Generate noise
+        noise = (
+            torch.randn(
+                x_target_augment.shape,
+                dtype=dtype,
+                device=device,
+                generator=generator,
+            )
+            * self.sigma_coord
         )
 
-        # # With CFG drop probability, train the unconditional model
-        # if torch.rand(1).item() < self.cfg_drop_probability:
-        #     context.entity.is_ligand = torch.zeros_like(context.entity.is_ligand)
-        #     context.entity.is_ligand_token = torch.zeros_like(context.entity.is_ligand_token)
-        #     context.entity.is_target_token = torch.zeros_like(context.entity.is_target_token)
-        #     context.entity.is_hotspot = torch.zeros_like(context.entity.is_hotspot)
-        #     context.entity.is_motif_related = torch.zeros_like(context.entity.is_motif_related)
-        #     context.entity.is_motif_related_token = torch.zeros_like(context.entity.is_motif_related_token)
+        # Apply flow matching interpolation
+        r_noisy = noise_w_flow_matching(
+            x_target_augment, noise, timestep[..., :, None, None]
+        )
 
         # Denoising
         pred = self.diffusion_module(
-            r_noisy=noisy_coords,  # TODO: can we maintain one of r_noisy or noisy_coords plz?
+            r_noisy=r_noisy,
             timestep=timestep,
             context=context,
             inplace_safe=inplace_safe,

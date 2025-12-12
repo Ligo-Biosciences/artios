@@ -17,10 +17,10 @@ Feature metadata can be accessed via:
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from enum import Enum, auto
 from functools import partial
-from typing import Annotated, Callable, get_args, get_type_hints
+from typing import Annotated, Any, Callable, get_args, get_type_hints
 
 import torch
 from biotite.structure import AtomArray
@@ -130,12 +130,12 @@ def Auxiliary(
 class Context:
     """Base class with common utilities for feature containers."""
 
-    def to_dict(self) -> dict[str, Tensor]:
-        """Convert to flat dictionary of tensors."""
-        return {k: v for k, v in asdict(self).items() if torch.is_tensor(v)}
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to flat dictionary of field values."""
+        return dict(asdict(self).items())
 
     @classmethod
-    def from_dict(cls, d: dict[str, Tensor], **extra_kwargs) -> Context:
+    def from_dict(cls, d: dict[str, Any], **extra_kwargs) -> Context:
         """Create instance from dictionary of tensors.
 
         Args:
@@ -146,11 +146,11 @@ class Context:
             New instance with fields populated from dict.
         """
         kwargs = {}
-        for field in fields(cls):
-            if field.name in d:
-                kwargs[field.name] = d[field.name]
-            elif field.name in extra_kwargs:
-                kwargs[field.name] = extra_kwargs[field.name]
+        for f in fields(cls):
+            if f.name in d:
+                kwargs[f.name] = d[f.name]
+            elif f.name in extra_kwargs:
+                kwargs[f.name] = extra_kwargs[f.name]
         return cls(**kwargs)
 
     def pad(
@@ -169,16 +169,16 @@ class Context:
         type_hints = get_type_hints(type(self), include_extras=True)
 
         padded_fields = {}
-        for field in fields(self):
-            value = getattr(self, field.name)
+        for f in fields(self):
+            value = getattr(self, f.name)
 
             if not torch.is_tensor(value):
-                padded_fields[field.name] = value
+                padded_fields[f.name] = value
                 continue
 
-            ann = type_hints(field.name)
+            ann = type_hints(f.name)
             feature_type = get_args(ann)[1].type
-            padded_fields[field.name] = pad_fns[feature_type](value)
+            padded_fields[f.name] = pad_fns[feature_type](value)
 
         return type(self)(**padded_fields)
 
@@ -263,13 +263,13 @@ class ChainPermContext(Context):
 
 
 @dataclass
-class AtomPermInfo:
+class AtomPermContext(Context):
     """Atom permutation features for symmetric permutation.
 
     TODO: feature explanation
     """
 
-    perms: list[list[int]]
+    perms: list[list[int]] = field(default_factory=list)
 
 
 @typecheck
@@ -444,6 +444,7 @@ class FullContext:
     token: TokenContext
     reference: ReferenceConformerContext
     chain_perm: ChainPermContext
+    atom_perm: AtomPermContext
     mask: MaskContext
     motif: MotifContext
     index: IndexContext
@@ -483,11 +484,11 @@ class FullContext:
 
         return type(self)(**kwargs)
 
-    def to_dict(self) -> dict[str, dict[str, Tensor]]:
-        """Convert all Context fields to a nested dictionary of tensors.
+    def to_dict(self) -> dict[str, dict[str, Any]]:
+        """Convert all Context fields to a nested dictionary.
 
         Returns:
-            Nested dictionary with all tensor fields from all sub-contexts.
+            Nested dictionary with all fields from all sub-contexts.
         """
         result = {}
         for f in fields(self):
@@ -523,6 +524,7 @@ class FullContext:
         token = TokenContext.from_dict(d.get("token", {}))
         reference = ReferenceConformerContext.from_dict(d.get("reference", {}))
         chain_perm = ChainPermContext.from_dict(d.get("chain_perm", {}))
+        atom_perm = AtomPermContext.from_dict(d.get("atom_perm", {}))
         mask = MaskContext.from_dict(d.get("mask", {}))
         motif = MotifContext.from_dict(d.get("motif", {}))
         index = IndexContext.from_dict(d.get("index", {}))
@@ -556,6 +558,7 @@ class FullContext:
             token=token,
             reference=reference,
             chain_perm=chain_perm,
+            atom_perm=atom_perm,
             mask=mask,
             motif=motif,
             index=index,

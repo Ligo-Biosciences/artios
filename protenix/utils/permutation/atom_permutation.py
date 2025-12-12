@@ -1011,7 +1011,7 @@ def run_batched(
     ref_space_uid: Int[Tensor, "batch n"],
     atom_perm_list: list[list[list[int]]],
     pdb_id: list[str],
-    permute_label: bool = True,
+    permute_label: bool = False,
     alignment_mask: Optional[Bool[Tensor, "batch n"]] = None,
     error_dir: Optional[str] = None,
     global_align_wo_symmetric_atom: bool = False,

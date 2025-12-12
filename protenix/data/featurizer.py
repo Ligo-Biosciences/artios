@@ -375,9 +375,10 @@ class ContextGenerator(object):
             MaskContext: Atom-level masks for loss computation and attention.
         """
         atom_is_resolved = self.cropped_atom_array.is_resolved.astype(int)
-        atom_in_token_w_resolved_centre_atom = self.centre_atoms.is_resolved[
+        centre_atom_is_resolved = self.centre_atoms.is_resolved.astype(int)
+        atom_in_token_w_resolved_centre_atom = centre_atom_is_resolved[
             self.atom_to_token_idx
-        ].astype(int)
+        ]
 
         return MaskContext(
             centre_atom_mask=torch.Tensor(
@@ -385,6 +386,7 @@ class ContextGenerator(object):
             ).bool(),
             atom_mask=torch.ones(len(self.cropped_atom_array)).bool(),
             is_resolved=torch.Tensor(self.cropped_atom_array.is_resolved).bool(),
+            centre_atom_is_resolved=torch.Tensor(centre_atom_is_resolved).bool(),
             backbone_mask=torch.Tensor(self.backbone_atoms_and_mask[1]).bool(),
             atom_loss_mask=torch.Tensor(
                 atom_is_resolved * atom_in_token_w_resolved_centre_atom

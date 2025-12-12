@@ -11,17 +11,8 @@ from torch import Tensor
 
 from protenix.utils.typing import Bool, Float, typecheck
 
-# Optimized layer norm
-
-try:
-    CUDA_AVAILABLE = True
-except OSError:
-    CUDA_AVAILABLE = False
-
 
 # Linear layer utilities
-
-
 def _calculate_fan(linear_weight_shape, fan="fan_in"):
     """Calculate fan-in/fan-out/fan-avg for a linear layer weight shape."""
     fan_out, fan_in = linear_weight_shape
@@ -276,22 +267,7 @@ class LayerNorm(nn.Module):
                 "bias", torch.zeros(normalized_shape, device=device, dtype=dtype)
             )
 
-    # @torch.compiler.disable(recursive=True)
     def forward(self, x: Float[Tensor, "... d"]) -> Float[Tensor, "... d"]:
-        """Forward pass using optimized kernel on GPU, regular layernorm on CPU."""
-
-        # if (
-        #     CUDA_AVAILABLE
-        #     and x.is_cuda
-        #     and x.dtype in [torch.float32, torch.float16, torch.bfloat16]
-        # ):
-        #     # Use optimized CUDA kernel implementation
-        #     return FusedLayerNormAffineFunction.apply(
-        #         x, self.weight, self.bias, self.normalized_shape, self.eps
-        #     )
-
-        # else:
-        # Manual implementation using torch.functional
         return F.layer_norm(
             x,
             self.normalized_shape,

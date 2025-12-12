@@ -9,7 +9,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 
-from protenix.metrics.rmsd import weighted_rigid_align_V2
+from protenix.metrics.rmsd import weighted_rigid_align
 from protenix.model.utils import expand_at_dim, masked_mean
 
 
@@ -308,7 +308,7 @@ class MSELoss(BaseLoss):
         d = pred_coordinate.dtype
         # Some ops in weighted_rigid_align do not support BFloat16 training
         with torch.amp.autocast("cuda", enabled=False):
-            true_coordinate_aligned = weighted_rigid_align_V2(
+            true_coordinate_aligned = weighted_rigid_align(
                 x=true_coordinate.to(torch.float32),  # [..., N_sample, N_atom, 3]
                 x_target=pred_coordinate.to(
                     torch.float32

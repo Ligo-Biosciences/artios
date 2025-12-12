@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from protenix.data.features import FullContext
+from protenix.model.generator import Deterministic, LaProteinaCoordScheduler
 from protenix.model.modules.diffusion_backbone import (
     DiffusionConditioning,
     DiffusionModule,
@@ -316,6 +317,104 @@ class TestDiffusionModule:
 
         assert output.shape == (batch_size, n_samples, n_atoms, 3)
         assert not torch.isnan(output).any()
+
+    def test_as_predictor(self, diffusion_module, context, device):
+        """Test that as_predictor returns a callable that produces velocity and score."""
+        n_atoms = context.reference.ref_pos.shape[-2]
+        batch_size = context.token.residue_index.shape[0]
+        n_samples = 1
+
+        # Create predictor
+        predictor = diffusion_module.as_predictor(context=context, inplace_safe=False)
+
+        # Create input tensors
+        x_noisy = torch.randn(batch_size, n_samples, n_atoms, 3).to(device)
+        timestep = torch.rand(batch_size, n_samples).to(device)
+
+        # Call predictor
+        velocity, score = predictor(x_noisy, timestep)
+
+        # Check output shapes
+        assert velocity.shape == (batch_size, n_samples, n_atoms, 3)
+        assert score.shape == (batch_size, n_samples, n_atoms, 3)
+        assert not torch.isnan(velocity).any()
+        assert not torch.isnan(score).any()
+
+    def test_as_predictor_with_different_timesteps(
+        self, diffusion_module, context, device
+    ):
+        """Test as_predictor with varying timesteps."""
+        n_atoms = context.reference.ref_pos.shape[-2]
+        batch_size = context.token.residue_index.shape[0]
+        n_samples = 2
+
+        predictor = diffusion_module.as_predictor(context=context)
+
+        x_noisy = torch.randn(batch_size, n_samples, n_atoms, 3).to(device)
+        timestep = torch.tensor([[0.1, 0.9]] * batch_size).to(device)
+
+        velocity, score = predictor(x_noisy, timestep)
+
+        assert velocity.shape == (batch_size, n_samples, n_atoms, 3)
+        assert score.shape == (batch_size, n_samples, n_atoms, 3)
+        assert not torch.isnan(velocity).any()
+        assert not torch.isnan(score).any()
+
+    def test_sample(self, diffusion_module, device):
+        """Test the sample method produces valid outputs."""
+        # Create a small context for sampling test
+        context = create_test_context(
+            batch_size=1,
+            n_tokens=16,
+            n_atoms=32,
+            device=device,
+        )
+        n_atoms = context.reference.ref_pos.shape[-2]
+        n_sample = 2
+        n_steps = 3  # Small for fast testing
+
+        # Create timestep scheduler
+        timestep_scheduler = LaProteinaCoordScheduler(scale=10.0)
+
+        with torch.no_grad():
+            output = diffusion_module.sample(
+                context=context,
+                timestep_scheduler=timestep_scheduler,
+                n_steps=n_steps,
+                stochasticity=Deterministic(),
+                gamma=1.0,
+                n_sample=n_sample,
+                second_order=False,
+                inplace_safe=False,
+            )
+
+        # Check output shape: [batch, n_sample, n_atom, 3]
+        assert output.shape == (1, n_sample, n_atoms, 3)
+        assert not torch.isnan(output).any()
+        assert torch.isfinite(output).all()
+
+    def test_sample_different_n_samples(self, diffusion_module, device):
+        """Test sample method with different n_sample values."""
+        context = create_test_context(
+            batch_size=1,
+            n_tokens=16,
+            n_atoms=32,
+            device=device,
+        )
+        n_atoms = context.reference.ref_pos.shape[-2]
+        timestep_scheduler = LaProteinaCoordScheduler(scale=10.0)
+
+        for n_sample in [1, 2, 4]:
+            with torch.no_grad():
+                output = diffusion_module.sample(
+                    context=context,
+                    timestep_scheduler=timestep_scheduler,
+                    n_steps=2,
+                    n_sample=n_sample,
+                )
+
+            assert output.shape == (1, n_sample, n_atoms, 3)
+            assert torch.isfinite(output).all()
 
 
 if __name__ == "__main__":

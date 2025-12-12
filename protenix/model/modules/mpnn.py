@@ -37,10 +37,10 @@ class EncoderOutput:
     """Output from the MPNN encoder.
 
     Attributes:
-        node_feats: Encoded node features [..., n_token, node_dim]
-        edge_feats: Encoded edge features [..., n_token, neighbours, edge_dim]
-        edge_index: Graph connectivity [..., n_token, neighbours]
-        edge_mask: Valid edge mask [..., n_token, neighbours]
+        node_feats: Encoded node features
+        edge_feats: Encoded edge features
+        edge_index: Graph connectivity
+        edge_mask: Valid edge mask
     """
 
     node_feats: Float[Tensor, "... n_token node_dim"]
@@ -55,8 +55,8 @@ class DecodingMasks:
     """Attention masks for autoregressive decoding.
 
     Attributes:
-        forward_mask: Mask for attending to future positions [..., n_token, neighbours, 1]
-        backward_mask: Mask for attending to past positions [..., n_token, neighbours, 1]
+        forward_mask: Mask for attending to future positions
+        backward_mask: Mask for attending to past positions
     """
 
     forward_mask: Bool[Tensor, "... n_token neighbours 1"]
@@ -378,7 +378,7 @@ class MPNN(nn.Module):
             zero_shot: If True, ignore sequence context (structure-only prediction)
 
         Returns:
-            Logits over residue types [..., n_token, num_residue_types]
+            Logits over residue types
         """
         node_feats = encoder_output.node_feats
         edge_index = encoder_output.edge_index
@@ -439,7 +439,7 @@ class MPNN(nn.Module):
         """Sample residue types from logits using temperature-controlled sampling.
 
         Args:
-            logits: Raw model logits [..., n_token, num_residue_types]
+            logits: Raw model logits
             temperature: Sampling temperature (0=greedy, >0=stochastic)
             seed: Seed for deterministic sampling
 
@@ -494,8 +494,8 @@ class MPNN(nn.Module):
 
         Returns:
             Tuple of (sampled_sequence, node_feats)
-                - sampled_sequence: One-hot encoded [..., n_token, num_residue_types]
-                - node_feats: Final node features [..., n_token, node_dim]
+                - sampled_sequence: One-hot encoded
+                - node_feats: Final node features
         """
         assert temperature >= 0, "Temperature must be non-negative"
 

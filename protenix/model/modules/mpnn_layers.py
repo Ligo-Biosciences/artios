@@ -147,7 +147,7 @@ class MPNNEncoderLayer(BaseMPNNLayer):
 
         self.act = nn.GELU()
 
-    @torch.compile
+    # @torch.compile
     def forward(
         self,
         node_emb: Float[Tensor, "... nodes node_dim"],
@@ -253,7 +253,7 @@ class MPNNDecoderLayer(BaseMPNNLayer):
 
         self.act = nn.GELU()
 
-    @torch.compile
+    # @torch.compile
     def forward(
         self,
         node_emb: Float[Tensor, "... nodes node_dim"],

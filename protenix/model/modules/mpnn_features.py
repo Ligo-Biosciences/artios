@@ -252,6 +252,7 @@ class MPNNFeaturizer(nn.Module):
             Node features tensor
         """
         dtype = context.reference.ref_pos.dtype
+        n_token = context.mask.token_mask.shape[-1]
 
         # Compute node features
         is_ligand = context.entity.is_ligand.unsqueeze(-1)  # [..., n_atom, 1]
@@ -271,7 +272,7 @@ class MPNNFeaturizer(nn.Module):
             x_atom=ligand_feats,
             atom_to_token_idx=context.index.atom_to_token_idx,
             atom_mask=context.mask.atom_mask,
-            n_token=context.basic.n_token,  # TODO: this is before padding!
+            n_token=n_token,
         )  # [..., n_token, node_dim]
 
         # Embed entity flags

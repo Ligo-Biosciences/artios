@@ -1,7 +1,8 @@
-from typing import Any, Optional
+from typing import Optional
 
 import torch
 import torch.nn as nn
+from typing_extensions import assert_never
 
 from protenix.data.features import FullContext
 from protenix.model.generator import (
@@ -15,6 +16,7 @@ from protenix.model.generator import (
 )
 from protenix.model.modules.diffusion_backbone import DiffusionModule
 from protenix.model.output import ModelOutput
+from protenix.model.utils import Mode
 
 
 class ArtiosBackbone(nn.Module):
@@ -97,7 +99,7 @@ class ArtiosBackbone(nn.Module):
             inplace_safe: Whether to use inplace operations safely.
 
         Returns:
-            ModelOutput containing predicted coordinates.
+            ModelOutput: Model output containing the prediction.
         """
         device = context.token.residue_index.device
         dtype = torch.float32
@@ -140,7 +142,7 @@ class ArtiosBackbone(nn.Module):
         context: FullContext,
         inplace_safe: bool = False,
         seed: Optional[int] = None,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
+    ) -> ModelOutput:
         """
         Main training (and evaluation) loop for the Artios All-Atom model.
 
@@ -150,8 +152,7 @@ class ArtiosBackbone(nn.Module):
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
-            tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
-                Prediction, updated label, and log dictionaries.
+            ModelOutput: Model output containing the prediction.
         """
         device = context.coordinate.coordinate.device
 
@@ -192,9 +193,8 @@ class ArtiosBackbone(nn.Module):
     def forward(
         self,
         context: FullContext,
-        mode: str,
+        mode: Mode,
         *,
-        current_step: Optional[int] = None,
         seed: Optional[int] = None,
     ) -> ModelOutput:
         """
@@ -202,27 +202,27 @@ class ArtiosBackbone(nn.Module):
 
         Args:
             context (FullContext): Full context containing all features and labels.
-            mode (str): Mode of operation ('train', 'inference', 'eval').
-            current_step (Optional[int]): Current training step. Defaults to None.
+            mode (Mode): Mode of operation.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
             ModelOutput: Model output containing the prediction and timestep.
         """
-
-        assert mode in ["train", "inference", "eval"]
         inplace_safe = not (self.training or torch.is_grad_enabled())
 
-        if mode == "train" or mode == "eval":
-            output = self.main_train_loop(
-                context=context,
-                inplace_safe=inplace_safe,
-                seed=seed,
-            )
-        elif mode == "inference":
-            output = self.main_inference_loop(
-                context=context,
-                inplace_safe=False,
-            )
+        match mode:
+            case Mode.TRAIN | Mode.EVAL:
+                output = self.main_train_loop(
+                    context=context,
+                    inplace_safe=inplace_safe,
+                    seed=seed,
+                )
+            case Mode.INFERENCE:
+                output = self.main_inference_loop(
+                    context=context,
+                    inplace_safe=False,
+                )
+            case _:
+                assert_never(mode)
 
         return output

@@ -12,7 +12,6 @@ Cross attention and self attention are separated.
 from functools import partial
 from typing import List, Tuple
 
-import torch
 from einops import rearrange
 from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint
@@ -362,7 +361,7 @@ class DiffusionTransformer(nn.Module):
 
     # @profile_function("diffusion_transformer")
     @typecheck
-    @torch.compile
+    # @torch.compile
     def forward(
         self,
         a: Float[Tensor, "... n c_token"],

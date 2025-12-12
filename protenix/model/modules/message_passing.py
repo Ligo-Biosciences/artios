@@ -5,14 +5,14 @@ from einops import rearrange
 from torch import Tensor
 
 from protenix.model.utils import expand_at_dim
-from protenix.utils.typing import Float, Int, typecheck
+from protenix.utils.typing import Float, Int, Shaped, typecheck
 
 
 @typecheck
 def gather_nodes(
-    h_nodes: Float[Tensor, "batch nodes features"],
-    edge_idx: Int[Tensor, "batch nodes neighbours"],
-) -> Float[Tensor, "batch nodes neighbours features"]:
+    h_nodes: Shaped[Tensor, "batch nodes features"],
+    edge_idx: Shaped[Tensor, "batch nodes neighbours"],
+) -> Shaped[Tensor, "batch nodes neighbours features"]:
     """Gather node features at specified neighbor indices.
 
     Args:

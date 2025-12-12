@@ -37,7 +37,7 @@ from protenix.data.dataloader import get_dataloaders
 
 # from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.metrics.sequence_metrics import SequenceMetrics
-from protenix.model.allatom_mpnn import AllatomMPNN
+from protenix.model.allatom_mpnn import ArtiosMPNN
 from protenix.model.loss import MPNNLoss
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
@@ -205,7 +205,7 @@ class ArtiosAllAtomTrainer(object):
         self.curr_loss_dict = {}
 
     def init_model(self):
-        self.raw_model = AllatomMPNN(self.configs).to(self.device)  # TODO: AllatomMPNN
+        self.raw_model = ArtiosMPNN(self.configs).to(self.device)  # TODO: AllatomMPNN
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
             self.print("Using DDP")

@@ -176,7 +176,7 @@ class Context:
                 padded_fields[f.name] = value
                 continue
 
-            ann = type_hints(f.name)
+            ann = type_hints[f.name]
             feature_type = get_args(ann)[1].type
             padded_fields[f.name] = pad_fns[feature_type](value)
 
@@ -335,6 +335,11 @@ class MaskContext(Context):
         Bool[Tensor, "*batch n_atom"],
         type=FeatureType.ATOM,
         description="Atom is resolved in structure.",
+    )
+    centre_atom_is_resolved: Mask(
+        Bool[Tensor, "*batch n_token"],
+        type=FeatureType.TOKEN,
+        description="Centre atom is resolved in structure.",
     )
     backbone_mask: Mask(
         Bool[Tensor, "*batch n_token 5"],

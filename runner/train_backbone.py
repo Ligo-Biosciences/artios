@@ -41,7 +41,7 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.data.featurizer import ContextGenerator
 from protenix.data.utils import save_structure_cif
 from protenix.metrics.lddt_metrics import LDDTMetrics
-from protenix.model.allatom_mpnn import AllatomMPNN
+from protenix.model.allatom_mpnn import ArtiosMPNN
 from protenix.model.artios_backbone import ArtiosBackbone
 from protenix.model.loss import BackboneLoss
 from protenix.model.modules.transformer import (
@@ -220,7 +220,7 @@ class ArtiosBackboneTrainer(object):
 
     def init_model(self):
         self.raw_backbone_model = ArtiosBackbone(self.configs).to(self.device)
-        self.mpnn_model = AllatomMPNN(self.configs).to(self.device)
+        self.mpnn_model = ArtiosMPNN(self.configs).to(self.device)
         self.mpnn_model.eval()
         # DDP not required for VAE loading since model is frozen - no need for gradient aggregation
         self.use_ddp = False

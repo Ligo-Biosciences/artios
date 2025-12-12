@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from enum import Enum
 from typing import Optional, Union
 
 import numpy as np
@@ -679,3 +680,11 @@ def masked_mean(
     )
 
     return mean
+
+
+class Mode(str, Enum):
+    """Supported modes of operation for model forward passes."""
+
+    TRAIN = "train"
+    INFERENCE = "inference"
+    EVAL = "eval"

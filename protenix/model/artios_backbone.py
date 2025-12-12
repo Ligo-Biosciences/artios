@@ -2,6 +2,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from typing_extensions import assert_never
 
 from protenix.data.features import FullContext
 from protenix.model.generator_backbone import (
@@ -12,6 +13,7 @@ from protenix.model.generator_backbone import (
 )
 from protenix.model.modules.diffusion_backbone import DiffusionModule
 from protenix.model.output import ModelOutput
+from protenix.model.utils import Mode
 from protenix.utils.torch_utils import autocasting_disable_decorator
 
 
@@ -79,8 +81,8 @@ class ArtiosBackbone(nn.Module):
         device = context.token.residue_index.device
         dtype = context.token.residue_index.dtype
 
-        N_sample = self.configs.sample_diffusion["N_sample"]
-        N_step = self.configs.sample_diffusion["N_step"]
+        N_sample = self.configs.sample_diffusion.N_sample
+        N_step = self.configs.sample_diffusion.N_step
 
         timesteps = self.inference_timestep_scheduler(
             N_step=N_step, device=device, dtype=dtype
@@ -152,9 +154,8 @@ class ArtiosBackbone(nn.Module):
     def forward(
         self,
         context: FullContext,
-        mode: str,
+        mode: Mode,
         *,
-        current_step: Optional[int] = None,
         seed: Optional[int] = None,
     ) -> ModelOutput:
         """
@@ -162,27 +163,27 @@ class ArtiosBackbone(nn.Module):
 
         Args:
             context (FullContext): Full context containing all features and labels.
-            mode (str): Mode of operation ('train', 'inference', 'eval').
-            current_step (Optional[int]): Current training step. Defaults to None.
+            mode (Mode): Mode of operation.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
             ModelOutput: Model output containing the prediction and timestep.
         """
-
-        assert mode in ["train", "inference", "eval"]
         inplace_safe = not (self.training or torch.is_grad_enabled())
 
-        if mode == "train" or mode == "eval":
-            output = self.main_train_loop(
-                context=context,
-                inplace_safe=inplace_safe,
-                seed=seed,
-            )
-        elif mode == "inference":
-            output = self.main_inference_loop(
-                context=context,
-                inplace_safe=False,
-            )
+        match mode:
+            case Mode.TRAIN | Mode.EVAL:
+                output = self.main_train_loop(
+                    context=context,
+                    inplace_safe=inplace_safe,
+                    seed=seed,
+                )
+            case Mode.INFERENCE:
+                output = self.main_inference_loop(
+                    context=context,
+                    inplace_safe=False,
+                )
+            case _:
+                assert_never(mode)
 
         return output

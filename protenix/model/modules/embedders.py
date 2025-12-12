@@ -112,15 +112,16 @@ class FourierEmbedding(nn.Module):
         self.register_buffer("w", torch.randn(c, generator=generator))
         self.register_buffer("b", torch.randn(c, generator=generator))
 
-    def forward(self, t_hat_timestep: Tensor) -> Tensor:
+    @typecheck
+    def forward(
+        self, t_hat_timestep: Float[Tensor, "*batch n_sample"]
+    ) -> Float[Tensor, "*batch n_sample c"]:
         """
         Args:
-            t_hat_timestep (Tensor): the noise level
-                [..., N_sample]
+            t_hat_timestep: the noise level
 
         Returns:
-            Tensor: the output fourier embedding
-                [..., N_sample, c]
+            the output fourier embedding
         """
         return torch.cos(
             input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w + self.b)

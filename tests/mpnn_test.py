@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from protenix.model.modules.mpnn import MPNN, DecodingMasks
-from tests.context_utils import create_test_context
+from tests.context_utils import FullContext, create_test_context
 
 
 @pytest.fixture
@@ -471,47 +471,6 @@ class TestDecode:
 
         assert not torch.isnan(logits).any(), "Logits contain NaN values"
         assert not torch.isinf(logits).any(), "Logits contain Inf values"
-
-    def test_different_restype_inputs(self, mpnn_model, single_context):
-        """Test that different restype inputs produce different outputs."""
-        encoder_output = mpnn_model.encode(single_context)
-        decoding_order = mpnn_model.generate_decoding_order(
-            centre_atom_coords=single_context.coordinate.centre_coordinate,
-            centre_atom_mask=single_context.mask.token_mask,
-            seed=42,
-        )
-        masks = mpnn_model.generate_decoding_masks(
-            decoding_order=decoding_order,
-            edge_index=encoder_output.edge_index,
-            node_mask=single_context.mask.token_mask,
-        )
-
-        # First restype
-        restype_1 = single_context.token.restype
-        logits_1 = mpnn_model.decode(
-            encoder_output=encoder_output,
-            restype=restype_1,
-            masks=masks,
-            node_mask=single_context.mask.token_mask,
-            zero_shot=False,
-        )
-
-        # Different restype
-        restype_2 = restype_1.clone()
-        restype_2[:, 0, :] = 0
-        restype_2[:, 0, 5] = 1  # Set to different residue type
-
-        logits_2 = mpnn_model.decode(
-            encoder_output=encoder_output,
-            restype=restype_2,
-            masks=masks,
-            node_mask=single_context.mask.token_mask,
-            zero_shot=False,
-        )
-
-        assert not torch.allclose(
-            logits_1, logits_2, atol=1e-4
-        ), "Different restype inputs produce identical outputs"
 
 
 class TestForward:

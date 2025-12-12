@@ -1,17 +1,3 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import math
 from typing import Iterator, Optional, Sequence
 
@@ -20,7 +6,7 @@ import torch.distributed as dist
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import DataLoader, DistributedSampler, Sampler
 
-from protenix.data.data_collator import DataCollatorWithPadding
+from protenix.data.data_collator import CollateContexts
 from protenix.data.dataset import Dataset, get_datasets
 from protenix.utils.logger import get_logger
 
@@ -335,10 +321,7 @@ def get_dataloaders(
             batch_size=configs.batch_size,
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
-            collate_fn=DataCollatorWithPadding(
-                max_n_msa=configs.data.padding.max_n_msa,
-                max_n_template=configs.data.padding.max_n_template,
-                max_n_pocket=configs.data.padding.max_n_pocket,
+            collate_fn=CollateContexts(
                 atom_bin_ends=configs.data.padding.atom_bin_ends,
                 token_bin_ends=configs.data.padding.token_bin_ends,
                 crop_size=configs.train_crop_size,
@@ -360,10 +343,7 @@ def get_dataloaders(
             batch_size=configs.batch_size,
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
-            collate_fn=DataCollatorWithPadding(
-                max_n_msa=configs.data.padding.max_n_msa,
-                max_n_template=configs.data.padding.max_n_template,
-                max_n_pocket=configs.data.padding.max_n_pocket,
+            collate_fn=CollateContexts(
                 atom_bin_ends=configs.data.padding.atom_bin_ends,
                 token_bin_ends=configs.data.padding.token_bin_ends,
                 crop_size=configs.train_crop_size,
@@ -391,17 +371,13 @@ def get_dataloaders(
             shuffle=False,
             num_workers=configs.data.num_dl_workers,
             sampler=test_sampler,
-            collate_fn=DataCollatorWithPadding(  # TODO: this will currently fail for the VAE or diffusion training.
-                max_n_msa=configs.data.padding.max_n_msa,
-                max_n_template=configs.data.padding.max_n_template,
-                max_n_pocket=configs.data.padding.max_n_pocket,
+            collate_fn=CollateContexts(
                 atom_bin_ends=configs.data.padding.atom_bin_ends,
                 token_bin_ends=configs.data.padding.token_bin_ends,
                 crop_size=configs.train_crop_size,
                 motif_training=configs.data.motif_training.motif_train_rate > 0.0,
                 max_motif_residues=configs.data.motif_training.max_motif_residues,
             ),
-            # lambda batch: batch[0],
         )
     logger.info(
         f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}"

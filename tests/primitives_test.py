@@ -1,387 +1,428 @@
+#!/usr/bin/env python3
+
+import math
+
 import pytest
 import torch
+import torch.nn.functional as F
+from torch import Tensor, nn
 
+from protenix.model.modules.layout import gather_trunk_pair_embedding
 from protenix.model.modules.primitives import (
-    AdaptiveLayerNorm,
-    Attention,
-    BiasInitLinear,
-    LayerNorm,
     Linear,
-    LinearNoBias,
-    SwiGLU,
-    Transition,
-    _calculate_fan,
     attention,
-    bias_init_fn,
-    create_local_attn_bias,
-    final_init_,
-    gather_pair_embedding_in_dense_trunk,
-    gating_init_,
-    glorot_uniform_init_,
-    he_normal_init_,
-    init_bias_to_zero_,
-    init_weight_to_zero_,
-    lecun_normal_init_,
-    normal_init_,
-    optimized_concat_split,
-    rearrange_qk_to_dense_trunk,
-    rearrange_to_dense_trunk,
-    trunc_normal_init_,
 )
 
 
-class TestInitializationFunctions:
+class TestLinearPrecision:
+    """Test Linear layer precision handling, especially bfloat16 to higher precision casting."""
+
     @pytest.fixture
-    def device(self):
+    def device(self) -> torch.device:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def test_calculate_fan(self):
-        shape = (10, 20)
-        assert _calculate_fan(shape, "fan_in") == 20
-        assert _calculate_fan(shape, "fan_out") == 10
-        assert _calculate_fan(shape, "fan_avg") == 15
+    def test_linear_precision_casting_bfloat16(self, device: torch.device) -> None:
+        """Test that bfloat16 inputs get cast to higher precision during matmul."""
+        # if device == torch.device("cpu"):
+        #    pytest.skip("Skipping bfloat16 test on CPU")
 
-        with pytest.raises(ValueError):
-            _calculate_fan(shape, "invalid_fan")
+        in_features, out_features = 64, 32
+        batch_size = 4
 
-    def test_trunc_normal_init(self):
-        weight = torch.empty(10, 20)
-        bias = torch.empty(10)
-
-        trunc_normal_init_(weight, bias)
-
-        assert not torch.isnan(weight).any()
-        assert not torch.isnan(bias).any()
-        assert bias.abs().sum() == 0
-
-    def test_init_bias_zero(self):
-        bias = torch.ones(10)
-        init_bias_to_zero_(bias)
-        assert torch.all(bias == 0)
-
-    def test_init_weight_zero(self):
-        weight = torch.ones(10, 20)
-        init_weight_to_zero_(weight)
-        assert torch.all(weight == 0)
-
-    def test_initialization_functions(self):
-        weight = torch.empty(10, 20)
-        bias = torch.empty(10)
-
-        for init_fn in [
-            lecun_normal_init_,
-            he_normal_init_,
-            glorot_uniform_init_,
-            final_init_,
-            gating_init_,
-            normal_init_,
-        ]:
-            init_fn(weight, bias)
-            assert not torch.isnan(weight).any()
-            assert not torch.isnan(bias).any()
-
-    def test_bias_init_fn(self):
-        weight = torch.empty(10, 20)
-        bias = torch.empty(10)
-        biasinit = 1.0
-
-        bias_init_fn(weight, bias, biasinit)
-        assert torch.all(weight == 0)
-        assert torch.all(bias == biasinit)
-
-
-class TestLayers:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    def test_linear_layer(self, device):
-        batch_size = 32
-        in_features = 64
-        out_features = 128
-
-        init_methods = ["default", "relu", "glorot", "gating", "normal", "zeros"]
-
-        for init in init_methods:
-            layer = Linear(in_features, out_features, init=init).to(device)
-            x = torch.randn(batch_size, in_features).to(device)
-
-            out = layer(x)
-            assert out.shape == (batch_size, out_features)
-            assert not torch.isnan(out).any()
-
-        with pytest.raises(ValueError):
-            Linear(in_features, out_features, init="invalid_init")
-
-    def test_linear_no_bias(self, device):
-        batch_size = 32
-        in_features = 64
-        out_features = 128
-
-        layer = LinearNoBias(in_features, out_features).to(device)
-        x = torch.randn(batch_size, in_features).to(device)
-
-        out = layer(x)
-        assert out.shape == (batch_size, out_features)
-        assert not torch.isnan(out).any()
-        assert layer.bias is None
-
-    def test_bias_init_linear(self, device):
-        batch_size = 32
-        in_features = 64
-        out_features = 128
-        biasinit = 1.0
-
-        layer = BiasInitLinear(in_features, out_features, biasinit=biasinit).to(device)
-        x = torch.randn(batch_size, in_features).to(device)
-
-        out = layer(x)
-        assert out.shape == (batch_size, out_features)
-        assert not torch.isnan(out).any()
-        assert torch.all(layer.bias == biasinit)
-
-    def test_layer_norm(self, device):
-        batch_size = 32
-        features = 64
-
-        layer = LayerNorm(features).to(device)
-        x = torch.randn(batch_size, features).to(device)
-
-        out = layer(x)
-        assert out.shape == (batch_size, features)
-        assert not torch.isnan(out).any()
-        assert torch.all(layer.bias == 0)
-
-    def test_swiglu(self, device):
-        batch_size = 32
-        c_in = 64
-        c_out = 128
-
-        layer = SwiGLU(c_in, c_out).to(device)
-        x = torch.randn(batch_size, c_in).to(device)
-
-        out = layer(x)
-        assert out.shape == (batch_size, c_out)
-        assert not torch.isnan(out).any()
-
-    def test_adaptive_layer_norm(self, device):
-        batch_size = 32
-        n_tokens = 16
-        c_a = 768
-        c_s = 384
-
-        layer = AdaptiveLayerNorm(c_a, c_s).to(device)
-        a = torch.randn(batch_size, n_tokens, c_a).to(device)
-        s = torch.randn(batch_size, n_tokens, c_s).to(device)
-
-        out = layer(a, s)
-        assert out.shape == (batch_size, n_tokens, c_a)
-        assert not torch.isnan(out).any()
-
-    def test_transition(self, device):
-        batch_size = 32
-        c_in = 64
-        n = 4
-
-        layer = Transition(c_in, n).to(device)
-        x = torch.randn(batch_size, c_in).to(device)
-
-        out = layer(x)
-        assert out.shape == (batch_size, c_in)
-        assert not torch.isnan(out).any()
-
-
-class TestAttention:
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    @pytest.mark.parametrize("use_efficient_implementation", [True, False])
-    def test_attention(self, device, use_efficient_implementation):
-        batch_size = 2
-        seq_len = 8
-        c_q = c_k = c_v = 32
-        c_hidden = 64
-        num_heads = 4
-
-        attn = Attention(
-            c_q=c_q,
-            c_k=c_k,
-            c_v=c_v,
-            c_hidden=c_hidden,
-            num_heads=num_heads,
-            use_efficient_implementation=use_efficient_implementation,
+        # Create Linear layer with high_precision=True
+        linear_high_precision = Linear(
+            in_features=in_features,
+            out_features=out_features,
+            bias=True,
+            high_precision=True,
         ).to(device)
 
-        q_x = torch.randn(batch_size, seq_len, c_q).to(device)
-        kv_x = torch.randn(batch_size, seq_len, c_k).to(device)
+        # Create regular Linear layer for comparison
+        linear_regular = Linear(
+            in_features=in_features,
+            out_features=out_features,
+            bias=True,
+            high_precision=False,
+        ).to(device)
 
-        out = attn(q_x, kv_x)
-        assert out.shape == (batch_size, seq_len, c_q)
-        assert not torch.isnan(out).any()
+        # Copy weights to ensure same parameters
+        linear_regular.weight.data.copy_(linear_high_precision.weight.data)
+        linear_regular.bias.data.copy_(linear_high_precision.bias.data)
 
-        attn_bias = torch.randn(batch_size, seq_len, seq_len).to(device)
-        out = attn(q_x, kv_x, attn_bias=attn_bias)
-        assert out.shape == (batch_size, seq_len, c_q)
-        assert not torch.isnan(out).any()
+        linear_regular.weight = nn.Parameter(linear_regular.weight.to(torch.bfloat16))
+        linear_regular.bias = nn.Parameter(linear_regular.bias.to(torch.bfloat16))
+
+        # Create bfloat16 input
+        input_tensor = torch.randn(
+            batch_size, in_features, device=device, dtype=torch.bfloat16
+        )
+
+        # Forward pass with high precision (no manual autocast needed)
+        output_high_precision = linear_high_precision(input_tensor)
+
+        # Forward pass with regular precision
+        output_regular = linear_regular(input_tensor)
+
+        # The outputs should have different precision characteristics
+        assert (
+            output_high_precision.dtype == torch.bfloat16
+        )  # Output dtype matches input
+        assert output_regular.dtype == torch.bfloat16
+
+        # Test that high precision version is actually computing with higher precision
+        # by using float32 reference computation
+        input_f32 = input_tensor.to(torch.float32)
+        weight_f32 = linear_high_precision.weight.to(torch.float32)
+        bias_f32 = linear_high_precision.bias.to(torch.float32)
+        reference_output = F.linear(input_f32, weight_f32, bias_f32).to(torch.bfloat16)
+
+        # High precision output should be closer to reference than regular output
+        error_high_precision = torch.abs(
+            output_high_precision - reference_output
+        ).mean()
+        error_regular = torch.abs(output_regular - reference_output).mean()
+
+        # Allow some tolerance but high precision should be better or equal
+        assert error_high_precision <= error_regular
+        assert error_regular - error_high_precision > 1e-4
+
+    def test_linear_precision_casting_float16(self, device: torch.device) -> None:
+        """Test that float16 inputs get cast to higher precision during matmul."""
+        in_features, out_features = 64, 32
+        batch_size = 4
+
+        # Create Linear layer with high_precision=True
+        linear_high_precision = Linear(
+            in_features=in_features,
+            out_features=out_features,
+            bias=True,
+            high_precision=True,
+        ).to(device)
+
+        # Create regular Linear layer for comparison
+        linear_regular = Linear(
+            in_features=in_features,
+            out_features=out_features,
+            bias=True,
+            high_precision=False,
+        ).to(device)
+
+        # Copy weights to ensure same parameters
+        linear_regular.weight.data.copy_(linear_high_precision.weight.data)
+        linear_regular.bias.data.copy_(linear_high_precision.bias.data)
+
+        linear_regular.weight = nn.Parameter(linear_regular.weight.to(torch.float16))
+        linear_regular.bias = nn.Parameter(linear_regular.bias.to(torch.float16))
+
+        # Create float16 input
+        input_tensor = torch.randn(
+            batch_size, in_features, device=device, dtype=torch.float16
+        )
+
+        # Forward pass with high precision (no manual autocast needed)
+        output_high_precision = linear_high_precision(input_tensor)
+
+        # Forward pass with regular precision
+        output_regular = linear_regular(input_tensor)
+
+        # The outputs should have different precision characteristics
+        assert (
+            output_high_precision.dtype == torch.float16
+        )  # Output dtype matches input
+        assert output_regular.dtype == torch.float16
+
+        # Test that high precision version is actually computing with higher precision
+        input_f32 = input_tensor.to(torch.float32)
+        weight_f32 = linear_high_precision.weight.to(torch.float32)
+        bias_f32 = linear_high_precision.bias.to(torch.float32)
+        reference_output = F.linear(input_f32, weight_f32, bias_f32).to(torch.float16)
+
+        # High precision output should be closer to reference than regular output
+        error_high_precision = torch.abs(
+            output_high_precision - reference_output
+        ).mean()
+        error_regular = torch.abs(output_regular - reference_output).mean()
+
+        # Allow some tolerance but high precision should be better or equal
+        assert error_high_precision <= error_regular
+        assert error_regular - error_high_precision > 1e-4
 
 
-class TestAttentionHelpers:
+class TestAttentionFunction:
+    """Test attention function with manual QK computation comparison and F.sdpa tests."""
+
     @pytest.fixture
-    def device(self):
+    def device(self) -> torch.device:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def test_attention_core(self, device):
-        batch_size = 2
-        seq_len = 8
-        hidden_dim = 32
+    def test_attention_manual_vs_implementation(self, device: torch.device) -> None:
+        """Test attention function against manual QK computation."""
+        batch_size, n_q, n_kv, d = 2, 16, 20, 64
 
-        q = torch.randn(batch_size, seq_len, hidden_dim).to(device)
-        k = torch.randn(batch_size, seq_len, hidden_dim).to(device)
-        v = torch.randn(batch_size, seq_len, hidden_dim).to(device)
+        # Create test tensors
+        q = torch.randn(batch_size, n_q, d, device=device)
+        k = torch.randn(batch_size, n_kv, d, device=device)
+        v = torch.randn(batch_size, n_kv, d, device=device)
+        pair_mask = torch.ones(batch_size, n_q, n_kv, device=device, dtype=torch.bool)
 
-        out = attention(q, k, v)
-        assert out.shape == (batch_size, seq_len, hidden_dim)
-        assert not torch.isnan(out).any()
+        # Manual attention computation
+        # [..., n_kv, d] -> [..., d, n_kv]
+        k_transposed = k.transpose(-1, -2)
 
-    def test_rearrange_qk_to_dense_trunk(self):
-        batch_size = 2
-        seq_len = 16
-        hidden_dim = 32
-        n_queries = 4
-        n_keys = 8
+        # [..., n_q, d], [..., d, n_kv] -> [..., n_q, n_kv]
+        attn_weights_manual = q @ k_transposed / (q.shape[-1] ** 0.5)
 
-        q = torch.randn(batch_size, seq_len, hidden_dim)
-        k = torch.randn(batch_size, seq_len, hidden_dim)
+        # Apply mask (fill False positions with -inf)
+        inf = 1e10
+        attn_weights_manual = torch.masked_fill(attn_weights_manual, ~pair_mask, -inf)
 
-        q_trunked, k_trunked, padding_info = rearrange_qk_to_dense_trunk(
-            q=q, k=k, dim_q=-2, dim_k=-2, n_queries=n_queries, n_keys=n_keys
+        # [..., n_q, n_kv]
+        attn_weights_manual = F.softmax(attn_weights_manual, dim=-1)
+
+        # [..., n_q, n_kv], [..., n_kv, d] -> [..., n_q, d]
+        manual_output = attn_weights_manual @ v
+
+        # Implementation output
+        impl_output = attention(q, k, v, pair_mask, inf=inf)
+
+        # Compare outputs
+        torch.testing.assert_close(manual_output, impl_output, rtol=1e-5, atol=1e-6)
+
+    def test_attention_with_bias(self, device: torch.device) -> None:
+        """Test attention function with attention bias."""
+        batch_size, n_q, n_kv, d = 2, 16, 20, 64
+
+        # Create test tensors
+        q = torch.randn(batch_size, n_q, d, device=device)
+        k = torch.randn(batch_size, n_kv, d, device=device)
+        v = torch.randn(batch_size, n_kv, d, device=device)
+        pair_mask = torch.ones(batch_size, n_q, n_kv, device=device, dtype=torch.bool)
+        attn_bias = torch.randn(batch_size, n_q, n_kv, device=device)
+
+        # Manual attention computation with bias
+        k_transposed = k.transpose(-1, -2)
+        attn_weights_manual = q @ k_transposed / (q.shape[-1] ** 0.5)
+
+        # Add bias
+        attn_weights_manual = attn_weights_manual + attn_bias
+
+        # Apply mask
+        inf = 1e10
+        attn_weights_manual = torch.masked_fill(attn_weights_manual, ~pair_mask, -inf)
+        attn_weights_manual = F.softmax(attn_weights_manual, dim=-1)
+        manual_output = attn_weights_manual @ v
+
+        # Implementation output
+        impl_output = attention(q, k, v, pair_mask, attn_bias=attn_bias, inf=inf)
+
+        # Compare outputs
+        torch.testing.assert_close(manual_output, impl_output, rtol=1e-5, atol=1e-6)
+
+    def test_attention_sdpa_without_bias(self, device: torch.device) -> None:
+        """Test F.scaled_dot_product_attention without attention bias."""
+
+        batch_size, n_heads, n_q, n_kv, d = 2, 8, 32, 40, 64
+
+        # Create test tensors in multi-head format
+        q = torch.randn(batch_size, n_heads, n_q, d, device=device)
+        k = torch.randn(batch_size, n_heads, n_kv, d, device=device)
+        v = torch.randn(batch_size, n_heads, n_kv, d, device=device)
+
+        # Create attention mask (True for valid positions)
+        attn_mask = torch.ones(
+            batch_size, n_heads, n_q, n_kv, device=device, dtype=torch.bool
+        )
+        attn_mask[:, :, :, -10:] = False  # Mask last 10 key positions
+
+        # Use F.scaled_dot_product_attention
+        sdpa_output = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, dropout_p=0.0, is_causal=False
         )
 
-        n_trunks = (seq_len + n_queries - 1) // n_queries
-        assert q_trunked.shape == (batch_size, n_trunks, n_queries, hidden_dim)
-        assert k_trunked.shape == (batch_size, n_trunks, n_keys, hidden_dim)
+        # Manual computation for comparison
+        scale = 1.0 / math.sqrt(d)
+        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale
 
-        assert all(
-            k in padding_info
-            for k in ["mask_trunked", "q_pad", "k_pad_left", "k_pad_right"]
+        # Apply mask
+        attn_weights = torch.masked_fill(attn_weights, ~attn_mask, float("-inf"))
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        manual_output = torch.matmul(attn_weights, v)
+
+        # Compare outputs (allow some tolerance due to optimizations)
+        torch.testing.assert_close(sdpa_output, manual_output, rtol=1e-4, atol=1e-5)
+
+    def test_attention_with_partial_mask(self, device: torch.device) -> None:
+        """Test attention function with partial masking."""
+        batch_size, n_q, n_kv, d = 2, 16, 20, 64
+
+        # Create test tensors
+        q = torch.randn(batch_size, n_q, d, device=device)
+        k = torch.randn(batch_size, n_kv, d, device=device)
+        v = torch.randn(batch_size, n_kv, d, device=device)
+
+        # Create partial mask (mask out some positions)
+        pair_mask = torch.ones(batch_size, n_q, n_kv, device=device, dtype=torch.bool)
+        pair_mask[:, :, -5:] = False  # Mask last 5 key positions
+        pair_mask[:, -3:, :] = False  # Mask last 3 query positions
+
+        # Manual computation
+        k_transposed = k.transpose(-1, -2)
+        attn_weights_manual = q @ k_transposed / (q.shape[-1] ** 0.5)
+
+        inf = 1e10
+        attn_weights_manual = torch.masked_fill(attn_weights_manual, ~pair_mask, -inf)
+        attn_weights_manual = F.softmax(attn_weights_manual, dim=-1)
+        manual_output = attn_weights_manual @ v
+
+        # Implementation output
+        impl_output = attention(q, k, v, pair_mask, inf=inf)
+
+        # Compare outputs
+        torch.testing.assert_close(manual_output, impl_output, rtol=1e-5, atol=1e-6)
+
+
+def _gather_pair_embedding_in_dense_trunk(x: Tensor, idx_q: Tensor, idx_k: Tensor):
+    """
+    Selectively gather elements from a tensor using two sets of indices.
+
+        x: [..., N_token, N_token, d]
+        idx_q: [N_b, N_q]
+        idx_k: [N_b, N_k]
+
+    Return:
+        y: [..., N_b, N_q, N_k, d]
+            where y[..., b, i, j, :] = x[..., idx_q[b, i], idx_k[b, j], :]
+
+    Note: this function will be correct as long as there is not a mapping like
+    real atom -> masked token in the atom_to_token_idx. This should be safe
+    since real atoms only map to real tokens.
+    """
+    idx_q = idx_q.long()
+    idx_k = idx_k.long()
+    assert len(idx_q.shape) == len(idx_k.shape) == 2
+
+    # Get the shape parameters
+    N_b, N_q = idx_q.shape
+    N_k = idx_k.shape[1]
+
+    # Expand idx_q and idx_k to match the shape required for advanced indexing
+    idx_q_expanded = idx_q.unsqueeze(-1).expand(-1, -1, N_k)
+    idx_k_expanded = idx_k.unsqueeze(1).expand(-1, N_q, -1)
+
+    # Use advanced indexing to gather the desired elements
+    y = x[..., idx_q_expanded, idx_k_expanded, :]
+
+    return y
+
+
+class TestGatherPairEmbedding:
+    """Test gather_pair_embedding_in_dense_trunk and its batched version."""
+
+    @pytest.fixture
+    def device(self) -> torch.device:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def test_gather_equivalence_no_batch_dims(self, device: torch.device) -> None:
+        """Test equivalence when no batch dimensions are present."""
+        N_token, d = 50, 64
+        N_b, N_q, N_k = 8, 16, 128
+
+        # Create test tensors
+        x = torch.randn(N_token, N_token, d, device=device)
+        idx_q = torch.randint(0, N_token, (N_b, N_q), device=device)
+        idx_k = torch.randint(0, N_token, (N_b, N_k), device=device)
+
+        # Test unbatched function
+        result_unbatched = _gather_pair_embedding_in_dense_trunk(x, idx_q, idx_k)
+
+        # Test batched function with no batch dims
+        result_batched = gather_trunk_pair_embedding(x, idx_q, idx_k)
+
+        # Results should be identical
+        torch.testing.assert_close(
+            result_unbatched, result_batched, rtol=1e-10, atol=1e-10
         )
 
-    def test_optimized_concat_split(self):
-        batch_size = 2
-        D = 16
-        E = 8
-        n_queries = 4
+        # Check output shape
+        expected_shape = (N_b, N_q, N_k, d)
+        assert result_unbatched.shape == expected_shape
+        assert result_batched.shape == expected_shape
 
-        attn_bias = torch.randn(batch_size, D, E)
-        out = optimized_concat_split(attn_bias, n_queries)
+    def test_gather_equivalence_with_batch_dims(self, device: torch.device) -> None:
+        """Test batched function vs loop over unbatched function."""
+        batch_size = 4
+        N_token, d = 30, 32
+        N_b, N_q, N_k = 5, 10, 128
 
-        assert out.shape == (batch_size, n_queries, D // n_queries * E)
-        assert not torch.isnan(out).any()
+        # Create test tensors with batch dimension
+        x_batched = torch.randn(batch_size, N_token, N_token, d, device=device)
+        idx_q_batched = torch.randint(0, N_token, (batch_size, N_b, N_q), device=device)
+        idx_k_batched = torch.randint(0, N_token, (batch_size, N_b, N_k), device=device)
 
-    def test_rearrange_to_dense_trunk(self):
-        batch_size = 2
-        seq_len = 16
-        hidden_dim = 32
-        n_queries = 4
-        n_keys = 8
+        # Method 1: Use batched function
+        result_batched = gather_trunk_pair_embedding(
+            x_batched, idx_q_batched, idx_k_batched
+        )
 
-        q = torch.randn(batch_size, seq_len, hidden_dim)
-        k = torch.randn(batch_size, seq_len, hidden_dim)
-        v = torch.randn(batch_size, seq_len, hidden_dim)
+        # Method 2: Loop over batch dimension and stack results
+        results_list = []
+        for i in range(batch_size):
+            result_i = _gather_pair_embedding_in_dense_trunk(
+                x_batched[i], idx_q_batched[i], idx_k_batched[i]
+            )
+            results_list.append(result_i)
+        result_stacked = torch.stack(results_list, dim=0)
 
-        (
-            q_trunked,
-            k_trunked,
-            v_trunked,
-            attn_bias_trunked,
-            q_pad_length,
-        ) = rearrange_to_dense_trunk(q, k, v, n_queries, n_keys)
+        # Results should be identical
+        torch.testing.assert_close(
+            result_batched, result_stacked, rtol=1e-10, atol=1e-10
+        )
 
-        n_trunks = (seq_len + n_queries - 1) // n_queries
-        assert q_trunked.shape == (batch_size, n_trunks, n_queries, hidden_dim)
-        assert k_trunked.shape == (batch_size, n_trunks, n_keys, hidden_dim)
-        assert v_trunked.shape == (batch_size, n_trunks, n_keys, hidden_dim)
+        # Check output shape
+        expected_shape = (batch_size, N_b, N_q, N_k, d)
+        assert result_batched.shape == expected_shape
+        assert result_stacked.shape == expected_shape
 
-    def test_create_local_attn_bias(self):
-        n = 16
-        n_queries = 4
-        n_keys = 8
+    def test_gather_with_multiple_batch_dims(self, device: torch.device) -> None:
+        """Test batched function with multiple batch dimensions."""
+        batch_size1, batch_size2 = 3, 2
+        N_token, d = 25, 16
+        N_b, N_q, N_k = 4, 6, 5
 
-        attn_bias = create_local_attn_bias(n, n_queries, n_keys)
-        assert attn_bias.shape == (n, n)
-        assert not torch.isnan(attn_bias).any()
+        # Create test tensors with multiple batch dimensions
+        x_batched = torch.randn(
+            batch_size1, batch_size2, N_token, N_token, d, device=device
+        )
+        idx_q_batched = torch.randint(
+            0, N_token, (batch_size1, batch_size2, N_b, N_q), device=device
+        )
+        idx_k_batched = torch.randint(
+            0, N_token, (batch_size1, batch_size2, N_b, N_k), device=device
+        )
 
-    def test_gather_pair_embedding(self):
-        # Setup basic parameters
-        batch_size = 2
-        n_b = 4
-        seq_len = 16
-        n_q = 8
-        n_k = 8
-        hidden_dim = 32
+        # Method 1: Use batched function
+        result_batched = gather_trunk_pair_embedding(
+            x_batched, idx_q_batched, idx_k_batched
+        )
 
-        # Create a tensor 'x' of shape [batch_size, seq_len, seq_len, hidden_dim]
-        x = torch.randn(batch_size, seq_len, seq_len, hidden_dim)
-        # Randomly generate indices for query and key selection
-        idx_q = torch.randint(0, seq_len, (n_b, n_q))
-        idx_k = torch.randint(0, seq_len, (n_b, n_k))
+        # Method 2: Double loop and stack results
+        results_list = []
+        for i in range(batch_size1):
+            results_inner = []
+            for j in range(batch_size2):
+                result_ij = gather_trunk_pair_embedding(
+                    x_batched[i, j], idx_q_batched[i, j], idx_k_batched[i, j]
+                )
+                results_inner.append(result_ij)
+            results_list.append(torch.stack(results_inner, dim=0))
+        result_stacked = torch.stack(results_list, dim=0)
 
-        # -------------------------
-        # Basic test using integer indices
-        out = gather_pair_embedding_in_dense_trunk(x, idx_q, idx_k)
-        # Expected shape: [batch_size, n_b, n_q, n_k, hidden_dim]
-        assert out.shape == (
-            batch_size,
-            n_b,
-            n_q,
-            n_k,
-            hidden_dim,
-        ), f"Expected shape {(batch_size, n_b, n_q, n_k, hidden_dim)}, got {out.shape}"
-        # Verify that each gathered element matches the corresponding element from 'x'
-        for b in range(batch_size):
-            for b_idx in range(n_b):
-                for i in range(n_q):
-                    for j in range(n_k):
-                        expected = x[b, idx_q[b_idx, i], idx_k[b_idx, j]]
-                        actual = out[b, b_idx, i, j]
-                        assert torch.allclose(
-                            expected, actual
-                        ), f"Mismatch at batch {b}, chain index {b_idx}, q index {i}, k index {j}"
+        # Results should be identical
+        torch.testing.assert_close(
+            result_batched, result_stacked, rtol=1e-10, atol=1e-10
+        )
 
-        # -------------------------
-        # Extended test: Include extra leading dimensions
-        extra_dims = (3, 4)
-        x_extra = torch.randn(*extra_dims, batch_size, seq_len, seq_len, hidden_dim)
-        out_extra = gather_pair_embedding_in_dense_trunk(x_extra, idx_q, idx_k)
-        expected_shape = extra_dims + (batch_size, n_b, n_q, n_k, hidden_dim)
-        assert (
-            out_extra.shape == expected_shape
-        ), f"Expected shape {expected_shape}, got {out_extra.shape}"
-        # Validate individual entries with extra dimensions
-        for d0 in range(extra_dims[0]):
-            for d1 in range(extra_dims[1]):
-                for b in range(batch_size):
-                    for b_idx in range(n_b):
-                        for i in range(n_q):
-                            for j in range(n_k):
-                                expected = x_extra[
-                                    d0, d1, b, idx_q[b_idx, i], idx_k[b_idx, j]
-                                ]
-                                actual = out_extra[d0, d1, b, b_idx, i, j]
-                                assert torch.allclose(
-                                    expected, actual
-                                ), f"Mismatch at extra dims ({d0},{d1}), batch {b}, chain index {b_idx}, q {i}, k {j}"
-
-        # -------------------------
-        # Test type conversion: indices provided as float should be handled correctly
-        idx_q_float = idx_q.float()
-        idx_k_float = idx_k.float()
-        out_float = gather_pair_embedding_in_dense_trunk(x, idx_q_float, idx_k_float)
-        assert torch.allclose(
-            out, out_float
-        ), "Output differs when indices are provided as floats compared to integers"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
+        # Check output shape
+        expected_shape = (batch_size1, batch_size2, N_b, N_q, N_k, d)
+        assert result_batched.shape == expected_shape
+        assert result_stacked.shape == expected_shape

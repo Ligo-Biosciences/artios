@@ -1,249 +1,96 @@
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Union
+from dataclasses import fields
+from typing import List, Type
 
 import torch
+from biotite.structure import AtomArray
 
 from protenix.common.atom_types import DENSE_ATOM_NUM
-from protenix.data.padding_utils import get_padding_length, pad_data
+from protenix.data.features import Context, FullContext
+from protenix.data.padding_utils import get_padding_length
+from protenix.data.tokenizer import TokenArray
 
 
-class DataCollatorWithPadding:
-    """
-    Collates batches of data from the dataset.
-
-    This collator first pads all datapoints in the batch to a common shape that
-    depends on the maximum number of atoms in the batch.
-    Features are then collated across the batch.
-        - For tensor features, this involves stacking along the batch dimension.
-        - For list features, this involves storing in a list of lists.
-        - For other types, an error is raised.
-    """
+class CollateContexts:
+    """Collates the FullContext objects returned by a Dataset batch."""
 
     def __init__(
         self,
-        max_n_msa: int = 512,
-        max_n_template: int = 4,
-        max_n_pocket: int = 30,
-        atom_bin_ends: List[int] = None,
-        token_bin_ends: List[int] = None,
-        crop_size: int = 384,
-        motif_training: bool = False,
-        max_motif_residues: int = 150,
-        return_atom_token_arrays: bool = True,
-        num_pad_workers: int = 4,
-        list_features: List[str] = [
-            "pdb_id",
-            "chain_id",
-            "bioassembly_dict_fpath",
-        ],
+        token_bin_ends: List[int],
+        atom_bin_ends: List[int],
+        crop_size: int,
+        motif_training: bool,
+        max_motif_residues: int,
     ):
-        """
-        Initialise the DataCollatorWithPadding.
-
-        Args:
-            max_n_msa: Maximum number of MSA sequences
-            max_n_template: Maximum number of templates
-            max_n_pocket: Maximum number of pockets
-            atom_bin_ends: List of bin endpoints for atom padding
-            token_bin_ends: List of bin endpoints for token padding
-            crop_size: Maximum number of tokens (used to calculate max atoms)
-            motif_training: Whether to include motif training
-            max_motif_residues: Maximum number of motif residues
-            return_atom_token_arrays: Whether to include cropped_atom_array and
-                cropped_token_array in the output batch.
-            list_features: List of features which will be collated into a list.
-        """
-        self.max_n_msa = max_n_msa
-        self.max_n_template = max_n_template
-        self.max_n_pocket = max_n_pocket
-        self.atom_bin_ends = atom_bin_ends
         self.token_bin_ends = token_bin_ends
+        self.atom_bin_ends = atom_bin_ends
         self.crop_size = crop_size
         self.motif_training = motif_training
         self.max_motif_residues = max_motif_residues
-        self.return_atom_token_arrays = return_atom_token_arrays
-        self.num_pad_workers = num_pad_workers
 
-        self.list_features = list_features
+    def __call__(self, batch: List[FullContext]) -> FullContext:
+        """Collates the FullContext objects returned by a Dataset batch."""
+        return self.collate(batch)
 
-    def __call__(
-        self, batch: List[Dict[str, Any]]
-    ) -> Dict[str, Union[Dict[str, torch.Tensor], List[Any]]]:
-        """
-        Collate a batch of samples from the dataset.
-
-        This method first determines the maximum dimensions needed for the batch,
-        pads all samples to these dimensions, then stacks them along the batch dimension.
-
-        Args:
-            batch (list[dict]): A list of dictionaries, where each dictionary is the output
-                from a single sample from the dataset __getitem__ method. Each sample will have keys
-                (input_feature_dict, label_dict, label_full_dict, and basic) and optional keys
-                (cropped_atom_array, cropped_token_array).
-
-        Returns:
-            A dictionary containing the batched data with keys:
-                - input_feature_dict: Batched input features
-                - label_dict: Batched labels
-                - label_full_dict: Batched full labels
-                - basic: Batched basic information
-                - (optional) cropped_atom_arrays: List of AtomArrays
-                - (optional) cropped_token_arrays: List of TokenArrays
-        """
-        # import time
-
-        # t0 = time.time()
-
+    def collate(self, batch: List[FullContext]) -> FullContext:
+        """Collates the FullContext objects returned by a Dataset batch."""
         atom_padding_length = self._get_atom_padding_length(batch)
         token_padding_length = self._get_token_padding_length(batch)
-        # t1 = time.time()
 
-        padded_batch = self._pad_batch(batch, atom_padding_length, token_padding_length)
-        # t2 = time.time()
+        padded_batch = [
+            context.pad(atom_padding_length, token_padding_length) for context in batch
+        ]
 
-        collated = {}
-        for dict_key in ["input_feature_dict", "label_dict", "basic"]:
-            collated[dict_key] = self._collate_dicts(dict_key, padded_batch)
-        # t3 = time.time()
+        return self._stack_full_contexts(padded_batch)
 
-        # print(
-        #     f"Collate timing - get_pad_len: {t1-t0:.3f}s, pad_batch: {t2-t1:.3f}s, collate: {t3-t2:.3f}s"
-        # )
-
-        # Add optional atom and token arrays if requested
-        if self.return_atom_token_arrays:
-            self._add_optional_arrays(collated, padded_batch)
-
-        # NOTE: temp solution : Add an empty label full dict
-        collated["label_full_dict"] = {}
-
-        return collated
-
-    def _get_atom_padding_length(self, batch: List[Dict[str, Any]]) -> int:
-        """
-        Get the maximum atom padding length for a batch.
-        For all-atom training, the max bin end is inuitively crop_size * DENSE_ATOM_NUM.
-        For motif training, max atoms come from the four atoms in the backbone + atoms in the
-        sidechains, giving 4 * crop_size + DENSE_ATOM_NUM * max_motif_residues.
-        """
-        max_atom_in_batch = max(
-            data["input_feature_dict"]["atom_to_token_idx"].shape[0] for data in batch
-        )
+    def _get_atom_padding_length(self, batch: List[FullContext]) -> int:
+        """Gets the maximum atom padding length for a batch."""
+        max_atom_in_batch = max(context.basic.n_atom for context in batch)
 
         if self.motif_training:
             max_bin_end = 4 * self.crop_size + DENSE_ATOM_NUM * self.max_motif_residues
         else:
-            # suitable for all-atom training
             max_bin_end = self.crop_size * DENSE_ATOM_NUM
 
         return get_padding_length(max_atom_in_batch, self.atom_bin_ends + [max_bin_end])
 
-    def _get_token_padding_length(self, batch: List[Dict[str, Any]]) -> int:
-        """
-        Get the maximum token padding length for a batch.
-        """
-        max_token_in_batch = max(
-            data["input_feature_dict"]["token_index"].shape[0] for data in batch
-        )
+    def _get_token_padding_length(self, batch: List[FullContext]) -> int:
+        """Gets the maximum token padding length for a batch."""
+        max_token_in_batch = max(context.basic.n_token for context in batch)
 
         if self.motif_training:
             max_bin_end = self.crop_size + DENSE_ATOM_NUM * self.max_motif_residues
         else:
-            # suitable for all-atom training
             max_bin_end = self.crop_size
 
         return get_padding_length(
             max_token_in_batch, self.token_bin_ends + [max_bin_end]
         )
 
-    def _pad_batch(
-        self,
-        batch: List[Dict[str, Any]],
-        atom_padding_length: int,
-        token_padding_length: int,
-    ) -> List[Dict[str, Any]]:
-        """
-        Pad a batch of samples to the maximum dimensions.
-        """
-        with ThreadPoolExecutor(max_workers=self.num_pad_workers) as executor:
-            futures = [
-                executor.submit(
-                    pad_data,
-                    data,
-                    atom_padding_length,
-                    token_padding_length,
-                    self.max_n_msa,
-                    self.max_n_template,
-                    self.max_n_pocket,
-                )
-                for data in batch
-            ]
-            padded_batch = [future.result() for future in futures]
-        return padded_batch
+    def _stack_full_contexts(self, contexts: List[FullContext]) -> FullContext:
+        """Stack a list of padded FullContext into a single batched FullContext."""
+        kwargs = {}
 
-    def _add_optional_arrays(
-        self, collated: Dict[str, Any], padded_batch: List[Dict]
-    ) -> None:
-        """Add optional atom/token arrays if requested."""
-        if "cropped_atom_array" in padded_batch[0]:
-            collated["cropped_atom_arrays"] = [
-                sample["cropped_atom_array"] for sample in padded_batch
-            ]
-        if "cropped_token_array" in padded_batch[0]:
-            collated["cropped_token_arrays"] = [
-                sample["cropped_token_array"] for sample in padded_batch
-            ]
-
-    def _collate_dicts(
-        self, dict_key: str, padded_batch: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """
-        Collate a single dictionary type across the batch.
-        Features in the list_features are stored in a list.
-            This is for features such as str's, like pdb_id.
-        Features of type torch.Tensor are stacked along the batch dimension.
-        Any other type will raise an error.
-
-        Args:
-            dict_key: The dictionary key to collate ("input_feature_dict", etc.)
-            padded_batch: The list of datapoints, each item in the list is a dictionary with
-                keys (input_feature_dict, label_dict, label_full_dict, and basic) and optional keys
-                (cropped_atom_array, cropped_token_array).
-
-        Returns:
-            Collated dictionary for this dictionary key
-        """
-        collated_dict = {}
-        sample_dict = padded_batch[0][dict_key]
-
-        for feature_key in sample_dict.keys():
-            feature_values = [data[dict_key][feature_key] for data in padded_batch]
-            # Assert all values for feature have same type
-            assert all(
-                isinstance(value, type(feature_values[0])) for value in feature_values
+        for field in fields(FullContext):
+            field_values = [getattr(c, field.name) for c in contexts]
+            kwargs[field.name] = self._stack_context_group(
+                field_values, type(field_values[0])
             )
 
-            # List features get stored in a list
-            if feature_key in self.list_features:
-                collated_dict[feature_key] = feature_values
-            # torch tensors get stacked along batch dimension
-            elif isinstance(feature_values[0], torch.Tensor):
-                try:
-                    collated_dict[feature_key] = torch.stack(feature_values, dim=0)
-                except Exception as e:
-                    print(f"Error stacking feature {feature_key}: {e}")
-                    for i, data_point in enumerate(padded_batch):
-                        print(
-                            f"""
-                            data_point {i} {feature_key} shape: {data_point[dict_key][feature_key].shape}
-                            and value: {data_point[dict_key][feature_key]}
-                            """
-                        )
-                    raise e
-            # Raise error for other types
-            else:
-                raise ValueError(
-                    f"Unexpected feature type for key {feature_key}: {type(feature_values[0])}"
-                )
+        return FullContext(**kwargs)
 
-        return collated_dict
+    def _stack_context_group(
+        self, contexts: List[Context], cls: Type[Context]
+    ) -> Context:
+        """Stack tensor fields along dim=0, keep non-tensors as lists."""
+        kwargs = {}
+        for field in fields(contexts[0]):
+            values = [getattr(c, field.name) for c in contexts]
+
+            if torch.is_tensor(values[0]):
+                kwargs[field.name] = torch.stack(values, dim=0)
+            elif isinstance(values[0], (int, float, str, AtomArray, TokenArray)):
+                kwargs[field.name] = values
+            else:
+                raise ValueError(f"Unexpected field type: {type(values[0])}")
+
+        return cls(**kwargs)

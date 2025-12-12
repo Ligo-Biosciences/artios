@@ -12,152 +12,141 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from enum import Enum
 from typing import Optional, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
+from einops import repeat
 from scipy.spatial.transform import Rotation
 from torch import Tensor
 
 from protenix.utils.scatter_utils import scatter
+from protenix.utils.typing import Bool, Float, Int, typecheck
 
 
-def add(a, b, inplace_safe: bool = False):
-    """
-    Add two objects with optional in-place modification.
+@typecheck
+def calc_centroid(
+    coords: Float[Tensor, "*batch n_atom xyz"],
+    mask: Bool[Tensor, "*batch n_atom"] | None = None,
+    eps: float = 1e-12,
+) -> Float[Tensor, "... xyz"]:
+    """Calculate the centroid (center of mass) of coordinates.
 
     Args:
-        a: First object to add
-        b: Second object to add
-        in_place (bool): If True, modifies first argument in place. Defaults to False.
+        coords: Input coordinates.
+        mask: Optional mask for valid atoms. If None, all atoms are considered valid.
+        eps: Small epsilon to avoid division by zero.
 
     Returns:
-        The sum of the two objects
+        The centroid of the coordinates.
     """
-    if inplace_safe:
-        a += b
-        return a
+    if mask is None:
+        return coords.mean(dim=-2)
     else:
-        return a + b
+        masked_coords = coords * mask.unsqueeze(dim=-1)
+        centroid = masked_coords.sum(dim=-2) / (mask.sum(dim=-1, keepdim=True) + eps)
+        return centroid
 
 
-def mul(a, b, inplace_safe: bool = False):
-    if inplace_safe:
-        a *= b
-        return a
-    else:
-        return a * b
-
-
+@typecheck
 def centre_random_augmentation(
-    x_input_coords: Tensor,
-    N_sample: int = 1,
+    x_input_coords: Float[Tensor, "*batch n_atom xyz"],
+    n_sample: int = 1,
     s_trans: float = 1.0,
     centre_only: bool = False,
-    mask: Tensor = None,
+    mask: Bool[Tensor, "*batch n_atom"] | None = None,
     eps: float = 1e-12,
-) -> Tensor:
+) -> Float[Tensor, "... n_sample n_atom xyz"]:
     """Implements Algorithm 19 in AF3
 
     Args:
-        x_input_coords (Tensor): input coords
-            [..., N_atom, 3]
-        N_sample (int, optional): the total number of augmentation. Defaults to 1.
-        s_trans (float, optional): scale factor of trans. Defaults to 1.0.
-        centre_only (bool, optional): if set true, will only perform centering without applying random translation and rotation.
-        mask (Tensor, optional): masking for the coords
-            [..., N_atom]
-        eps (float, optional): small number used for masked mean
-    Returns:
-        Tensor:  the Augmentation version of input coords
-            [..., N_sample, N_atom, 3]
-    """
+        x_input_coords: Input coords.
+        n_sample: The total number of augmentation. Defaults to 1.
+        s_trans: Scale factor of trans. Defaults to 1.0.
+        centre_only: If set true, will only perform centering without applying random translation and rotation.
+        mask: Masking for the coords.
+        eps: Small number used for masked mean.
 
-    N_atom = x_input_coords.size(-2)
+    Returns:
+        The augmentation version of input coords.
+    """
+    n_atom = x_input_coords.size(-2)
     device = x_input_coords.device
 
-    # Move to origin [..., N_atom, 3]
+    # Create all-True mask if not provided
     if mask is None:
-        x_input_coords = x_input_coords - torch.mean(
-            input=x_input_coords, dim=-2, keepdim=True
-        )
-    else:
-        try:
-            center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (
-                mask.sum(dim=-1, keepdim=True) + eps
-            )
-        except Exception as e:
-            print("Error in centering calculation:")
-            print(f"x_input_coords shape: {x_input_coords.shape}")
-            print(f"mask shape: {mask.shape}")
-            raise e
-        x_input_coords = x_input_coords - center.unsqueeze(dim=-2)
+        mask = torch.ones_like(x_input_coords[..., 0], dtype=torch.bool)
 
-    # Expand to [..., N_sample, N_atom, 3]
-    x_input_coords = expand_at_dim(x_input_coords, dim=-3, n=N_sample)
+    # Move to origin [..., n_atom, 3]
+    centroid = calc_centroid(x_input_coords, mask=mask, eps=eps)
+    x_input_coords = x_input_coords - centroid.unsqueeze(dim=-2)
+
+    # Expand to [..., n_sample, n_atom, 3]
+    x_input_coords = repeat(
+        x_input_coords, "... n_atom xyz -> ... n_sample n_atom xyz", n_sample=n_sample
+    )
 
     if centre_only:
-        if mask is not None:
-            x_input_coords = x_input_coords * mask[..., None, :, None]
+        x_input_coords = x_input_coords * mask[..., None, :, None]
         return x_input_coords
 
-    # N_augment = batch_size * N_sample
-    N_augment = torch.numel(x_input_coords[..., 0, 0])
+    # n_augment = batch_size * n_sample
+    n_augment = torch.numel(x_input_coords[..., 0, 0])
 
-    # Generate N_augment (rot, trans) pairs
+    # Generate n_augment (rot, trans) pairs
     batch_size_shape = x_input_coords.shape[:-3]
     rot_matrix_random = (
-        uniform_random_rotation(N_sample=N_augment)
+        uniform_random_rotation(n_sample=n_augment)
         .to(device)
-        .reshape(*batch_size_shape, N_sample, 3, 3)
-    ).detach()  # [..., N_sample, 3, 3]
-    trans_random = s_trans * torch.randn(size=(*batch_size_shape, N_sample, 3)).to(
+        .reshape(*batch_size_shape, n_sample, 3, 3)
+    ).detach()  # [..., n_sample, 3, 3]
+    trans_random = s_trans * torch.randn(size=(*batch_size_shape, n_sample, 3)).to(
         device
-    )  # [..., N_sample, 3]
+    )  # [..., n_sample, 3]
+    rot_expanded = repeat(
+        rot_matrix_random, "... n_sample u v -> ... n_sample n_atom u v", n_atom=n_atom
+    )
     x_augment_coords = (
-        rot_vec_mul(
-            r=expand_at_dim(rot_matrix_random, dim=-3, n=N_atom), t=x_input_coords
-        )
-        + trans_random[..., None, :]
-    )  # [..., N_sample, N_atom, 3]
+        rot_vec_mul(r=rot_expanded, t=x_input_coords) + trans_random[..., None, :]
+    )  # [..., n_sample, n_atom, 3]
 
     # Apply the mask
-    if mask is not None:
-        x_augment_coords = x_augment_coords * mask[..., None, :, None]
+    x_augment_coords = x_augment_coords * mask[..., None, :, None]
     return x_augment_coords
 
 
 # Comment: Rotation.random is not supported by torch.compile()
-def uniform_random_rotation(N_sample: int = 1) -> Tensor:
+@typecheck
+def uniform_random_rotation(n_sample: int = 1) -> Float[Tensor, "n_sample u v"]:
     """Generate random rotation matrices with scipy.spatial.transform.Rotation
 
     Args:
         N_sample (int, optional): the total number of augmentation. Defaults to 1.
 
     Returns:
-        Tensor: N_sample rot matrics
-            [N_sample, 3, 3]
+        Tensor: n_sample rot matrics
+            [n_sample, 3, 3]
     """
-    rotation = Rotation.random(num=N_sample)
+    rotation = Rotation.random(num=n_sample)
     rot_matrix = torch.from_numpy(rotation.as_matrix()).float()  # [N_sample, 3, 3]
     return rot_matrix
 
 
-# this is from openfold.utils.rigid_utils import rot_vec_mul
-def rot_vec_mul(r: Tensor, t: Tensor) -> Tensor:
+@typecheck
+def rot_vec_mul(
+    r: Float[Tensor, "*batch u v"], t: Float[Tensor, "*batch xyz"]
+) -> Float[Tensor, "*batch xyz"]:
     """Apply rot matrix to vector
     Applies a rotation to a vector. Written out by hand to avoid transfer
     to avoid AMP downcasting.
 
     Args:
-        r (Tensor): the rotation matrices
-            [..., 3, 3]
-        t (Tensor): the coordinate tensors
-            [..., 3]
+        r: the rotation matrices
+        t: the coordinate tensors
 
     Returns:
-        Tensor: the rotated coordinates
+        the rotated coordinates
     """
     x, y, z = torch.unbind(input=t, dim=-1)
     return torch.stack(
@@ -170,56 +159,25 @@ def rot_vec_mul(r: Tensor, t: Tensor) -> Tensor:
     )
 
 
-# from openfold.utils.tensor_utils.permute_final_dims
-# from openfold.utils.tensor_utils.flatten_final_dims
-def permute_final_dims(tensor: Tensor, inds: list[int]) -> Tensor:
-    """Permute final dims of tensor
-
-    Args:
-        tensor (Tensor): the input tensor
-            [...]
-        inds (List[int]): the dim to permute
-
-    Returns:
-        Tensor: the permuted tensor
-    """
-    zero_index = -1 * len(inds)
-    first_inds = list(range(len(tensor.shape[:zero_index])))
-    return tensor.permute(first_inds + [zero_index + i for i in inds])
-
-
-def flatten_final_dims(t: Tensor, num_dims: int) -> Tensor:
-    """Flatten final dims of tensor
-
-    Args:
-        t (Tensor): the input tensor
-            [...]
-        num_dims (int): the number of final dims to flatten
-
-    Returns:
-        Tensor: the flattened tensor
-    """
-    return t.reshape(shape=t.shape[:-num_dims] + (-1,))
-
-
-def one_hot(x: Tensor, lower_bins: Tensor, upper_bins: Tensor) -> Tensor:
+@typecheck
+def one_hot(
+    x: Float[Tensor, "*batch"],
+    lower_bins: Float[Tensor, "bins"],
+    upper_bins: Float[Tensor, "bins"],
+) -> Float[Tensor, "*batch bins"]:
     """Get one hot embedding of x from lower_bins and upper_bins
     Args:
-        x (Tensor): the input x
-            [...]
-        lower_bins (Tensor): the lower bounds of bins
-            [bins]
-        upper_bins (Tensor): the upper bounds of bins
-            [bins]
+        x: the input x
+        lower_bins: the lower bounds of bins
+        upper_bins: the upper bounds of bins
     Returns:
-        Tensor: the one hot embedding of x from v_bins
-            [..., bins]
+        the one hot embedding of x from v_bins
     """
     dgram = (x[..., None] > lower_bins) * (x[..., None] < upper_bins).float()
     return dgram
 
 
-# this is mostly from openfold.utils.torch_utils import batched_gather
+# TODO: typecheck this
 def batched_gather(
     data: Tensor, inds: Tensor, dim: int = 0, no_batch_dims: int = 0
 ) -> Tensor:
@@ -256,28 +214,24 @@ def batched_gather(
     return data[tuple(ranges)]
 
 
-def broadcast_token_to_atom(x_token: Tensor, atom_to_token_idx: Tensor) -> Tensor:
+@typecheck
+def broadcast_token_to_atom(
+    x_token: Float[Tensor, "*batch n_token d"],
+    atom_to_token_idx: Int[Tensor, "*batch n_atom"],
+) -> Float[Tensor, "*batch n_atom d"]:
     """Broadcast token-level embeddings to atom-level embeddings
 
     Args:
-        x_token (Tensor): token embedding
-            [..., N_token, d]
-        atom_to_token_idx (Tensor): map atom idx to token idx
-            [..., N_atom] or [N_atom]
+        x_token: token embedding
+        atom_to_token_idx: map atom idx to token idx
 
     Returns:
-        Tensor: atom embedding
-            [..., N_atom, d]
+        atom embedding
     """
-    assert (
-        len(x_token.shape[:-2]) == len(atom_to_token_idx.shape[:-1])
-    ), f"got x_token.shape[:-2] = {x_token.shape[:-2]}, atom_to_token_idx.shape[:-1] = {atom_to_token_idx.shape[:-1]}"
 
     if len(atom_to_token_idx.shape) == 1:
         # shape = [N_atom], easy index
         return x_token[..., atom_to_token_idx, :]
-    else:
-        assert atom_to_token_idx.shape[:-1] == x_token.shape[:-2]
 
     return batched_gather(
         data=x_token,
@@ -287,26 +241,23 @@ def broadcast_token_to_atom(x_token: Tensor, atom_to_token_idx: Tensor) -> Tenso
     )
 
 
+@typecheck
 def average_atom_to_token(
-    x_atom: Tensor,
-    atom_mask: Tensor,
-    atom_to_token_idx: Tensor,
+    x_atom: Float[Tensor, "... n_atom d"],
+    atom_mask: Bool[Tensor, "... n_atom"],
+    atom_to_token_idx: Int[Tensor, "... n_atom"],
     n_token: int,
-) -> Tensor:
+) -> Float[Tensor, "*batch n_token d"]:
     """Aggregate atom embedding to obtain token embedding
 
     Args:
-        x_atom (Tensor): atom-level embedding
-            [..., N_atom, d]
-        atom_mask (Tensor): atom mask indicating non-padding atoms
-            [..., N_atom]
-        atom_to_token_idx (Tensor): map atom to token idx
-            [..., N_atom] or [N_atom]
+        x_atom: atom-level embedding
+        atom_mask: atom mask indicating non-padding atoms
+        atom_to_token_idx: map atom to token idx
         n_token (int): number of tokens in total.
 
     Returns:
-        Tensor: token-level embedding
-            [..., N_token, d]
+        token-level embedding
     """
     assert (
         len(x_atom.shape[:-2]) == len(atom_to_token_idx.shape[:-1])
@@ -479,68 +430,6 @@ def index_at_dim(x: Tensor, dim: int, idx: Tensor) -> Tensor:
     return x[tuple(index)]
 
 
-def move_final_dim_to_dim(x: Tensor, dim: int) -> Tensor:
-    """
-    Move the final dimension of a tensor to a specified dimension.
-
-    Args:
-        x (Tensor): Input tensor.
-        dim (int): Target dimension to move the final dimension to.
-
-    Returns:
-        Tensor: Tensor with the final dimension moved to the specified dimension.
-    """
-    # permute_final_dims
-    n_dim = len(x.shape)
-    if dim < 0:
-        dim = n_dim + dim
-    if dim >= n_dim - 1:
-        return x
-
-    new_order = (n_dim - 1,)
-    if dim > 0:
-        new_order = tuple(range(dim)) + new_order
-    if dim < n_dim - 1:
-        new_order = new_order + tuple(range(dim, n_dim - 1))
-
-    return x.permute(new_order)
-
-
-def simple_merge_dict_list(dict_list: list[dict]) -> dict:
-    """
-    Merge a list of dictionaries into a single dictionary.
-
-    Args:
-        dict_list (list[dict]): List of dictionaries to merge.
-
-    Returns:
-        dict: Merged dictionary where values are concatenated arrays.
-    """
-    merged_dict = {}
-
-    def add(key, value):
-        merged_dict.setdefault(key, [])
-        if isinstance(value, (float, int)):
-            value = np.array([value])
-        elif isinstance(value, Tensor):
-            if value.dim() == 0:
-                value = np.array([value.item()])
-            else:
-                value = value.detach().cpu().numpy()
-        elif isinstance(value, np.ndarray):
-            pass
-        else:
-            raise ValueError(f"Unsupported type for metric data: {type(value)}")
-        merged_dict[key].append(value)
-
-    for x in dict_list:
-        for k, v in x.items():
-            add(k, v)
-    for k, v in merged_dict.items():
-        merged_dict[k] = np.concatenate(v)
-    return merged_dict
-
-
 def sample_logit_normal(
     size, device, dtype=torch.float32, loc=0, scale=1, generator=None
 ):
@@ -679,3 +568,11 @@ def masked_mean(
     )
 
     return mean
+
+
+class Mode(str, Enum):
+    """Supported modes of operation for model forward passes."""
+
+    TRAIN = "train"
+    INFERENCE = "inference"
+    EVAL = "eval"

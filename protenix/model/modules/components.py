@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange, repeat
 from torch import Tensor
 
 from protenix.model.modules.primitives import (
@@ -10,7 +11,7 @@ from protenix.model.modules.primitives import (
     LinearNoBias,
     attention,
 )
-from protenix.model.utils import expand_at_dim, flatten_final_dims, reshape_at_dim
+from protenix.utils.typing import Bool, Float, typecheck
 
 
 class SwiGLU(nn.Module):
@@ -27,18 +28,8 @@ class SwiGLU(nn.Module):
         self.c_out = c_out
         self.linear = LinearNoBias(c_in, c_out * 2)
 
-    def forward(self, x: Tensor) -> Tensor:
-        """
-        SwiGLU layer.
-
-        Args:
-            x (torch.Tensor): Input tensor
-                [..., c_in]
-
-        Returns:
-            torch.Tensor: Output tensor
-                [..., c_out]
-        """
+    def forward(self, x: Float[Tensor, "... c_in"]) -> Float[Tensor, "... c_out"]:
+        """SwiGLU layer."""
         a, b = self.linear(x).chunk(2, dim=-1)
         output = F.silu(a) * b
         return output
@@ -58,7 +49,7 @@ class MLP(nn.Module):
         self.swiglu = SwiGLU(c_in, c_in * n)
         self.output_linear = LinearNoBias(c_in * n, c_out)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Float[Tensor, "... c_in"]) -> Float[Tensor, "... c_out"]:
         return self.output_linear(self.swiglu(x))
 
 
@@ -84,17 +75,17 @@ class AdaptiveLayerNorm(nn.Module):
             in_features=c_s, out_features=c_a, init="zeros"
         )
 
-    def forward(self, a: Tensor, s: Tensor) -> Tensor:
+    @typecheck
+    def forward(
+        self, a: Float[Tensor, "... c_a"], s: Float[Tensor, "... c_s"]
+    ) -> Float[Tensor, "... c_a"]:
         """
         Args:
-            a (torch.Tensor): the single feature aggregate per-atom representation
-                [..., c_a]
-            s (torch.Tensor): single embedding
-                [..., c_s]
+            a: the single representation
+            s: single conditioning
 
         Returns:
-            torch.Tensor: the updated a from AdaLN
-                [..., c_a]
+            the updated single feature from AdaLN
         """
         a = self.layernorm_a(a)
         a = torch.sigmoid(self.linear_s(s)) * a + self.linear_nobias_s(s)
@@ -126,16 +117,7 @@ class Transition(nn.Module):
         )
 
     # @torch.compile
-    def forward(self, x: Tensor) -> Tensor:
-        """
-        Args:
-            x (torch.Tensor): the input tensor
-                [..., c]
-
-        Returns:
-            torch.Tensor: the output tensor as the same shape of x
-                [..., c]
-        """
+    def forward(self, x: Float[Tensor, "... c"]) -> Float[Tensor, "... c"]:
         x = self.layernorm(x)
         x = self.linear_no_bias(self.swiglu(x))
         return x
@@ -191,66 +173,64 @@ class Attention(nn.Module):
             self.hidden_dim, q_dim, init=final_linear_init
         )
 
+    @typecheck
     def forward(
         self,
-        q_x: Tensor,
-        kv_x: Tensor,
-        pair_bias: Tensor,
-        pair_mask: Tensor,
-    ):
+        q_x: Float[Tensor, "... n_q q_dim"],
+        kv_x: Float[Tensor, "... n_kv kv_dim"],
+        pair_bias: Float[Tensor, "... h n_q n_kv"],
+        pair_mask: Bool[Tensor, "... n_q n_kv"],
+    ) -> Float[Tensor, "... n_q q_dim"]:
         """
         Forward pass of Attention module.
 
         Args:
             q_x: input from which the queries will be derived from
-                [..., N_q, q_dim]
             kv_x: input from which the key and values will be derived from
-                [..., N_kv, kv_dim]
             pair_bias: per-head pair biases
-                [..., num_heads, N_q, N_kv]
             pair_mask: pairwise attention mask
-                [..., N_q, N_kv]
 
         Returns:
-            torch.Tensor: Output tensor
-                [..., N_q, q_dim]
+            Attention output
         """
         assert pair_bias.shape[-3] == self.num_heads
-        assert pair_bias.shape[-2:] == (q_x.shape[-2], kv_x.shape[-2])
-        assert pair_mask.shape[-2:] == (q_x.shape[-2], kv_x.shape[-2])
 
-        # Project QKV
-        q = reshape_at_dim(
-            self.linear_q(q_x), dim=-1, target_shape=(self.num_heads, self.head_dim)
-        )  # [..., n_q, n_heads, c]
-        k = reshape_at_dim(
-            self.linear_k(kv_x), dim=-1, target_shape=(self.num_heads, self.head_dim)
-        )  # [..., n_kv, n_heads, c]
-        v = reshape_at_dim(
-            self.linear_v(kv_x), dim=-1, target_shape=(self.num_heads, self.head_dim)
-        )  # [..., n_kv, n_heads, c]
-
-        q = q.transpose(-2, -3)  # [..., n_heads, n_q, c]
-        k = k.transpose(-2, -3)  # [..., n_heads, n_kv, c]
-        v = v.transpose(-2, -3)  # [..., n_heads, n_kv, c]
+        # Project QKV and split heads
+        q = rearrange(
+            self.linear_q(q_x),
+            "... n_q (h c) -> ... h n_q c",
+            h=self.num_heads,
+            c=self.head_dim,
+        )
+        k = rearrange(
+            self.linear_k(kv_x),
+            "... n_kv (h c) -> ... h n_kv c",
+            h=self.num_heads,
+            c=self.head_dim,
+        )
+        v = rearrange(
+            self.linear_v(kv_x),
+            "... n_kv (h c) -> ... h n_kv c",
+            h=self.num_heads,
+            c=self.head_dim,
+        )
 
         # Add head dim
-        pair_mask = expand_at_dim(
-            pair_mask, dim=-3, n=self.num_heads
-        )  # [..., n_heads, n_q, n_kv]
+        pair_mask = repeat(
+            pair_mask, "... n_q n_kv -> ... h n_q n_kv", h=self.num_heads
+        )
 
         attn_out = attention(
             q=q, k=k, v=v, pair_mask=pair_mask, attn_bias=pair_bias, inf=1e9
         )  # [..., n_heads, n_q, c]
 
-        attn_out = attn_out.transpose(-2, -3)  # [..., n_q, n_heads, c]
-        attn_out = flatten_final_dims(attn_out, num_dims=2)  # [..., n_q, n_heads * c]
+        attn_out = rearrange(attn_out, "... h n_q c -> ... n_q (h c)")
 
         # Gating
         if self.gating:
-            gate = self.gate_linear(q_x)  # [..., n_q, n_heads * c]
-            attn_out = gate * attn_out  # [..., n_q, n_heads * c]
+            gate = self.gate_linear(q_x)
+            attn_out = gate * attn_out
 
         # Final projection
-        attn_out = self.linear_output(attn_out)  # [..., n_q, q_dim]
+        attn_out = self.linear_output(attn_out)
         return attn_out

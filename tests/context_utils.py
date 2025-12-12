@@ -79,6 +79,7 @@ def load_sample_context(device: torch.device | None = None) -> FullContext:
         centre_atom_mask=torch.zeros(n_atoms, dtype=torch.bool, device=device),
         atom_mask=atom_mask,
         is_resolved=atom_mask.clone(),
+        centre_atom_is_resolved=torch.ones(n_tokens, dtype=torch.bool, device=device),
         backbone_mask=torch.ones(n_tokens, 5, dtype=torch.bool, device=device),
         atom_loss_mask=atom_mask.clone(),
         token_mask=torch.ones(n_tokens, dtype=torch.bool, device=device),
@@ -236,6 +237,9 @@ def create_test_context(
         ),
         atom_mask=torch.ones(batch_size, n_atoms, dtype=torch.bool, device=device),
         is_resolved=torch.ones(batch_size, n_atoms, dtype=torch.bool, device=device),
+        centre_atom_is_resolved=torch.ones(
+            batch_size, n_tokens, dtype=torch.bool, device=device
+        ),
         backbone_mask=torch.ones(
             batch_size, n_tokens, 5, dtype=torch.bool, device=device
         ),

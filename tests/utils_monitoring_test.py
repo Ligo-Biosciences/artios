@@ -408,7 +408,8 @@ class TestPlotFunctions:
         fig = plot_covariance_heatmap(data["test_data"], "_test")
 
         assert isinstance(fig, plt.Figure)
-        assert len(fig.axes) == 1  # Heatmap should have single axis
+        # Heatmap has main axis + colorbar axis
+        assert len(fig.axes) == 2
 
         plt.close(fig)
 

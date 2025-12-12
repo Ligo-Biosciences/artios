@@ -6,14 +6,21 @@ from einops import repeat
 from typing_extensions import assert_never
 
 from protenix.data.features import FullContext
-from protenix.model.generator_backbone import (
+from protenix.model.generator import (
+    BetaWithUniform,
     LaProteinaCoordScheduler,
-    TrainingTimestepSampler,
-    sample_local_noising,
+    stochasticity_from_config,
 )
 from protenix.model.modules.sidechain_packer import SidechainPacker
 from protenix.model.output import ModelOutput
-from protenix.model.utils import Mode, broadcast_token_to_atom
+from protenix.model.utils import (
+    Mode,
+    average_atom_to_token,
+    broadcast_token_to_atom,
+    centre_random_augmentation,
+    expand_at_dim,
+    noise_w_flow_matching,
+)
 
 
 class ArtiosPacking(nn.Module):
@@ -24,7 +31,7 @@ class ArtiosPacking(nn.Module):
         # Fixed eval generator for reproducibility
         # self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
 
-        self.timestep_sampler = TrainingTimestepSampler(
+        self.timestep_sampler = BetaWithUniform(
             **configs.artios_packing.train_timestep_sampler
         )
 
@@ -51,15 +58,8 @@ class ArtiosPacking(nn.Module):
         Returns:
             ModelOutput: Model output containing the prediction.
         """
-        device = context.token.residue_index.device
-        dtype = context.token.residue_index.dtype
-
         N_sample = self.sampling_configs.N_sample
         N_step = self.sampling_configs.N_step
-
-        timesteps = self.inference_timestep_scheduler(
-            N_step=N_step, device=device, dtype=dtype
-        )
 
         residual_centre_atoms = broadcast_token_to_atom(
             x_token=context.coordinate.centre_coordinate,
@@ -71,15 +71,20 @@ class ArtiosPacking(nn.Module):
             n_sample=N_sample,
         )
 
-        pred = self.sidechain_packer.sample(
-            context=context,
-            timesteps=timesteps,
-            residual_centre_atoms=residual_centre_atoms,
-            n_sample=N_sample,
+        # Build stochasticity schedule from config
+        stochasticity = stochasticity_from_config(
             stoch_type=self.sampling_configs.stoch_type,
             alpha=self.sampling_configs.alpha,
+        )
+
+        pred = self.sidechain_packer.sample(
+            context=context,
+            timestep_scheduler=self.inference_timestep_scheduler,
+            n_steps=N_step,
+            residual_centre_atoms=residual_centre_atoms,
+            stochasticity=stochasticity,
             gamma=self.sampling_configs.gamma,
-            eps=self.sampling_configs.eps,
+            n_sample=N_sample,
         )
 
         return ModelOutput(coordinate=pred)
@@ -100,6 +105,8 @@ class ArtiosPacking(nn.Module):
             ModelOutput: Model output containing the prediction.
         """
         device = context.coordinate.coordinate.device
+        dtype = context.coordinate.coordinate.dtype
+        batch_shape = context.coordinate.coordinate.shape[:-2]
 
         n_sample = self.diffusion_batch_size
         n_token = context.token.token_index.shape[-1]
@@ -110,16 +117,52 @@ class ArtiosPacking(nn.Module):
             else None
         )
 
-        r_noisy, timestep, _ = sample_local_noising(
-            input=context.coordinate.coordinate,
-            mask=context.mask.is_resolved,
-            centre_atom_mask=context.mask.centre_atom_mask,
-            atom_to_token_idx=context.index.atom_to_token_idx,
-            timestep_sampler=self.timestep_sampler,
+        # Augment target coordinates
+        x_target_augment = centre_random_augmentation(
+            x_input_coords=context.coordinate.coordinate,
             n_sample=n_sample,
+            mask=context.mask.is_resolved,
+        ).to(dtype)
+
+        # Get centre atoms (expand masks for n_sample dimension)
+        centre_atom_mask = expand_at_dim(
+            context.mask.centre_atom_mask, dim=-2, n=n_sample
+        )
+        atom_to_token_idx = expand_at_dim(
+            context.index.atom_to_token_idx, dim=-2, n=n_sample
+        )
+
+        centre_atoms = average_atom_to_token(
+            x_atom=x_target_augment,
+            atom_mask=centre_atom_mask,
+            atom_to_token_idx=atom_to_token_idx,
             n_token=n_token,
-            scale=self.local_sigma_coord,
-            generator=generator,
+        )
+
+        residual_centre_atoms = broadcast_token_to_atom(
+            x_token=centre_atoms, atom_to_token_idx=atom_to_token_idx
+        )
+
+        # Generate timesteps
+        timestep = self.timestep_sampler.sample(
+            size=(*batch_shape, n_sample), device=device, generator=generator
+        ).to(dtype)
+
+        # Generate noise centered at residue centres
+        noise = (
+            torch.randn(
+                x_target_augment.shape,
+                dtype=dtype,
+                device=device,
+                generator=generator,
+            )
+            * self.local_sigma_coord
+        )
+        noise = residual_centre_atoms + noise
+
+        # Apply flow matching interpolation
+        r_noisy = noise_w_flow_matching(
+            x_target_augment, noise, timestep[..., :, None, None]
         )
 
         pred = self.sidechain_packer(

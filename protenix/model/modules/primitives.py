@@ -9,9 +9,6 @@ from einops import rearrange
 from scipy.stats import truncnorm
 from torch import Tensor
 
-from protenix.model.utils import (
-    add,
-)
 from protenix.utils.typing import Bool, Float, typecheck
 
 # Optimized layer norm
@@ -333,7 +330,7 @@ def attention(
     attn_weights = q @ k / (q.shape[-1] ** 0.5)
 
     if attn_bias is not None:
-        attn_weights = add(attn_weights, attn_bias)
+        attn_weights = attn_weights + attn_bias
 
     # fill out of mask with -inf (based on dtype)
     attn_weights.masked_fill_(~pair_mask, -inf)

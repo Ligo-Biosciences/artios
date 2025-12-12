@@ -340,8 +340,8 @@ class MPNNFeaturizer(nn.Module):
 
         # Apply mask and flatten backbone pairs
         masked_distances = distances * distance_mask
-        flat_distances = rearrange(masked_distances, "... r d - > ... (r d)")
-        flat_mask = rearrange(distance_mask, "... r d - > ... (r d)")
+        flat_distances = rearrange(masked_distances, "... r d -> ... (r d)")
+        flat_mask = rearrange(distance_mask, "... r d -> ... (r d)")
         # [..., n_token, neighbors, 25]
 
         # Apply RBF encoding

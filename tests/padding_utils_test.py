@@ -186,8 +186,8 @@ class TestPaddingUtils:
             "ref_pos": input_feature_dict["ref_pos"],
         }
 
-        # Test assertion for atom shrinking
-        with pytest.raises(AssertionError, match="Need at least 1 padding token"):
+        # Test error for atom shrinking
+        with pytest.raises(ValueError, match="Cannot pad feature.*to smaller"):
             pad_features_dict(
                 test_features,
                 current_n_atom=current_n_atom,
@@ -202,10 +202,13 @@ class TestPaddingUtils:
                 max_n_pocket=2,
             )
 
-        # Test assertion for token shrinking
-        with pytest.raises(AssertionError, match="Need at least 1 padding token"):
+        # Test error for token shrinking
+        test_features_token = {
+            "restype": input_feature_dict["restype"],
+        }
+        with pytest.raises(ValueError, match="Cannot pad feature.*to smaller"):
             pad_features_dict(
-                test_features,
+                test_features_token,
                 current_n_atom=current_n_atom,
                 max_n_atom=current_n_atom + 5,
                 current_n_token=current_n_token,

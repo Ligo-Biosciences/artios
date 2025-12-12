@@ -8,13 +8,11 @@ This module tests the core functionality of the MPNN class, including:
 - Sampling (autoregressive inference)
 """
 
-import os
-
 import pytest
 import torch
 
-from protenix.data.features import FullContext
 from protenix.model.modules.mpnn import MPNN, DecodingMasks
+from tests.context_utils import create_test_context
 
 
 @pytest.fixture
@@ -36,37 +34,31 @@ def mpnn_model():
 
 
 @pytest.fixture
-def full_context() -> FullContext:
-    """Load sample FullContext from test data."""
-    test_data_path = os.path.join(
-        os.path.dirname(__file__), "testdata", "sample_batch_full_context.pt"
-    )
-    data = torch.load(test_data_path, weights_only=False)
-    return FullContext.from_dict(data)
+def device():
+    """Get available device."""
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 @pytest.fixture
-def single_context(full_context: FullContext) -> FullContext:
-    """Extract a single sample from the batch for simpler testing."""
-
-    # Take first sample from batch
-    def slice_first(d):
-        result = {}
-        for k, v in d.items():
-            if isinstance(v, dict):
-                result[k] = slice_first(v)
-            elif torch.is_tensor(v):
-                result[k] = v[0:1]  # Keep batch dim
-            else:
-                result[k] = v
-        return result
-
-    test_data_path = os.path.join(
-        os.path.dirname(__file__), "testdata", "sample_batch_full_context.pt"
+def full_context(device) -> "FullContext":
+    """Create batched FullContext for testing."""
+    return create_test_context(
+        batch_size=2,
+        n_tokens=32,
+        n_atoms=64,
+        device=device,
     )
-    data = torch.load(test_data_path, weights_only=False)
-    sliced = slice_first(data)
-    return FullContext.from_dict(sliced)
+
+
+@pytest.fixture
+def single_context(device) -> "FullContext":
+    """Create single-sample FullContext for testing."""
+    return create_test_context(
+        batch_size=1,
+        n_tokens=32,
+        n_atoms=64,
+        device=device,
+    )
 
 
 class TestEncoderOutput:
@@ -185,32 +177,11 @@ class TestEncode:
             torch.abs(encoder_output.edge_feats) < 1e6
         ), "edge_feats contains unreasonably large values - possible masking bug"
 
-    def test_device_consistency(self, mpnn_model, single_context):
+    def test_device_consistency(self, mpnn_model, single_context, device):
         """Test that outputs are on the same device as inputs."""
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mpnn_model = mpnn_model.to(device)
 
-        # Move context tensors to device
-        test_data_path = os.path.join(
-            os.path.dirname(__file__), "testdata", "sample_batch_full_context.pt"
-        )
-        data = torch.load(test_data_path, weights_only=False, map_location=device)
-
-        def move_to_device(d):
-            result = {}
-            for k, v in d.items():
-                if isinstance(v, dict):
-                    result[k] = move_to_device(v)
-                elif torch.is_tensor(v):
-                    result[k] = v[0:1].to(device)
-                else:
-                    result[k] = v
-            return result
-
-        data_device = move_to_device(data)
-        context_device = FullContext.from_dict(data_device)
-
-        encoder_output = mpnn_model.encode(context_device)
+        encoder_output = mpnn_model.encode(single_context)
 
         assert encoder_output.node_feats.device == device
         assert encoder_output.edge_feats.device == device

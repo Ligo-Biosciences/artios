@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import torch
 from torch import Tensor
@@ -8,7 +8,6 @@ from torch import Tensor
 from protenix.model.utils import (
     beta_function,
     centre_random_augmentation,
-    noise_w_flow_matching,
 )
 from protenix.utils.typing import Bool, Float, typecheck
 
@@ -658,75 +657,3 @@ class FlowMatchingSampler:
                 )
 
         return x
-
-
-# =============================================================================
-# Training Utilities
-# =============================================================================
-
-
-@typecheck
-def sample_noising(  # TODO: this doesn't have much of a moat, should be deleted.
-    input: Float[Tensor, "... n_token n_feature"],
-    mask: Bool[Tensor, "... n_token"],
-    timestep_sampler: TrainingTimestepSampler,
-    num_sample: int,
-    scale: float,
-    generator: Optional[torch.Generator] = None,
-) -> tuple[
-    Float[Tensor, "... n_sample n_token n_feature"],
-    Float[Tensor, "... n_sample"],
-    Float[Tensor, "... n_sample n_token n_feature"],
-]:
-    """Core noising function for training flow matching models.
-
-    Performs the following steps:
-    1. Augment input with random rotation and translation
-    2. Generate timesteps from the sampler
-    3. Generate scaled Gaussian noise
-    4. Interpolate using flow matching: x_t = t*x_1 + (1-t)*noise
-
-    Args:
-        input: Clean input coordinates to noise.
-        mask: Mask indicating valid tokens.
-        timestep_sampler: Sampler for generating training timesteps.
-        num_sample: Number of noised samples to generate per input.
-        scale: Scale factor for the Gaussian noise.
-        generator: Optional random generator for reproducibility.
-
-    Returns:
-        Tuple of (noised_input, timesteps, augmented_input).
-    """
-    batch_size_shape = input.shape[:-2]
-    device = input.device
-    dtype = input.dtype
-
-    # Augment
-    x_target_augment = centre_random_augmentation(
-        x_input_coords=input,
-        n_sample=num_sample,
-        mask=mask,
-    ).to(dtype)
-
-    # Generate timestep
-    timestep = timestep_sampler.sample(
-        size=(*batch_size_shape, num_sample), device=device, generator=generator
-    ).to(dtype)
-
-    # Generate noise
-    noise = (
-        torch.randn(
-            x_target_augment.shape,
-            dtype=dtype,
-            device=x_target_augment.device,
-            generator=generator,
-        )
-        * scale
-    )
-
-    # Noise input
-    x_noisy = noise_w_flow_matching(
-        x_target_augment, noise, timestep[..., :, None, None]
-    )
-
-    return x_noisy, timestep, x_target_augment

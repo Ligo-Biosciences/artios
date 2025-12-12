@@ -82,6 +82,7 @@ class TestContextToFromDict:
             centre_atom_mask=torch.zeros(n_atoms, dtype=torch.bool),
             atom_mask=torch.ones(n_atoms, dtype=torch.bool),
             is_resolved=torch.ones(n_atoms, dtype=torch.bool),
+            centre_atom_is_resolved=torch.ones(n_tokens, dtype=torch.bool),
             backbone_mask=torch.ones(n_tokens, 5, dtype=torch.bool),
             atom_loss_mask=torch.ones(n_atoms, dtype=torch.bool),
             token_mask=torch.ones(n_tokens, dtype=torch.bool),
@@ -92,6 +93,9 @@ class TestContextToFromDict:
 
         assert torch.equal(mask.atom_mask, restored.atom_mask)
         assert torch.equal(mask.is_resolved, restored.is_resolved)
+        assert torch.equal(
+            mask.centre_atom_is_resolved, restored.centre_atom_is_resolved
+        )
         assert torch.equal(mask.token_mask, restored.token_mask)
 
 
@@ -212,6 +216,7 @@ class TestFullContextToFromDict:
                 "centre_atom_mask": torch.zeros(n_atoms, dtype=torch.bool),
                 "atom_mask": torch.ones(n_atoms, dtype=torch.bool),
                 "is_resolved": torch.ones(n_atoms, dtype=torch.bool),
+                "centre_atom_is_resolved": torch.ones(n_tokens, dtype=torch.bool),
                 "backbone_mask": torch.ones(n_tokens, 5, dtype=torch.bool),
                 "atom_loss_mask": torch.ones(n_atoms, dtype=torch.bool),
                 "token_mask": torch.ones(n_tokens, dtype=torch.bool),

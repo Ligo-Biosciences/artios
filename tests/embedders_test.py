@@ -35,7 +35,14 @@ class TestRelativePositionEncoding:
             k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()
         }
 
-        out = encoder(input_dict)
+        # Call with keyword arguments as expected by the new signature
+        out = encoder(
+            asym_id=input_dict["asym_id"],
+            residue_index=input_dict["residue_index"],
+            entity_id=input_dict["entity_id"],
+            sym_id=input_dict["sym_id"],
+            token_index=input_dict["token_index"],
+        )
 
         # Check output shape
         n_tokens = input_dict["asym_id"].shape[-1]

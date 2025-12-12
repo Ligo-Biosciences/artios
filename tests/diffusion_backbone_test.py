@@ -1,10 +1,8 @@
 """Tests for the refactored diffusion_backbone module using FullContext.
 
 This test file uses the new typed FullContext dataclass instead of raw dicts.
-Test data is loaded from tests/testdata/sample_batch_full_context.pt.
+Uses context_utils to create proper FullContext test data.
 """
-
-import os
 
 import pytest
 import torch
@@ -14,6 +12,7 @@ from protenix.model.modules.diffusion_backbone import (
     DiffusionConditioning,
     DiffusionModule,
 )
+from tests.context_utils import create_test_context
 
 
 @pytest.fixture
@@ -24,41 +23,12 @@ def device():
 
 @pytest.fixture
 def context(device) -> FullContext:
-    """Load test context from saved batch data."""
-    test_data_path = os.path.join(
-        os.path.dirname(__file__), "testdata", "sample_batch_full_context.pt"
-    )
-    data = torch.load(test_data_path, weights_only=False)
-    ctx = FullContext.from_dict(data)
-
-    # Move all tensors to device
-    return _move_context_to_device(ctx, device)
-
-
-def _move_context_to_device(ctx: FullContext, device: torch.device) -> FullContext:
-    """Move all tensors in a FullContext to the specified device."""
-    from dataclasses import fields
-
-    def move_context(context):
-        kwargs = {}
-        for field in fields(context):
-            value = getattr(context, field.name)
-            if torch.is_tensor(value):
-                kwargs[field.name] = value.to(device)
-            else:
-                kwargs[field.name] = value
-        return type(context)(**kwargs)
-
-    return FullContext(
-        token=move_context(ctx.token),
-        reference=move_context(ctx.reference),
-        chain_perm=move_context(ctx.chain_perm),
-        mask=move_context(ctx.mask),
-        motif=move_context(ctx.motif),
-        index=move_context(ctx.index),
-        entity=move_context(ctx.entity),
-        coordinate=move_context(ctx.coordinate),
-        basic=ctx.basic,  # BasicContext has no tensors
+    """Create test FullContext."""
+    return create_test_context(
+        batch_size=2,
+        n_tokens=32,
+        n_atoms=64,
+        device=device,
     )
 
 
@@ -289,14 +259,17 @@ class TestDiffusionModule:
         assert output.shape == (batch_size, n_samples, n_atoms, 3)
         assert not torch.isnan(output).any()
 
-    def test_gradient_flow(self, diffusion_module, context, device):
+    def test_gradient_flow(self, diffusion_module, device):
         """Test that gradients flow through the model correctly."""
-        n_atoms = context.reference.ref_pos.shape[-2]
+        # Create a single-batch context for gradient test
+        single_context = create_test_context(
+            batch_size=1,
+            n_tokens=32,
+            n_atoms=64,
+            device=device,
+        )
+        n_atoms = single_context.reference.ref_pos.shape[-2]
         n_samples = 1
-
-        # Use single batch item for gradient test
-        single_context = _slice_context(context, 0)
-        single_context = _move_context_to_device(single_context, device)
 
         # Create input tensors that require gradients
         r_noisy = torch.randn(1, n_samples, n_atoms, 3, requires_grad=True).to(device)
@@ -343,57 +316,6 @@ class TestDiffusionModule:
 
         assert output.shape == (batch_size, n_samples, n_atoms, 3)
         assert not torch.isnan(output).any()
-
-
-def _slice_context(ctx: FullContext, idx: int) -> FullContext:
-    """Slice a batched FullContext to get a single item with batch dim preserved."""
-    from dataclasses import fields
-
-    from protenix.data.features import BasicContext
-
-    def slice_context(context, idx):
-        kwargs = {}
-        for field in fields(context):
-            value = getattr(context, field.name)
-            if torch.is_tensor(value):
-                kwargs[field.name] = value[idx : idx + 1]
-            else:
-                kwargs[field.name] = value
-        return type(context)(**kwargs)
-
-    # Handle BasicContext separately since it has list fields
-    basic_kwargs = {
-        "atom_array": [ctx.basic.atom_array[idx]] if ctx.basic.atom_array else None,
-        "token_array": [ctx.basic.token_array[idx]] if ctx.basic.token_array else None,
-        "pdb_id": [ctx.basic.pdb_id[idx]]
-        if isinstance(ctx.basic.pdb_id, list)
-        else ctx.basic.pdb_id,
-        "bioassembly_dict_fpath": [ctx.basic.bioassembly_dict_fpath[idx]]
-        if isinstance(ctx.basic.bioassembly_dict_fpath, list)
-        else ctx.basic.bioassembly_dict_fpath,
-        "n_asym": [ctx.basic.n_asym[idx]]
-        if isinstance(ctx.basic.n_asym, list)
-        else ctx.basic.n_asym,
-        "n_token": [ctx.basic.n_token[idx]]
-        if isinstance(ctx.basic.n_token, list)
-        else ctx.basic.n_token,
-        "n_atom": [ctx.basic.n_atom[idx]]
-        if isinstance(ctx.basic.n_atom, list)
-        else ctx.basic.n_atom,
-    }
-    basic = BasicContext(**basic_kwargs)
-
-    return FullContext(
-        token=slice_context(ctx.token, idx),
-        reference=slice_context(ctx.reference, idx),
-        chain_perm=slice_context(ctx.chain_perm, idx),
-        mask=slice_context(ctx.mask, idx),
-        motif=slice_context(ctx.motif, idx),
-        index=slice_context(ctx.index, idx),
-        entity=slice_context(ctx.entity, idx),
-        coordinate=slice_context(ctx.coordinate, idx),
-        basic=basic,
-    )
 
 
 if __name__ == "__main__":

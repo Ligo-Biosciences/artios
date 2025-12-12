@@ -305,7 +305,7 @@ class MSELoss(BaseLoss):
                     torch.float32
                 ),  # [..., N_sample, N_atom, 3]
                 atom_weight=weight.to(torch.float32),  # [..., N_sample, N_atom]
-                mask=mask.to(torch.float32),
+                mask=mask.bool(),  # Must be bool for weighted_rigid_align
                 stop_gradient=True,
             )  # [..., N_sample, N_atom, 3]
             true_coordinate_aligned = true_coordinate_aligned.to(d)

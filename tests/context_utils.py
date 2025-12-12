@@ -298,17 +298,23 @@ def create_test_context(
     )
 
     # AtomPermContext
-    atom_perm = AtomPermContext(perms=[])
+    # For run_batched, we need atom_perm_list with shape [batch][n_atoms][n_perms]
+    # Each atom maps to identity (itself) - using modulo n_tokens as ref_space_uid
+    # Format: perms[batch_idx] = [[atom_0_perms], [atom_1_perms], ...]
+    # For identity permutation with no symmetry, each atom has just one permutation option
+    atom_perm_perms = [[[i] for i in range(n_atoms)] for _ in range(batch_size)]
+    atom_perm = AtomPermContext(perms=atom_perm_perms)
 
     # BasicContext (non-tensor metadata)
+    # For batched contexts, metadata fields should be lists with length batch_size
     basic = BasicContext(
-        atom_array=AtomArray(0),  # Empty placeholder
-        token_array=TokenArray([]),  # Empty token array
-        pdb_id="test",
-        bioassembly_dict_fpath="",
-        n_asym=1,
-        n_token=n_tokens,
-        n_atom=n_atoms,
+        atom_array=[AtomArray(0) for _ in range(batch_size)],
+        token_array=[TokenArray([]) for _ in range(batch_size)],
+        pdb_id=[f"test_{i}" for i in range(batch_size)],
+        bioassembly_dict_fpath=["" for _ in range(batch_size)],
+        n_asym=[1 for _ in range(batch_size)],
+        n_token=[n_tokens for _ in range(batch_size)],
+        n_atom=[n_atoms for _ in range(batch_size)],
     )
 
     return FullContext(

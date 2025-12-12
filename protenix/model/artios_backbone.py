@@ -13,6 +13,7 @@ from protenix.model.generator import (
 from protenix.model.modules.diffusion_backbone import DiffusionModule
 from protenix.model.output import ModelOutput
 from protenix.model.utils import Mode, centre_random_augmentation, noise_w_flow_matching
+from protenix.utils.permutation import atom_permutation
 
 
 class ArtiosBackbone(nn.Module):
@@ -135,7 +136,20 @@ class ArtiosBackbone(nn.Module):
             inplace_safe=inplace_safe,
         )
 
-        return ModelOutput(coordinate=pred, timestep=timestep)
+        # Correct symmetric atoms
+        result = atom_permutation.run_batched(
+            pred_coord=pred,
+            true_coord=context.coordinate.coordinate,
+            true_coord_mask=context.mask.atom_loss_mask,
+            ref_space_uid=context.reference.ref_space_uid,
+            atom_perm_list=context.atom_perm.perms,
+            pdb_id=context.basic.pdb_id,
+            permute_label=False,
+        )
+
+        symmetry_corrected = result.coordinate
+
+        return ModelOutput(coordinate=symmetry_corrected, timestep=timestep)
 
     def forward(
         self,

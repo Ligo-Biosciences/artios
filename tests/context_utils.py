@@ -5,6 +5,7 @@ from biotite.structure import AtomArray
 from torch import Tensor
 
 from protenix.data.features import (
+    AtomPermContext,
     BasicContext,
     ChainPermContext,
     CoordinateContext,
@@ -121,6 +122,9 @@ def load_sample_context(device: torch.device | None = None) -> FullContext:
         resolution=float(input_dict["resolution"].item()),
     )
 
+    # AtomPermContext
+    atom_perm = AtomPermContext(perms=[])
+
     # BasicContext
     basic = BasicContext(
         atom_array=AtomArray(0),
@@ -136,6 +140,7 @@ def load_sample_context(device: torch.device | None = None) -> FullContext:
         token=token,
         reference=reference,
         chain_perm=chain_perm,
+        atom_perm=atom_perm,
         mask=mask,
         motif=motif,
         index=index,
@@ -143,6 +148,25 @@ def load_sample_context(device: torch.device | None = None) -> FullContext:
         coordinate=coordinate,
         basic=basic,
     )
+
+
+def load_batched_context() -> FullContext:
+    """Load the batched sample test data and construct a FullContext.
+
+    This loads real batched data from sample_batch_full_context.pt which contains
+    a batch of 8 samples with n_tokens=440 and n_atoms=1728.
+
+    Returns:
+        FullContext constructed from sample_batch_full_context.pt
+    """
+    import os
+
+    test_data_path = os.path.join(
+        os.path.dirname(__file__), "testdata", "sample_batch_full_context.pt"
+    )
+    data = torch.load(test_data_path, weights_only=False)
+
+    return FullContext.from_dict(data)
 
 
 def create_test_context(
@@ -269,6 +293,9 @@ def create_test_context(
         resolution=1.5,
     )
 
+    # AtomPermContext
+    atom_perm = AtomPermContext(perms=[])
+
     # BasicContext (non-tensor metadata)
     basic = BasicContext(
         atom_array=AtomArray(0),  # Empty placeholder
@@ -284,6 +311,7 @@ def create_test_context(
         token=token,
         reference=reference,
         chain_perm=chain_perm,
+        atom_perm=atom_perm,
         mask=mask,
         motif=motif,
         index=index,

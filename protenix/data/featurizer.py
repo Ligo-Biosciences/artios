@@ -15,7 +15,7 @@ from protenix.common.constants import (
     get_all_elems,
 )
 from protenix.data.features import (
-    AtomPermInfo,
+    AtomPermContext,
     BasicContext,
     ChainPermContext,
     CoordinateContext,
@@ -460,6 +460,7 @@ class ContextGenerator(object):
             token=self.get_token_context(),
             reference=self.get_reference_conformer_context(),
             chain_perm=self.get_chain_perm_context(),
+            atom_perm=self.get_atom_permutation_list(),
             mask=self.get_mask_context(),
             motif=self.get_motif_context(),
             index=self.get_index_context(),
@@ -470,7 +471,7 @@ class ContextGenerator(object):
 
     def get_atom_permutation_list(
         self,
-    ) -> AtomPermInfo:
+    ) -> AtomPermContext:
         """
         Generate info of permutations.
 
@@ -534,7 +535,7 @@ class ContextGenerator(object):
             # Remove the columns related to the position changes of fixed atoms.
             fiedx_atom_res_perm = atom_res_perm[:, unchanged_columns_mask]
             fixed_atom_perm_list.extend(fiedx_atom_res_perm.tolist())
-        return AtomPermInfo(perms=fixed_atom_perm_list)
+        return AtomPermContext(perms=fixed_atom_perm_list)
 
     @staticmethod
     def get_lig_pocket_mask(

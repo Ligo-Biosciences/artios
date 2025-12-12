@@ -123,21 +123,27 @@ class AtomPermutationResult:
 
 @dataclass
 class PermutedLabel:
-    """Result when permuting ground truth labels."""
+    """Result when permuting ground truth labels.
+
+    For batched inputs (run_batched), stats is a list with one entry per batch element.
+    """
 
     coordinate: Float[Tensor, "*batch n 3"]
     coordinate_mask: Bool[Tensor, "*batch n"]
     permutation: Int[Tensor, "*batch n"]
-    stats: PermutationStats
+    stats: PermutationStats | list[PermutationStats]
 
 
 @dataclass
 class PermutedPrediction:
-    """Result when permuting predictions."""
+    """Result when permuting predictions.
+
+    For batched inputs (run_batched), stats is a list with one entry per batch element.
+    """
 
     coordinate: Float[Tensor, "*batch n 3"]
     permutation: Int[Tensor, "*batch n"]
-    stats: PermutationStats
+    stats: PermutationStats | list[PermutationStats]
 
 
 PermutationResult = PermutedLabel | PermutedPrediction
@@ -995,3 +1001,86 @@ def run(
             error_dir=error_dir,
         )
         return None
+
+
+@typecheck
+def run_batched(
+    pred_coord: Float[Tensor, "batch n_samples n 3"],
+    true_coord: Float[Tensor, "batch n 3"],
+    true_coord_mask: Bool[Tensor, "batch n"],
+    ref_space_uid: Int[Tensor, "batch n"],
+    atom_perm_list: list[list[list[int]]],
+    pdb_id: list[str],
+    permute_label: bool = True,
+    alignment_mask: Optional[Bool[Tensor, "batch n"]] = None,
+    error_dir: Optional[str] = None,
+    global_align_wo_symmetric_atom: bool = False,
+) -> Optional[PermutationResult]:
+    """Apply permutation to correct symmetric atoms for batched input.
+
+    Loops over the batch dimension and calls `run` for each sample independently.
+
+    Args:
+        pred_coord: Predicted coordinates. Shape: [batch, n_samples, n, 3].
+        true_coord: Ground truth coordinates. Shape: [batch, n, 3].
+        true_coord_mask: Mask for resolved atoms. Shape: [batch, n].
+        ref_space_uid: Unique residue ID per atom. Shape: [batch, n].
+        atom_perm_list: Per-atom permutation indices. Length: batch.
+        pdb_id: List of pdb ids in the batch
+        permute_label: If True, permute ground truth; if False, permute prediction.
+        alignment_mask: Optional mask for alignment. Shape: [batch, n].
+        error_dir: Directory to save error information on failure.
+        global_align_wo_symmetric_atom: If True, exclude symmetric atoms from alignment.
+
+    Returns:
+        PermutedLabel if permute_label=True, PermutedPrediction otherwise.
+        Tensors are stacked along batch dimension, stats is a list.
+        Returns None if any sample fails.
+    """
+    batch_size = pred_coord.size(0)
+
+    coords_list: list[Tensor] = []
+    perms_list: list[Tensor] = []
+    masks_list: list[Tensor] = []
+    stats_list: list[PermutationStats] = []
+
+    for i in range(batch_size):
+        align_mask_i = alignment_mask[i] if alignment_mask is not None else None
+
+        result = run(
+            pred_coord=pred_coord[i],
+            true_coord=true_coord[i],
+            true_coord_mask=true_coord_mask[i],
+            ref_space_uid=ref_space_uid[i],
+            atom_perm_list=atom_perm_list[i],
+            pdb_id=pdb_id[i],
+            permute_label=permute_label,
+            alignment_mask=align_mask_i,
+            error_dir=error_dir,
+            global_align_wo_symmetric_atom=global_align_wo_symmetric_atom,
+        )
+
+        if result is None:
+            return None
+
+        coords_list.append(result.coordinate)
+        perms_list.append(result.permutation)
+        stats_list.append(result.stats)
+        if isinstance(result, PermutedLabel):
+            masks_list.append(result.coordinate_mask)
+
+    permutation = torch.stack(perms_list, dim=0)
+
+    if permute_label:
+        return PermutedLabel(
+            coordinate=torch.stack(coords_list, dim=0),
+            coordinate_mask=torch.stack(masks_list, dim=0),
+            permutation=permutation,
+            stats=stats_list,
+        )
+    else:
+        return PermutedPrediction(
+            coordinate=torch.stack(coords_list, dim=0),
+            permutation=permutation,
+            stats=stats_list,
+        )

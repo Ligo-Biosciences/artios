@@ -1,43 +1,43 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import copy
 from collections import defaultdict
+from functools import cached_property
 from typing import Union
 
 import numpy as np
 import torch
-from biotite.structure import Atom, AtomArray, get_residue_starts
-from scipy.spatial.distance import cdist
-from sklearn.neighbors import KDTree
+from biotite.structure import AtomArray, get_residue_starts
+from sklearn.neighbors import KDTree  # TODO: switch to scipy
 
-from protenix.common.atom_types import DENSE_ATOM_NUM
 from protenix.common.constants import (
     BACKBONE_DEFS,
     STD_RESIDUES,
     STD_RESIDUES_AND_GAP,
     get_all_elems,
 )
-from protenix.data.tokenizer import Token, TokenArray
-from protenix.utils.geometry import angle_3p, random_transform
+from protenix.data.features import (
+    AtomPermContext,
+    BasicContext,
+    ChainPermContext,
+    CoordinateContext,
+    EntityContext,
+    FullContext,
+    IndexContext,
+    MaskContext,
+    MotifContext,
+    ReferenceConformerContext,
+    TokenContext,
+)
+from protenix.data.tokenizer import TokenArray
+from protenix.utils.geometry import compute_virtual_cb, random_transform
 
 
-class Featurizer(object):
+class ContextGenerator(object):
     def __init__(
         self,
         cropped_token_array: TokenArray,
         cropped_atom_array: AtomArray,
+        pdb_id: str,
+        bioassembly_dict_fpath: str,
         ref_pos_augment: bool = True,
         lig_atom_rename: bool = False,
     ) -> None:
@@ -49,10 +49,42 @@ class Featurizer(object):
             lig_atom_rename (bool): Boolean indicating whether rename atom name for ligand atoms
         """
         self.cropped_token_array = cropped_token_array
-
         self.cropped_atom_array = cropped_atom_array
+        self.pdb_id = pdb_id
+        self.bioassembly_dict_fpath = bioassembly_dict_fpath
         self.ref_pos_augment = ref_pos_augment
         self.lig_atom_rename = lig_atom_rename
+
+        # Make atom -> token index
+        atom_to_token_idx_dict = {}
+        for idx, token in enumerate(self.cropped_token_array.tokens):
+            for atom_idx in token.atom_indices:
+                atom_to_token_idx_dict[atom_idx] = idx
+
+        # Ensure the order of the atom_to_token_idx is the same as the atom_array
+        self.atom_to_token_idx = torch.Tensor(
+            [
+                atom_to_token_idx_dict[atom_idx]
+                for atom_idx in range(len(self.cropped_atom_array))
+            ]
+        ).long()
+
+    @cached_property
+    def centre_atoms_indices(self) -> np.ndarray:
+        return self.cropped_token_array.get_annotation("centre_atom_index")
+
+    @cached_property
+    def centre_atoms(self) -> AtomArray:
+        return self.cropped_atom_array[self.centre_atoms_indices]
+
+    @cached_property
+    def backbone_atoms_and_mask(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extract backbone atom coordinates and masks for all tokens."""
+        return _extract_backbone_atoms(
+            self.cropped_token_array,
+            self.cropped_atom_array,
+            self.centre_atoms,
+        )
 
     @staticmethod
     def encoder(encode_def_list: list[str], input_list: list[str]) -> torch.Tensor:
@@ -74,7 +106,7 @@ class Featurizer(object):
             onehot_dict[key] = onehot
 
         onehot_encoded_data = [onehot_dict[item] for item in input_list]
-        onehot_tensor = torch.Tensor(onehot_encoded_data)
+        onehot_tensor = torch.Tensor(onehot_encoded_data).long()
         return onehot_tensor
 
     @staticmethod
@@ -93,7 +125,7 @@ class Featurizer(object):
             torch.Tensor:  A Tensor of one-hot encoded residue types
         """
 
-        return Featurizer.encoder(list(STD_RESIDUES_AND_GAP.keys()), restype_list)
+        return ContextGenerator.encoder(list(STD_RESIDUES_AND_GAP.keys()), restype_list)
 
     @staticmethod
     def elem_onehot_encoded(elem_list: list[str]) -> torch.Tensor:
@@ -108,7 +140,7 @@ class Featurizer(object):
         Returns:
             torch.Tensor:  A Tensor of one-hot encoded elements
         """
-        return Featurizer.encoder(get_all_elems(), elem_list)
+        return ContextGenerator.encoder(get_all_elems(), elem_list)
 
     @staticmethod
     def ref_atom_name_chars_encoded(atom_names: list[str]) -> torch.Tensor:
@@ -136,295 +168,34 @@ class Featurizer(object):
             for name_str in atom_name.ljust(4):
                 atom_encode.append(onehot_dict[ord(name_str) - 32])
             mol_encode.append(atom_encode)
-        onehot_tensor = torch.Tensor(mol_encode)
+        onehot_tensor = torch.Tensor(mol_encode).long()
         return onehot_tensor
 
-    @staticmethod
-    def get_prot_nuc_frame(token: Token, centre_atom: Atom) -> tuple[int, list[int]]:
-        """
-        Ref: AlphaFold3 SI Chapter 4.3.2
-        For proteins/DNA/RNA, we use the three atoms [N, CA, C] / [C1', C3', C4']
-
-        Args:
-            token (Token): Token object.
-            centre_atom (Atom): Biotite Atom object of Token centre atom.
-
-        Returns:
-            has_frame (int): 1 if the token has frame, 0 otherwise.
-            frame_atom_index (List[int]): The index of the atoms used to construct the frame.
-        """
-        if centre_atom.mol_type == "protein":
-            # For protein
-            abc_atom_name = ["N", "CA", "C"]
-        else:
-            # For DNA and RNA
-            abc_atom_name = [r"C1'", r"C3'", r"C4'"]
-
-        idx_in_atom_indices = []
-        for i in abc_atom_name:
-            if centre_atom.mol_type == "protein" and "N" not in token.atom_names:
-                return 0, [-1, -1, -1]
-            elif centre_atom.mol_type != "protein" and "C1'" not in token.atom_names:
-                return 0, [-1, -1, -1]
-            idx_in_atom_indices.append(token.atom_names.index(i))
-        # Protein/DNA/RNA always has frame
-        has_frame = 1
-        frame_atom_index = [token.atom_indices[i] for i in idx_in_atom_indices]
-        return has_frame, frame_atom_index
-
-    @staticmethod
-    def get_lig_frame(
-        token: Token,
-        centre_atom: Atom,
-        lig_res_ref_conf_kdtree: dict[str, tuple[KDTree, list[int]]],
-        ref_pos: torch.Tensor,
-        ref_mask: torch.Tensor,
-    ) -> tuple[int, list[int]]:
-        """
-        Ref: AlphaFold3 SI Chapter 4.3.2
-        For ligands, we use the reference conformer of the ligand to construct the frame.
-
-        Args:
-            token (Token): Token object.
-            centre_atom (Atom): Biotite Atom object of Token centre atom.
-            lig_res_ref_conf_kdtree (Dict[str, Tuple[KDTree, List[int]]]): A dictionary of KDTree objects and atom indices.
-            ref_pos (torch.Tensor): Atom positions in the reference conformer. Size=[N_atom, 3]
-            ref_mask (torch.Tensor): Mask indicating which atom slots are used in the reference conformer. Size=[N_atom]
-
-        Returns:
-            tuple[int, List[int]]:
-                has_frame (int): 1 if the token has frame, 0 otherwise.
-                frame_atom_index (List[int]): The index of the atoms used to construct the frame.
-        """
-        kdtree, atom_ids = lig_res_ref_conf_kdtree[centre_atom.ref_space_uid]
-        b_ref_pos = (
-            ref_pos[token.centre_atom_index].detach().cpu().numpy()
-        )  # Convert to numpy array
-        b_idx = token.centre_atom_index
-        if kdtree is None:
-            # Atom num < 3
-            frame_atom_index = [-1, b_idx, -1]
-            has_frame = 0
-        else:
-            _dist, ind = kdtree.query([b_ref_pos], k=3)
-            a_idx, c_idx = atom_ids[ind[0][1]], atom_ids[ind[0][2]]
-            frame_atom_index = [a_idx, b_idx, c_idx]
-
-            # Check if reference confomrer vaild
-            has_frame = all([ref_mask[idx] for idx in frame_atom_index])
-
-            # Colinear check
-            if has_frame:
-                # Convert tensors to numpy arrays for angle calculation
-                pos_array = [
-                    ref_pos[idx].detach().cpu().numpy() for idx in frame_atom_index
-                ]
-                theta_degrees = angle_3p(*pos_array)
-                if theta_degrees <= 25 or theta_degrees >= 155:
-                    has_frame = 0
-        return has_frame, frame_atom_index
-
-    @staticmethod
-    def get_token_frame(
-        token_array: TokenArray,
-        atom_array: AtomArray,
-        ref_pos: torch.Tensor,
-        ref_mask: torch.Tensor,
-    ) -> TokenArray:
-        """
-        Ref: AlphaFold3 SI Chapter 4.3.2
-        The atoms (a_i, b_i, c_i) used to construct token i's frame depend on the chain type of i:
-        Protein tokens use their residue's backbone (N, Cα, C),
-        while DNA and RNA tokens use (C1′, C3′, C4′) atoms of their residue.
-        All other tokens (small molecules, glycans, ions) contain only one atom per token.
-        The token atom is assigned to b_i, the closest atom to the token atom is a_i,
-        and the second closest atom to the token atom is c_i.
-        If this set of three atoms is close to colinear (less than 25 degree deviation),
-        or if three atoms do not exist in the chain (e.g. a sodium ion),
-        then the frame is marked as invalid.
-
-        Note: frames constucted from reference conformer
-
-        Args:
-            token_array (TokenArray): A list of tokens.
-            atom_array (AtomArray): An atom array.
-            ref_pos (torch.Tensor): Atom positions in the reference conformer. Size=[N_atom, 3]
-            ref_mask (torch.Tensor): Mask indicating which atom slots are used in the reference conformer. Size=[N_atom]
-
-        Returns:
-            TokenArray: A TokenArray with updated frame annotations.
-                        - has_frame: 1 if the token has frame, 0 otherwise.
-                        - frame_atom_index: The index of the atoms used to construct the frame.
-        """
-        token_array_w_frame = copy.deepcopy(token_array)
-
-        # Construct a KDTree for queries to avoid redundant distance calculations
-        lig_res_ref_conf_kdtree = {}
-        # Ligand and non-standard residues need to use ref to identify frames
-        lig_atom_array = atom_array[
-            (atom_array.mol_type == "ligand")
-            | (~np.isin(atom_array.res_name, list(STD_RESIDUES.keys())))
-        ]
-        for ref_space_uid in np.unique(lig_atom_array.ref_space_uid):
-            # The ref_space_uid is the unique identifier ID for each residue.
-            atom_ids = np.where(atom_array.ref_space_uid == ref_space_uid)[0]
-            if len(atom_ids) >= 3:
-                kdtree = KDTree(ref_pos[atom_ids], metric="euclidean")
-            else:
-                # Invalid frame
-                kdtree = None
-            lig_res_ref_conf_kdtree[ref_space_uid] = (kdtree, atom_ids)
-
-        has_frame = []
-        for token in token_array_w_frame:
-            centre_atom = atom_array[token.centre_atom_index]
-            if (
-                centre_atom.mol_type != "ligand"
-                and centre_atom.res_name in STD_RESIDUES
-            ):
-                has_frame, frame_atom_index = Featurizer.get_prot_nuc_frame(
-                    token, centre_atom
-                )
-
-            else:
-                has_frame, frame_atom_index = Featurizer.get_lig_frame(
-                    token, centre_atom, lig_res_ref_conf_kdtree, ref_pos, ref_mask
-                )
-
-            token.has_frame = has_frame
-            token.frame_atom_index = frame_atom_index
-        return token_array_w_frame
-
-    @staticmethod
-    def compute_virtual_cb(
-        n_coord: np.ndarray,
-        ca_coord: np.ndarray,
-        c_coord: np.ndarray,
-    ) -> np.ndarray:
-        """Compute virtual Cβ position using ideal geometry from ProteinMPNN.
-
-        Uses idealized bond lengths and angles to place Cβ in the correct
-        tetrahedral position relative to the N-CA-C backbone.
-
-        Args:
-            n_coord: N atom coordinates [..., 3]
-            ca_coord: CA atom coordinates [..., 3]
-            c_coord: C atom coordinates [..., 3]
-
-        Returns:
-            Virtual Cβ coordinates [..., 3]
-
-        Reference:
-            ProteinMPNN implementation of virtual Cβ placement
-        """
-        # Backbone bond vectors
-        n_ca = ca_coord - n_coord
-        ca_c = c_coord - ca_coord
-
-        # Cross product gives direction perpendicular to peptide plane
-        cross = np.cross(n_ca, ca_c)
-
-        # Idealized Cß
-        cb_coord = ca_coord + 0.568 * n_ca - 0.54068 * ca_c - 0.5827 * cross
-
-        return cb_coord
-
-    @staticmethod
-    def get_backbone_atoms_tensor(
-        token_array: TokenArray,
-        atom_array: AtomArray,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Extract backbone atom coordinates and masks for all tokens.
-
-        The backbone atoms depend on the chain type:
-        - Proteins: N, CA, C, O, and virtual Cß (computed from N, CA, C)
-        - Nucleic acids: OP1, OP2, C1', C3', C4'
-        - Ligands: Centre atom only (other slots are zero)
-
-        Args:
-            token_array: Array of tokens
-            atom_array: Array of atoms with coordinates
-
-        Returns:
-            backbone_coords: Backbone atom coordinates [n_token, 5, 3]
-            backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
-        """
-        # Backbone atom definitions by molecule type
-        n_tokens = len(token_array)
-        backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
-        backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
-
-        # Get centre atoms for all tokens
-        centre_atom_indices = token_array.get_annotation("centre_atom_index")
-        centre_atoms = atom_array[centre_atom_indices]
-
-        for token_idx, token in enumerate(token_array):
-            centre_atom = centre_atoms[token_idx]
-            mol_type = centre_atom.mol_type
-            is_standard = centre_atom.res_name in STD_RESIDUES
-
-            # Ligands or non-standard residues: use centre atom only
-            if mol_type == "ligand" or not is_standard:
-                backbone_coords[token_idx, 0] = centre_atom.coord
-                backbone_mask[token_idx, 0] = 1.0
-                continue
-
-            # Standard protein or nucleic acid
-            backbone_names = BACKBONE_DEFS[mol_type]
-            atom_name_map = {name: idx for idx, name in enumerate(token.atom_names)}
-            atom_coords = {}
-
-            # Extract backbone atoms
-            for bb_idx, atom_name in enumerate(backbone_names):
-                if atom_name in atom_name_map:
-                    local_idx = atom_name_map[atom_name]
-                    global_idx = token.atom_indices[local_idx]
-                    backbone_coords[token_idx, bb_idx] = atom_array.coord[global_idx]
-                    backbone_mask[token_idx, bb_idx] = 1.0
-                    atom_coords[atom_name] = atom_array.coord[global_idx]
-
-            # Compute virtual Cβ for proteins
-            if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):
-                cb_coord = Featurizer.compute_virtual_cb(
-                    atom_coords["N"], atom_coords["CA"], atom_coords["C"]
-                )
-                backbone_coords[token_idx, 4] = cb_coord
-                backbone_mask[token_idx, 4] = 1.0
-
-        return torch.Tensor(backbone_coords), torch.Tensor(backbone_mask)
-
-    def get_token_features(self) -> dict[str, torch.Tensor]:
+    def get_token_context(self) -> TokenContext:
         """
         Ref: AlphaFold3 SI Chapter 2.8
 
-        Get token features.
-        The size of these features is [N_token].
+        Get token context.
+        The size of these features is [N_token] or [N_token, N_token].
 
         Returns:
-            Dict[str, torch.Tensor]: A dict of token features.
+            TokenContext
         """
-        token_features = {}
-
-        centre_atoms_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
-        centre_atoms = self.cropped_atom_array[centre_atoms_indices]
-
-        restype = centre_atoms.cano_seq_resname
+        restype = self.centre_atoms.cano_seq_resname
         restype_onehot = self.restype_onehot_encoded(restype)
 
-        token_features["token_index"] = torch.arange(0, len(self.cropped_token_array))
-        token_features["residue_index"] = torch.Tensor(
-            centre_atoms.res_id.astype(int)
-        ).long()
-        token_features["asym_id"] = torch.Tensor(centre_atoms.asym_id_int).long()
-        token_features["entity_id"] = torch.Tensor(centre_atoms.entity_id_int).long()
-        token_features["sym_id"] = torch.Tensor(centre_atoms.sym_id_int).long()
-        token_features["restype"] = restype_onehot
+        context = TokenContext(
+            token_index=torch.arange(0, len(self.cropped_token_array)),
+            residue_index=torch.Tensor(self.centre_atoms.res_id.astype(int)).long(),
+            asym_id=torch.Tensor(self.centre_atoms.asym_id_int).long(),
+            entity_id=torch.Tensor(self.centre_atoms.entity_id_int).long(),
+            sym_id=torch.Tensor(self.centre_atoms.sym_id_int).long(),
+            restype=restype_onehot,
+            token_bonds=self.get_bonds(),
+        )
+        return context
 
-        return token_features
-
-    def get_chain_perm_features(self) -> dict[str, torch.Tensor]:
+    def get_chain_perm_context(self) -> ChainPermContext:
         """
         The chain permutation use "entity_mol_id", "mol_id" and "mol_atom_index"
         instead of the "entity_id", "asym_id" and "residue_index".
@@ -432,24 +203,18 @@ class Featurizer(object):
         The shape of these features is [N_atom].
 
         Returns:
-            Dict[str, torch.Tensor]: A dict of chain permutation features.
+            ChainPermContext
         """
-
-        chain_perm_features = {}
-        chain_perm_features["mol_id"] = torch.Tensor(
-            self.cropped_atom_array.mol_id
-        ).long()
-        chain_perm_features["mol_atom_index"] = torch.Tensor(
-            self.cropped_atom_array.mol_atom_index
-        ).long()
-        chain_perm_features["entity_mol_id"] = torch.Tensor(
-            self.cropped_atom_array.entity_mol_id
-        ).long()
-        return chain_perm_features
+        chain_perm_context = ChainPermContext(
+            mol_id=torch.Tensor(self.cropped_atom_array.mol_id).long(),
+            mol_atom_index=torch.Tensor(self.cropped_atom_array.mol_atom_index).long(),
+            entity_mol_id=torch.Tensor(self.cropped_atom_array.entity_mol_id).long(),
+        )
+        return chain_perm_context
 
     def get_renamed_atom_names(self) -> np.ndarray:
         """
-        Rename the atom names of ligands to avioid information leakage.
+        Rename the atom names of ligands to avoid information leakage.
 
         Returns:
             np.ndarray: A numpy array of renamed atom names.
@@ -471,15 +236,14 @@ class Featurizer(object):
             new_atom_names[start:stop] = new_res_atom_names
         return new_atom_names
 
-    def get_reference_features(self) -> dict[str, torch.Tensor]:
+    def get_reference_conformer_context(self) -> ReferenceConformerContext:
         """
         Ref: AlphaFold3 SI Chapter 2.8
 
         Get reference features.
-        The size of these features is [N_atom].
 
         Returns:
-            Dict[str, torch.Tensor]: a dict of reference features.
+            ReferenceConformerContext
         """
         ref_pos = []
         for ref_space_uid in np.unique(self.cropped_atom_array.ref_space_uid):
@@ -493,53 +257,35 @@ class Featurizer(object):
             ref_pos.append(res_ref_pos)
         ref_pos = np.concatenate(ref_pos)
 
-        ref_features = {}
-        ref_features["ref_pos"] = torch.Tensor(ref_pos)
-        ref_features["ref_mask"] = torch.Tensor(self.cropped_atom_array.ref_mask).long()
-        ref_features["ref_element"] = Featurizer.elem_onehot_encoded(
-            self.cropped_atom_array.element
-        ).long()
-        ref_features["ref_charge"] = torch.Tensor(
-            self.cropped_atom_array.ref_charge
-        ).long()
-
         if self.lig_atom_rename:
             atom_names = self.get_renamed_atom_names()
         else:
             atom_names = self.cropped_atom_array.atom_name
 
-        ref_features["ref_atom_name_chars"] = Featurizer.ref_atom_name_chars_encoded(
-            atom_names
-        ).long()
-        ref_features["ref_space_uid"] = torch.Tensor(
-            self.cropped_atom_array.ref_space_uid
-        ).long()
+        ref_conf_context = ReferenceConformerContext(
+            ref_pos=torch.Tensor(ref_pos),
+            ref_mask=torch.Tensor(self.cropped_atom_array.ref_mask).long(),
+            ref_element=ContextGenerator.elem_onehot_encoded(
+                self.cropped_atom_array.element
+            ).long(),
+            ref_charge=torch.Tensor(self.cropped_atom_array.ref_charge).long(),
+            ref_atom_name_chars=ContextGenerator.ref_atom_name_chars_encoded(
+                atom_names
+            ).long(),
+            ref_space_uid=torch.Tensor(self.cropped_atom_array.ref_space_uid).long(),
+        )
 
-        # token_array_with_frame = self.get_token_frame(
-        #     token_array=self.cropped_token_array,
-        #     atom_array=self.cropped_atom_array,
-        #     ref_pos=ref_features["ref_pos"],
-        #     ref_mask=ref_features["ref_mask"],
-        # )
-        # ref_features["has_frame"] = torch.Tensor(
-        #     token_array_with_frame.get_annotation("has_frame")
-        # ).long()  # [N_token]
-        # ref_features["frame_atom_index"] = torch.Tensor(
-        #     token_array_with_frame.get_annotation("frame_atom_index")
-        # ).long()  # [N_token, 3]
-        return ref_features
+        return ref_conf_context
 
-    def get_bond_features(self) -> dict[str, torch.Tensor]:
+    def get_bonds(self) -> torch.Tensor:
         """
         Ref: AlphaFold3 SI Chapter 2.8
         A 2D matrix indicating if there is a bond between any atom in token i and token j,
         restricted to just polymer-ligand and ligand-ligand bonds and bonds less than 2.4 Å during training.
-        The size of bond feature is [N_token, N_token].
 
         Returns:
-            Dict[str, torch.Tensor]: A dict of bond features.
+            torch.Tensor of shape [n_token, n_token] indicating bonds between tokens
         """
-        bond_features = {}
         num_tokens = len(self.cropped_token_array)
         adj_matrix = self.cropped_atom_array.bonds.adjacency_matrix().astype(int)
 
@@ -580,72 +326,218 @@ class Featurizer(object):
                 if np.any(sub_matrix):
                     token_adj_matrix[i, j] = 1
                     token_adj_matrix[j, i] = 1
-        bond_features["token_bonds"] = torch.Tensor(token_adj_matrix)
-        return bond_features
+        return torch.Tensor(token_adj_matrix).long()
 
-    def _get_atom_to_token_idx(self) -> torch.Tensor:
-        """
-        Get the mapping from atom index to token index.
-        """
-
-        atom_to_token_idx_dict = {}
-        for idx, token in enumerate(self.cropped_token_array.tokens):
-            for atom_idx in token.atom_indices:
-                atom_to_token_idx_dict[atom_idx] = idx
-
-        # Ensure the order of the atom_to_token_idx is the same as the atom_array
-        atom_to_token_idx = torch.Tensor(
-            [
-                atom_to_token_idx_dict[atom_idx]
-                for atom_idx in range(len(self.cropped_atom_array))
-            ]
-        ).long()
-        return atom_to_token_idx
-
-    def get_extra_features(self) -> dict[str, torch.Tensor]:
-        """
-        Get other features not listed in AlphaFold3 SI Chapter 2.8 Table 5.
+    def get_index_context(self) -> IndexContext:
+        """Get atom-to-token index mappings and global features.
 
         Returns:
-            Dict[str, torch.Tensor]: a dict of extra features.
+            IndexContext: Atom-to-token mappings.
         """
-        atom_to_token_idx = self._get_atom_to_token_idx()
+        return IndexContext(
+            atom_to_token_idx=self.atom_to_token_idx,
+            atom_to_tokatom_idx=torch.Tensor(
+                self.cropped_atom_array.tokatom_idx
+            ).long(),
+        )
 
-        extra_features = {}
-        extra_features["atom_to_token_idx"] = atom_to_token_idx  # [N_atom]
-        extra_features["atom_to_tokatom_idx"] = torch.Tensor(
-            self.cropped_atom_array.tokatom_idx
-        ).long()  # [N_atom]
+    def get_entity_context(self) -> EntityContext:
+        """Get molecule type indicators at atom and token level.
 
-        extra_features["is_protein"] = torch.Tensor(
-            self.cropped_atom_array.is_protein
-        ).long()  # [N_atom]
-        extra_features["is_ligand"] = torch.Tensor(
-            self.cropped_atom_array.is_ligand
-        ).long()  # [N_atom]
-        extra_features["is_dna"] = torch.Tensor(
-            self.cropped_atom_array.is_dna
-        ).long()  # [N_atom]
-        extra_features["is_rna"] = torch.Tensor(
-            self.cropped_atom_array.is_rna
-        ).long()  # [N_atom]
+        Returns:
+            EntityContext: Boolean masks for molecule types.
+        """
 
-        if "resolution" in self.cropped_atom_array._annot:
-            extra_features["resolution"] = torch.Tensor(
-                [self.cropped_atom_array.resolution[0]]
-            )
-        else:
-            extra_features["resolution"] = torch.Tensor([-1])
-
-        for mol_type in ["ligand", "protein", "dna", "rna"]:
+        def get_token_level_moltype(mol_type: str):
             is_x_atom = torch.Tensor(
                 getattr(self.cropped_atom_array, f"is_{mol_type}")
             ).to(dtype=torch.bool)
             is_x_token = torch.zeros(len(self.cropped_token_array), dtype=torch.bool)
-            is_x_token.scatter_(dim=-1, index=atom_to_token_idx, src=is_x_atom)
-            extra_features[f"is_{mol_type}_token"] = is_x_token  # [N_token]
+            is_x_token.scatter_(dim=-1, index=self.atom_to_token_idx, src=is_x_atom)
 
-        return extra_features
+            return is_x_token
+
+        return EntityContext(
+            is_protein=torch.Tensor(self.cropped_atom_array.is_protein).bool(),
+            is_ligand=torch.Tensor(self.cropped_atom_array.is_ligand).bool(),
+            is_dna=torch.Tensor(self.cropped_atom_array.is_dna).bool(),
+            is_rna=torch.Tensor(self.cropped_atom_array.is_rna).bool(),
+            is_protein_token=get_token_level_moltype("protein"),
+            is_ligand_token=get_token_level_moltype("ligand"),
+            is_dna_token=get_token_level_moltype("dna"),
+            is_rna_token=get_token_level_moltype("rna"),
+        )
+
+    def get_mask_context(self) -> MaskContext:
+        """Generate mask features for the cropped atom array.
+
+        Returns:
+            MaskContext: Atom-level masks for loss computation and attention.
+        """
+        atom_is_resolved = self.cropped_atom_array.is_resolved.astype(int)
+        centre_atom_is_resolved = self.centre_atoms.is_resolved.astype(int)
+        atom_in_token_w_resolved_centre_atom = centre_atom_is_resolved[
+            self.atom_to_token_idx
+        ]
+
+        return MaskContext(
+            centre_atom_mask=torch.Tensor(
+                self.cropped_atom_array.centre_atom_mask
+            ).bool(),
+            atom_mask=torch.ones(len(self.cropped_atom_array)).bool(),
+            is_resolved=torch.Tensor(self.cropped_atom_array.is_resolved).bool(),
+            centre_atom_is_resolved=torch.Tensor(centre_atom_is_resolved).bool(),
+            backbone_mask=torch.Tensor(self.backbone_atoms_and_mask[1]).bool(),
+            atom_loss_mask=torch.Tensor(
+                atom_is_resolved * atom_in_token_w_resolved_centre_atom
+            ).bool(),
+            token_mask=torch.ones(len(self.cropped_token_array)).bool(),
+        )
+
+    def get_motif_context(self) -> MotifContext:
+        """Get features for motif training.
+
+        We extract coordinates from the centre atoms to avoid creating heavy
+        N_atom features when this method is called for all-atom models.
+
+        Returns:
+            MotifContext: Motif features for motif scaffolding.
+        """
+        is_motif = self.cropped_atom_array.is_motif
+        is_motif_related = self.cropped_atom_array.is_motif_related
+
+        token_resolved = self.centre_atoms.is_resolved  # [N_token]
+        is_motif_token = self.centre_atoms.is_motif  # [N_token]
+        is_motif_related_token = self.centre_atoms.is_motif_related  # [N_token]
+
+        restype = self.centre_atoms.cano_seq_resname
+        restype_onehot = self.restype_onehot_encoded(restype)
+
+        # TODO: this part is a bit ugly with the reshapes etc.
+        motif_restype = restype_onehot * torch.Tensor(
+            is_motif_related_token * token_resolved
+        ).unsqueeze(-1)  # [N_token, 32]
+
+        motif_coordinate = self.centre_atoms.coord * is_motif_token.reshape(
+            -1, 1
+        )  # [N_token, 3]
+
+        return MotifContext(
+            is_motif=torch.Tensor(is_motif).bool(),
+            is_motif_related=torch.Tensor(is_motif_related).bool(),
+            is_motif_token=torch.Tensor(is_motif_token).bool(),
+            is_motif_related_token=torch.Tensor(is_motif_related_token).bool(),
+            motif_restype=motif_restype.float(),
+            motif_coordinate=torch.Tensor(motif_coordinate).float(),
+        )
+
+    def get_coordinate_context(self) -> CoordinateContext:
+        """Get coordinates features.
+
+        Returns:
+            CoordinateContext: Coordinates features.
+        """
+        return CoordinateContext(
+            coordinate=torch.Tensor(self.cropped_atom_array.coord).float(),
+            centre_coordinate=torch.Tensor(self.centre_atoms.coord),
+            backbone_coordinate=self.backbone_atoms_and_mask[0],
+            resolution=float(self.cropped_atom_array.resolution[0]),
+        )
+
+    def get_basic_context(self) -> BasicContext:
+        """Get basic context information."""
+        return BasicContext(
+            atom_array=self.cropped_atom_array,
+            token_array=self.cropped_token_array,
+            pdb_id=self.pdb_id,
+            bioassembly_dict_fpath=self.bioassembly_dict_fpath,
+            n_asym=len(np.unique(self.centre_atoms.asym_id_int)),
+            n_token=len(self.cropped_token_array),
+            n_atom=len(self.cropped_atom_array),
+        )
+
+    def get_full_context(self) -> FullContext:
+        """Get all context required for design pipeline."""
+        return FullContext(
+            token=self.get_token_context(),
+            reference=self.get_reference_conformer_context(),
+            chain_perm=self.get_chain_perm_context(),
+            atom_perm=self.get_atom_permutation_list(),
+            mask=self.get_mask_context(),
+            motif=self.get_motif_context(),
+            index=self.get_index_context(),
+            entity=self.get_entity_context(),
+            coordinate=self.get_coordinate_context(),
+            basic=self.get_basic_context(),
+        )
+
+    def get_atom_permutation_list(
+        self,
+    ) -> AtomPermContext:
+        """
+        Generate info of permutations.
+
+        Returns:
+            List[List[int]]: a list of atom permutations.
+
+        # TODO: add this back in.
+        """
+        atom_perm_list = []
+        for i in self.cropped_atom_array.res_perm:
+            # Decode list[str] -> list[list[int]]
+            atom_perm_list.append([int(j) for j in i.split("_")])
+
+        # Atoms connected to different residue are fixed.
+        # Bonds array: [[atom_idx_i, atom_idx_j, bond_type]]
+        idx_i = self.cropped_atom_array.bonds._bonds[:, 0]
+        idx_j = self.cropped_atom_array.bonds._bonds[:, 1]
+        diff_mask = (
+            self.cropped_atom_array.ref_space_uid[idx_i]
+            != self.cropped_atom_array.ref_space_uid[idx_j]
+        )
+        inter_residue_bonds = self.cropped_atom_array.bonds._bonds[diff_mask]
+        fixed_atom_mask = np.isin(
+            np.arange(len(self.cropped_atom_array)),
+            np.unique(inter_residue_bonds[:, :2]),
+        )
+
+        # Get fixed atom permutation for each residue.
+        fixed_atom_perm_list = []
+        res_starts = get_residue_starts(
+            self.cropped_atom_array, add_exclusive_stop=True
+        )
+        for r_start, r_stop in zip(res_starts[:-1], res_starts[1:]):
+            atom_res_perm = np.array(
+                atom_perm_list[r_start:r_stop]
+            )  # [N_res_atoms, N_res_perm]
+            res_fixed_atom_mask = fixed_atom_mask[r_start:r_stop]
+
+            if np.sum(res_fixed_atom_mask) == 0:
+                # If all atoms in the residue are not fixed, e.g. ions
+                fixed_atom_perm_list.extend(atom_res_perm.tolist())
+                continue
+
+            # Create a [N_res_atoms, N_res_perm] template of indices
+            n_res_atoms, n_perm = atom_res_perm.shape
+            indices_template = (
+                atom_res_perm[:, 0].reshape(n_res_atoms, 1).repeat(n_perm, axis=1)
+            )
+
+            # Identify the column where the positions of the fixed atoms remain unchanged
+            fixed_atom_perm = atom_res_perm[
+                res_fixed_atom_mask
+            ]  # [N_fixed_res_atoms, N_res_perm]
+            fixed_indices_template = indices_template[
+                res_fixed_atom_mask
+            ]  # [N_fixed_res_atoms, N_res_perm]
+            unchanged_columns_mask = np.all(
+                fixed_atom_perm == fixed_indices_template, axis=0
+            )
+
+            # Remove the columns related to the position changes of fixed atoms.
+            fiedx_atom_res_perm = atom_res_perm[:, unchanged_columns_mask]
+            fixed_atom_perm_list.extend(fiedx_atom_res_perm.tolist())
+        return AtomPermContext(perms=fixed_atom_perm_list)
 
     @staticmethod
     def get_lig_pocket_mask(
@@ -667,6 +559,8 @@ class Featurizer(object):
 
         Returns:
             tuple[torch.Tensor, torch.Tensor]: A tuple of ligand pocket mask and pocket mask.
+
+        # TODO: this is useful, but we need to adapt it to our features.
         """
 
         if isinstance(lig_label_asym_id, str):
@@ -731,451 +625,60 @@ class Featurizer(object):
         ).long()
         return ligand_mask_by_pockets, pocket_mask_by_pockets
 
-    def get_mask_features(self) -> dict[str, torch.Tensor]:
-        """
-        Generate mask features for the cropped atom array.
 
-        Returns:
-            Dict[str, torch.Tensor]: A dictionary containing various mask features.
-        """
-        mask_features = {}
-
-        mask_features["pae_rep_atom_mask"] = torch.Tensor(
-            self.cropped_atom_array.centre_atom_mask
-        ).long()
-
-        mask_features["plddt_m_rep_atom_mask"] = torch.Tensor(
-            self.cropped_atom_array.plddt_m_rep_atom_mask
-        ).long()  # [N_atom]
-
-        # mask_features["distogram_rep_atom_mask"] = torch.Tensor(
-        #     self.cropped_atom_array.distogram_rep_atom_mask
-        # ).long()  # [N_atom]
-
-        mask_features["modified_res_mask"] = torch.Tensor(
-            self.cropped_atom_array.modified_res_mask
-        ).long()
-
-        # Note: commented out for reducing memory load of features
-        # lig_polymer_bonds = get_ligand_polymer_bond_mask(self.cropped_atom_array)
-        # num_atoms = len(self.cropped_atom_array)
-        # bond_mask_mat = np.zeros((num_atoms, num_atoms))
-        # for i, j, _ in lig_polymer_bonds:
-        #     bond_mask_mat[i, j] = 1
-        #     bond_mask_mat[j, i] = 1
-        # mask_features["bond_mask"] = torch.Tensor(
-        #     bond_mask_mat
-        # ).long()  # [N_atom, N_atom]
-
-        # Add token and atom masks for padding
-        mask_features["token_mask"] = torch.ones(len(self.cropped_token_array)).long()
-        mask_features["atom_mask"] = torch.ones(len(self.cropped_atom_array)).long()
-        return mask_features
-
-    def get_token_dist_mat(self, token_indices_in_ref: np.ndarray) -> np.ndarray:
-        """
-        Get the distance matrix of the tokens in the reference chain.
-
-        Args:
-            token_indices_in_ref (np.ndarray): The indices of the tokens in the reference chain.
-                (num_tokens_in_ref_chain,)
-
-        Returns:
-            numpy.ndarray: The distance matrix of the tokens in the reference chain,
-                           shape=(len(tokens_in_ref_chain), len(tokens)).
-        """
-        centre_atom_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
-        centre_atoms = self.cropped_atom_array[centre_atom_indices]
-
-        partial_token_dist_matrix = cdist(
-            centre_atoms[token_indices_in_ref].coord,
-            centre_atoms.coord,
-            "euclidean",
-        )
-
-        return partial_token_dist_matrix
-
-    def get_target_features(
-        self, hotspot_cutoff: float = 5.0
-    ) -> dict[str, torch.Tensor]:
-        """
-        Get target-specific features for training.
-        Adds the target_centre_coordinate, target_restype, and is_target_token features.
-
-        Args:
-            hotspot_cutoff (float):
-        Returns:
-            Dict[str, torch.Tensor]: A dictionary containing target features.
-        """
-        target_features = {}
-
-        centre_atom_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
-        centre_atoms = self.cropped_atom_array[centre_atom_indices]
-        centre_atoms.is_hotspot = np.zeros_like(
-            centre_atoms.is_target
-        )  # dummy is_hotspot feature
-
-        is_target_token = self.cropped_atom_array.is_target[
-            centre_atom_indices
-        ]  # [N_token]
-        token_resolved = self.cropped_atom_array.is_resolved[centre_atom_indices]
-
-        # Centre atom coordinates of the target
-        target_features["target_centre_coordinate"] = torch.Tensor(
-            centre_atoms.coord * is_target_token.reshape(-1, 1)
-        )  # [N_token, 3]
-
-        # Restypes of the target
-        # [N_token, 32] one-hot encoded residue types
-        restype = centre_atoms.cano_seq_resname
-        restype_onehot = self.restype_onehot_encoded(restype)
-        target_features["target_restype"] = restype_onehot * torch.Tensor(
-            is_target_token * token_resolved
-        ).unsqueeze(-1)
-
-        # TODO: completely butchering this for now
-        # ### Hotspot feature for target training
-        # # [N_token] binary indicator for hotspot residues
-        # # 1. Distance matrix in the crop
-        # target_distance = self.get_token_dist_mat(centre_atoms.is_target)
-        # # [n_target_tokens, n_all_tokens]
-
-        # # 2. Distance is valid mask
-        # target_resolved = centre_atoms.is_resolved[centre_atoms.is_target]
-        # target_dist_mask = target_resolved[:, None] * token_resolved[None, :]
-        # # [n_target_tokens, n_all_tokens]
-
-        # # 3. If distance is less than cutoff (e.g. 5 Angstroms) -> interface
-        # mask_distance = target_distance < hotspot_cutoff
-
-        # # 4. Find the hotspots in the crop
-        # mask_diff_from_target = target_resolved[:, None] * (
-        #     1 - is_target_token[None, :]
-        # )
-        # mask = mask_distance * target_dist_mask * mask_diff_from_target
-        # mask_interface = np.sum(mask, axis=-1)
-        # mask_interface = mask_interface > 0.0
-
-        # # Randomly pick between 0 and 5 hotspots
-        # interface_indices = np.where(mask_interface)[0]
-        # if len(interface_indices) > 0:
-        #     num_hotspots = np.random.randint(0, min(6, len(interface_indices) + 1))
-        #     if num_hotspots > 0:
-        #         selected_hotspots = np.random.choice(
-        #             interface_indices, size=num_hotspots, replace=False
-        #         )
-        #         centre_atoms.is_hotspot[selected_hotspots] = 1.0
-
-        target_features["is_target_token"] = torch.Tensor(
-            is_target_token * token_resolved
-        ).long()  # [N_token]
-
-        # TODO: temp solution: just setting straight to zeros
-        # target_features["is_hotspot"] = torch.Tensor(centre_atoms.is_hotspot).long()
-        target_features["is_hotspot"] = torch.zeros(len(centre_atoms)).long()
-
-        return target_features
-
-    def get_mpnn_features(self):
-        """
-        Features for MPNN sequence design.
-        """
-        mpnn_features = {}
-
-        # Centre coordinates
-        centre_atom_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
-        centre_atoms = self.cropped_atom_array[centre_atom_indices]
-
-        # Backbone mask and centre atom mask for biomolecules
-        backbone_coords, backbone_mask = Featurizer.get_backbone_atoms_tensor(
-            token_array=self.cropped_token_array, atom_array=self.cropped_atom_array
-        )
-
-        mpnn_features.update(
-            {
-                "mpnn_centre_coordinate": torch.Tensor(centre_atoms.coord),
-                "mpnn_centre_atom_mask": torch.Tensor(centre_atoms.is_resolved),
-                "mpnn_backbone_coords": backbone_coords,
-                "mpnn_backbone_mask": backbone_mask,
-            }
-        )
-
-        return mpnn_features
-
-    def get_motif_features(self):
-        """
-        Features for motif training.
-        We extract coordinates from the centre atoms to avoid creating heavy N_atom features when this
-        method is called for all-atom models.
-        """
-        motif_features = {}
-
-        # Atom features
-        is_motif = self.cropped_atom_array.is_motif
-        is_motif_related = self.cropped_atom_array.is_motif_related
-
-        # Token features
-        centre_atom_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
-        centre_atoms = self.cropped_atom_array[centre_atom_indices]
-
-        token_resolved = centre_atoms.is_resolved  # [N_token]
-        is_motif_token = centre_atoms.is_motif  # [N_token]
-        is_motif_related_token = centre_atoms.is_motif_related  # [N_token]
-
-        restype = centre_atoms.cano_seq_resname
-        restype_onehot = self.restype_onehot_encoded(restype)
-        motif_restype = restype_onehot * torch.Tensor(
-            is_motif_related_token * token_resolved
-        ).unsqueeze(-1)  # [N_token, 32]
-
-        motif_coordinate = centre_atoms.coord * is_motif_token.reshape(
-            -1, 1
-        )  # [N_token, 3]
-
-        motif_features.update(
-            {
-                "is_motif": torch.Tensor(is_motif).long(),
-                "is_motif_related": torch.Tensor(is_motif_related).long(),
-                "is_motif_token": torch.Tensor(is_motif_token).long(),
-                "is_motif_related_token": torch.Tensor(is_motif_related_token).long(),
-                "motif_restype": torch.Tensor(motif_restype),
-                "motif_coordinate": torch.Tensor(motif_coordinate),
-            }
-        )
-
-        return motif_features
-
-    def get_all_input_features(self):
-        """
-        Get input features from cropped data.
-
-        Returns:
-            Dict[str, torch.Tensor]: a dict of features.
-        """
-        features = {}
-        token_features = self.get_token_features()
-        features.update(token_features)
-
-        # bond_features = self.get_bond_features()
-        # features.update(bond_features)
-
-        reference_features = self.get_reference_features()
-        features.update(reference_features)
-
-        extra_features = self.get_extra_features()
-        features.update(extra_features)
-
-        chain_perm_features = self.get_chain_perm_features()
-        features.update(chain_perm_features)
-
-        mask_features = self.get_mask_features()
-        features.update(mask_features)
-
-        target_features = self.get_target_features()
-        features.update(target_features)
-
-        mpnn_features = self.get_mpnn_features()
-        features.update(mpnn_features)
-
-        motif_features = self.get_motif_features()
-        features.update(motif_features)
-
-        return features
-
-    def get_dense_atoms_to_flat_atoms_mask(self) -> torch.Tensor:
-        """
-        Get a per-token mask that is used to convert a dense atom representation
-        from the network to a flat atom representation.
-        """
-        # Initialize the mask
-        num_tokens = len(self.cropped_token_array)
-        dense_to_flat = np.zeros((num_tokens, DENSE_ATOM_NUM), dtype=int)
-
-        # Fill in the mask based on number of atoms in the token
-        for i, token in enumerate(self.cropped_token_array):
-            dense_to_flat[i, : len(token)] = 1
-
-        return torch.Tensor(dense_to_flat).long()
-
-    def get_labels(self) -> dict[str, torch.Tensor]:
-        """
-        Get the input labels required for the training phase.
-
-        Returns:
-            Dict[str, torch.Tensor]: a dict of labels.
-
-        Raises:
-            ValueError: If any of the label tensors contain NaN values.
-        """
-        labels = {}
-
-        # Check coordinates
-        labels["coordinate"] = torch.Tensor(
-            self.cropped_atom_array.coord
-        )  # [N_atom, 3]
-
-        # Check coordinate mask
-        labels["coordinate_mask"] = torch.Tensor(
-            self.cropped_atom_array.is_resolved.astype(int)
-        ).long()  # [N_atom]
-
-        # Find centre atom indices
-        centre_atoms_indices = self.cropped_token_array.get_annotation(
-            "centre_atom_index"
-        )
-
-        # Does centre atom exist?
-        labels["has_centre_atom"] = torch.Tensor(
-            self.cropped_atom_array.is_resolved[centre_atoms_indices].astype(int)
-        ).long()  # [N_token]
-
-        # Get centre coordinates
-        labels["centre_coordinate"] = torch.Tensor(
-            self.cropped_atom_array.coord[centre_atoms_indices]
-        )  # [N_token, 3]
-
-        # Dense to flat atom mask
-        num_tokens = len(self.cropped_token_array)
-        dense_to_flat = np.zeros((num_tokens, DENSE_ATOM_NUM), dtype=int)
-
-        for i, token in enumerate(self.cropped_token_array):
-            dense_to_flat[i, : len(token)] = 1
-        labels["dense_to_flat_atom_mask"] = torch.Tensor(dense_to_flat).long()
-
-        # Add loss masks
-        atom_to_token_idx = self._get_atom_to_token_idx()  # [N_atom]
-        labels["atom_loss_mask"] = (
-            labels["coordinate_mask"] * labels["has_centre_atom"][atom_to_token_idx]
-        )  # [N_atom]
-        labels["token_loss_mask"] = labels["has_centre_atom"]  # [N_token]
-
-        return labels
-
-    def get_atom_permutation_list(
-        self,
-    ) -> list[list[int]]:
-        """
-        Generate info of permutations.
-
-        Returns:
-            List[List[int]]: a list of atom permutations.
-        """
-        atom_perm_list = []
-        for i in self.cropped_atom_array.res_perm:
-            # Decode list[str] -> list[list[int]]
-            atom_perm_list.append([int(j) for j in i.split("_")])
-
-        # Atoms connected to different residue are fixed.
-        # Bonds array: [[atom_idx_i, atom_idx_j, bond_type]]
-        idx_i = self.cropped_atom_array.bonds._bonds[:, 0]
-        idx_j = self.cropped_atom_array.bonds._bonds[:, 1]
-        diff_mask = (
-            self.cropped_atom_array.ref_space_uid[idx_i]
-            != self.cropped_atom_array.ref_space_uid[idx_j]
-        )
-        inter_residue_bonds = self.cropped_atom_array.bonds._bonds[diff_mask]
-        fixed_atom_mask = np.isin(
-            np.arange(len(self.cropped_atom_array)),
-            np.unique(inter_residue_bonds[:, :2]),
-        )
-
-        # Get fixed atom permutation for each residue.
-        fixed_atom_perm_list = []
-        res_starts = get_residue_starts(
-            self.cropped_atom_array, add_exclusive_stop=True
-        )
-        for r_start, r_stop in zip(res_starts[:-1], res_starts[1:]):
-            atom_res_perm = np.array(
-                atom_perm_list[r_start:r_stop]
-            )  # [N_res_atoms, N_res_perm]
-            res_fixed_atom_mask = fixed_atom_mask[r_start:r_stop]
-
-            if np.sum(res_fixed_atom_mask) == 0:
-                # If all atoms in the residue are not fixed, e.g. ions
-                fixed_atom_perm_list.extend(atom_res_perm.tolist())
-                continue
-
-            # Create a [N_res_atoms, N_res_perm] template of indices
-            n_res_atoms, n_perm = atom_res_perm.shape
-            indices_template = (
-                atom_res_perm[:, 0].reshape(n_res_atoms, 1).repeat(n_perm, axis=1)
+def _extract_backbone_atoms(
+    token_array: TokenArray,
+    atom_array: AtomArray,
+    centre_atoms: AtomArray,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Extract backbone atom coordinates and masks for all tokens.
+
+    Args:
+        token_array: TokenArray with atom_indices and atom_names annotations
+        atom_array: Full AtomArray with coordinates and is_resolved
+        centre_atoms: Centre atoms for each token
+
+    Returns:
+        backbone_coords: Backbone atom coordinates [n_token, 5, 3]
+        backbone_mask: Mask indicating valid backbone atoms [n_token, 5]
+    # NOTE: out of sight, out of mind.
+    """
+    n_tokens = len(token_array)
+    backbone_coords = np.zeros((n_tokens, 5, 3), dtype=np.float32)
+    backbone_mask = np.zeros((n_tokens, 5), dtype=np.float32)
+
+    for token_idx, token in enumerate(token_array):
+        centre_atom = centre_atoms[token_idx]
+        mol_type = centre_atom.mol_type
+        is_standard = centre_atom.res_name in STD_RESIDUES
+
+        # Ligands or non-standard residues: use centre atom only
+        if centre_atom.is_resolved and (mol_type == "ligand" or not is_standard):
+            backbone_coords[token_idx, 0] = centre_atom.coord
+            backbone_mask[token_idx, 0] = 1.0
+            continue
+
+        # Standard protein or nucleic acid
+        backbone_names = BACKBONE_DEFS[mol_type]
+        atom_name_map = {name: idx for idx, name in enumerate(token.atom_names)}
+        atom_coords = {}
+
+        # Extract backbone atoms
+        for bb_idx, atom_name in enumerate(backbone_names):
+            if atom_name in atom_name_map:
+                local_idx = atom_name_map[atom_name]
+                global_idx = token.atom_indices[local_idx]
+                atom = atom_array[global_idx]
+                backbone_coords[token_idx, bb_idx] = atom.coord
+                backbone_mask[token_idx, bb_idx] = atom.is_resolved.astype(int)
+                atom_coords[atom_name] = atom.coord
+
+        # Compute virtual Cβ for proteins
+        if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):
+            cb_coord = compute_virtual_cb(
+                atom_coords["N"], atom_coords["CA"], atom_coords["C"]
             )
+            backbone_coords[token_idx, 4] = cb_coord
+            backbone_mask[token_idx, 4] = 1.0
 
-            # Identify the column where the positions of the fixed atoms remain unchanged
-            fixed_atom_perm = atom_res_perm[
-                res_fixed_atom_mask
-            ]  # [N_fixed_res_atoms, N_res_perm]
-            fixed_indices_template = indices_template[
-                res_fixed_atom_mask
-            ]  # [N_fixed_res_atoms, N_res_perm]
-            unchanged_columns_mask = np.all(
-                fixed_atom_perm == fixed_indices_template, axis=0
-            )
-
-            # Remove the columns related to the position changes of fixed atoms.
-            fiedx_atom_res_perm = atom_res_perm[:, unchanged_columns_mask]
-            fixed_atom_perm_list.extend(fiedx_atom_res_perm.tolist())
-        return fixed_atom_perm_list
-
-    @staticmethod
-    def get_gt_full_complex_features(
-        atom_array: AtomArray,
-        cropped_atom_array: AtomArray = None,
-        get_cropped_asym_only: bool = True,
-    ) -> dict[str, torch.Tensor]:
-        """Get full ground truth complex features.
-        It is used for multi-chain permutation alignment.
-
-        Args:
-            atom_array (AtomArray): all atoms in the complex.
-            cropped_atom_array (AtomArray, optional): cropped atoms. Defaults to None.
-            get_cropped_asym_only (bool, optional): Defaults to True.
-                - If true, a chain is returned only if its asym_id (mol_id) appears in the
-                cropped_atom_array. It should be a favored setting for the spatial cropping.
-                - If false, a chain is returned if its entity_id (entity_mol_id) appears in
-                the cropped_atom_array.
-
-        Returns:
-            Dict[str, torch.Tensor]: a dictionary containing
-                coordinate, coordinate_mask, etc.
-        """
-        gt_features = {}
-
-        if cropped_atom_array is not None:
-            # Get the cropped part of gt entities
-            entity_atom_set = set(
-                zip(
-                    cropped_atom_array.entity_mol_id,
-                    cropped_atom_array.mol_atom_index,
-                )
-            )
-            mask = [
-                (entity, atom) in entity_atom_set
-                for (entity, atom) in zip(
-                    atom_array.entity_mol_id, atom_array.mol_atom_index
-                )
-            ]
-
-            if get_cropped_asym_only:
-                # Restrict to asym chains appeared in cropped_atom_array
-                asyms = np.unique(cropped_atom_array.mol_id)
-                mask = mask * np.isin(atom_array.mol_id, asyms)
-            atom_array = atom_array[mask]
-
-        gt_features["coordinate"] = torch.Tensor(atom_array.coord)
-        gt_features["coordinate_mask"] = torch.Tensor(atom_array.is_resolved).long()
-        gt_features["entity_mol_id"] = torch.Tensor(atom_array.entity_mol_id).long()
-        gt_features["mol_id"] = torch.Tensor(atom_array.mol_id).long()
-        gt_features["mol_atom_index"] = torch.Tensor(atom_array.mol_atom_index).long()
-        gt_features["pae_rep_atom_mask"] = torch.Tensor(
-            atom_array.centre_atom_mask
-        ).long()
-        return gt_features, atom_array
+    return torch.Tensor(backbone_coords), torch.Tensor(backbone_mask)

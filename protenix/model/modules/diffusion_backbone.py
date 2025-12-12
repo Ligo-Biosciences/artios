@@ -2,11 +2,22 @@
 TODO: this filename should eventually just be called diffusion.py I think.
 """
 
-from typing import Optional, Union
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+from einops import rearrange, repeat
+from jaxtyping import Float
+from torch import Tensor
 
+from protenix.data.features import FullContext
+from protenix.model.generator import (
+    Deterministic,
+    FlowMatchingSampler,
+    InferenceTimestepScheduler,
+    StochasticitySchedule,
+    VelocityScorePredictor,
+)
 from protenix.model.modules.components import Transition
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
@@ -15,9 +26,9 @@ from protenix.model.utils import (
     average_atom_to_token,
     broadcast_token_to_atom,
     centre_random_augmentation,
-    expand_at_dim,
     one_hot,
 )
+from protenix.utils.typing import typecheck
 
 
 class DiffusionConditioning(nn.Module):
@@ -31,9 +42,6 @@ class DiffusionConditioning(nn.Module):
         c_z: int = 128,
         c_s: int = 384,
         c_timestep_embedding: int = 256,
-        target_dist_min: float = 1.0,
-        target_dist_max: float = 30.0,
-        target_dist_bin_size: float = 0.5,
         motif_dist_min: float = 1.0,
         motif_dist_max: float = 15.0,
         motif_dist_bin_size: float = 0.25,
@@ -44,10 +52,6 @@ class DiffusionConditioning(nn.Module):
             c_z (int, optional): hidden dim [for pair embedding].
             c_s (int, optional):  hidden dim [for single embedding].
             c_timestep_embedding (int, optional): timestep embedding dim.
-            target_dist_min (float, optional): minimum distance for target pair distance binning. Defaults to 1.0.
-            target_dist_max (float, optional): maximum distance for target pair distance binning. Defaults to 30.0.
-            target_dist_bin_size (float, optional): bin size for target pair distance binning. Defaults to 0.5.
-            # TODO: halved the target distance configs for now. Give a think if sensible.
             motif_dist_min (float, optional): minimum distance for motif pair distance binning. Defaults to 1.0.
             motif_dist_max (float, optional): maximum distance for motif pair distance binning. Defaults to 15.0.
             motif_dist_bin_size (float, optional): bin size for motif pair distance binning. Defaults to 0.25.
@@ -123,8 +127,8 @@ class DiffusionConditioning(nn.Module):
             "is_ligand_token": 1,
             "is_dna_token": 1,
             "is_rna_token": 1,
-            "is_target_token": 1,
-            "is_hotspot": 1,
+        }
+        self.motif_entity_features = {
             "is_motif_token": 1,
             "is_motif_related_token": 1,
         }
@@ -133,34 +137,10 @@ class DiffusionConditioning(nn.Module):
             out_features=self.c_s,
             init="lecun",
         )
-
-        ### Target features
-        # Target distance binning parameters
-        self.target_dist_min = target_dist_min
-        self.target_dist_max = target_dist_max
-        self.target_dist_bin_size = target_dist_bin_size
-        self.n_target_dist_bins = int(
-            (target_dist_max - target_dist_min) / target_dist_bin_size
-        )
-
-        # Initialize distance bins as parameters during initialization
-        # TODO: soft-binning with different parameters can work better here
-        # TODO: we likely need displacements and finer distances such as 1 / (1 + d**2)
-        target_lower_bins = torch.arange(
-            target_dist_min, target_dist_max, target_dist_bin_size
-        )
-        target_upper_bins = torch.cat(
-            [target_lower_bins[1:], target_lower_bins.new_tensor([1e6])], dim=-1
-        )
-        self.target_lower_bins = nn.Parameter(target_lower_bins, requires_grad=False)
-        self.target_upper_bins = nn.Parameter(target_upper_bins, requires_grad=False)
-        self.num_bins = len(target_lower_bins)
-
-        # Target feature embeddings
-        self.embed_target_restype = LinearNoBias(32, self.c_s, init="normal")
-        self.embed_target_coord = LinearNoBias(3, self.c_s, init="lecun")
-        self.embed_target_pair_dist = LinearNoBias(
-            self.n_target_dist_bins, self.c_z, init="normal"
+        self.motif_entity_type_embed = LinearNoBias(
+            in_features=sum(self.motif_entity_features.values()),
+            out_features=self.c_s,
+            init="lecun",
         )
 
         ### Transitions
@@ -169,41 +149,41 @@ class DiffusionConditioning(nn.Module):
         self.transition_s2 = Transition(c_in=self.c_s, n=2)
 
     # @torch.compiler.disable
+    @typecheck
     def get_atom_condition(
         self,
-        input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
-    ) -> torch.Tensor:
+        context: FullContext,
+    ) -> Tuple[
+        Float[Tensor, "... n_token c_s"], Float[Tensor, "... n_token n_token c_z"]
+    ]:
         """Generate token level single and pair conditioning on the tokens that
         are atoms. This is the ligand and motif atoms only.
 
         Args:
-            input_feature_dict: Input feature dictionary.
-            inplace_safe: Whether it is safe to use inplace operations
+            context: Full context containing all features and labels.
 
         Returns:
-            torch.Tensor: Initial single and pair embedding with atom level conditioning
-                 * [..., n_token, c_s]
-                 * [..., n_token, n_token, c_z]
+            Tuple of single and pair embeddings with atom level conditioning:
+                - c_s: [..., n_token, c_s]
+                - z: [..., n_token, n_token, c_z]
         """
-        atom_to_token_idx = input_feature_dict["atom_to_token_idx"]
-        atom_mask = input_feature_dict["atom_mask"]
-        n_token = input_feature_dict["residue_index"].shape[-1]
-        n_atom = input_feature_dict["ref_pos"].shape[-2]
-        batch_shape = input_feature_dict["ref_pos"].shape[:-2]
+        atom_to_token_idx = context.index.atom_to_token_idx
+        atom_mask = context.mask.atom_mask
+        n_token = context.token.residue_index.shape[-1]
+        n_atom = context.reference.ref_pos.shape[-2]
+        batch_shape = context.reference.ref_pos.shape[:-2]
 
-        is_ligand = input_feature_dict["is_ligand"]
+        is_ligand = context.entity.is_ligand  # [..., n_atom]
 
-        is_motif_related = input_feature_dict["is_motif_related"]  # [..., N_atom]
+        is_motif_related = context.motif.is_motif_related  # [..., n_atom]
 
         ### Create atom pair conditioning
         # 1. Get token-wise atom reference positions
         # [..., N_atom, 3]
-        is_atom = (
-            (is_ligand | is_motif_related).bool().unsqueeze(-1)
-        )  # [..., n_atom, 1]
-        ref_pos = (
-            input_feature_dict["ref_pos"] * is_atom
-        )  # (zero out that are non-atomized)
+        is_atom = rearrange(
+            (is_ligand | is_motif_related), "... n_atom -> ... n_atom 1"
+        )
+        ref_pos = context.reference.ref_pos * is_atom
 
         # 2. Aggregate per-atom reference positions to per-token reference positions
         # [..., N_atom, 3] -> [..., N_token, 3]
@@ -216,7 +196,7 @@ class DiffusionConditioning(nn.Module):
 
         # Compute v_lm mask
         token_ref_space_uid = average_atom_to_token(
-            x_atom=input_feature_dict["ref_space_uid"].unsqueeze(-1),
+            x_atom=context.reference.ref_space_uid.float().unsqueeze(-1),
             atom_to_token_idx=atom_to_token_idx,
             atom_mask=atom_mask,
             n_token=n_token,
@@ -250,7 +230,7 @@ class DiffusionConditioning(nn.Module):
             self.atom_condition_embed(
                 torch.cat(
                     [
-                        input_feature_dict[name]
+                        getattr(context.reference, name)
                         .reshape(*batch_shape, n_atom, self.atom_input_feature[name])
                         .to(d_lm.dtype)
                         for name in self.atom_input_feature
@@ -272,29 +252,30 @@ class DiffusionConditioning(nn.Module):
 
         return c_s, z
 
+    @typecheck
     def get_motif_condition(
         self,
-        input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        context: FullContext,
+    ) -> Tuple[
+        Float[Tensor, "... n_token c_s"], Float[Tensor, "... n_token n_token c_z"]
+    ]:
         """Generate motif conditioning embeddings.
 
         Args:
-            input_feature_dict: Input feature dictionary containing motif data
+            context: Full context containing all features and labels.
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor]: Motif single and pair embeddings
-                - s_motif (torch.Tensor): [..., N_token, c_s]
-                - z_motif (torch.Tensor): [..., N_token, N_token, c_z]
+            Tuple of motif single (s_motif) and pair (z_motif) embeddings
         """
-        is_motif_token = input_feature_dict["is_motif_token"]  # [..., N_token]
-        motif_coord = input_feature_dict["motif_coordinate"]  # [..., N_token, 3]
-        motif_restype = input_feature_dict["motif_restype"]  # [..., N_token, 32]
+        is_motif_token = context.motif.is_motif_token  # [..., N_token]
+        motif_coord = context.motif.motif_coordinate  # [..., N_token, 3]
+        motif_restype = context.motif.motif_restype  # [..., N_token, 32]
 
         # Augment motif coordinates
         motif_coord_augment = centre_random_augmentation(
             motif_coord,
             mask=is_motif_token,
-            N_sample=1,
+            n_sample=1,
             s_trans=1.0,  # TODO: increase s_trans?
         ).squeeze(-3)  # [..., N_token, 3]
 
@@ -325,117 +306,42 @@ class DiffusionConditioning(nn.Module):
 
         return s_motif, z_motif
 
-    # @torch.compiler.disable
-    def get_target_condition(
-        self,
-        input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Generate target embeddings from target features.
-
-        Args:
-            input_feature_dict: Input feature dictionary containing target data
-            N_sample (int): number of samples for target coordinate augmentation
-            inplace_safe (bool): Whether it is safe to use inplace operations
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: Target single and pair embeddings
-                - s_target (torch.Tensor): [..., N_token, c_s]
-                - z_target (torch.Tensor): [..., N_token, N_token, c_z]
-        """
-        target_coord = input_feature_dict[
-            "target_centre_coordinate"
-        ]  # [..., N_token, 3]
-        target_restype = input_feature_dict["target_restype"]  # [..., N_token, 32]
-        is_target_token = input_feature_dict["is_target_token"]  # [..., N_token]
-
-        # Augment the coordinates
-        target_coord_augment = centre_random_augmentation(
-            target_coord, mask=is_target_token, N_sample=1, s_trans=1.0
-        ).squeeze(-3)  # [..., N_token, c_s]
-
-        # 1. Target restype embedding (single embedding)
-        s_target_restype = self.embed_target_restype(
-            target_restype
-        )  # [..., N_token, c_s]
-
-        # 2. Target center coordinate embedding (single embedding)
-        s_target_coord = self.embed_target_coord(
-            target_coord_augment / self.sigma_coord
-        )  # [..., N_token, c_s]
-        s_target = s_target_restype + s_target_coord
-
-        # 3. Target pair distance embedding (pair embedding)
-        # Compute pairwise distances between target center coordinates
-        pair_dists = torch.norm(
-            target_coord_augment[..., None, :, :]
-            - target_coord_augment[..., :, None, :],
-            dim=-1,
-        )  # [..., N_token, N_token]
-
-        # One-hot encode distances
-        pair_dist_onehot = one_hot(
-            pair_dists,
-            self.target_lower_bins,
-            self.target_upper_bins,
-        )  # [..., N_token, N_token, n_bins]
-
-        # Embed one-hot distances
-        z_target = self.embed_target_pair_dist(
-            pair_dist_onehot
-        )  # [..., N_token, N_token, c_z]
-
-        # Mask pair embeddings for target tokens only
-        target_mask_pair = (
-            is_target_token[..., None, :] * is_target_token[..., :, None]
-        )  # [..., N_token, N_token, 1]
-        z_target = (
-            z_target * target_mask_pair[..., None]
-        )  # [..., N_token, N_token, c_z]
-        s_target = s_target * is_target_token[..., None]  # [..., N_token, c_s]
-
-        return s_target, z_target
-
     # @torch.compile
+    @typecheck
     def forward(
         self,
-        r_noisy: torch.Tensor,
-        timestep: torch.Tensor,
-        input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
+        r_noisy: Float[Tensor, "... n_sample n_atom 3"],
+        timestep: Float[Tensor, "... n_sample"],
+        context: FullContext,
         inplace_safe: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[
+        Float[Tensor, "... n_sample n_token c_s"],
+        Float[Tensor, "... n_token n_token c_z"],
+    ]:
         """
         Args:
-            r_noisy (torch.Tensor): noisy coordinates
-                [..., N_sample, N_atom, 3]
-            timestep (torch.Tensor): the noising timestep
-                [..., N_sample]
-            input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input meta feature dict
-            inplace_safe (bool): Whether it is safe to use inplace operations.
+            r_noisy: Noisy coordinates
+            timestep: Noising timestep
+            context: Full context containing all features and labels.
+            inplace_safe: Whether it is safe to use inplace operations.
+
         Returns:
-            tuple[torch.Tensor, torch.Tensor]: embeddings s and z
-                - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
-                - z (torch.Tensor): [..., N_tokens, N_tokens, c_z]
+            Tuple of single (s) and pair (z) embeddings
         """
-        assert (
-            timestep.shape[-1] == r_noisy.shape[-3]
-        ), f"Got timestep shape {timestep.shape} and r_noisy {r_noisy.shape}"
         dtype = r_noisy.dtype
 
         # Grab data on inputs
-        n_token = input_feature_dict["residue_index"].shape[-1]
+        n_token = context.token.residue_index.shape[-1]
 
         # Initialize pair embedding with atom level (motif + ligand) conformer features
-        s_atom, z_atom = self.get_atom_condition(input_feature_dict)
+        s_atom, z_atom = self.get_atom_condition(context)
 
         # Motif features
-        s_motif, z_motif = self.get_motif_condition(input_feature_dict)
-
-        # Target features
-        s_target, z_target = self.get_target_condition(input_feature_dict)
+        s_motif, z_motif = self.get_motif_condition(context)
 
         # Add single and pair embeddings
-        s = s_target + s_atom + s_motif
-        z = z_target + z_atom + z_motif
+        s = s_atom + s_motif
+        z = z_atom + z_motif
 
         # Add token bonds to pair embedding
         # z = z + self.token_bonds_embed(
@@ -445,11 +351,11 @@ class DiffusionConditioning(nn.Module):
         ### Relative position encodings
         # Concatenate z_init with relative position encoding and embed (Line 1)
         relpos_embed = self.relpos(
-            asym_id=input_feature_dict["asym_id"],
-            residue_index=input_feature_dict["residue_index"],
-            entity_id=input_feature_dict["entity_id"],
-            sym_id=input_feature_dict["sym_id"],
-            token_index=input_feature_dict["token_index"],
+            asym_id=context.token.asym_id,
+            residue_index=context.token.residue_index,
+            entity_id=context.token.entity_id,
+            sym_id=context.token.sym_id,
+            token_index=context.token.token_index,
         )
         z = torch.cat(
             tensors=[z, relpos_embed],
@@ -468,28 +374,41 @@ class DiffusionConditioning(nn.Module):
         ).to(z.dtype)  # [..., N_sample, c_noise_embedding]
 
         # 2. Normalise and embed both timesteps
-        s = s.unsqueeze(-3)
-        s = s + expand_at_dim(
+        s = rearrange(s, "... n c -> ... 1 n c")
+        s = s + repeat(
             self.linear_t(self.layernorm_t(timestep_embed)),
-            dim=-2,
+            "... s c -> ... s n c",
             n=n_token,
-        )  # [..., N_sample, N_token, c_s]
+        )
 
-        # Embed entity type and target using the is_X_token features
+        # Embed entity type
         s_entity_type = self.entity_type_embed(
             torch.stack(
-                [input_feature_dict[name].to(dtype) for name in self.entity_features],
+                [
+                    getattr(context.entity, name).to(dtype)
+                    for name in self.entity_features
+                ],
                 dim=-1,
             )
         )  # [..., N_token, c_s]
-        s = s + s_entity_type.unsqueeze(-3)
+
+        # Embed motif entity type
+        s_entity_type = s_entity_type + self.motif_entity_type_embed(
+            torch.stack(
+                [
+                    getattr(context.motif, name).to(dtype)
+                    for name in self.motif_entity_features
+                ],
+                dim=-1,
+            )
+        )  # [..., N_token, c_s]
+
+        s = s + rearrange(s_entity_type, "... n c -> ... 1 n c")
 
         ### Transition for both single and pair embeddings
-        # Send single embedding through two transitions
         s = s + self.transition_s1(s)
         s = s + self.transition_s2(s)
 
-        # Send pair embedding through one transition
         z = z + self.transition_z(z)
 
         return s, z
@@ -535,7 +454,7 @@ class DiffusionModule(nn.Module):
         self.c_s = c_s
         self.c_z = c_z
 
-        self.atom_input_feature = {
+        self.atom_input_feature = {  # TODO: how could we better handle - dataclass?
             "ref_charge": 1,
             "ref_element": 128,
             "ref_atom_name_chars": 4 * 64,
@@ -545,11 +464,7 @@ class DiffusionModule(nn.Module):
         self.blocks_per_ckpt = blocks_per_ckpt
         self.use_fine_grained_checkpoint = use_fine_grained_checkpoint
 
-        # Coordinate embedding layer
-        self.linear_no_bias_r_embed = LinearNoBias(
-            3,
-            c_token,  # init="lecun"
-        )
+        self.linear_no_bias_r_embed = LinearNoBias(3, c_token)
 
         self.diffusion_conditioning = DiffusionConditioning(
             sigma_coord=sigma_coord,
@@ -557,7 +472,6 @@ class DiffusionModule(nn.Module):
             c_s=c_s,
         )
 
-        # Alg20: line4
         self.layernorm_s = LayerNorm(c_s)
         self.linear_no_bias_s = LinearNoBias(
             in_features=c_s, out_features=c_token, init="zeros"
@@ -581,56 +495,149 @@ class DiffusionModule(nn.Module):
         self.readout_layernorm = LayerNorm(c_atom)
         self.readout_linear = LinearNoBias(c_atom, 3, init="zeros")
 
-    def readout(self, q_atom: torch.Tensor):
-        """Readout layer."""
+    @typecheck
+    def readout(
+        self, q_atom: Float[Tensor, "... n_sample n_atom c_atom"]
+    ) -> Float[Tensor, "... n_sample n_atom 3"]:
+        """Readout layer.
+
+        Args:
+            q_atom: Atom features
+
+        Returns:
+            Predicted atom coordinates
+        """
         q_atom = q_atom + self.readout_transition(q_atom)
         return self.readout_linear(self.readout_layernorm(q_atom))
 
-    def f_forward(
+    def as_predictor(
         self,
-        r_noisy: torch.Tensor,
-        timestep: torch.Tensor,
-        input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
+        context: FullContext,
         inplace_safe: bool = False,
-    ) -> torch.Tensor:
-        """
-        The raw network to be trained.
-        This is v_theta(x_t, t)
-        Here, c_noise(sigma) is computed in Conditioning module.
+        eps: float = 1e-5,
+    ) -> VelocityScorePredictor:
+        """Create a VelocityScorePredictor bound to this module and context.
 
         Args:
-            r_noisy (torch.Tensor): scaled noisy coordinates (i.e., c_in * x)
-                [..., N_sample, N_token, 3]
-            timestep (torch.Tensor): the noising timestep
-                [..., N_sample]
-            input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): input feature dictionary
-            inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
+            context: Full feature context to use for predictions.
+            inplace_safe: Whether to use inplace operations safely.
+            eps: Small constant for numerical stability.
 
         Returns:
-            torch.Tensor: Network output. This will either be velocity prediction or denoising coord prediction,
-                depending on network parameterisation.
-                [..., N_sample, N_token, 3]
+            A callable satisfying VelocityScorePredictor protocol.
+        """
+
+        def predictor(
+            x_noisy: Float[Tensor, "... n_atom 3"],
+            timestep: Float[Tensor, "..."],
+        ) -> tuple[Float[Tensor, "... n_atom 3"], Float[Tensor, "... n_atom 3"]]:
+            coords_pred = self.forward(
+                r_noisy=x_noisy,
+                timestep=timestep,
+                context=context,
+                inplace_safe=inplace_safe,
+            )
+
+            t = repeat(timestep, "... -> ... 1 1")
+            velocity = (coords_pred - x_noisy) / torch.clamp(1 - t, min=eps)
+            score = t * velocity - x_noisy
+            return velocity, score
+
+        return predictor
+
+    @typecheck
+    def sample(
+        self,
+        context: FullContext,
+        timestep_scheduler: InferenceTimestepScheduler,
+        n_steps: int,
+        stochasticity: StochasticitySchedule = Deterministic(),
+        gamma: float = 1.0,
+        n_sample: int = 1,
+        second_order: bool = False,
+        inplace_safe: bool = False,
+    ) -> Float[Tensor, "... n_sample n_atom 3"]:
+        """Backbone denoising sampling using flow matching.
+
+        Args:
+            context: Full feature context.
+            timestep_scheduler: Scheduler for generating timestep sequence.
+            n_steps: Number of integration steps.
+            stochasticity: Schedule defining g(t) in the SDE.
+            gamma: Temperature parameter for the stochastic term.
+            n_sample: Number of samples to generate.
+            second_order: Whether to use second-order integration.
+            inplace_safe: Whether to use inplace operations safely.
+
+        Returns:
+            Denoised atom coordinates.
+        """
+        n_atom = context.reference.ref_pos.shape[-2]
+        batch_shape = context.token.residue_index.shape[:-1]
+        device = context.token.residue_index.device
+        dtype = torch.float32
+
+        # Generate initial noise
+        x_init = self.sigma_coord * torch.randn(
+            size=(*batch_shape, n_sample, n_atom, 3), device=device, dtype=dtype
+        )
+
+        # Create sampler and predictor
+        sampler = FlowMatchingSampler(
+            timestep_scheduler=timestep_scheduler,
+            stochasticity=stochasticity,
+            gamma=gamma,
+            second_order=second_order,
+            centre_coords=True,
+        )
+        predictor = self.as_predictor(context, inplace_safe=inplace_safe)
+
+        return sampler.sample(
+            predictor=predictor,
+            x_init=x_init,
+            n_steps=n_steps,
+        )
+
+    @typecheck
+    def f_forward(
+        self,
+        r_noisy: Float[Tensor, "... n_sample n_atom 3"],
+        timestep: Float[Tensor, "... n_sample"],
+        context: FullContext,
+        inplace_safe: bool = False,
+    ) -> Float[Tensor, "... n_sample n_atom 3"]:
+        """The raw network to be trained. This is v_theta(x_t, t).
+        c_noise(sigma) is computed in Conditioning module.
+
+        Args:
+            r_noisy: Scaled noisy coordinates (i.e., c_in * x)
+            timestep: Noising timestep
+            context: Full context containing all features and labels.
+            inplace_safe: Whether it is safe to use inplace operations.
+
+        Returns:
+            Network output (velocity prediction or denoising coord prediction,
+            depending on network parameterisation)
         """
         N_sample = r_noisy.shape[-3]
-        assert (
-            timestep.shape[-1] == N_sample
-        ), f"Got timestep shape {timestep.shape} but expected {N_sample}"
 
-        atom_mask = expand_at_dim(
-            input_feature_dict["atom_mask"],
-            dim=-2,
-            n=N_sample,
+        atom_mask = repeat(
+            context.mask.atom_mask,
+            "... a -> ... s a",
+            s=N_sample,
         )
-        atom_to_token_idx = expand_at_dim(
-            input_feature_dict["atom_to_token_idx"], dim=-2, n=N_sample
+        atom_to_token_idx = repeat(
+            context.index.atom_to_token_idx,
+            "... a -> ... s a",
+            s=N_sample,
         )
 
-        n_token = input_feature_dict["residue_index"].shape[-1]
+        n_token = context.token.residue_index.shape[-1]
         n_atom = atom_mask.shape[-1]
-        batch_shape = input_feature_dict["residue_index"].shape[:-1]
+        batch_shape = context.token.residue_index.shape[:-1]
 
         # Compute pair mask
-        token_mask = input_feature_dict["token_mask"]  # [..., N_token]
+        token_mask = context.mask.token_mask  # [..., N_token]
         token_mask = token_mask.unsqueeze(-2)  # add N_sample dim
         pair_mask = token_mask[..., :, None] * token_mask[..., None, :]
         # [..., 1, N_token, N_token]
@@ -648,7 +655,7 @@ class DiffusionModule(nn.Module):
         s, z = self.diffusion_conditioning(
             r_noisy=r_noisy,
             timestep=timestep,
-            input_feature_dict=input_feature_dict,
+            context=context,
             inplace_safe=inplace_safe,
         )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
 
@@ -656,8 +663,8 @@ class DiffusionModule(nn.Module):
         a_token = a_token + self.linear_no_bias_s(self.layernorm_s(s))
         a_token = a_token * token_mask[..., None]  # [..., N_sample, N_token, c_token]
 
-        z = z.unsqueeze(-4)
-        z = z * pair_mask[..., None]
+        z = rearrange(z, "... i j c_z -> ... 1 i j c_z")
+        z = z * rearrange(pair_mask, "... 1 i j -> ... 1 i j 1")
 
         a_token = self.diffusion_transformer(a=a_token, s=s, z=z, pair_mask=pair_mask)
         a_token = a_token * token_mask[..., None]
@@ -672,52 +679,51 @@ class DiffusionModule(nn.Module):
         )  # [..., N_sample, N_atom, c_atom]
 
         # Break symmetry in the backbone atoms with atom level information
-        q_atom = q_atom + expand_at_dim(
-            self.linear_no_bias_f(
-                torch.cat(
-                    [
-                        input_feature_dict[name]
-                        .reshape(*batch_shape, n_atom, self.atom_input_feature[name])
-                        .to(q_atom.dtype)
-                        for name in self.atom_input_feature
-                    ],
-                    dim=-1,
-                )
-            ),
-            dim=-3,
-            n=N_sample,
+        atom_features = self.linear_no_bias_f(
+            torch.cat(
+                [
+                    getattr(context.reference, name)
+                    .reshape(*batch_shape, n_atom, self.atom_input_feature[name])
+                    .to(q_atom.dtype)
+                    for name in self.atom_input_feature
+                ],
+                dim=-1,
+            )
         )
+        q_atom = q_atom + repeat(atom_features, "... a c -> ... s a c", s=N_sample)
 
         return self.readout(q_atom)
 
-    def c_in(self, timestep: torch.Tensor) -> torch.Tensor:
+    def c_in(self, timestep: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
+        """Input scaling factor for noisy coordinates."""
         return 1 / (timestep**2 + (1 - timestep) ** 2).sqrt()
 
-    def c_out(self, timestep: torch.Tensor) -> torch.Tensor:
-        return 1 - timestep  # velocity parametrization
+    def c_out(self, timestep: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
+        """Output scaling factor (velocity parametrization)."""
+        return 1 - timestep
 
-    def c_skip(self, timestep: torch.Tensor) -> torch.Tensor:
+    def c_skip(self, timestep: Float[Tensor, "..."]) -> float:
+        """Skip connection scaling factor."""
         return 1.0
 
+    @typecheck
     def forward(
         self,
-        r_noisy: torch.Tensor,
-        timestep: torch.Tensor,
-        input_feature_dict: dict[str, Union[torch.Tensor, int, float, dict]],
+        r_noisy: Float[Tensor, "... n_sample n_atom 3"],
+        timestep: Float[Tensor, "... n_sample"],
+        context: FullContext,
         inplace_safe: bool = False,
-    ) -> dict[str, torch.Tensor]:
-        """
-        Performs a forward pass of the diffusion module.
+    ) -> Float[Tensor, "... n_sample n_atom 3"]:
+        """Performs a forward pass of the diffusion module.
 
         Args:
-            r_noisy (torch.Tensor): Noisy coordinates.
-            timestep (torch.Tensor): The noising timestep.
-            input_feature_dict (dict[str, Union[torch.Tensor, int, float, dict]]): Input feature dictionary.
-            inplace_safe (bool): Whether it is safe to use inplace operations. Defaults to False.
+            r_noisy: Noisy coordinates
+            timestep: Noising timestep
+            context: Full context containing all features and labels.
+            inplace_safe: Whether it is safe to use inplace operations.
 
         Returns:
-            torch.Tensor: Predicted coordinates.
-                [..., N_sample, N_token, 3]
+            Predicted coordinates
         """
         # Expand timesteps
         timestep_ = timestep[..., None, None]
@@ -729,7 +735,7 @@ class DiffusionModule(nn.Module):
         out = self.f_forward(
             r_noisy=r_noisy_unit,
             timestep=timestep,
-            input_feature_dict=input_feature_dict,
+            context=context,
             inplace_safe=inplace_safe,
         )
 

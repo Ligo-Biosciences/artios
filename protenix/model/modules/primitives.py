@@ -5,24 +5,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 from scipy.stats import truncnorm
 from torch import Tensor
 
-from protenix.model.utils import (
-    add,
-)
-
-# Optimized layer norm
-
-try:
-    CUDA_AVAILABLE = True
-except OSError:
-    CUDA_AVAILABLE = False
+from protenix.utils.typing import Bool, Float, typecheck
 
 
 # Linear layer utilities
-
-
 def _calculate_fan(linear_weight_shape, fan="fan_in"):
     """Calculate fan-in/fan-out/fan-avg for a linear layer weight shape."""
     fan_out, fan_in = linear_weight_shape
@@ -176,7 +166,7 @@ class Linear(nn.Linear):
 
         self.high_precision = high_precision
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: Float[Tensor, "... in"]) -> Float[Tensor, "... out"]:
         """
         Forward pass with precision support.
 
@@ -277,29 +267,7 @@ class LayerNorm(nn.Module):
                 "bias", torch.zeros(normalized_shape, device=device, dtype=dtype)
             )
 
-    # @torch.compiler.disable(recursive=True)
-    def forward(self, x: Tensor) -> Tensor:
-        """Forward pass using optimized kernel on GPU, regular layernorm on CPU.
-
-        Args:
-            x (Tensor): Input tensor
-
-        Returns:
-            Tensor: Normalized tensor
-        """
-
-        # if (
-        #     CUDA_AVAILABLE
-        #     and x.is_cuda
-        #     and x.dtype in [torch.float32, torch.float16, torch.bfloat16]
-        # ):
-        #     # Use optimized CUDA kernel implementation
-        #     return FusedLayerNormAffineFunction.apply(
-        #         x, self.weight, self.bias, self.normalized_shape, self.eps
-        #     )
-
-        # else:
-        # Manual implementation using torch.functional
+    def forward(self, x: Float[Tensor, "... d"]) -> Float[Tensor, "... d"]:
         return F.layer_norm(
             x,
             self.normalized_shape,
@@ -309,50 +277,36 @@ class LayerNorm(nn.Module):
         )
 
 
+@typecheck
 @torch.compiler.disable
 def attention(
-    q: Tensor,
-    k: Tensor,
-    v: Tensor,
-    pair_mask: Tensor,
-    attn_bias: Optional[Tensor] = None,
+    q: Float[Tensor, "... n_q d"],
+    k: Float[Tensor, "... n_kv d"],
+    v: Float[Tensor, "... n_kv d"],
+    pair_mask: Bool[Tensor, "... n_q n_kv"],
+    attn_bias: Optional[Float[Tensor, "... n_q n_kv"]] = None,
     inf: float = 1e10,
-) -> Tensor:
+) -> Float[Tensor, "... n_q d"]:
     """Attention.
 
     Args:
-        q (Tensor): query tensor
-            [..., n_q, d]
-        k (Tensor): key tensor
-            [..., n_kv, d]
-        v (Tensor): value tensor
-            [..., n_kv, d]
-        pair_mask (Tensor): pair mask tensor
-            [..., n_q, n_kv]
-        attn_bias (Tensor, optional): attention bias tensor
-            None | [..., n_q, n_kv]
-        inf (float, optional): large number for attention masking
+        q: query tensor
+        k: key tensor
+        v: value tensor
+        pair_mask: pair mask tensor
+        attn_bias: attention bias tensor
+        inf: large number for attention masking. Defaults to 1e10.
 
     Returns:
-        Tensor: attention output
-            [..., n_q, d]
+        attention output
     """
-    assert k.shape == v.shape
-    assert q.shape[-1] == k.shape[-1]
-    assert pair_mask.dtype == torch.bool
-
-    if attn_bias is not None:
-        assert attn_bias.shape[-2] == q.shape[-2]
-        assert attn_bias.shape[-1] == k.shape[-2]
-
-    # [..., n_kv, d] -> [..., d, n_kv]
-    k = k.transpose(-1, -2)
+    k = rearrange(k, "... n_kv d -> ... d n_kv")
 
     # [..., n_q, d], [..., d, n_kv] -> [..., n_q, n_kv]
     attn_weights = q @ k / (q.shape[-1] ** 0.5)
 
     if attn_bias is not None:
-        attn_weights = add(attn_weights, attn_bias)
+        attn_weights = attn_weights + attn_bias
 
     # fill out of mask with -inf (based on dtype)
     attn_weights.masked_fill_(~pair_mask, -inf)

@@ -9,6 +9,7 @@ from protenix.model.modules.transformer import (
     Transformer,
     TransformerBlock,
 )
+from protenix.utils.typing import TypeCheckError
 
 
 class TestDiTBlock:
@@ -63,7 +64,7 @@ class TestDiTBlock:
         pair_bias = torch.randn(BATCH_SIZE, num_heads, N + 1, N + 1)
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N + 1, N + 1)).bool()
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(TypeCheckError):
             block(
                 a=a,
                 scale_attn=scale_attn,
@@ -126,7 +127,7 @@ class TestDiffusionTransformer:
         z = torch.randn(BATCH_SIZE, N, N, c_z)
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N + 1, N + 1)).bool()
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(TypeCheckError):
             transformer(a, s, z, pair_mask)
 
         a = torch.randn(BATCH_SIZE, N, c_token)
@@ -134,15 +135,16 @@ class TestDiffusionTransformer:
         z = torch.randn(BATCH_SIZE, N, N, c_z)
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N + 1)).bool()
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(TypeCheckError):
             transformer(a, s, z, pair_mask)
 
+        # Wrong a shape - extra dimension
         a = torch.randn(BATCH_SIZE, N, N, c_token)
         s = torch.randn(BATCH_SIZE, N, c_s)
         z = torch.randn(BATCH_SIZE, N, N, c_z)
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
 
-        with pytest.raises(AssertionError):
+        with pytest.raises((TypeCheckError, RuntimeError)):
             transformer(a, s, z, pair_mask)
 
     def test_batch_dim_mismatch(self):
@@ -250,7 +252,7 @@ class TestLocalAttnTransformerBlock:
             0, 2, (BATCH_SIZE, N_subset, num_queries, num_keys)
         ).bool()
 
-        with pytest.raises(AssertionError):
+        with pytest.raises((AssertionError, TypeCheckError)):
             block(
                 q_l,
                 scale_attn=scale_attn,
@@ -271,7 +273,7 @@ class TestLocalAttnTransformerBlock:
             0, 2, (BATCH_SIZE, N_subset, num_queries, num_keys)
         ).bool()
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(TypeCheckError):
             block(
                 q_l,
                 scale_attn=scale_attn,
@@ -398,21 +400,21 @@ class TestTransformerBlock:
         pair_bias = torch.randn(BATCH_SIZE, num_heads + 1, N, N)
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
 
-        with pytest.raises(AssertionError):
+        with pytest.raises((AssertionError, TypeCheckError)):
             block(a=a, pair_bias=pair_bias, pair_mask=pair_mask)
 
         # Test wrong pair_bias spatial dimensions
         pair_bias = torch.randn(BATCH_SIZE, num_heads, N + 1, N + 1)
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
 
-        with pytest.raises(AssertionError):
+        with pytest.raises((AssertionError, TypeCheckError)):
             block(a=a, pair_bias=pair_bias, pair_mask=pair_mask)
 
         # Test wrong pair_mask spatial dimensions
         pair_bias = torch.randn(BATCH_SIZE, num_heads, N, N)
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N + 1, N + 1)).bool()
 
-        with pytest.raises(AssertionError):
+        with pytest.raises((AssertionError, TypeCheckError)):
             block(a=a, pair_bias=pair_bias, pair_mask=pair_mask)
 
     def test_c_a_divisible_by_num_heads(self):
@@ -480,20 +482,20 @@ class TestTransformer:
             c_a=c_a, c_z=c_z, num_blocks=num_blocks, num_heads=num_heads
         )
 
-        # Test wrong c_a dimension
+        # Test wrong c_a dimension - will fail at runtime when LayerNorm expects c_a
         a = torch.randn(BATCH_SIZE, N, c_a + 10)  # Wrong c_a
         z = torch.randn(BATCH_SIZE, N, N, c_z)
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
 
-        with pytest.raises(AssertionError, match="Input token dimension mismatch"):
+        with pytest.raises((TypeCheckError, RuntimeError)):
             transformer(a=a, z=z, pair_mask=pair_mask)
 
-        # Test wrong c_z dimension
+        # Test wrong c_z dimension - will fail at runtime when z_proj expects c_z
         a = torch.randn(BATCH_SIZE, N, c_a)
         z = torch.randn(BATCH_SIZE, N, N, c_z + 10)  # Wrong c_z
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
 
-        with pytest.raises(AssertionError, match="Input pair bias dimension mismatch"):
+        with pytest.raises((TypeCheckError, RuntimeError)):
             transformer(a=a, z=z, pair_mask=pair_mask)
 
         # Test wrong z spatial dimensions
@@ -501,7 +503,7 @@ class TestTransformer:
         z = torch.randn(BATCH_SIZE, N + 1, N + 1, c_z)  # Wrong spatial dims
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
 
-        with pytest.raises(AssertionError, match="Input pair bias dimension mismatch"):
+        with pytest.raises(TypeCheckError):
             transformer(a=a, z=z, pair_mask=pair_mask)
 
         # Test wrong pair_mask spatial dimensions
@@ -509,7 +511,7 @@ class TestTransformer:
         z = torch.randn(BATCH_SIZE, N, N, c_z)
         pair_mask = torch.randint(0, 2, (BATCH_SIZE, N + 1, N + 1)).bool()
 
-        with pytest.raises(AssertionError, match="Input pair mask dimension mismatch"):
+        with pytest.raises(TypeCheckError):
             transformer(a=a, z=z, pair_mask=pair_mask)
 
     def test_pair_bias_chunking(self):

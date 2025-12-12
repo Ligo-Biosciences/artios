@@ -54,9 +54,7 @@ class Token(object):
         return f'Token({self.value}, {",".join(annot_lst)})'
 
     def __setattr__(self, attr, value):
-        if attr == "_annot":
-            super().__setattr__(attr, value)
-        elif attr == "value":
+        if attr == "_annot" or attr == "value":
             super().__setattr__(attr, value)
         else:
             self._annot[attr] = value

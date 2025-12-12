@@ -1,24 +1,11 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-
 import torch
 import torch.nn.functional as F
+from einops import rearrange
 from torch import Tensor, nn
 
 # from protenix.model.modules.atom_attention import AtomAttentionEncoder
 from protenix.model.modules.primitives import LinearNoBias
+from protenix.utils.typing import Float, Int, typecheck
 
 
 class RelativePositionEncoding(nn.Module):
@@ -50,70 +37,59 @@ class RelativePositionEncoding(nn.Module):
             "token_index": 1,
         }
 
+    @typecheck
     def forward(
         self,
         *,
-        asym_id: Tensor,
-        residue_index: Tensor,
-        entity_id: Tensor,
-        sym_id: Tensor,
-        token_index: Tensor,
-    ) -> Tensor:
-        """
-        Args:
-            asym_id (Tensor): asymmetric unit IDs [..., N_tokens]
-            residue_index (Tensor): residue indices [..., N_tokens]
-            entity_id (Tensor): entity IDs [..., N_tokens]
-            sym_id (Tensor): symmetry IDs [..., N_tokens]
-            token_index (Tensor): token indices [..., N_tokens]
+        asym_id: Int[Tensor, "*batch n_token"],
+        residue_index: Int[Tensor, "*batch n_token"],
+        entity_id: Int[Tensor, "*batch n_token"],
+        sym_id: Int[Tensor, "*batch n_token"],
+        token_index: Int[Tensor, "*batch n_token"],
+    ) -> Float[Tensor, "*batch n_token n_token c_z"]:
+        # Pairwise equality masks
+        asym_i = rearrange(asym_id, "... n -> ... n 1")
+        asym_j = rearrange(asym_id, "... n -> ... 1 n")
+        same_chain = asym_i == asym_j
 
-        Returns:
-            Tensor: relative position encoding
-                [..., N_token, N_token, c_z]
-        """
-        b_same_chain = (
-            asym_id[..., :, None] == asym_id[..., None, :]
-        ).long()  # [..., N_token, N_token]
-        b_same_residue = (
-            residue_index[..., :, None] == residue_index[..., None, :]
-        ).long()  # [..., N_token, N_token]
-        b_same_entity = (
-            entity_id[..., :, None] == entity_id[..., None, :]
-        ).long()  # [..., N_token, N_token]
-        d_residue = torch.clip(
-            input=residue_index[..., :, None]
-            - residue_index[..., None, :]
-            + self.r_max,
-            min=0,
-            max=2 * self.r_max,
-        ) * b_same_chain + (1 - b_same_chain) * (
-            2 * self.r_max + 1
-        )  # [..., N_token, N_token]
-        a_rel_pos = F.one_hot(d_residue, 2 * (self.r_max + 1))
-        d_token = torch.clip(
-            input=token_index[..., :, None] - token_index[..., None, :] + self.r_max,
-            min=0,
-            max=2 * self.r_max,
-        ) * b_same_chain * b_same_residue + (1 - b_same_chain * b_same_residue) * (
-            2 * self.r_max + 1
-        )  # [..., N_token, N_token]
-        a_rel_token = F.one_hot(d_token, 2 * (self.r_max + 1))
-        d_chain = torch.clip(
-            input=sym_id[..., :, None] - sym_id[..., None, :] + self.s_max,
-            min=0,
-            max=2 * self.s_max,
-        ) * b_same_entity + (1 - b_same_entity) * (
-            2 * self.s_max + 1
-        )  # [..., N_token, N_token]
-        a_rel_chain = F.one_hot(d_chain, 2 * (self.s_max + 1))
+        residue_i = rearrange(residue_index, "... n -> ... n 1")
+        residue_j = rearrange(residue_index, "... n -> ... 1 n")
+        same_residue = residue_i == residue_j
 
-        p = self.embed_relpos_features(
-            torch.cat(
-                [a_rel_pos, a_rel_token, b_same_entity[..., None], a_rel_chain],
-                dim=-1,
-            ).float()
-        )  # [..., N_token, N_token, 2 * (self.r_max + 1)+ 2 * (self.r_max + 1)+ 1 + 2 * (self.s_max + 1)] -> [..., N_token, N_token, c_z]
-        return p
+        entity_i = rearrange(entity_id, "... n -> ... n 1")
+        entity_j = rearrange(entity_id, "... n -> ... 1 n")
+        same_entity = entity_i == entity_j
+
+        # Relative residue position (clipped), with special index for different chains
+        d_residue_clipped = (residue_i - residue_j + self.r_max).clip(0, 2 * self.r_max)
+        different_chain_idx = 2 * self.r_max + 1
+        d_residue = torch.where(same_chain, d_residue_clipped, different_chain_idx)
+        rel_residue = F.one_hot(d_residue, num_classes=2 * self.r_max + 2)
+
+        # Relative token position (clipped), with special index for different chain or residue
+        token_i = rearrange(token_index, "... n -> ... n 1")
+        token_j = rearrange(token_index, "... n -> ... 1 n")
+        d_token_clipped = (token_i - token_j + self.r_max).clip(0, 2 * self.r_max)
+        same_chain_and_residue = same_chain & same_residue
+        d_token = torch.where(
+            same_chain_and_residue, d_token_clipped, different_chain_idx
+        )
+        rel_token = F.one_hot(d_token, num_classes=2 * self.r_max + 2)
+
+        # Relative chain position (sym_id difference), with special index for different entities
+        sym_i = rearrange(sym_id, "... n -> ... n 1")
+        sym_j = rearrange(sym_id, "... n -> ... 1 n")
+        d_chain_clipped = (sym_i - sym_j + self.s_max).clip(0, 2 * self.s_max)
+        different_entity_idx = 2 * self.s_max + 1
+        d_chain = torch.where(same_entity, d_chain_clipped, different_entity_idx)
+        rel_chain = F.one_hot(d_chain, num_classes=2 * self.s_max + 2)
+
+        # Concatenate features and embed
+        features = torch.cat(
+            [rel_residue, rel_token, same_entity[..., None], rel_chain],
+            dim=-1,
+        ).float()
+        return self.embed_relpos_features(features)
 
 
 class FourierEmbedding(nn.Module):
@@ -136,15 +112,16 @@ class FourierEmbedding(nn.Module):
         self.register_buffer("w", torch.randn(c, generator=generator))
         self.register_buffer("b", torch.randn(c, generator=generator))
 
-    def forward(self, t_hat_timestep: Tensor) -> Tensor:
+    @typecheck
+    def forward(
+        self, t_hat_timestep: Float[Tensor, "*batch n_sample"]
+    ) -> Float[Tensor, "*batch n_sample c"]:
         """
         Args:
-            t_hat_timestep (Tensor): the noise level
-                [..., N_sample]
+            t_hat_timestep: the noise level
 
         Returns:
-            Tensor: the output fourier embedding
-                [..., N_sample, c]
+            the output fourier embedding
         """
         return torch.cos(
             input=2 * torch.pi * (t_hat_timestep.unsqueeze(dim=-1) * self.w + self.b)

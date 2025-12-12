@@ -57,8 +57,8 @@ class DecodingMasks:
         backward_mask: Mask for attending to past positions [..., n_token, neighbours, 1]
     """
 
-    forward_mask: Float[Tensor, "... n_token neighbours 1"]
-    backward_mask: Float[Tensor, "... n_token neighbours 1"]
+    forward_mask: Bool[Tensor, "... n_token neighbours 1"]
+    backward_mask: Bool[Tensor, "... n_token neighbours 1"]
 
 
 class MPNN(nn.Module):
@@ -144,10 +144,11 @@ class MPNN(nn.Module):
         self.embed_restype = LinearNoBias(num_residue_types, node_dim)
         self.linear_out = LinearNoBias(node_dim, num_residue_types)
 
+    @typecheck
     def generate_decoding_order(
         self,
         centre_atom_coords: Float[Tensor, "batch n_token 3"],
-        centre_atom_mask: Float[Tensor, "batch n_token"],
+        centre_atom_mask: Bool[Tensor, "batch n_token"],
         seed: Optional[int] = None,
         smoothing_factor: Optional[float] = None,
         seed_token_index: Optional[int] = None,
@@ -261,11 +262,12 @@ class MPNN(nn.Module):
             edge_mask=edge_mask,
         )
 
+    @typecheck
     def generate_decoding_masks(
         self,
-        decoding_order: Float[Tensor, "batch n_token"],
-        edge_index: Float[Tensor, "batch n_token neighbours"],
-        node_mask: Float[Tensor, "batch n_token"],
+        decoding_order: Int[Tensor, "batch n_token"],
+        edge_index: Int[Tensor, "batch n_token neighbours"],
+        node_mask: Bool[Tensor, "batch n_token"],
     ) -> DecodingMasks:
         """Generate autoregressive attention masks from decoding order.
 
@@ -304,21 +306,22 @@ class MPNN(nn.Module):
         )
         mask_1D = node_mask[..., None]
 
-        backward_attn_mask = mask_1D * backward_attn_mask
-        forward_attn_mask = mask_1D * (1.0 - backward_attn_mask)
+        backward_attn_mask = mask_1D & (backward_attn_mask > 0.5)
+        forward_attn_mask = mask_1D & ~backward_attn_mask
 
         return DecodingMasks(
             forward_mask=forward_attn_mask[..., None],
             backward_mask=backward_attn_mask[..., None],
         )
 
+    @typecheck
     def _prepare_decoder_edge_features(
         self,
         encoder_output: EncoderOutput,
         sequence_embeds: Float[Tensor, "batch n_token node_dim"],
     ) -> Tuple[
-        Float[Tensor, "batch n_token neighbours hidden"],
-        Float[Tensor, "batch n_token neighbours hidden"],
+        Float[Tensor, "batch n_token neighbours encoder_hidden"],
+        Float[Tensor, "batch n_token neighbours sequence_hidden"],
     ]:
         """Prepare edge features for decoder with sequence and encoder information.
 
@@ -391,8 +394,9 @@ class MPNN(nn.Module):
         for layer in self.decoder:
             if zero_shot:
                 # Structure-only: use encoder features for all positions
-                combined_edge_feats = encoder_edge_feats * (
-                    masks.forward_mask + masks.backward_mask
+                valid_mask = masks.forward_mask | masks.backward_mask
+                combined_edge_feats = torch.where(
+                    valid_mask, encoder_edge_feats, torch.zeros_like(encoder_edge_feats)
                 )
             else:
                 # Autoregressive: sequence for past, encoder for future
@@ -401,9 +405,14 @@ class MPNN(nn.Module):
                     features=node_feats,
                     edge_idx=edge_index,
                 )
-                combined_edge_feats = (
-                    decoder_edge_feats * masks.backward_mask
-                    + encoder_edge_feats * masks.forward_mask
+                combined_edge_feats = torch.where(
+                    masks.backward_mask,
+                    decoder_edge_feats,
+                    torch.where(
+                        masks.forward_mask,
+                        encoder_edge_feats,
+                        torch.zeros_like(encoder_edge_feats),
+                    ),
                 )
 
             node_feats = checkpoint(
@@ -418,6 +427,7 @@ class MPNN(nn.Module):
         logits = self.linear_out(node_feats)
         return logits
 
+    @typecheck
     def _sample_from_logits(
         self,
         logits: Float[Tensor, "batch n_token num_residue_types"],
@@ -452,10 +462,11 @@ class MPNN(nn.Module):
         one_hot = F.one_hot(samples, num_classes=self.num_residue_types).float()
         return one_hot
 
+    @typecheck
     def sample(
         self,
         context: FullContext,
-        decoding_order: Optional[Float[Tensor, "batch n_token"]] = None,
+        decoding_order: Optional[Int[Tensor, "batch n_token"]] = None,
         temperature: float = 1.0,
         zero_shot: bool = False,
         smoothing_factor: float = 0.5,
@@ -544,10 +555,11 @@ class MPNN(nn.Module):
 
         return restype, encoder_output.node_feats
 
+    @typecheck
     def forward(
         self,
         context: FullContext,
-        decoding_order: Optional[Float[Tensor, "batch n_token"]] = None,
+        decoding_order: Optional[Int[Tensor, "batch n_token"]] = None,
         zero_shot: bool = False,
         seed: Optional[int] = None,
     ) -> Tuple[

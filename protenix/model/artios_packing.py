@@ -3,6 +3,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from einops import repeat
+from typing_extensions import assert_never
 
 from protenix.data.features import FullContext
 from protenix.model.generator_backbone import (
@@ -12,7 +13,7 @@ from protenix.model.generator_backbone import (
 )
 from protenix.model.modules.sidechain_packer import SidechainPacker
 from protenix.model.output import ModelOutput
-from protenix.model.utils import broadcast_token_to_atom
+from protenix.model.utils import Mode, broadcast_token_to_atom
 
 
 class ArtiosPacking(nn.Module):
@@ -109,7 +110,6 @@ class ArtiosPacking(nn.Module):
             else None
         )
 
-        # Noising
         r_noisy, timestep, _ = sample_local_noising(
             input=context.coordinate.coordinate,
             mask=context.mask.is_resolved,
@@ -122,7 +122,6 @@ class ArtiosPacking(nn.Module):
             generator=generator,
         )
 
-        # Denoising
         pred = self.sidechain_packer(
             r_noisy=r_noisy,
             timestep=timestep,
@@ -134,7 +133,7 @@ class ArtiosPacking(nn.Module):
     def forward(
         self,
         context: FullContext,
-        mode: str,
+        mode: Mode,
         *,
         seed: Optional[int] = None,
     ) -> ModelOutput:
@@ -143,23 +142,23 @@ class ArtiosPacking(nn.Module):
 
         Args:
             context (FullContext): Full context containing all features and labels.
-            mode (str): Mode of operation ('train', 'inference', 'eval').
+            mode (Mode): Mode of operation.
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
             ModelOutput: Model output containing the prediction and timestep.
         """
-
-        assert mode in ["train", "inference", "eval"]
-
-        if mode == "train" or mode == "eval":
-            output = self.main_train_loop(
-                context=context,
-                seed=seed,
-            )
-        elif mode == "inference":
-            output = self.main_inference_loop(
-                context=context,
-            )
+        match mode:
+            case Mode.TRAIN | Mode.EVAL:
+                output = self.main_train_loop(
+                    context=context,
+                    seed=seed,
+                )
+            case Mode.INFERENCE:
+                output = self.main_inference_loop(
+                    context=context,
+                )
+            case _:
+                assert_never(mode)
 
         return output

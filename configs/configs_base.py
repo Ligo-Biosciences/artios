@@ -205,7 +205,10 @@ model_configs = {
             "dropout": 0.0,
             "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
-        "mpnn_module": {
+    },
+    "artios_mpnn": {
+        "train_zero_shot": False,
+        "model": {
             "num_residue_types": 32,
             "node_dim": 128,  # TODO: make node and edge dims global config values
             "edge_dim": 128,
@@ -217,6 +220,11 @@ model_configs = {
             "num_rbf_kernels": 16,
             "dropout": 0.0,
             "coord_noise": 0.1,
+        },
+        "sampling": {
+            "temperature": 0.1,
+            "zero_shot": False,
+            "smoothing_factor": 0.5,
         },
     },
     "artios_packing": {

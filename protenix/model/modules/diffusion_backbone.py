@@ -181,7 +181,7 @@ class DiffusionConditioning(nn.Module):
         # 1. Get token-wise atom reference positions
         # [..., N_atom, 3]
         is_atom = rearrange(
-            (is_ligand | is_motif_related).bool(), "... n_atom -> ... n_atom 1"
+            (is_ligand | is_motif_related), "... n_atom -> ... n_atom 1"
         )
         ref_pos = context.reference.ref_pos * is_atom
 

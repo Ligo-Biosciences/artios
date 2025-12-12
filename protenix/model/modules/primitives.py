@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 from scipy.stats import truncnorm
 from torch import Tensor
 
@@ -326,8 +327,7 @@ def attention(
     Returns:
         attention output
     """
-    # [..., n_kv, d] -> [..., d, n_kv]
-    k = k.transpose(-1, -2)
+    k = rearrange(k, "... n_kv d -> ... d n_kv")
 
     # [..., n_q, d], [..., d, n_kv] -> [..., n_q, n_kv]
     attn_weights = q @ k / (q.shape[-1] ** 0.5)

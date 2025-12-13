@@ -179,14 +179,14 @@ class DiffusionConditioning(nn.Module):
 
         ### Create atom pair conditioning
         # 1. Get token-wise atom reference positions
-        # [..., N_atom, 3]
+        # [..., n_atom, 3]
         is_atom = rearrange(
             (is_ligand | is_motif_related), "... n_atom -> ... n_atom 1"
         )
         ref_pos = context.reference.ref_pos * is_atom
 
         # 2. Aggregate per-atom reference positions to per-token reference positions
-        # [..., N_atom, 3] -> [..., N_token, 3]
+        # [..., n_atom, 3] -> [..., n_token, 3]
         ref_pos = average_atom_to_token(
             x_atom=ref_pos,
             atom_to_token_idx=atom_to_token_idx,
@@ -200,7 +200,7 @@ class DiffusionConditioning(nn.Module):
             atom_to_token_idx=atom_to_token_idx,
             atom_mask=atom_mask,
             n_token=n_token,
-        )  # [..., N_token, 1]
+        )  # [..., n_token, 1]
 
         # Check if ref_space_uid values are the same (or very similar for floating point)
         v_lm = (
@@ -239,14 +239,14 @@ class DiffusionConditioning(nn.Module):
                 )
             )
             * is_atom
-        )  # [..., N_atom, c_s]
+        )  # [..., n_atom, c_s]
 
         c_s = average_atom_to_token(
             x_atom=c_s,
             atom_to_token_idx=atom_to_token_idx,
             atom_mask=atom_mask,
             n_token=n_token,
-        )  # [..., N_token, c_s]
+        )  # [..., n_token, c_s]
 
         c_s = c_s + self.embed_atom_ref_pos(ref_pos)
 
@@ -266,10 +266,17 @@ class DiffusionConditioning(nn.Module):
 
         Returns:
             Tuple of motif single (s_motif) and pair (z_motif) embeddings
+
+        # TODO: is_motif_related needs to be embedded
+        is_motif needs to be embedded
+        both of these in pair and single embeddings
+
+        the motif distances should be embedded with the inverse distance
+        embedding as well.
         """
-        is_motif_token = context.motif.is_motif_token  # [..., N_token]
-        motif_coord = context.motif.motif_coordinate  # [..., N_token, 3]
-        motif_restype = context.motif.motif_restype  # [..., N_token, 32]
+        is_motif_token = context.motif.is_motif_token  # [..., n_token]
+        motif_coord = context.motif.motif_coordinate  # [..., n_token, 3]
+        motif_restype = context.motif.motif_restype  # [..., n_token, 32]
 
         # Augment motif coordinates
         motif_coord_augment = centre_random_augmentation(
@@ -277,7 +284,7 @@ class DiffusionConditioning(nn.Module):
             mask=is_motif_token,
             n_sample=1,
             s_trans=1.0,  # TODO: increase s_trans?
-        ).squeeze(-3)  # [..., N_token, 3]
+        ).squeeze(-3)  # [..., n_token, 3]
 
         # Single embeddings
         s_motif = self.embed_motif_restype(motif_restype)
@@ -288,17 +295,19 @@ class DiffusionConditioning(nn.Module):
         motif_pair_dists = torch.norm(
             motif_coord_augment[..., None, :, :] - motif_coord_augment[..., :, None, :],
             dim=-1,
-        )  # [..., N_token, N_token]
+        )  # [..., n_token, n_token]
 
         # One-hot encode distances
         motif_pair_dist_onehot = one_hot(
             motif_pair_dists,
             self.motif_lower_bins,
             self.motif_upper_bins,
-        )  # [..., N_token, N_token, n_bins]
+        )  # [..., n_token, n_token, n_bins]
 
         # Mask pair embeddings for motif tokens only
-        motif_mask_pair = is_motif_token[..., None, :] * is_motif_token[..., :, None]
+        is_motif_i = rearrange(is_motif_token, "... n -> ... n 1")
+        is_motif_j = rearrange(is_motif_token, "... n -> ... 1 n")
+        motif_mask_pair = is_motif_i & is_motif_j
         motif_pair_dist_onehot = motif_pair_dist_onehot * motif_mask_pair[..., None]
 
         # Embed one-hot distances
@@ -526,6 +535,8 @@ class DiffusionModule(nn.Module):
         Returns:
             A callable satisfying VelocityScorePredictor protocol.
         """
+
+        # TODO: we can separate the diffusion conditioning from the main network for efficiency.
 
         def predictor(
             x_noisy: Float[Tensor, "... n_atom 3"],

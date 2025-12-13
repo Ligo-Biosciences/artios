@@ -125,8 +125,9 @@ class AtomArrayTokenizer(object):
             first_atom = res[0]
             res_name = first_atom.res_name
             mol_type = first_atom.mol_type
+            is_motif_related = getattr(first_atom, "is_motif_related", 0) == 1
             res_token = STD_RESIDUES.get(res_name, None)
-            if res_token is not None and mol_type != "ligand":
+            if res_token is not None and mol_type != "ligand" and not is_motif_related:
                 # for std residues
                 token = Token(res_token)
                 atom_indices = [

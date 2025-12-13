@@ -23,9 +23,7 @@ class ArtiosBackbone(nn.Module):
 
         self.N_model_seed = self.configs.model.N_model_seed
 
-        self.timestep_sampler = ProteinaCoordSampler(
-            **configs.train_timestep_sampler.coord
-        )
+        self.timestep_sampler = ProteinaCoordSampler(**configs.train_timestep_sampler)
 
         self.inference_timestep_scheduler = LaProteinaCoordScheduler(
             **configs.inference_timestep_scheduler.la_proteina.coord

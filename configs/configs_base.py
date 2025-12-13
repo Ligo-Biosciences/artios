@@ -156,14 +156,16 @@ model_configs = {
     },
     "train_timestep_sampler": {
         "alpha": 1.9,
-        "beta": 1.0,
+        # "beta": 1.0,
         "uniform_weight": 0.02,
     },
     "inference_timestep_scheduler": {
         "ligo": {"p": -0.7},
         "variable_linear_quadratic": {"m": 0.35, "n": 0.7},
         "la_proteina": {
-            "coord": {"scale": 10.0},
+            "coord": {
+                "scale": 10.0
+            },  # TODO: coord is redundant as we don't have latents
         },
     },
     "sample_diffusion": {

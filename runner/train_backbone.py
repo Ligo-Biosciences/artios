@@ -1,17 +1,3 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import datetime
 import logging
 import os
@@ -27,7 +13,6 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
-from biotite.structure.io import save_structure
 from neptune_scale import Run
 from neptune_scale.api.run import SourceTrackingConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -38,29 +23,23 @@ from configs.configs_data import data_configs
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
-from protenix.data.featurizer import ContextGenerator
-from protenix.data.utils import save_structure_cif
+from protenix.data.features import FullContext
 from protenix.metrics.lddt_metrics import LDDTMetrics
-from protenix.model.allatom_mpnn import ArtiosMPNN
 from protenix.model.artios_backbone import ArtiosBackbone
 from protenix.model.loss import BackboneLoss
-from protenix.model.modules.transformer import (
-    DiffusionTransformer,
-    DiTBlock,
-)
+from protenix.model.modules.transformer import DiffusionTransformer, DiTBlock
+from protenix.model.output import ModelOutput
+from protenix.model.utils import Mode
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
-from protenix.utils.monitoring import (
-    grad_norm,
-)
+from protenix.utils.monitoring import grad_norm
 from protenix.utils.profiler import profile_function
 from protenix.utils.seed import seed_everything
-from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
+from protenix.utils.torch_utils import autocasting_disable_decorator
 from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
-from runner.dumper import DataDumper
 from runner.ema import PowerLawEMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -103,9 +82,8 @@ class ArtiosBackboneTrainer(object):
         self.error_dir = f"{self.run_dir}/errors"
         self.logs_dir = f"{self.run_dir}/logs"
 
-        # Add dump dir for training time inference
+        # TODO: Re-add DataDumper when inference output saving is needed
         self.configs.dump_dir = self.prediction_dir
-        self.dumper = DataDumper(self.configs.dump_dir)
 
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)
@@ -194,13 +172,6 @@ class ArtiosBackboneTrainer(object):
             deterministic=self.configs.deterministic,
         )
 
-        if self.configs.use_deepspeed_evo_attention:
-            env = os.getenv("CUTLASS_PATH", None)
-            print(f"env: {env}")
-            assert (
-                env is not None
-            ), "if use ds4sci, set env as https://www.deepspeed.ai/tutorials/ds4sci_evoformerattention/"
-
         # Set high precision for tensor core matmul using new API (PyTorch 2.9+)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
@@ -211,17 +182,11 @@ class ArtiosBackboneTrainer(object):
 
     def init_loss(self):
         self.loss = BackboneLoss(self.configs)  # TODO: change the loss!
-        # self.symmetric_permutation = (
-        #     SymmetricPermutation(  # TODO: still needed for ligands
-        #         self.configs, error_dir=self.error_dir
-        #     )
-        # )
         self.lddt_metrics = LDDTMetrics(self.configs)
 
     def init_model(self):
         self.raw_backbone_model = ArtiosBackbone(self.configs).to(self.device)
-        self.mpnn_model = ArtiosMPNN(self.configs).to(self.device)
-        self.mpnn_model.eval()
+        # TODO: we might need to initialize the packing model here.
         # DDP not required for VAE loading since model is frozen - no need for gradient aggregation
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
@@ -260,14 +225,14 @@ class ArtiosBackboneTrainer(object):
         self.lr_scheduler = get_lr_scheduler(self.configs, self.optimizer, **kwargs)
 
     def init_data(self):
-        print("beginning init_data...")
+        self.print("beginning init_data...")
         self.train_dl, self.test_dls = get_dataloaders(
             self.configs,
             DIST_WRAPPER.world_size,
             seed=self.configs.seed,
             error_dir=self.error_dir,
         )
-        print("finished init_data")
+        self.print("finished init_data")
 
     def save_checkpoint(self, ema_suffix="", save_model_only=False):
         if DIST_WRAPPER.rank == 0:
@@ -430,122 +395,96 @@ class ArtiosBackboneTrainer(object):
     @profile_function("model_forward")
     def model_forward(
         self,
-        batch: dict,
-        mode: str = "train",
+        context: FullContext,
+        mode: Mode = Mode.TRAIN,
         seed: Optional[int] = None,
-    ) -> tuple[dict, dict]:
+    ) -> ModelOutput:
         """Forward pass of the model.
 
         Args:
-            batch (dict): Batch of data.
-            mode (str): Mode of the forward pass.
-            seed (Optional[int]): Seed for random number generation. Defaults to None.
+            context: Full context containing all features and labels.
+            mode: Mode of the forward pass (TRAIN or EVAL).
+            seed: Seed for random number generation. Defaults to None.
 
         Returns:
-            tuple[dict, dict]: Predictions and log dict.
+            ModelOutput containing the prediction.
         """
-        assert mode in ["train", "eval"]
-        batch["pred_dict"], batch["label_dict"], log_dict = self.backbone_model(
-            input_feature_dict=batch["input_feature_dict"],
-            label_dict=batch["label_dict"],
-            mode=mode,
-            current_step=self.step if mode == "train" else None,
-            seed=seed,
-        )
-        return batch, log_dict
+        output = self.backbone_model(context=context, mode=mode, seed=seed)
+        return output
 
     @profile_function("get_loss")
     def get_loss(
-        self, batch: dict, mode: str = "train"
-    ) -> tuple[torch.Tensor, dict, dict]:
-        assert mode in ["train", "eval"]
-        self.loss.to(batch["label_dict"]["coordinate"].device)  # Move loss to device
+        self,
+        output: ModelOutput,
+        context: FullContext,
+    ) -> tuple[torch.Tensor, dict]:
+        """Compute loss from model output and context.
+
+        Args:
+            output: Model output containing predictions.
+            context: Full context containing labels and masks.
+
+        Returns:
+            Tuple of (loss tensor, loss metrics dict).
+        """
+        self.loss.to(context.coordinate.coordinate.device)
 
         loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
             self.loss
-        )(
-            feat_dict=batch["input_feature_dict"],
-            pred_dict=batch["pred_dict"],
-            label_dict=batch["label_dict"],
-        )
+        )(output=output, context=context)
         return loss, loss_dict
 
     @torch.no_grad()
-    def get_metrics(self, batch: dict) -> dict:
-        lddt_dict = self.lddt_metrics.compute_lddt(
-            batch["pred_dict"], batch["label_dict"]
-        )
-        return lddt_dict
-
-    @torch.no_grad()
-    def aggregate_metrics(self, lddt_dict: dict, batch: dict) -> dict:
-        simple_metrics, _ = self.lddt_metrics.aggregate_lddt(lddt_dict)
-
-        return simple_metrics
-
-    @torch.no_grad()
-    def evaluate(self, mode: str = "eval"):
+    def evaluate(self):
+        """Run evaluation on all test datasets, including post-hoc EMA if configured."""
         all_eval_metrics = {}
+
         if not self.configs.eval_ema_only:
-            # Evaluate None-EMA
             metrics = self._evaluate()
             all_eval_metrics["None-EMA"] = metrics
 
-        # Evaluate post-hoc EMA checkpoints
         if self.configs.calc_post_hoc_ema_during_training:
-            # Perform post hoc ema calculation
             post_hoc_checkpoints = self.calc_post_hoc_ema()
 
-            # Store current model state
             current_state = {
                 k: v.clone() for k, v in self.backbone_model.state_dict().items()
             }
 
             for checkpoint_path in post_hoc_checkpoints:
-                # Extract sigma value from filename
                 sigma = float(checkpoint_path.stem.split("_post_hoc_ema_")[-1])
-
-                # Load and evaluate the post-hoc EMA checkpoint
                 checkpoint = torch.load(checkpoint_path, map_location=self.device)
-
-                # Load post-hoc EMA weights
                 self.backbone_model.load_state_dict(checkpoint["model"])
 
-                # Evaluate
                 self.print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
-                metrics = self._evaluate(ema_suffix=f"_post_hoc_ema_{sigma}", mode=mode)
+                metrics = self._evaluate()
                 all_eval_metrics[f"post_hoc_ema_{sigma}"] = metrics
 
-                # Delete post-hoc checkpoint from RAM and disk
                 del checkpoint
                 wait_for_all_processes()
                 if DIST_WRAPPER.rank == 0:
                     os.remove(checkpoint_path)
 
-            # Restore original model state
             self.backbone_model.load_state_dict(current_state)
 
-        # Plot all the metrics on Neptune
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
             log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
 
     @torch.no_grad()
-    def _evaluate(self, ema_suffix: str = "", mode: str = "eval"):
-        # Init Metric Aggregator
+    def _evaluate(self) -> dict:
+        """Run evaluation loop on all test datasets.
+
+        Returns:
+            Dictionary of evaluation metrics.
+        """
         simple_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
-        # rotamer_score = PerResidueRotamerScore()
-        # rama_score = PerResidueRamaScore()
-        # clash_score = StructureClashScore()
+
         eval_precision = {
             "fp32": torch.float32,
             "bf16": torch.bfloat16,
             "fp16": torch.float16,
         }[self.configs.dtype]
         enable_amp = (
-            torch.autocast(
-                device_type="cuda",
-                dtype=eval_precision,
-            )
+            torch.autocast(device_type="cuda", dtype=eval_precision)
             if torch.cuda.is_available()
             else nullcontext()
         )
@@ -554,172 +493,22 @@ class ArtiosBackboneTrainer(object):
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
-            # evaluated_pids = []
-            # total_batch_num = len(test_dl)
 
-            for index, batch in enumerate(tqdm(test_dl)):
-                batch = to_device(batch, self.device)
-                pid = batch["basic"]["pdb_id"][0]
+            for index, context in enumerate(tqdm(test_dl)):
+                context = context.to(self.device)
 
-                # if index + 1 == total_batch_num and DIST_WRAPPER.world_size > 1:
-                #     # Gather all pids across ranks for avoiding duplicated evaluations when drop_last = False
-                #     all_data_ids = DIST_WRAPPER.all_gather_object(evaluated_pids)
-                #     dedup_ids = set(sum(all_data_ids, []))
-                #     if pid in dedup_ids:
-                #         print(
-                #             f"Rank {DIST_WRAPPER.rank}: Drop data_id {pid} as it is already evaluated."
-                #         )
-                #         break
-                # evaluated_pids.append(pid)
-
-                simple_metrics = {}
                 with enable_amp:
-                    batch, _ = self.model_forward(batch, mode=mode, seed=index)
-                    # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict = self.get_loss(
-                        batch, mode="train"
-                    )  # eval, loss evaluated in the same way as train
-                    simple_metrics.update(loss_dict)
+                    output = self.model_forward(context, mode=Mode.EVAL, seed=index)
+                    _, loss_dict = self.get_loss(output, context)
 
-                # Metrics
-                for key, value in simple_metrics.items():
+                for key, value in loss_dict.items():
                     simple_metric_wrapper.add(key, value, namespace="val")
 
-                # Inference
-                if (
-                    self.configs.run_training_time_inference
-                    and index < 20
-                    and DIST_WRAPPER.rank == 0
-                ):
-                    backbone_pred_dict, _, _ = self.backbone_model(
-                        input_feature_dict=batch["input_feature_dict"],
-                        label_dict=batch["label_dict"],
-                        label_full_dict=None,
-                        mode="inference",
-                    )
-
-                    allatom_mpnn_pred_dict = None
-                    if self.configs.run_training_time_mpnn_inference_on_backbones:
-                        mpnn_batch = {}
-                        cropped_atom_array = batch["cropped_atom_array"]
-                        cropped_token_array = batch["cropped_token_array"]
-
-                        cropped_atom_array.coord = backbone_pred_dict["coordinate"]
-
-                        mpnn_batch["cropped_atom_array"] = cropped_atom_array
-                        mpnn_batch["cropped_token_array"] = cropped_token_array
-
-                        mpnn_featurizer = ContextGenerator(
-                            cropped_token_array=cropped_token_array,
-                            cropped_atom_array=cropped_atom_array,
-                            ref_pos_augment=True,
-                            lig_atom_rename=False,
-                        )
-                        mpnn_batch["input_feature_dict"] = (
-                            mpnn_featurizer.get_mpnn_features()
-                        )
-                        mpnn_batch["label_dict"] = mpnn_featurizer.get_labels()
-
-                        allatom_mpnn_pred_dict, _, _ = (
-                            self.allatom_mpnn_model(  # TODO: initialise me !
-                                input_feature_dict=mpnn_batch["input_feature_dict"],
-                                label_full_dict=None,
-                                label_dict=mpnn_batch["label_dict"],
-                                mode="inference",
-                                temperature=0.1,
-                                # decoding_order=?,
-                                # seed=?,
-                            )
-                        )
-
-                    saved_files = None
-                    if DIST_WRAPPER.rank == 0:
-                        coordinate = batch["pred_dict"]["coordinate"][0]
-                        atom_array = batch["cropped_atom_arrays"][0]
-                        n_atoms = len(atom_array)
-                        n_sample = coordinate.shape[-3]
-                        atom_array.set_annotation("b_factor", atom_array.is_motif)
-                        # NOTE: this will include the atoms of unresolved residues.
-                        # These were masked when passed through to MPNN so the output
-                        # will be nonsensical. Filtering for these will:
-                        #   1. leave breaks in the backbone if unresolved residues lie
-                        # within the main structure
-                        #   2. remove the "blobs" found in inference outputs caused
-                        # by the inputted PDB data not having any crystallographic data
-                        # and consequently being labelled as is_resolved=False
-                        # NOTE: the above will not be a problem when performing this model
-                        # is placed in our full eval pipeline as our design model will
-                        # not be designing unresolved residues.
-                        # NOTE: I think we still have the age-old problem of attending to
-                        # unresolved residues during training though...
-                        batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
-                        # Expand is_motif along first dim by n_sample: [n_atom,] -> [n_sample, n_atom]
-                        is_motif = np.tile(
-                            atom_array.is_motif[np.newaxis, :], (n_sample, 1)
-                        )
-                        saved_files = self.dumper.dump(
-                            dataset_name=test_name,
-                            pdb_id=pid,
-                            seed=0,
-                            pred_dict=batch["pred_dict"],
-                            atom_array=atom_array,
-                            entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
-                            b_factor=is_motif,
-                        )
-
-                    # TODO: calculate a motif RMSD score between packed and backbone is_motif
-                    # TODO: work out how best to log this
-                    # if packed_atom_array_list is not None:
-                    #     for idx, (b_aa, p_aa) in enumerate(
-                    #         zip(backbone_atom_array_list, packed_atom_array_list)
-                    #     ):
-                    #         backbone_motif = b_aa[b_aa.is_motif > 0]
-                    #         packed_motif = p_aa[p_aa.is_motif > 0]
-                    #         motif_rmsd = np.sqrt(
-                    #             np.mean(
-                    #                 np.sum(
-                    #                     (backbone_motif.coord - packed_motif.coord)
-                    #                     ** 2,
-                    #                     axis=-1,
-                    #                 )
-                    #             )
-                    #         )
-
-                    # rotamer_score.update(packed_atom_array_list)
-                    # rama_score.update(packed_atom_array_list)
-                    # clash_score.update(packed_atom_array_list)
-
-                    # Log structure files to Neptune Scale
-                    if self.configs.use_wandb:
-                        if saved_files is not None:
-                            files_dict = {}
-                            for file_path in saved_files:
-                                # Create a relative key for Neptune using test_name/pdb_id/filename
-                                filename = os.path.basename(file_path)
-                                neptune_key = f"structures/{test_name}/{pid}/{filename}"
-                                files_dict[neptune_key] = file_path
-
-                            self.neptune_run.log_files(
-                                files=files_dict,
-                                step=self.step,
-                            )
-                    del saved_files
-                del batch, simple_metrics
-
+                del context, output
                 if index % 5 == 0:
-                    # Release some memory periodically
                     torch.cuda.empty_cache()
 
             metrics = simple_metric_wrapper.calc()
-            # if rotamer_score.num_total_residues > 0.0:
-            #     metrics["val/rotamer_score"] = rotamer_score.compute()
-            # if rama_score.num_total_residues > 0.0:
-            #     metrics["val/rama_score"] = rama_score.compute()
-            # if clash_score.num_total_interactions > 0.0:
-            #     metrics["val/clash_score"] = clash_score.compute()
-            # rotamer_score.reset()
-            # rama_score.reset()
-            # clash_score.reset()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
         return metrics
@@ -742,10 +531,14 @@ class ArtiosBackboneTrainer(object):
         self.optimizer.zero_grad(set_to_none=True)
 
     @profile_function("train_step")
-    def train_step(self, batch: dict):
+    def train_step(self, context: FullContext):
+        """Execute a single training step.
+
+        Args:
+            context: Full context containing features and labels.
+        """
         self.backbone_model.train()
 
-        # FP16 training has not been verified yet
         train_precision = {
             "fp32": torch.float32,
             "bf16": torch.bfloat16,
@@ -765,8 +558,8 @@ class ArtiosBackboneTrainer(object):
         )
 
         with enable_amp:
-            batch, _ = self.model_forward(batch, mode="train")
-            loss, loss_dict = self.get_loss(batch, mode="train")
+            output = self.model_forward(context, mode=Mode.TRAIN)
+            loss, loss_dict = self.get_loss(output, context)
 
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):
@@ -786,6 +579,7 @@ class ArtiosBackboneTrainer(object):
             self.update()
             self.optimizer_step(scaler)
             self.lr_scheduler.step()
+
         for key, value in loss_dict.items():
             if "loss" not in key:
                 continue
@@ -889,75 +683,47 @@ class ArtiosBackboneTrainer(object):
         if self.configs.monitor.grad_norm:
             _, total_norm = grad_norm(self.backbone_model, norm_type=2)
 
-            # Average across all ranks
-            # def numpy_mean_aggregation(values):
-            #    return float(np.mean(values))  # Convert to float in case of numpy types
-            # total_norm = gather_and_merge(total_norm, numpy_mean_aggregation)
-
             # Log to neptune
             if DIST_WRAPPER.rank == 0:
                 self.neptune_run.log_metrics({"grad_norm": total_norm}, step=self.step)
 
     def save_training_sample(
         self,
-        batch: dict,
+        context: FullContext,
         motif_as_b_factor: bool = False,
     ):
-        """Saves a training sample to the training samples directory."""
-        arrays = batch["cropped_atom_arrays"]
-        for idx, atom_array in enumerate(arrays):
-            pdb_id = batch["basic"]["pdb_id"][idx]
+        """Saves a training sample to the training samples directory.
+
+        Args:
+            context: Full context containing atom arrays and pdb ids.
+            motif_as_b_factor: If True, set b_factor to is_motif annotation.
+        """
+        from biotite.structure.io import save_structure
+
+        atom_arrays = context.basic.atom_array
+        pdb_ids = context.basic.pdb_id
+
+        for idx, atom_array in enumerate(atom_arrays):
+            if atom_array is None:
+                continue
+            pdb_id = pdb_ids[idx]
             if motif_as_b_factor:
                 atom_array.b_factor = atom_array.is_motif
             save_structure(
                 os.path.join(self.training_samples_dir, f"{pdb_id}.cif"), atom_array
             )
 
-    def save_outputs(
-        self,
-        pred_dict: dict,
-        batch: dict,
-        ema_suffix: str,
-        structure_type: str = "backbone",
-        motif_as_b_factor: bool = False,
-    ):
-        """Saves outputs to CIFs."""
-        cropped_atom_array = batch["cropped_atom_arrays"][0]
-        pdb_id = batch["basic"]["pdb_id"]
-
-        coordinate = pred_dict["coordinate"].detach().cpu().numpy()
-        self.print(f"Coordinate shape: {coordinate.shape}")
-
-        if motif_as_b_factor:
-            cropped_atom_array.b_factor = cropped_atom_array.is_motif
-
-        # Save each sample
-        saved_files = []
-        atom_arrays = []
-        for idx in range(coordinate.shape[-4]):
-            output_path = os.path.join(
-                self.prediction_dir,
-                f"{pdb_id}_{structure_type}_sample_{idx}_{ema_suffix}.cif",
-            )
-            sample_coords = coordinate[idx]
-            # Call save_to_cif function
-            try:
-                save_structure_cif(
-                    atom_array=cropped_atom_array,
-                    pred_coordinate=sample_coords,
-                    output_fpath=output_path,
-                    entity_poly_type=None,
-                    pdb_id=pdb_id,
-                )
-                saved_files.append(output_path)
-                atom_arrays.append(cropped_atom_array)
-                self.print(f"Saved sample {idx} to {output_path}")
-
-            except Exception as e:
-                self.print(f"Error saving sample {idx}: {e}")
-                continue
-
-        return saved_files, atom_arrays
+    # TODO: Re-add save_outputs method cleanly when inference output saving is needed
+    # def save_outputs(
+    #     self,
+    #     output: ModelOutput,
+    #     context: FullContext,
+    #     ema_suffix: str,
+    #     structure_type: str = "backbone",
+    #     motif_as_b_factor: bool = False,
+    # ):
+    #     """Saves outputs to CIFs."""
+    #     pass
 
     def run(self):
         """
@@ -972,37 +738,42 @@ class ArtiosBackboneTrainer(object):
         use_ema = hasattr(self, "power_law_ema_wrappers")
         self.print(f"Using power law ema's: {use_ema}")
 
+        enable_profiling = self.configs.get("enable_profiling", False)
+
         def trace_handler(p):
             output = p.key_averages().table(
                 sort_by="self_cuda_time_total", row_limit=20
             )
-            print(output)
-            # Only save trace from rank 0 to avoid file conflicts
+            self.print(output)
             if DIST_WRAPPER.rank == 0:
                 tracename = f"trace_{p.step_num}_rank{DIST_WRAPPER.rank}.json"
                 filepath = f"{self.logs_dir}/{tracename}"
-                # Ensure directory exists before writing
                 os.makedirs(self.logs_dir, exist_ok=True)
                 p.export_chrome_trace(filepath)
-                # self.neptune_log_files({f"profiling/{tracename}": filepath})
 
-        with torch.profiler.profile(
-            activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.CUDA,
-            ],
-            schedule=torch.profiler.schedule(
-                wait=10,
-                warmup=10,
-                active=10,
-                skip_first=50,
-                skip_first_wait=1,
-                repeat=1,
-            ),
-            on_trace_ready=trace_handler,
-        ) as p:
+        profiler_context = (
+            torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                schedule=torch.profiler.schedule(
+                    wait=10,
+                    warmup=10,
+                    active=10,
+                    skip_first=50,
+                    skip_first_wait=1,
+                    repeat=1,
+                ),
+                on_trace_ready=trace_handler,
+            )
+            if enable_profiling
+            else nullcontext()
+        )
+
+        with profiler_context as p:
             while True:
-                for batch in self.train_dl:
+                for context in self.train_dl:
                     is_update_step = (
                         self.global_step + 1
                     ) % self.iters_to_accumulate == 0
@@ -1025,16 +796,18 @@ class ArtiosBackboneTrainer(object):
                     step_need_eval &= is_update_step
                     step_need_save &= is_update_step
 
-                    batch = to_device(batch, self.device, non_blocking=True)
+                    context = context.to(self.device, non_blocking=True)
 
                     if is_save_training_sample_step:
-                        self.save_training_sample(batch, motif_as_b_factor=True)
+                        self.save_training_sample(context, motif_as_b_factor=True)
 
                     self.progress_bar()
-                    self.train_step(batch)
+                    self.train_step(context)
+
                     if use_ema and is_update_step:
                         for wrapper in self.power_law_ema_wrappers:
                             wrapper.update(t=self.step + 1)
+
                     if step_need_log or is_last_step:
                         metrics = self.train_metric_wrapper.calc()
                         self.print(f"Step {self.step} train: {metrics}")
@@ -1057,8 +830,8 @@ class ArtiosBackboneTrainer(object):
                             self.neptune_run.log_metrics(metrics, step=self.step)
 
                     if step_need_save or is_last_step:
-                        self.print(f"beginning Saving checkpoint at step {self.step}")
-                        self.save_checkpoint()  # Saves non-ema checkpoint
+                        self.print(f"Saving checkpoint at step {self.step}")
+                        self.save_checkpoint()
                         if use_ema:
                             for wrapper in self.power_law_ema_wrappers:
                                 wrapper.apply_shadow()
@@ -1076,12 +849,13 @@ class ArtiosBackboneTrainer(object):
                     self.global_step += 1
                     if self.global_step % self.iters_to_accumulate == 0:
                         self.step += 1
+
                     if self.step >= self.configs.max_steps:
                         self.print(f"Finish training after {self.step} steps")
                         break
 
-                    # Profiler step
-                    p.step()
+                    if enable_profiling:
+                        p.step()
 
                 if self.step >= self.configs.max_steps:
                     break

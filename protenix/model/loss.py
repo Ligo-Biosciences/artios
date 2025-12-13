@@ -77,7 +77,7 @@ class BaseLoss(nn.Module, ABC):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> Tuple[Tensor, Dict[str, Tensor], Dict[str, Tensor]]:
+    ) -> Tuple[Tensor, Dict[str, Tensor]]:
         """Forward pass with reduction."""
         loss, metrics = self.compute_loss(output, context)
         loss = loss_reduction(loss, self.reduction)
@@ -171,34 +171,34 @@ class MSELoss(BaseLoss):
         sigma: Optional[float] = None,
         metric_suffix: Optional[str] = "",
     ) -> None:
-        super().__init__(reduction=reduction)
-        """
-+          Args:
-           pred_key: Key to extract prediction from pred_dict
-           true_key: Key to extract ground truth from label_dict
-           mask_key: Key to extract mask from label_dict
-           protein_mask_key: Key for protein mask in feat_dict
-           dna_mask_key: Key for DNA mask in feat_dict
-           rna_mask_key: Key for RNA mask in feat_dict
-           ligand_mask_key: Key for ligand mask in feat_dict
-           motif_mask_key: Key for motif mask in feat_dict
-           motif_related_mask_key: Key for motif related mask in feat_dict
-           weight_protein: Weight for protein
-           weight_dna: Weight for DNA
-           weight_rna: Weight for RNA
-           weight_ligand: Weight for ligand
-           weight_motif: Weight for motif
-           weight_motif_related: Weight for motif related
-           enable_alignment: Whether to align before MSE
-           expand_ground_truth: Whether to expand GT over samples
-           reduction: Reduction method
-           eps: Epsilon for stability
-           extra_filter_mask_key: Key to extract extra filter mask from label_dict
-           timestep_key: Key to extract timestep from pred_dict
-           timestep_scale_clamp: Clamp the timestep to this value
-           sigma: The sigma for per-sample scale computation
-           metric_suffix: Suffix for the metric key. One of "centre_atom" or "latent". 
-               If empty, no suffix is added.
+        """Initialize MSELoss.
+
+        Args:
+            pred_key: Key to extract prediction from pred_dict.
+            true_key: Key to extract ground truth from label_dict.
+            mask_key: Key to extract mask from label_dict.
+            protein_mask_key: Key for protein mask in feat_dict.
+            dna_mask_key: Key for DNA mask in feat_dict.
+            rna_mask_key: Key for RNA mask in feat_dict.
+            ligand_mask_key: Key for ligand mask in feat_dict.
+            motif_mask_key: Key for motif mask in feat_dict.
+            motif_related_mask_key: Key for motif related mask in feat_dict.
+            weight_protein: Weight for protein.
+            weight_dna: Weight for DNA.
+            weight_rna: Weight for RNA.
+            weight_ligand: Weight for ligand.
+            weight_motif: Weight for motif.
+            weight_motif_related: Weight for motif related.
+            enable_alignment: Whether to align before MSE.
+            expand_ground_truth: Whether to expand GT over samples.
+            reduction: Reduction method.
+            eps: Epsilon for stability.
+            extra_filter_mask_key: Key to extract extra filter mask from label_dict.
+            timestep_key: Key to extract timestep from pred_dict.
+            timestep_scale_clamp: Clamp the timestep to this value.
+            sigma: The sigma for per-sample scale computation.
+            metric_suffix: Suffix for the metric key. One of "centre_atom" or "latent".
+                If empty, no suffix is added.
         """
         super().__init__(reduction=reduction)
 

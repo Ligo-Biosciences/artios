@@ -221,6 +221,12 @@ class ArtiosBackboneTrainer(object):
         self.optimizer = get_optimizer(self.configs, self.backbone_model)
         self.init_scheduler()
 
+        # Initialize GradScaler once for use across all training steps
+        self.scaler = torch.GradScaler(
+            device="cuda" if self.use_cuda else "cpu",
+            enabled=(self.configs.dtype == "fp16"),
+        )
+
     def init_scheduler(self, **kwargs):
         self.lr_scheduler = get_lr_scheduler(self.configs, self.optimizer, **kwargs)
 
@@ -521,13 +527,13 @@ class ArtiosBackboneTrainer(object):
             )
 
     @profile_function("backward_pass")
-    def backward_pass(self, loss, scaler):
-        scaler.scale(loss / self.iters_to_accumulate).backward()
+    def backward_pass(self, loss):
+        self.scaler.scale(loss / self.iters_to_accumulate).backward()
 
     @profile_function("optimizer_step")
-    def optimizer_step(self, scaler):
-        scaler.step(self.optimizer)
-        scaler.update()
+    def optimizer_step(self):
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
         self.optimizer.zero_grad(set_to_none=True)
 
     @profile_function("train_step")
@@ -552,11 +558,6 @@ class ArtiosBackboneTrainer(object):
             else nullcontext()
         )
 
-        scaler = torch.GradScaler(
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            enabled=(self.configs.dtype == "float16"),
-        )
-
         with enable_amp:
             output = self.model_forward(context, mode=Mode.TRAIN)
             loss, loss_dict = self.get_loss(output, context)
@@ -565,7 +566,7 @@ class ArtiosBackboneTrainer(object):
             if is_loss_nan_check(loss):
                 self.print(f"Skip iteration with NaN loss: {self.step} steps")
                 loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
-        self.backward_pass(loss, scaler)
+        self.backward_pass(loss)
 
         # For simplicity, the global training step is used
         if (self.global_step + 1) % self.iters_to_accumulate == 0:
@@ -573,11 +574,11 @@ class ArtiosBackboneTrainer(object):
                 f"self.step {self.step}, self.iters_to_accumulate: {self.iters_to_accumulate}"
             )
             # Unscales the gradients of optimizer's assigned parameters in-place
-            scaler.unscale_(self.optimizer)
+            self.scaler.unscale_(self.optimizer)
             self.on_before_optimizer_step()
             # Do grad clip only
             self.update()
-            self.optimizer_step(scaler)
+            self.optimizer_step()
             self.lr_scheduler.step()
 
         for key, value in loss_dict.items():

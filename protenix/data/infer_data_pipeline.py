@@ -14,18 +14,16 @@
 
 import json
 import logging
-import time
 import traceback
 import warnings
-from typing import Any, Mapping
+from typing import Any
 
 import torch
 from biotite.structure import AtomArray
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
 from protenix.data.json_parser import parse_input_dict
-from protenix.data.json_to_feature import SampleDictToFeatures
-from protenix.data.utils import data_type_transform
+from protenix.data.json_to_context import InputToContext
 from protenix.utils.distributed import DIST_WRAPPER
 
 logger = logging.getLogger(__name__)
@@ -77,125 +75,6 @@ class InferenceDataset(Dataset):
         with open(self.input_json_path, "r") as f:
             self.inputs = json.load(f)
 
-    def process_one(
-        self,
-        sample_input: Mapping[str, Any],
-    ) -> tuple[dict[str, torch.Tensor], AtomArray, dict[str, float]]:
-        """
-        Processes a single sample from the input JSON to generate features and statistics.
-
-        Args:
-            sample_input: A validated Pydantic input object (MotifInput or SequenceDesignInput).
-
-        Returns:
-            A tuple containing:
-                - A dictionary of features.
-                - An AtomArray object.
-                - A dictionary of time tracking statistics.
-        """
-        # general features
-        t0 = time.time()
-        sample2feat = SampleDictToFeatures(
-            sample_input,
-        )
-        features_dict, atom_array, token_array = sample2feat.get_feature_dict()
-
-        # is_hotspot = torch.zeros(features_dict["is_hotspot"].shape)
-
-        # entity_poly_type = sample2feat.entity_poly_type
-        t1 = time.time()
-
-        # # Msa features
-        # entity_to_asym_id = DataPipeline.get_label_entity_id_to_asym_id_int(atom_array)
-        # msa_features = (
-        #     InferenceMSAFeaturizer.make_msa_feature(
-        #         bioassembly=sample_input["sequences"],
-        #         entity_to_asym_id=entity_to_asym_id,
-        #         token_array=token_array,
-        #         atom_array=atom_array,
-        #     )
-        #     if self.use_msa
-        #     else {}
-        # )
-
-        # Make dummy features for not implemented features
-        # dummy_feats = ["template"]
-        # if len(msa_features) == 0:
-        #     dummy_feats.append("msa")
-        # else:
-        #     msa_features = dict_to_tensor(msa_features)
-        #     features_dict.update(msa_features)
-        # features_dict = make_dummy_feature(
-        #     features_dict=features_dict,
-        #     dummy_feats=dummy_feats,
-        # )
-
-        # Transform to right data type TODO: work out if required
-        feat = data_type_transform(feat_or_label_dict=features_dict)
-
-        t2 = time.time()
-
-        data = {}
-        data["input_feature_dict"] = feat
-
-        # Add dimension related items
-        N_token = feat["token_index"].shape[0]
-        N_atom = feat["atom_to_token_idx"].shape[0]
-        # N_msa = feat["msa"].shape[0]
-
-        stats = {}
-        for mol_type in ["ligand", "protein", "dna", "rna"]:
-            mol_type_mask = feat[f"is_{mol_type}"].bool()
-            stats[f"{mol_type}/atom"] = int(mol_type_mask.sum(dim=-1).item())
-            stats[f"{mol_type}/token"] = len(
-                torch.unique(feat["atom_to_token_idx"][mol_type_mask])
-            )
-
-        N_asym = len(torch.unique(data["input_feature_dict"]["asym_id"]))
-        data.update(
-            {
-                "N_asym": torch.tensor([N_asym]),
-                "N_token": torch.tensor([N_token]),
-                "N_atom": torch.tensor([N_atom]),
-                # "N_msa": torch.tensor([N_msa]),
-            }
-        )
-
-        def formatted_key(key):
-            type_, unit = key.split("/")
-            if type_ == "protein":
-                type_ = "prot"
-            elif type_ == "ligand":
-                type_ = "lig"
-            else:
-                pass
-            return f"N_{type_}_{unit}"
-
-        data.update(
-            {
-                formatted_key(k): torch.tensor([stats[k]])
-                for k in [
-                    "protein/atom",
-                    "ligand/atom",
-                    "dna/atom",
-                    "rna/atom",
-                    "protein/token",
-                    "ligand/token",
-                    "dna/token",
-                    "rna/token",
-                ]
-            }
-        )
-        # data.update({"entity_poly_type": entity_poly_type})
-        t3 = time.time()
-        time_tracker = {
-            "crop": t1 - t0,
-            "featurizer": t2 - t1,
-            "added_feature": t3 - t2,
-        }
-
-        return data, atom_array, token_array, time_tracker
-
     def __len__(self) -> int:
         return len(self.inputs)
 
@@ -203,22 +82,18 @@ class InferenceDataset(Dataset):
         try:
             input_dict = self.inputs[index]
 
-            # Parse and validate the input dict into a Pydantic object
             sample_input = parse_input_dict(input_dict)
 
             sample_name = sample_input.name
             logger.info(f"Featurizing {sample_name}...")
 
-            data, atom_array, token_array, _ = self.process_one(
-                sample_input=sample_input
-            )
-            if atom_array is not None:
-                logger.info(f"DEBUG: atom_array length: {len(atom_array)}")
+            context = InputToContext(
+                input=sample_input,
+            ).get_context()
+
             error_message = ""
         except Exception as e:
-            data, atom_array, token_array = {}, None, None
+            context = None
             error_message = f"{e}:\n{traceback.format_exc()}"
-        # data["sample_name"] = sample_input.name
-        data["sample_name"] = "test"  # TODO: update me to work with new json!
-        data["sample_index"] = index
-        return data, atom_array, token_array, error_message
+
+        return context, error_message

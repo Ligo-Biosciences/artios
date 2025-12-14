@@ -145,7 +145,7 @@ class ArtiosBackbone(nn.Module):
             permute_label=False,
         )
 
-        symmetry_corrected = result.coordinate
+        symmetry_corrected = result.coordinate if result else pred
 
         return ModelOutput(coordinate=symmetry_corrected, timestep=timestep)
 

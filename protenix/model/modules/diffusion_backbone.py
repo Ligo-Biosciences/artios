@@ -2,7 +2,7 @@
 TODO: this filename should eventually just be called diffusion.py I think.
 """
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -153,7 +153,7 @@ class DiffusionConditioning(nn.Module):
     def get_atom_condition(
         self,
         context: FullContext,
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "... n_token c_s"], Float[Tensor, "... n_token n_token c_z"]
     ]:
         """Generate token level single and pair conditioning on the tokens that
@@ -256,7 +256,7 @@ class DiffusionConditioning(nn.Module):
     def get_motif_condition(
         self,
         context: FullContext,
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "... n_token c_s"], Float[Tensor, "... n_token n_token c_z"]
     ]:
         """Generate motif conditioning embeddings.
@@ -323,7 +323,7 @@ class DiffusionConditioning(nn.Module):
         timestep: Float[Tensor, "... n_sample"],
         context: FullContext,
         inplace_safe: bool = False,
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "... n_sample n_token c_s"],
         Float[Tensor, "... n_token n_token c_z"],
     ]:

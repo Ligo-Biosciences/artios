@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from operator import attrgetter
-from typing import Dict, Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -69,7 +69,7 @@ class BaseLoss(nn.Module, ABC):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> Tuple[Tensor, Dict[str, Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """Compute the loss from model outputs and any neccessary context."""
         pass
 
@@ -77,7 +77,7 @@ class BaseLoss(nn.Module, ABC):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> Tuple[Tensor, Dict[str, Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """Forward pass with reduction."""
         loss, metrics = self.compute_loss(output, context)
         loss = loss_reduction(loss, self.reduction)
@@ -112,7 +112,7 @@ class AggregatedLoss(BaseLoss):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> Tuple[Tensor, Dict[str, Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """Compute weighted sum of all component losses."""
         total_loss = torch.tensor(0.0, device=context.token.token_index.device)
         all_metrics = {}
@@ -316,16 +316,16 @@ class MSELoss(BaseLoss):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> tuple[Tensor, Dict[str, Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """
         Args:
             output: the model output.
             context: the full context.
 
         Returns:
-            tuple[Tensor, Dict[str, Tensor]]:
+            tuple[Tensor, dict[str, Tensor]]:
                 - loss (Tensor): the loss
-                - metrics (Dict[str, Tensor]): Dict containing the following keys:
+                - metrics (dict[str, Tensor]): dict containing the following keys:
                     - "mse_protein_loss": List[float]
                     - "mse_dna_loss": List[float]
                     - "mse_rna_loss": List[float]
@@ -496,7 +496,7 @@ class NLLLoss(BaseLoss):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> tuple[Tensor, Dict[str, Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """
         Computes the cross-entropy loss with label smoothing. Loss metrics dict contains
         per entity-type losses

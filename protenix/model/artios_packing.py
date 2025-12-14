@@ -21,7 +21,6 @@ from protenix.model.utils import (
     expand_at_dim,
     noise_w_flow_matching,
 )
-from protenix.utils.permutation import atom_permutation
 
 
 class ArtiosPacking(nn.Module):
@@ -171,20 +170,20 @@ class ArtiosPacking(nn.Module):
             context=context,
         )
 
-        # Correct symmetric atoms
-        result = atom_permutation.run_batched(
-            pred_coord=pred,
-            true_coord=context.coordinate.coordinate,
-            true_coord_mask=context.mask.atom_loss_mask,
-            ref_space_uid=context.reference.ref_space_uid,
-            atom_perm_list=context.atom_perm.perms,
-            pdb_id=context.basic.pdb_id,
-            permute_label=False,
-        )
+        # # Correct symmetric atoms
+        # result = atom_permutation.run_batched(
+        #     pred_coord=pred,
+        #     true_coord=context.coordinate.coordinate,
+        #     true_coord_mask=context.mask.atom_loss_mask,
+        #     ref_space_uid=context.reference.ref_space_uid,
+        #     atom_perm_list=context.atom_perm.perms,
+        #     pdb_id=context.basic.pdb_id,
+        #     permute_label=False,
+        # )
 
-        symmetry_corrected = result.coordinate
+        # symmetry_corrected = result.coordinate
 
-        return ModelOutput(coordinate=symmetry_corrected, timestep=timestep)
+        return ModelOutput(coordinate=pred, timestep=timestep)
 
     def forward(
         self,

@@ -10,7 +10,6 @@ Cross attention and self attention are separated.
 """
 
 from functools import partial
-from typing import List, Tuple
 
 from einops import rearrange
 from torch import Tensor, nn
@@ -134,7 +133,7 @@ class Transformer(nn.Module):
 
     def _prep_blocks(
         self, pair_biases: Tensor, pair_mask: Tensor
-    ) -> List[TransformerBlock]:
+    ) -> list[TransformerBlock]:
         """Prepare the transformer blocks."""
         blocks = [
             partial(block, pair_bias=pair_biases[i], pair_mask=pair_mask)
@@ -332,13 +331,13 @@ class DiffusionTransformer(nn.Module):
     def _prep_blocks(
         self,
         *,
-        scale_attns: Tuple[Tensor, ...],
-        shift_attns: Tuple[Tensor, ...],
-        gate_attns: Tuple[Tensor, ...],
-        scale_mlps: Tuple[Tensor, ...],
-        shift_mlps: Tuple[Tensor, ...],
-        gate_mlps: Tuple[Tensor, ...],
-        pair_biases: Tuple[Tensor, ...],
+        scale_attns: tuple[Tensor, ...],
+        shift_attns: tuple[Tensor, ...],
+        gate_attns: tuple[Tensor, ...],
+        scale_mlps: tuple[Tensor, ...],
+        shift_mlps: tuple[Tensor, ...],
+        gate_mlps: tuple[Tensor, ...],
+        pair_biases: tuple[Tensor, ...],
         pair_mask: Tensor,
     ):
         """Prepare the DiT blocks."""
@@ -617,13 +616,13 @@ class LocalAttnTransformer(nn.Module):
     def _prep_blocks(
         self,
         *,
-        scale_attns: Tuple[Tensor, ...],
-        shift_attns: Tuple[Tensor, ...],
-        gate_attns: Tuple[Tensor, ...],
-        scale_mlps: Tuple[Tensor, ...],
-        shift_mlps: Tuple[Tensor, ...],
-        gate_mlps: Tuple[Tensor, ...],
-        trunked_pair_biases: Tuple[Tensor, ...],
+        scale_attns: tuple[Tensor, ...],
+        shift_attns: tuple[Tensor, ...],
+        gate_attns: tuple[Tensor, ...],
+        scale_mlps: tuple[Tensor, ...],
+        shift_mlps: tuple[Tensor, ...],
+        gate_mlps: tuple[Tensor, ...],
+        trunked_pair_biases: tuple[Tensor, ...],
         trunked_pair_mask: Tensor,
     ):
         """Prepare the DiT blocks."""

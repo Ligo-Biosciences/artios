@@ -159,6 +159,7 @@ def save_model_output_to_cif(
         output_dir_list: List of output directory paths for each sample
         output: ModelOutput containing model predictions
         atom_array: Input AtomArray structure
+        n_atom: Number of atoms in the input atom array
         pdb_id: PDB identifier for the structure
         field_in_b_factor_col (Optional): Field in the AtomArray to use for the b-factor column.
 
@@ -171,7 +172,6 @@ def save_model_output_to_cif(
     # Extract first (and only) item from batch
     coordinate = output.coordinate[0, :, :n_atom].detach().cpu().numpy()
     atom_array = atom_array[0]
-    print("atom array after extracting the first,", atom_array)
 
     saved_files = []
 
@@ -196,12 +196,10 @@ def save_model_output_to_cif(
         )
 
         # Determine output file path
-        output_path = output_dir_list[idx]
+        output_dir = Path(output_dir_list[idx])
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = output_dir / f"{pdb_id}_sample_{idx}.cif"
 
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        # Save using save_structure_cif
         try:
             save_structure_cif(
                 atom_array=predicted_atom_array,

@@ -153,6 +153,25 @@ class Context:
                 kwargs[f.name] = extra_kwargs[f.name]
         return cls(**kwargs)
 
+    def to(self, device: torch.device, non_blocking: bool = False) -> Context:
+        """Move all tensor fields to the specified device.
+
+        Args:
+            device: Target device (e.g., torch.device("cuda")).
+            non_blocking: If True, perform async transfer for pinned memory.
+
+        Returns:
+            New instance with tensors moved to device.
+        """
+        moved_fields = {}
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if torch.is_tensor(value):
+                moved_fields[f.name] = value.to(device, non_blocking=non_blocking)
+            else:
+                moved_fields[f.name] = value
+        return type(self)(**moved_fields)
+
     def pad(
         self,
         pad_fns: dict[FeatureType, Callable[[Tensor], Tensor]],
@@ -487,6 +506,25 @@ class FullContext:
             else:
                 kwargs[f.name] = fg
 
+        return type(self)(**kwargs)
+
+    def to(self, device: torch.device, non_blocking: bool = False) -> FullContext:
+        """Move all tensor fields in all sub-contexts to the specified device.
+
+        Args:
+            device: Target device (e.g., torch.device("cuda")).
+            non_blocking: If True, perform async transfer for pinned memory.
+
+        Returns:
+            New FullContext with all tensors moved to device.
+        """
+        kwargs = {}
+        for f in fields(self):
+            fg = getattr(self, f.name)
+            if isinstance(fg, Context):
+                kwargs[f.name] = fg.to(device, non_blocking=non_blocking)
+            else:
+                kwargs[f.name] = fg
         return type(self)(**kwargs)
 
     def to_dict(self) -> dict[str, dict[str, Any]]:

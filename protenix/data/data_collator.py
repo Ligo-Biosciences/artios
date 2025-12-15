@@ -88,7 +88,7 @@ class CollateContexts:
 
             if torch.is_tensor(values[0]):
                 kwargs[field.name] = torch.stack(values, dim=0)
-            elif isinstance(values[0], (int, float, str, AtomArray, TokenArray)):
+            elif isinstance(values[0], (int, float, str, list, AtomArray, TokenArray)):
                 kwargs[field.name] = values
             else:
                 raise ValueError(f"Unexpected field type: {type(values[0])}")

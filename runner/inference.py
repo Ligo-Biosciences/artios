@@ -182,7 +182,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                 match model_type:
                     case ModelType.BACKBONE | ModelType.PACKING:
                         _ = save_model_output_to_cif(
-                            output_dir_list=configs.dump_dir_list,
+                            output_dir_list=runner.dump_dir_list,
                             output=output,
                             atom_array=context.basic.atom_array,
                             pdb_id=sample_name,
@@ -190,7 +190,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                         )
                     case ModelType.MPNN:
                         _ = save_model_output_to_fasta(  # TODO: implement me!
-                            output_dir_list=configs.dump_dir_list,
+                            output_dir_list=runner.dump_dir_list,
                             output=output,
                             pdb_id=sample_name,
                         )

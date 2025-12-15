@@ -171,14 +171,14 @@ def save_model_output_to_cif(
     saved_files = []
 
     assert (
-        len(output_dir_list) == coordinate.shape[0]
+        len(output_dir_list) == coordinate.shape[-3]
     ), f"Number of output directories must match number of samples, got {len(output_dir_list)=} and {coordinate.shape[0]=}"
 
     assert (
-        coordinate.shape[1] == len(atom_array)
-    ), f"Predicted coordinates must match input atom array size, got {coordinate.shape[1]=} and {len(atom_array)=}"
+        coordinate.shape[-2] == len(atom_array)
+    ), f"Predicted coordinates must match input atom array size, got {coordinate.shape[-2]=} and {len(atom_array)=}"
 
-    for idx in range(coordinate.shape[0]):
+    for idx in range(coordinate.shape[-3]):
         sample_coords = coordinate[idx]  # [N_atom, 3]
 
         # Create a copy of the input atom_array with predicted coordinates

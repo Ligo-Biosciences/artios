@@ -175,7 +175,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
         seed_everything(seed=seed, deterministic=configs.deterministic)
         for context in dataloader:
             try:
-                sample_name = context.basic.pdb_id
+                sample_name = context.basic.pdb_id[0]
 
                 output = runner.predict(context)
 

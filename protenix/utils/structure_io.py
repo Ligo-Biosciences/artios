@@ -147,7 +147,7 @@ def cif_to_pdb(
 def save_model_output_to_cif(
     output_dir_list: List[str],
     output: ModelOutput,
-    atom_array: AtomArray,
+    atom_array: List[AtomArray],
     pdb_id: str,
     field_in_b_factor_col: Optional[str] = None,
 ):
@@ -165,8 +165,11 @@ def save_model_output_to_cif(
         List[Path]: List of paths to the saved CIF files
     """
     assert output.coordinate is not None, "Coordinate is not in ModelOutput."
+    assert output.coordinate.shape[0] == 1, "Batch size must be 1."
 
-    coordinate = output.coordinate.detach().cpu().numpy()
+    # Extract first (and only) item from batch
+    coordinate = output.coordinate[0].detach().cpu().numpy()
+    atom_array = atom_array[0]
 
     saved_files = []
 

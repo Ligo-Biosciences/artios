@@ -246,7 +246,7 @@ model_configs = {
         },
         "train_timestep_sampler": {  # uniform
             "alpha": 1.0,
-            "beta": 1.0,
+            "uniform_weight": 1.0,
         },
         "inference_timestep_scheduler": {
             "la_proteina": {
@@ -393,6 +393,20 @@ loss_configs = {
             "weight_dna": 1.0,
             "weight_rna": 1.0,
             "weight_ligand": 1.0,
+        },
+        "packing": {
+            "mse": {
+                "weight_mse": 1 / 3,
+                "weight_protein": 1.0,
+                "weight_dna": 1.0,
+                "weight_rna": 1.0,
+                "weight_ligand": 1.0,
+                "weight_motif": 0.0,
+                "weight_motif_related": 0.0,
+                "enable_alignment": True,  # No alignment for packing since we align to backbone
+                "eps": 1e-6,
+            },
+            "sigma_coord": 2.0,  # local sigma coord for packing
         },
     },
     "metrics": {

@@ -81,7 +81,7 @@ default_distillation_configs = {
     "lig_atom_rename": GlobalConfigValue("train_lig_atom_rename"),
     "shuffle_mols": GlobalConfigValue("train_shuffle_mols"),
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
-    "filter_unique_fragment_prob": 0.8,
+    "filter_unique_fragment_prob": 1.0,
     "filter_unique_domain_prob": 0.0,
 }
 
@@ -176,10 +176,10 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": False,
     "binding_target_train_rate": 0.0,
-    "filter_unique_fragment_prob": 0.9,
+    "filter_unique_fragment_prob": 1.0,
     "filter_unique_domain_prob": 0.0,
     "motif_training": {
-        "motif_train_rate": 1.0,
+        "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,
         "pocket_motif_prob": 1.0,
         "whole_ligand_prob": 0.7,

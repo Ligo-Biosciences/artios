@@ -406,7 +406,7 @@ loss_configs = {
                 "weight_ligand": 1.0,
                 "weight_motif": 0.0,
                 "weight_motif_related": 0.0,
-                "enable_alignment": False,  # No alignment for packing since we align to backbone
+                "enable_alignment": True,  # No alignment for packing since we align to backbone
                 "eps": 1e-6,
             },
             "sigma_coord": 2.0,  # local sigma coord for packing

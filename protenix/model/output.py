@@ -59,14 +59,10 @@ class ModelOutput:
             if atom_array is None:
                 continue
 
-            coords = self.coordinate[batch_idx]  # [n_sample, n_atom, 3]
-            n_sample = coords.shape[0]
             n_atom = len(atom_array)
-
-            assert coords.shape[-2] == n_atom, (
-                f"Coordinate shape {coords.shape} does not match "
-                f"atom array length {n_atom} for {pdb_id}"
-            )
+            # Slice coordinates to match actual atom array length (coordinates are padded)
+            coords = self.coordinate[batch_idx, :, :n_atom, :]  # [n_sample, n_atom, 3]
+            n_sample = coords.shape[0]
 
             # Create subdirectory for this structure
             structure_dir = os.path.join(output_dir, pdb_id)

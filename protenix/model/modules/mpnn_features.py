@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Tuple
 
 import torch
 from einops import rearrange
@@ -126,7 +125,7 @@ class BaseEdgeFeaturizer(nn.Module, ABC):
         super().__init__(*args, **kwargs)
 
     @abstractmethod
-    def forward(self, context: FullContext) -> Tuple[Tensor, Tensor]:
+    def forward(self, context: FullContext) -> tuple[Tensor, Tensor]:
         """Transform input data into feature representation.
 
         Args:
@@ -206,7 +205,7 @@ class MPNNFeaturizer(nn.Module):
         self,
         centre_atom_coords: Float[Tensor, "batch n_token 3"],
         centre_atom_mask: Bool[Tensor, "batch n_token"],
-    ) -> Tuple[Float[Tensor, "batch n_token k"], Int[Tensor, "batch n_token k"]]:
+    ) -> tuple[Float[Tensor, "batch n_token k"], Int[Tensor, "batch n_token k"]]:
         """Compute k-nearest neighbour distances and edge indices based on centre atom coordinates.
 
         Finds the k-nearest token centre atoms for each token.
@@ -379,7 +378,7 @@ class MPNNFeaturizer(nn.Module):
     def forward(
         self,
         context: FullContext,
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "batch n_token node_dim"],
         Float[Tensor, "batch n_token neighbours edge_dim"],
         Int[Tensor, "batch n_token neighbours"],

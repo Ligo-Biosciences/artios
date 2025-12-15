@@ -58,6 +58,7 @@ basic_configs = {
     "load_ema_checkpoint_paths_directory": "",
     "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],
+    "enable_profiling": True,
 }
 data_configs = {
     # Data
@@ -127,7 +128,6 @@ model_configs = {
     ),  # NOTE: Number of blocks in each activation checkpoint, if None, no checkpointing is performed.
     # switch of kernels
     "use_memory_efficient_kernel": False,
-    "use_deepspeed_evo_attention": False,  # TODO: not using deepspeed
     "use_flash": False,
     "use_lma": False,
     "use_xformer": False,
@@ -154,14 +154,16 @@ model_configs = {
     },
     "train_timestep_sampler": {
         "alpha": 1.9,
-        "beta": 1.0,
+        # "beta": 1.0,
         "uniform_weight": 0.02,
     },
     "inference_timestep_scheduler": {
         "ligo": {"p": -0.7},
         "variable_linear_quadratic": {"m": 0.35, "n": 0.7},
         "la_proteina": {
-            "coord": {"scale": 10.0},
+            "coord": {
+                "scale": 10.0
+            },  # TODO: coord is redundant as we don't have latents
         },
     },
     "sample_diffusion": {
@@ -228,6 +230,7 @@ model_configs = {
     "artios_packing": {
         "model": {  # TODO: these configs will be tidier once Hydra in
             "c_token": 768,
+            "local_sigma_coord": 2.0,  # TODO: make global sigma coord
             "atom_encoder": {
                 "num_blocks": 3,
                 "num_heads": 4,
@@ -265,37 +268,7 @@ model_configs = {
     },
 }
 
-perm_configs = {
-    # Chain and Atom Permutation
-    "chain_permutation": {
-        "train": {
-            "mini_rollout": True,
-            "diffusion_sample": True,  # False
-        },
-        "test": {
-            "diffusion_sample": True,
-        },
-        "permute_by_pocket": True,
-        "configs": {
-            "use_center_rmsd": False,
-            "find_gt_anchor_first": False,
-            "accept_it_as_it_is": False,
-            "enumerate_all_anchor_pairs": False,
-            "selection_metric": "aligned_rmsd",
-        },
-    },
-    "atom_permutation": {
-        "train": {
-            "mini_rollout": True,
-            "diffusion_sample": True,  # False
-        },
-        "test": {
-            "diffusion_sample": True,
-        },
-        "permute_by_pocket": True,
-        "global_align_wo_symmetric_atom": False,
-    },
-}
+
 loss_configs = {
     "loss": {
         "diffusion_lddt_chunk_size": ValueMaybeNone(1),
@@ -463,7 +436,6 @@ configs = {
     **data_configs,
     **optim_configs,
     **model_configs,
-    **perm_configs,
     **loss_configs,
     **monitor_configs,
     **training_time_inference_configs,

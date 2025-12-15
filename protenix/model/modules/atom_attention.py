@@ -1,7 +1,7 @@
 """Atom attention encoder and decoder modules."""
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 from einops import rearrange, repeat
@@ -160,7 +160,7 @@ class AtomAttentionEncoder(nn.Module):
     def _per_atom_conditioning(
         self,
         reference: ReferenceConformerContext,
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "... n_atom c_atom"],
         Float[Tensor, "... n_blocks n_queries n_keys c_atompair"],
     ]:
@@ -246,7 +246,7 @@ class AtomAttentionEncoder(nn.Module):
         r_l: Optional[Float[Tensor, "... n_sample n_atom 3"]] = None,
         s: Optional[Float[Tensor, "... #n_sample n_token c_s"]] = None,
         z: Optional[Float[Tensor, "... #n_sample n_token n_token c_z"]] = None,
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "... n_sample n_token c_token"],
         AtomAttentionSkipConnections,
     ]:

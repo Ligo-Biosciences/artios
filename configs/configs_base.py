@@ -249,7 +249,7 @@ model_configs = {
         },
         "train_timestep_sampler": {  # uniform
             "alpha": 1.0,
-            "beta": 1.0,
+            "uniform_weight": 1.0,
         },
         "inference_timestep_scheduler": {
             "la_proteina": {

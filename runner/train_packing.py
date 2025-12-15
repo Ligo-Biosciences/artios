@@ -523,31 +523,27 @@ class ArtiosPackingTrainer(object):
         ema_suffix: str,
         enable_amp,
     ) -> None:
-        """Run inference on a single sample and log structures to Neptune.
+        """Run inference on a batch and log structures to Neptune.
 
         Args:
-            context: Full context for inference.
+            context: Full context for inference (may be batched).
             test_name: Name of the test dataset.
             ema_suffix: EMA suffix for logging.
-            max_samples: Maximum number of samples to save.
             enable_amp: Autocast context for mixed precision.
         """
-        # Get pdb_id - handle both single and batched cases
+        # Get pdb_ids and atom_arrays - ensure they're lists
         pdb_ids = context.basic.pdb_id
-        if isinstance(pdb_ids, list):
-            pdb_id = pdb_ids[0]
-        else:
-            pdb_id = pdb_ids
+        if not isinstance(pdb_ids, list):
+            pdb_ids = [pdb_ids]
 
-        # Get atom_array - handle both single and batched cases
         atom_arrays = context.basic.atom_array
-        if isinstance(atom_arrays, list):
-            atom_array = atom_arrays[0]
-        else:
-            atom_array = atom_arrays
+        if not isinstance(atom_arrays, list):
+            atom_arrays = [atom_arrays]
 
-        if atom_array is None:
-            self.print(f"Skipping inference for {pdb_id}: atom_array is None")
+        # Check if we have any valid atom arrays
+        valid_count = sum(1 for aa in atom_arrays if aa is not None)
+        if valid_count == 0:
+            self.print("Skipping inference: all atom_arrays are None")
             return
 
         try:
@@ -564,34 +560,39 @@ class ArtiosPackingTrainer(object):
                     self.prediction_dir,
                     test_name,
                     f"step_{self.step}",
-                    f"{prefix}{pdb_id}",
                 )
+                if prefix:
+                    output_dir = os.path.join(output_dir, prefix.rstrip("_"))
 
-                # Save structures to CIF files
-                saved_files = inference_output.save_samples_to_cif(
-                    atom_array=atom_array,
+                # Save structures to CIF files (handles full batch)
+                all_saved_files = inference_output.save_samples_to_cif(
+                    atom_arrays=atom_arrays,
                     output_dir=output_dir,
-                    pdb_id=pdb_id,
-                    batch_idx=0,
+                    pdb_ids=pdb_ids,
                 )
 
                 # Log structure files to Neptune
-                if self.configs.use_wandb and saved_files:
+                if self.configs.use_wandb and all_saved_files:
                     files_dict = {}
-                    for file_path in saved_files:
-                        filename = os.path.basename(file_path)
-                        neptune_key = (
-                            f"structures/{prefix}{test_name}/{pdb_id}/{filename}"
-                        )
-                        files_dict[neptune_key] = file_path
+                    total_files = 0
+                    for pdb_id, saved_files in all_saved_files.items():
+                        for file_path in saved_files:
+                            filename = os.path.basename(file_path)
+                            neptune_key = (
+                                f"structures/{prefix}{test_name}/{pdb_id}/{filename}"
+                            )
+                            files_dict[neptune_key] = file_path
+                            total_files += 1
 
-                    self.neptune_run.log_files(files=files_dict, step=self.step)
-                    self.print(
-                        f"Logged {len(saved_files)} structure files for {pdb_id}"
-                    )
+                    if files_dict:
+                        self.neptune_run.log_files(files=files_dict, step=self.step)
+                        self.print(
+                            f"Logged {total_files} structure files for "
+                            f"{len(all_saved_files)} structures"
+                        )
 
         except Exception as e:
-            self.print(f"Failed inference/logging for {pdb_id}: {e}")
+            self.print(f"Failed inference/logging for batch: {e}")
 
     def update(self):
         # Clip the gradient

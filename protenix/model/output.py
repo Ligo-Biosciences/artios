@@ -20,63 +20,80 @@ class ModelOutput:
 
     def save_samples_to_cif(
         self,
-        atom_array: AtomArray,
+        atom_arrays: list[AtomArray],
         output_dir: str,
-        pdb_id: str,
-        batch_idx: int = 0,
-        max_samples: int | None = None,
+        pdb_ids: list[str],
         entity_poly_type: dict[str, str] | None = None,
-    ) -> list[str]:
+    ) -> dict[str, list[str]]:
         """Save predicted coordinates for multiple samples to CIF files.
 
-        Handles the n_sample dimension by saving each sample to a separate file.
+        Handles both batch and n_sample dimensions by saving each sample
+        for each batch element to a separate file.
 
         Args:
-            atom_array: Biotite AtomArray with the structure template.
-            output_dir: Directory to save CIF files.
-            pdb_id: PDB identifier for naming files.
-            batch_idx: Which batch element to save (default 0).
-            max_samples: Maximum number of samples to save. If None, saves all.
+            atom_arrays: List of Biotite AtomArrays, one per batch element.
+            output_dir: Base directory to save CIF files.
+            pdb_ids: List of PDB identifiers, one per batch element.
             entity_poly_type: Entity poly type information for CIF writing.
 
         Returns:
-            List of file paths of saved CIF files.
+            Dictionary mapping pdb_id to list of saved file paths.
         """
         assert self.coordinate is not None, "No coordinates to save"
 
-        coords = self.coordinate[batch_idx]  # [n_sample, n_atom, 3]
-        n_sample = coords.shape[0]
-        n_atom = len(atom_array)
-
+        batch_size = self.coordinate.shape[0]
+        assert len(atom_arrays) == batch_size, (
+            f"Number of atom arrays ({len(atom_arrays)}) must match "
+            f"batch size ({batch_size})"
+        )
         assert (
-            coords.shape[-2] == n_atom
-        ), f"Coordinate shape {coords.shape} does not match atom array length {n_atom}"
+            len(pdb_ids) == batch_size
+        ), f"Number of pdb_ids ({len(pdb_ids)}) must match batch size ({batch_size})"
 
-        if max_samples is not None:
-            n_sample = min(n_sample, max_samples)
+        all_saved_files: dict[str, list[str]] = {}
 
-        os.makedirs(output_dir, exist_ok=True)
-        saved_files = []
+        for batch_idx in range(batch_size):
+            atom_array = atom_arrays[batch_idx]
+            pdb_id = pdb_ids[batch_idx]
 
-        # Set dummy b_factor if not present
-        if not hasattr(atom_array, "b_factor") or atom_array.b_factor is None:
-            atom_array.set_annotation("b_factor", np.zeros(n_atom))
+            if atom_array is None:
+                continue
 
-        for sample_idx in range(n_sample):
-            if sample_idx == 0:
-                output_fpath = os.path.join(output_dir, f"{pdb_id}.cif")
-            else:
-                output_fpath = os.path.join(
-                    output_dir, f"{pdb_id}_sample_{sample_idx}.cif"
-                )
+            coords = self.coordinate[batch_idx]  # [n_sample, n_atom, 3]
+            n_sample = coords.shape[0]
+            n_atom = len(atom_array)
 
-            save_structure_cif(
-                atom_array=atom_array,
-                pred_coordinate=coords[sample_idx],
-                output_fpath=output_fpath,
-                entity_poly_type=entity_poly_type,
-                pdb_id=pdb_id,
+            assert coords.shape[-2] == n_atom, (
+                f"Coordinate shape {coords.shape} does not match "
+                f"atom array length {n_atom} for {pdb_id}"
             )
-            saved_files.append(output_fpath)
 
-        return saved_files
+            # Create subdirectory for this structure
+            structure_dir = os.path.join(output_dir, pdb_id)
+            os.makedirs(structure_dir, exist_ok=True)
+            saved_files = []
+
+            # Set dummy b_factor if not present
+            if not hasattr(atom_array, "b_factor") or atom_array.b_factor is None:
+                atom_array.set_annotation("b_factor", np.zeros(n_atom))
+
+            for sample_idx in range(n_sample):
+                if sample_idx == 0:
+                    output_fpath = os.path.join(structure_dir, f"{pdb_id}.cif")
+                else:
+                    output_fpath = os.path.join(
+                        structure_dir, f"{pdb_id}_sample_{sample_idx}.cif"
+                    )
+
+                save_structure_cif(
+                    atom_array=atom_array,
+                    pred_coordinate=coords[sample_idx],
+                    output_fpath=output_fpath,
+                    entity_poly_type=entity_poly_type,
+                    pdb_id=pdb_id,
+                )
+                saved_files.append(output_fpath)
+
+            all_saved_files[pdb_id] = saved_files
+
+        return all_saved_files

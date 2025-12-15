@@ -32,6 +32,7 @@ basic_configs = {
     "iters_to_accumulate": 1,
     "eval_only": False,
     "load_backbone_checkpoint_path": "",
+    "load_packing_checkpoint_path": "",
     "load_flow_checkpoint_path": "",
     "load_mpnn_checkpoint_path": "",
     "load_vae_checkpoint_path": "",
@@ -395,6 +396,20 @@ loss_configs = {
             "weight_dna": 1.0,
             "weight_rna": 1.0,
             "weight_ligand": 1.0,
+        },
+        "packing": {
+            "mse": {
+                "weight_mse": 1 / 3,
+                "weight_protein": 1.0,
+                "weight_dna": 1.0,
+                "weight_rna": 1.0,
+                "weight_ligand": 1.0,
+                "weight_motif": 0.0,
+                "weight_motif_related": 0.0,
+                "enable_alignment": False,  # No alignment for packing since we align to backbone
+                "eps": 1e-6,
+            },
+            "sigma_coord": 2.0,  # local sigma coord for packing
         },
     },
     "metrics": {

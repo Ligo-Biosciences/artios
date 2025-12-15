@@ -176,6 +176,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
         for context in dataloader:
             try:
                 sample_name = context.basic.pdb_id[0]
+                n_atom = context.basic.n_atom[0]
 
                 output = runner.predict(context)
 
@@ -185,6 +186,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                             output_dir_list=runner.dump_dir_list,
                             output=output,
                             atom_array=context.basic.atom_array,
+                            n_atom=n_atom,
                             pdb_id=sample_name,
                             field_in_b_factor_col="is_motif",
                         )

@@ -162,9 +162,8 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
 
     for seed in configs.seeds:
         seed_everything(seed=seed, deterministic=configs.deterministic)
-        for batch in dataloader:
+        for context in dataloader:
             try:
-                context = batch[0]
                 sample_name = context.basic.pdb_id
 
                 output = runner.predict(context)

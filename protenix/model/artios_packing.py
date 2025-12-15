@@ -58,7 +58,7 @@ class ArtiosPacking(nn.Module):
         Returns:
             ModelOutput: Model output containing the prediction.
         """
-        N_sample = self.sampling_configs.N_sample
+        n_sample = self.sampling_configs.N_sample
         N_step = self.sampling_configs.N_step
 
         residual_centre_atoms = broadcast_token_to_atom(
@@ -68,7 +68,7 @@ class ArtiosPacking(nn.Module):
         residual_centre_atoms = repeat(
             residual_centre_atoms,
             "... n_atom c -> ... n_sample n_atom c",
-            n_sample=N_sample,
+            n_sample=n_sample,
         )
 
         stochasticity = stochasticity_from_config(
@@ -83,7 +83,7 @@ class ArtiosPacking(nn.Module):
             residual_centre_atoms=residual_centre_atoms,
             stochasticity=stochasticity,
             gamma=self.sampling_configs.gamma,
-            n_sample=N_sample,
+            n_sample=n_sample,
         )
 
         return ModelOutput(coordinate=pred)

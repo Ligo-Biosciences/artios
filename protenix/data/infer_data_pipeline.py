@@ -18,11 +18,10 @@ import traceback
 import warnings
 from typing import Any
 
-import torch
-from biotite.structure import AtomArray
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
 from protenix.data.data_collator import CollateContexts
+from protenix.data.features import FullContext
 from protenix.data.json_parser import parse_input_dict
 from protenix.data.json_to_context import InputToContext
 from protenix.utils.distributed import DIST_WRAPPER
@@ -85,7 +84,7 @@ class InferenceDataset(Dataset):
     def __len__(self) -> int:
         return len(self.inputs)
 
-    def __getitem__(self, index: int) -> tuple[dict[str, torch.Tensor], AtomArray, str]:
+    def __getitem__(self, index: int) -> FullContext:
         try:
             input_dict = self.inputs[index]
 
@@ -98,9 +97,8 @@ class InferenceDataset(Dataset):
                 input=sample_input,
             ).get_context()
 
-            error_message = ""
         except Exception as e:
-            context = None
             error_message = f"{e}:\n{traceback.format_exc()}"
+            raise Exception(error_message)
 
-        return context, error_message
+        return context

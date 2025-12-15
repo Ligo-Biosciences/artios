@@ -261,7 +261,7 @@ model_configs = {
             "stoch_type": "deterministic",
             "gamma": 1.0,
             "sigma_coord": 1.0,
-            "N_sample": GlobalConfigValue("N_sample"),
+            "N_sample": 10,
             "N_step": 200,
             "eps": 1e-5,
         },

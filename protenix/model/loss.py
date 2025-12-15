@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from operator import attrgetter
-from typing import Dict, Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -69,7 +69,7 @@ class BaseLoss(nn.Module, ABC):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> Tuple[Tensor, Dict[str, Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """Compute the loss from model outputs and any neccessary context."""
         pass
 
@@ -77,7 +77,7 @@ class BaseLoss(nn.Module, ABC):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> Tuple[Tensor, Dict[str, Tensor], Dict[str, Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """Forward pass with reduction."""
         loss, metrics = self.compute_loss(output, context)
         loss = loss_reduction(loss, self.reduction)
@@ -112,7 +112,7 @@ class AggregatedLoss(BaseLoss):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> Tuple[Tensor, Dict[str, Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """Compute weighted sum of all component losses."""
         total_loss = torch.tensor(0.0, device=context.token.token_index.device)
         all_metrics = {}
@@ -171,34 +171,34 @@ class MSELoss(BaseLoss):
         sigma: Optional[float] = None,
         metric_suffix: Optional[str] = "",
     ) -> None:
-        super().__init__(reduction=reduction)
-        """
-+          Args:
-           pred_key: Key to extract prediction from pred_dict
-           true_key: Key to extract ground truth from label_dict
-           mask_key: Key to extract mask from label_dict
-           protein_mask_key: Key for protein mask in feat_dict
-           dna_mask_key: Key for DNA mask in feat_dict
-           rna_mask_key: Key for RNA mask in feat_dict
-           ligand_mask_key: Key for ligand mask in feat_dict
-           motif_mask_key: Key for motif mask in feat_dict
-           motif_related_mask_key: Key for motif related mask in feat_dict
-           weight_protein: Weight for protein
-           weight_dna: Weight for DNA
-           weight_rna: Weight for RNA
-           weight_ligand: Weight for ligand
-           weight_motif: Weight for motif
-           weight_motif_related: Weight for motif related
-           enable_alignment: Whether to align before MSE
-           expand_ground_truth: Whether to expand GT over samples
-           reduction: Reduction method
-           eps: Epsilon for stability
-           extra_filter_mask_key: Key to extract extra filter mask from label_dict
-           timestep_key: Key to extract timestep from pred_dict
-           timestep_scale_clamp: Clamp the timestep to this value
-           sigma: The sigma for per-sample scale computation
-           metric_suffix: Suffix for the metric key. One of "centre_atom" or "latent". 
-               If empty, no suffix is added.
+        """Initialize MSELoss.
+
+        Args:
+            pred_key: Key to extract prediction from pred_dict.
+            true_key: Key to extract ground truth from label_dict.
+            mask_key: Key to extract mask from label_dict.
+            protein_mask_key: Key for protein mask in feat_dict.
+            dna_mask_key: Key for DNA mask in feat_dict.
+            rna_mask_key: Key for RNA mask in feat_dict.
+            ligand_mask_key: Key for ligand mask in feat_dict.
+            motif_mask_key: Key for motif mask in feat_dict.
+            motif_related_mask_key: Key for motif related mask in feat_dict.
+            weight_protein: Weight for protein.
+            weight_dna: Weight for DNA.
+            weight_rna: Weight for RNA.
+            weight_ligand: Weight for ligand.
+            weight_motif: Weight for motif.
+            weight_motif_related: Weight for motif related.
+            enable_alignment: Whether to align before MSE.
+            expand_ground_truth: Whether to expand GT over samples.
+            reduction: Reduction method.
+            eps: Epsilon for stability.
+            extra_filter_mask_key: Key to extract extra filter mask from label_dict.
+            timestep_key: Key to extract timestep from pred_dict.
+            timestep_scale_clamp: Clamp the timestep to this value.
+            sigma: The sigma for per-sample scale computation.
+            metric_suffix: Suffix for the metric key. One of "centre_atom" or "latent".
+                If empty, no suffix is added.
         """
         super().__init__(reduction=reduction)
 
@@ -316,16 +316,16 @@ class MSELoss(BaseLoss):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> tuple[Tensor, Dict[str, Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """
         Args:
             output: the model output.
             context: the full context.
 
         Returns:
-            tuple[Tensor, Dict[str, Tensor]]:
+            tuple[Tensor, dict[str, Tensor]]:
                 - loss (Tensor): the loss
-                - metrics (Dict[str, Tensor]): Dict containing the following keys:
+                - metrics (dict[str, Tensor]): dict containing the following keys:
                     - "mse_protein_loss": List[float]
                     - "mse_dna_loss": List[float]
                     - "mse_rna_loss": List[float]
@@ -496,7 +496,7 @@ class NLLLoss(BaseLoss):
         self,
         output: ModelOutput,
         context: FullContext,
-    ) -> tuple[Tensor, Dict[str, Tensor]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """
         Computes the cross-entropy loss with label smoothing. Loss metrics dict contains
         per entity-type losses

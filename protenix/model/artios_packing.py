@@ -68,7 +68,7 @@ class ArtiosPacking(nn.Module):
             ModelOutput: Model output containing the prediction.
         """
         n_sample = self.sampling_configs.N_sample
-        N_step = self.sampling_configs.N_step
+        n_step = self.sampling_configs.N_step
 
         residual_centre_atoms = broadcast_token_to_atom(
             x_token=context.coordinate.centre_coordinate,
@@ -88,7 +88,7 @@ class ArtiosPacking(nn.Module):
         pred = self.sidechain_packer.sample(
             context=context,
             timestep_scheduler=self.inference_timestep_scheduler,
-            n_steps=N_step,
+            n_steps=n_step,
             residual_centre_atoms=residual_centre_atoms,
             stochasticity=stochasticity,
             gamma=self.sampling_configs.gamma,

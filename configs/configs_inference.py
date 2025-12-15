@@ -218,10 +218,11 @@ code_directory = os.path.dirname(current_directory)
 # "./release_data/checkpoint/model_v0.2.0.pt"
 inference_configs = {
     "seeds": ListValue([101]),
+    "model_type": "packing",
     "dump_dir": "./output",
     "need_atom_confidence": False,
     "sorted_by_ranking_score": False,
-    "input_json_path": "i",
+    "input_json_path": "",
     "num_workers": 16,
     "use_msa": False,
 }

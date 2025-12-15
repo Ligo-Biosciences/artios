@@ -217,7 +217,7 @@ def run() -> None:
         arg_str=parse_sys_args(),
         fill_required_with_null=True,
     )
-    main(configs)
+    main(configs, model_type=ModelType(configs.model_type))
 
 
 if __name__ == "__main__":

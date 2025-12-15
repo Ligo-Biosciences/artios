@@ -38,7 +38,6 @@ from protenix.utils.structure_io import (
     save_model_output_to_cif,
     save_model_output_to_fasta,
 )
-from protenix.utils.torch_utils import to_device
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +134,7 @@ class InferenceRunner(object):
             if torch.cuda.is_available()
             else nullcontext()
         )
-        context = to_device(context, self.device)
+        # context = to_device(context, self.device)
         with enable_amp:
             output = self.model(
                 context=context,

@@ -447,8 +447,11 @@ class ArtiosPackingTrainer(object):
             log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
 
     @torch.no_grad()
-    def _evaluate(self) -> dict:
+    def _evaluate(self, ema_suffix: str = "") -> dict:
         """Run evaluation loop on all test datasets.
+
+        Args:
+            ema_suffix: Suffix for logging (e.g., "ema_0.999" or "none-EMA").
 
         Returns:
             Dictionary of evaluation metrics.
@@ -468,6 +471,10 @@ class ArtiosPackingTrainer(object):
 
         self.packing_model.eval()
 
+        # Get inference config
+        run_inference = self.configs.get("run_training_time_inference", False)
+        inference_log_interval = self.configs.get("inference_log_interval", 10)
+
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
 
@@ -481,6 +488,16 @@ class ArtiosPackingTrainer(object):
                 for key, value in loss_dict.items():
                     simple_metric_wrapper.add(key, value, namespace="val")
 
+                # Training-time inference for a subset of samples
+                is_logging_element = (index + 1) % inference_log_interval == 0
+                if run_inference and is_logging_element:
+                    self._run_inference_and_log(
+                        context=context,
+                        test_name=test_name,
+                        ema_suffix=ema_suffix,
+                        enable_amp=enable_amp,
+                    )
+
                 del context, output
                 if index % 5 == 0:
                     torch.cuda.empty_cache()
@@ -488,7 +505,93 @@ class ArtiosPackingTrainer(object):
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
+            # Log validation metrics to Neptune
+            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                prefix = f"{ema_suffix}/" if ema_suffix else ""
+                prefixed_metrics = {
+                    f"{prefix}{test_name}/{k}": v for k, v in metrics.items()
+                }
+                self.neptune_run.log_metrics(prefixed_metrics, step=self.step)
+
         return metrics
+
+    @torch.no_grad()
+    def _run_inference_and_log(
+        self,
+        context: FullContext,
+        test_name: str,
+        ema_suffix: str,
+        enable_amp,
+    ) -> None:
+        """Run inference on a single sample and log structures to Neptune.
+
+        Args:
+            context: Full context for inference.
+            test_name: Name of the test dataset.
+            ema_suffix: EMA suffix for logging.
+            max_samples: Maximum number of samples to save.
+            enable_amp: Autocast context for mixed precision.
+        """
+        # Get pdb_id - handle both single and batched cases
+        pdb_ids = context.basic.pdb_id
+        if isinstance(pdb_ids, list):
+            pdb_id = pdb_ids[0]
+        else:
+            pdb_id = pdb_ids
+
+        # Get atom_array - handle both single and batched cases
+        atom_arrays = context.basic.atom_array
+        if isinstance(atom_arrays, list):
+            atom_array = atom_arrays[0]
+        else:
+            atom_array = atom_arrays
+
+        if atom_array is None:
+            self.print(f"Skipping inference for {pdb_id}: atom_array is None")
+            return
+
+        try:
+            with enable_amp:
+                # Run inference (sampling) to get full structures
+                inference_output = self.model_forward(
+                    context, mode=Mode.INFERENCE, seed=42
+                )
+
+            if DIST_WRAPPER.rank == 0:
+                # Create output directory
+                prefix = f"{ema_suffix}_" if ema_suffix else ""
+                output_dir = os.path.join(
+                    self.prediction_dir,
+                    test_name,
+                    f"step_{self.step}",
+                    f"{prefix}{pdb_id}",
+                )
+
+                # Save structures to CIF files
+                saved_files = inference_output.save_samples_to_cif(
+                    atom_array=atom_array,
+                    output_dir=output_dir,
+                    pdb_id=pdb_id,
+                    batch_idx=0,
+                )
+
+                # Log structure files to Neptune
+                if self.configs.use_wandb and saved_files:
+                    files_dict = {}
+                    for file_path in saved_files:
+                        filename = os.path.basename(file_path)
+                        neptune_key = (
+                            f"structures/{prefix}{test_name}/{pdb_id}/{filename}"
+                        )
+                        files_dict[neptune_key] = file_path
+
+                    self.neptune_run.log_files(files=files_dict, step=self.step)
+                    self.print(
+                        f"Logged {len(saved_files)} structure files for {pdb_id}"
+                    )
+
+        except Exception as e:
+            self.print(f"Failed inference/logging for {pdb_id}: {e}")
 
     def update(self):
         # Clip the gradient

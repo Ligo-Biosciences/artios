@@ -14,14 +14,16 @@
 
 from __future__ import annotations
 
-import copy
 import logging
 import random
 import warnings
 
+import biotite.sequence.io as seqio
 import biotite.structure as struc
+import biotite.structure.io as strucio
 import numpy as np
 from biotite.structure import AtomArray
+from typing_extensions import assert_never
 
 from protenix.common.constants import BACKBONE_DEFS
 from protenix.common.residue_names import PROTEIN_COMMON_ONE_TO_THREE as PROTEIN_1to3
@@ -30,6 +32,7 @@ from protenix.data.json_parser import (
     Backbone,
     CCDLigand,
     MotifInput,
+    PackingInput,
     SequenceDesignInput,
     SMILESLigand,
 )
@@ -40,63 +43,153 @@ from protenix.data.rdkit import AtomInfo, smiles_to_atom_info
 logger = logging.getLogger(__name__)
 
 
-def motif_input_to_atom_array(motif_input: MotifInput) -> AtomArray:
-    """
-    Process motif scaffolding input to build AtomArray.
-    """
-    assert len(motif_input.design) == 1, "Only one design entity is supported"
-
-    # Design
-    design_atom_array = build_backbone(motif_input.design[0])
-
-    design_copy = copy.deepcopy(design_atom_array)
-    design_chain_id = ["0"] * len(design_copy)
-    design_copy.set_annotation("label_asym_id", design_chain_id)
-    design_copy.set_annotation("auth_asym_id", design_chain_id)
-    design_copy.set_annotation("chain_id", design_chain_id)
-    design_copy.set_annotation("label_seq_id", design_copy.res_id)
-    design_copy.set_annotation("copy_id", ["1"] * len(design_copy))
-    design_copy.set_annotation("label_entity_id", ["1"] * len(design_copy))
-    atom_array = design_copy
-
-    # Motif
-    motif_atom_array = build_motif(Motif.from_input(motif_input))  # .to_atom_array()
-    motif_copy = copy.deepcopy(motif_atom_array)
-
-    # TODO: temporary chain annotations before the correct IDs are inferred
-    # in the `add_atom_array_attributes` function of SampleDictToFeatures
-    motif_chain_id = ["1"] * len(motif_copy)
-    motif_copy.set_annotation("label_asym_id", motif_chain_id)
-    motif_copy.set_annotation("auth_asym_id", motif_chain_id)
-    motif_copy.set_annotation("chain_id", motif_chain_id)
-    motif_copy.set_annotation("label_seq_id", motif_copy.res_id)
-    motif_copy.set_annotation("copy_id", ["1"] * len(motif_copy))
-    motif_copy.set_annotation("label_entity_id", ["2"] * len(motif_copy))
-    motif_copy.set_annotation("is_target", [False] * len(motif_copy))
-    motif_copy.set_annotation("is_hotspot", [False] * len(motif_copy))
-    motif_copy.set_annotation("is_resolved", [True] * len(motif_copy))
-    atom_array += motif_copy
-
+def set_chain_and_seq_ids(
+    atom_array: AtomArray,
+    chain_id: int,
+) -> AtomArray:
+    """Assign IDs."""
+    chain_ids = [str(chain_id)] * len(atom_array)
+    atom_array.set_annotation("label_asym_id", chain_ids)
+    atom_array.set_annotation("auth_asym_id", chain_ids)
+    atom_array.set_annotation("chain_id", chain_ids)
+    atom_array.set_annotation("label_seq_id", atom_array.res_id)
+    atom_array.set_annotation("copy_id", ["1"] * len(atom_array))
+    atom_array.set_annotation("label_entity_id", [str(chain_id + 1)] * len(atom_array))
     return atom_array
 
 
+def motif_input_to_atom_array(motif_input: MotifInput) -> AtomArray:
+    """Process motif scaffolding input and builds AtomArray."""
+    assert len(motif_input.design) == 1, "Only one design entity is supported"
+
+    # Build protein array
+    sequence = [PROTEIN_1to3["G"] for _ in range(motif_input.design[0].length)]
+    design_atom_array = _build_polymer_atom_array(sequence)
+    design_atom_array = add_reference_features(design_atom_array)
+    design_atom_array = set_chain_and_seq_ids(design_atom_array, chain_id=0)
+
+    design_atom_array.set_annotation(
+        "is_motif_related", [False] * len(design_atom_array)
+    )
+    design_atom_array.set_annotation("is_motif", [False] * len(design_atom_array))
+
+    # Build motif
+    motif_atom_array = build_motif(Motif.from_input(motif_input))
+    motif_atom_array = set_chain_and_seq_ids(motif_atom_array, chain_id=1)
+
+    return design_atom_array + motif_atom_array
+
+
 def sequence_input_to_atom_array(sequence_input: SequenceDesignInput) -> AtomArray:
-    """Handles atom array generation for tasks with a sequence input and backbone.
-    This is required for packing design tasks."""
-    # TODO: this function will have extra annotation logic
-    return build_sequence_design_structure(sequence_input)
+    """Process sequence design input and builds AtomArray."""
+    # Load stitched backbone from cif
+    designed_array = strucio.load_structure(sequence_input.cif_file.path)
+
+    arrays = []
+    # Build protein array
+    res_ids = np.unique(
+        designed_array[designed_array.chain_id == "A"].res_id
+    )  # TODO: chain ID always 0 in future
+    len_sequence = len(res_ids)
+
+    res_id_to_idx = {res_id: idx for idx, res_id in enumerate(res_ids)}
+
+    sequence = [PROTEIN_1to3["G"] for _ in range(len_sequence)]
+
+    for res in sequence_input.fixed_residues:
+        residue = res.residue
+        if len(residue) == 1:
+            residue = PROTEIN_1to3[residue]
+
+        idx = res_id_to_idx[res.res_id]
+        sequence[idx] = residue
+
+    protein_array = _build_polymer_atom_array(sequence)
+    protein_array = add_reference_features(protein_array)
+    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0)
+
+    arrays.append(protein_array)
+
+    # Build ligand arrays
+    for i, ligand in enumerate(sequence_input.ligands):
+        ligand_array = build_ligand(ligand).atom_array
+        ligand_array = set_chain_and_seq_ids(ligand_array, chain_id=i + 1)
+        arrays.append(ligand_array)
+
+    combined = arrays[0]
+    for arr in arrays[1:]:
+        combined += arr
+
+    # Add the coordinates to combined array
+    assert len(combined) == len(designed_array)
+    combined.coord = designed_array.coord
+
+    combined.set_annotation("is_motif_related", [False] * len(combined))
+    combined.set_annotation("is_motif", [False] * len(combined))
+
+    return combined
+
+
+def packing_input_to_atom_array(packing_input: PackingInput) -> AtomArray:
+    """Process packing input and builds AtomArray."""
+    # Load stitched backbone from cif
+    designed_array = strucio.load_structure(packing_input.cif_file.path)
+
+    arrays = []
+    # Build protein array
+    fasta_dict = seqio.load_sequences(packing_input.fasta_file.path)
+    sequence = list(fasta_dict.values())[0]
+    ccd_seqs = [PROTEIN_1to3[aa] for aa in sequence]
+
+    protein_array = _build_polymer_atom_array(ccd_seqs)
+    protein_array = add_reference_features(protein_array)
+    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0)
+    arrays.append(protein_array)
+
+    # Build ligand arrays
+    for i, ligand in enumerate(packing_input.ligands):
+        ligand_array = build_ligand(ligand).atom_array
+        ligand_array = set_chain_and_seq_ids(ligand_array, chain_id=i + 1)
+        arrays.append(ligand_array)
+
+    combined = arrays[0]
+    for arr in arrays[1:]:
+        combined += arr
+
+    # Get backbone atom masks
+    backbone_atoms = BACKBONE_DEFS["protein"]
+    backbone_design_mask = (designed_array.hetero) | (
+        (~designed_array.hetero) & (np.isin(designed_array.atom_name, backbone_atoms))
+    )
+    backbone_combined_mask = (combined.hetero) | (
+        (~combined.hetero) & (np.isin(combined.atom_name, backbone_atoms))
+    )
+
+    # Add the coordinates to combined array
+    assert sum(backbone_combined_mask.astype(int)) == sum(
+        backbone_design_mask.astype(int)
+    )
+    combined.coord[backbone_combined_mask] = designed_array.coord[backbone_design_mask]
+
+    combined.set_annotation("is_motif_related", [False] * len(combined))
+    combined.set_annotation("is_motif", [False] * len(combined))
+
+    return combined
 
 
 def process_input_to_atom_array(
-    input: MotifInput | SequenceDesignInput,
+    input: MotifInput | SequenceDesignInput | PackingInput,
 ) -> AtomArray:
     """Dispatch to appropriate task-specific processor based on input structure."""
-    if isinstance(input, MotifInput):
-        return motif_input_to_atom_array(input)
-    elif isinstance(input, SequenceDesignInput):
-        return sequence_input_to_atom_array(input)
-    else:
-        raise ValueError(f"Unknown input type: {type(input)}")
+    match input:
+        case MotifInput():
+            return motif_input_to_atom_array(input)
+        case SequenceDesignInput():
+            return sequence_input_to_atom_array(input)
+        case PackingInput():
+            return packing_input_to_atom_array(input)
+        case _:
+            assert_never(input)
 
 
 def _build_polymer_atom_array(ccd_seqs: list[str]) -> AtomArray:
@@ -147,13 +240,6 @@ def build_backbone(backbone: Backbone) -> AtomArray:
     atom_array = _build_polymer_atom_array(sequence)
 
     atom_array = add_reference_features(atom_array)
-
-    atom_array.set_annotation("is_motif_related", [False] * len(atom_array))
-    atom_array.set_annotation("is_motif", [False] * len(atom_array))
-    atom_array.set_annotation("is_resolved", [True] * len(atom_array))
-    atom_array.set_annotation("is_target", [False] * len(atom_array))
-    atom_array.set_annotation("is_hotspot", [False] * len(atom_array))
-    atom_array.hetero[:] = False
 
     return atom_array
 
@@ -355,12 +441,12 @@ def build_motif(motif: Motif) -> AtomArray:
     return combined
 
 
-def build_sequence_design_structure(
-    input_data: SequenceDesignInput,
+def build_structure_from_backbone(
+    input_data: SequenceDesignInput | PackingInput,
 ) -> AtomArray:
     """Build atom array from sequence design input.
 
-    Takes a SequenceDesignInput and:
+    Takes a SequenceDesignInput or PackingInput and:
     1. Loads backbone CIF via MMCIFParser
     2. Filters protein residues to backbone atoms only (N, CA, C, O)
     3. Keeps ligand atoms (HETATM) as-is from CIF
@@ -368,7 +454,7 @@ def build_sequence_design_structure(
     5. Adds standard annotations (reference features)
 
     Args:
-        input_data: SequenceDesignInput with backbone file and fixed residues
+        input_data: SequenceDesignInput or PackingInput with backbone file and fixed residues
 
     Returns:
         AtomArray: Complete structure with is_fixed annotation marking
@@ -411,9 +497,8 @@ def build_sequence_design_structure(
 
     # Add is_fixed annotation for fixed residues
     is_fixed = np.zeros(len(combined), dtype=bool)
-    fixed_residue_map = {
-        (fr.chain_id, fr.res_id): fr.residue for fr in input_data.fixed_residues
-    }
+    fixed_residues = getattr(input_data, "fixed_residues", [])
+    fixed_residue_map = {(fr.chain_id, fr.res_id): fr.residue for fr in fixed_residues}
 
     for start, stop in zip(
         struc.get_residue_starts(combined, add_exclusive_stop=True)[:-1],

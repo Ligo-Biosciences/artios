@@ -449,7 +449,7 @@ class FullContext:
     token: TokenContext
     reference: ReferenceConformerContext
     chain_perm: ChainPermContext
-    atom_perm: AtomPermContext
+    # atom_perm: AtomPermContext
     mask: MaskContext
     motif: MotifContext
     index: IndexContext
@@ -529,7 +529,7 @@ class FullContext:
         token = TokenContext.from_dict(d.get("token", {}))
         reference = ReferenceConformerContext.from_dict(d.get("reference", {}))
         chain_perm = ChainPermContext.from_dict(d.get("chain_perm", {}))
-        atom_perm = AtomPermContext.from_dict(d.get("atom_perm", {}))
+        # atom_perm = AtomPermContext.from_dict(d.get("atom_perm", {}))
         mask = MaskContext.from_dict(d.get("mask", {}))
         motif = MotifContext.from_dict(d.get("motif", {}))
         index = IndexContext.from_dict(d.get("index", {}))
@@ -563,7 +563,7 @@ class FullContext:
             token=token,
             reference=reference,
             chain_perm=chain_perm,
-            atom_perm=atom_perm,
+            # atom_perm=atom_perm,
             mask=mask,
             motif=motif,
             index=index,

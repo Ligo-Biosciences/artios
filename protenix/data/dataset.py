@@ -609,13 +609,13 @@ class BaseSingleDataset(Dataset):
         )
 
         t3 = time.time()
-        cropped_atom_array = (
-            self._assign_binding_target(  # TODO: all references to targets can go
-                atom_array=cropped_atom_array,
-                train_with_binding_target=self.train_with_binding_target,
-                binding_target_train_rate=self.binding_target_train_rate,
-            )
-        )
+        # cropped_atom_array = (
+        #     self._assign_binding_target(  # TODO: all references to targets can go
+        #         atom_array=cropped_atom_array,
+        #         train_with_binding_target=self.train_with_binding_target,
+        #         binding_target_train_rate=self.binding_target_train_rate,
+        #     )
+        # )
         timings["assign_binding_target"] = time.time() - t3
 
         # Motif handling

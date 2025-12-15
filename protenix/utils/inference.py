@@ -22,12 +22,14 @@ class ModelConfig:
 
     model_class: type[nn.Module]
     checkpoint_path_key: str
+    n_sample_key: str | None = None
 
 
 MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
     ModelType.BACKBONE: ModelConfig(
         model_class=ArtiosBackbone,
         checkpoint_path_key="load_backbone_checkpoint_path",
+        n_sample_key="sample_diffusion.N_sample",
     ),
     ModelType.MPNN: ModelConfig(
         model_class=ArtiosMPNN,
@@ -36,5 +38,6 @@ MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
     ModelType.PACKING: ModelConfig(
         model_class=ArtiosPacking,
         checkpoint_path_key="load_packing_checkpoint_path",
+        n_sample_key="artios_packing.sample_diffusion.N_sample",
     ),
 }

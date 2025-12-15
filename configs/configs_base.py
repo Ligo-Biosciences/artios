@@ -447,7 +447,7 @@ training_time_inference_configs = {
     "num_workers": 16,
     "use_msa": False,
     # Packing model inference settings
-    "inference_log_interval": 10,  # Run inference every N eval samples
+    "inference_log_interval": 60,  # Run inference every N eval samples
 }
 
 configs = {

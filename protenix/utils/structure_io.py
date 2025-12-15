@@ -148,6 +148,7 @@ def save_model_output_to_cif(
     output_dir_list: List[str],
     output: ModelOutput,
     atom_array: List[AtomArray],
+    n_atom: int,
     pdb_id: str,
     field_in_b_factor_col: Optional[str] = None,
 ):
@@ -170,6 +171,7 @@ def save_model_output_to_cif(
     # Extract first (and only) item from batch
     coordinate = output.coordinate[0].detach().cpu().numpy()
     atom_array = atom_array[0]
+    print("atom array after extracting the first,", atom_array)
 
     saved_files = []
 
@@ -182,7 +184,7 @@ def save_model_output_to_cif(
     ), f"Predicted coordinates must match input atom array size, got {coordinate.shape[-2]=} and {len(atom_array)=}"
 
     for idx in range(coordinate.shape[-3]):
-        sample_coords = coordinate[idx]  # [N_atom, 3]
+        sample_coords = coordinate[idx, :n_atom]  # [N_atom, 3]
 
         # Create a copy of the input atom_array with predicted coordinates
         predicted_atom_array = atom_array.copy()

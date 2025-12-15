@@ -7,8 +7,8 @@ from typing_extensions import assert_never
 
 from protenix.data.features import FullContext
 from protenix.model.generator import (
-    BetaWithUniform,
     LaProteinaCoordScheduler,
+    ProteinaCoordSampler,
     stochasticity_from_config,
 )
 from protenix.model.modules.sidechain_packer import SidechainPacker
@@ -31,7 +31,7 @@ class ArtiosPacking(nn.Module):
         # Fixed eval generator for reproducibility
         # self.eval_generator = torch.Generator(device=self.device).manual_seed(42)
 
-        self.timestep_sampler = BetaWithUniform(
+        self.timestep_sampler = ProteinaCoordSampler(
             **configs.artios_packing.train_timestep_sampler
         )
 

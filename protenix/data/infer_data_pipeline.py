@@ -22,6 +22,7 @@ import torch
 from biotite.structure import AtomArray
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
+from protenix.data.data_collator import CollateContexts
 from protenix.data.json_parser import parse_input_dict
 from protenix.data.json_to_context import InputToContext
 from protenix.utils.distributed import DIST_WRAPPER
@@ -56,7 +57,13 @@ def get_inference_dataloader(configs: Any) -> DataLoader:
         dataset=inference_dataset,
         batch_size=1,
         sampler=sampler,
-        collate_fn=lambda batch: batch,
+        collate_fn=CollateContexts(
+            atom_bin_ends=configs.data.padding.atom_bin_ends,
+            token_bin_ends=configs.data.padding.token_bin_ends,
+            crop_size=384,
+            motif_training=False,
+            max_motif_residues=10,
+        ),
         num_workers=configs.num_workers,
     )
     return dataloader

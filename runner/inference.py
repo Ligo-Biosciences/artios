@@ -79,15 +79,25 @@ class InferenceRunner(object):
         logging.info("Finished init ENV.")
 
     def init_basics(self) -> None:
+        """Initialize dump directories and error directory.
+
+        Sets up a list of dump directories for each sample, and ensures the error directory exists.
+
+        Creates N_sample dump subdirectories inside dump_dir: dump_dir/0, dump_dir/1, ... etc.
+
+        Raises:
+            ValueError: If configs.N_sample is not a positive integer
+        """
         self.dump_dir = self.configs.dump_dir
         os.makedirs(self.dump_dir, exist_ok=True)
 
-        # self.dump_path_list = self.configs.dump_dir_list
-        self.error_dir = opjoin(self.configs.dump_dir, "ERR")
+        self.dump_dir_list = [
+            os.path.join(self.dump_dir, str(i)) for i in range(self.configs.N_sample)
+        ]
+        for dump_path in self.dump_dir_list:
+            os.makedirs(dump_path, exist_ok=True)
 
-        # for dump_path in self.dump_path_list:
-        #     os.makedirs(dump_path.parent, exist_ok=True)
-
+        self.error_dir = os.path.join(self.dump_dir, "ERR")
         os.makedirs(self.error_dir, exist_ok=True)
 
     def init_model(self) -> None:

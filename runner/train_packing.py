@@ -26,7 +26,6 @@ from protenix.data.dataloader import get_dataloaders
 from protenix.data.features import FullContext
 from protenix.metrics.lddt_metrics import LDDTMetrics
 from protenix.model.artios_packing import ArtiosPacking
-from protenix.model.loss import PackingLoss
 from protenix.model.modules.sidechain_packer import SidechainPacker
 from protenix.model.modules.transformer import DiffusionTransformer, DiTBlock
 from protenix.model.output import ModelOutput
@@ -38,7 +37,6 @@ from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.monitoring import grad_norm
 from protenix.utils.profiler import profile_function
 from protenix.utils.seed import seed_everything
-from protenix.utils.torch_utils import autocasting_disable_decorator
 from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.ema import PowerLawEMAWrapper
@@ -179,7 +177,6 @@ class ArtiosPackingTrainer(object):
         warnings.filterwarnings("ignore", module="atomworks")
 
     def init_loss(self):
-        self.loss = PackingLoss(self.configs)
         self.lddt_metrics = LDDTMetrics(self.configs)
 
     def init_model(self):
@@ -412,12 +409,7 @@ class ArtiosPackingTrainer(object):
         Returns:
             Tuple of (loss tensor, loss metrics dict).
         """
-        self.loss.to(context.coordinate.coordinate.device)
-
-        loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
-            self.loss
-        )(output=output, context=context)
-        return loss, loss_dict
+        return self.raw_packing_model.compute_loss(output, context)
 
     @torch.no_grad()
     def evaluate(self):

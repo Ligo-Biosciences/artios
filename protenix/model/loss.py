@@ -618,6 +618,46 @@ class BackboneLoss(AggregatedLoss):
         super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
 
 
+class PackingLoss(AggregatedLoss):
+    """Packing loss for sidechain packing model."""
+
+    def __init__(self, configs):
+        components = [
+            LossComponent(
+                name="mse_loss",
+                weight=configs.loss.packing.mse.weight_mse,
+                loss=MSELoss(
+                    # Tensor keys
+                    pred_key="coordinate",
+                    true_key="coordinate.coordinate",
+                    mask_key="mask.atom_loss_mask",
+                    # Entity mask keys
+                    protein_mask_key="entity.is_protein",
+                    dna_mask_key="entity.is_dna",
+                    rna_mask_key="entity.is_rna",
+                    ligand_mask_key="entity.is_ligand",
+                    motif_mask_key="motif.is_motif",
+                    motif_related_mask_key="motif.is_motif_related",
+                    # Weights
+                    weight_protein=configs.loss.packing.mse.weight_protein,
+                    weight_dna=configs.loss.packing.mse.weight_dna,
+                    weight_rna=configs.loss.packing.mse.weight_rna,
+                    weight_ligand=configs.loss.packing.mse.weight_ligand,
+                    weight_motif=configs.loss.packing.mse.weight_motif,
+                    weight_motif_related=configs.loss.packing.mse.weight_motif_related,
+                    # Behaviour
+                    enable_alignment=configs.loss.packing.mse.enable_alignment,
+                    expand_ground_truth=True,
+                    # Per sample scale keys
+                    timestep_key="timestep",
+                    sigma=configs.loss.packing.sigma_coord,
+                    metric_suffix="_coord",
+                ),
+            ),
+        ]
+        super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
+
+
 class MPNNLoss(AggregatedLoss):
     """MPNN loss."""
 

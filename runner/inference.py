@@ -80,11 +80,14 @@ class InferenceRunner(object):
         logging.info("Finished init ENV.")
 
     def init_basics(self) -> None:
-        self.dump_path_list = self.configs.dump_dir_list
-        self.error_dir = opjoin(self.configs.error_dir, "ERR")
+        self.dump_dir = self.configs.dump_dir
+        os.makedirs(self.dump_dir, exist_ok=True)
 
-        for dump_path in self.dump_path_list:
-            os.makedirs(dump_path.parent, exist_ok=True)
+        # self.dump_path_list = self.configs.dump_dir_list
+        # self.error_dir = opjoin(self.configs.error_dir, "ERR")
+
+        # for dump_path in self.dump_path_list:
+        #     os.makedirs(dump_path.parent, exist_ok=True)
 
         os.makedirs(self.error_dir, exist_ok=True)
 

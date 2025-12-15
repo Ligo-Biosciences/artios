@@ -134,7 +134,8 @@ class InferenceRunner(object):
             if torch.cuda.is_available()
             else nullcontext()
         )
-        # context = to_device(context, self.device)
+        context = context.to(self.device)
+
         with enable_amp:
             output = self.model(
                 context=context,

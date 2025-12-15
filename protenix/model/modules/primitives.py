@@ -1,5 +1,5 @@
 import math
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Optional, Union
 
 import numpy as np
 import torch
@@ -232,7 +232,7 @@ class LayerNorm(nn.Module):
 
     def __init__(
         self,
-        normalized_shape: Union[int, Tuple[int, ...]],
+        normalized_shape: Union[int, tuple[int, ...]],
         eps: float = 1e-5,
         elementwise_affine: bool = True,
         bias: bool = False,

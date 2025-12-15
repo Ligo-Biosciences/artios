@@ -1,7 +1,7 @@
 """Message passing neural network layers."""
 
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 from jaxtyping import Float, Int
@@ -23,7 +23,7 @@ class BaseMPNNLayer(nn.Module, ABC):
         edge_index: Int[Tensor, "... nodes neighbors"],
         node_mask: Float[Tensor, "... nodes"],
         edge_mask: Float[Tensor, "... nodes neighbors"],
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "... nodes node_dim"],
         Float[Tensor, "... nodes neighbors edge_dim"],
     ]:
@@ -155,7 +155,7 @@ class MPNNEncoderLayer(BaseMPNNLayer):
         edge_index: Int[Tensor, "... nodes neighbors"],
         node_mask: Optional[Float[Tensor, "... nodes"]] = None,
         edge_mask: Optional[Float[Tensor, "... nodes neighbors"]] = None,
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "... nodes node_dim"],
         Float[Tensor, "... nodes neighbors edge_dim"],
     ]:

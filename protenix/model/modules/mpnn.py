@@ -10,7 +10,7 @@ This module provides a cleaner API for the MPNN with:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -321,7 +321,7 @@ class MPNN(nn.Module):
         self,
         encoder_output: EncoderOutput,
         sequence_embeds: Float[Tensor, "batch n_token node_dim"],
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "batch n_token neighbours encoder_hidden"],
         Float[Tensor, "batch n_token neighbours sequence_hidden"],
     ]:
@@ -474,7 +474,7 @@ class MPNN(nn.Module):
         smoothing_factor: float = 0.5,
         show_progress: bool = False,
         seed: Optional[int] = None,
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "batch n_token num_residue_types"],
         Float[Tensor, "batch n_token node_dim"],
     ]:
@@ -564,7 +564,7 @@ class MPNN(nn.Module):
         decoding_order: Optional[Int[Tensor, "batch n_token"]] = None,
         zero_shot: bool = False,
         seed: Optional[int] = None,
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "batch n_token num_residue_types"],
         Float[Tensor, "batch n_token node_dim"],
         Float[Tensor, "batch n_token neighbours edge_dim"],

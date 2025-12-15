@@ -2,6 +2,8 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from einops import repeat
+from torch import Tensor
 from typing_extensions import assert_never
 
 from protenix.data.features import FullContext
@@ -10,9 +12,17 @@ from protenix.model.generator import (
     ProteinaCoordSampler,
     stochasticity_from_config,
 )
+from protenix.model.loss_new import (
+    align_to_prediction,
+    compute_entity_metrics,
+    mse_loss,
+    mse_per_atom,
+    timestep_scale,
+)
 from protenix.model.modules.diffusion_backbone import DiffusionModule
 from protenix.model.output import ModelOutput
 from protenix.model.utils import Mode, centre_random_augmentation, noise_w_flow_matching
+from protenix.utils.casting import disable_autocast
 
 
 class ArtiosBackbone(nn.Module):
@@ -184,3 +194,57 @@ class ArtiosBackbone(nn.Module):
                 assert_never(mode)
 
         return output
+
+    @disable_autocast
+    def compute_loss(
+        self,
+        output: ModelOutput,
+        context: FullContext,
+    ) -> tuple[Tensor, dict[str, list[float]]]:
+        """Compute loss from model output and context.
+
+        Args:
+            output: Model output containing predicted coordinates and timestep.
+            context: Full context containing ground truth and masks.
+
+        Returns:
+            Tuple of (loss tensor, metrics dict for logging).
+        """
+        pred = output.coordinate  # [batch, n_sample, n_atom, 3]
+        n_sample = pred.shape[-3]
+
+        # Expand ground truth and masks to match samples
+        true = repeat(context.coordinate.coordinate, "b n c -> b s n c", s=n_sample)
+        mask = repeat(context.mask.atom_loss_mask, "b n -> b s n", s=n_sample)
+
+        # Align ground truth to prediction
+        true_aligned = align_to_prediction(pred, true, mask)
+
+        # Compute per-sample MSE loss
+        per_sample_mse = mse_loss(pred, true_aligned, mask)  # [batch, n_sample]
+
+        # Scale by timestep
+        scale = timestep_scale(output.timestep, sigma=self.sigma_coord)
+        scaled_mse = scale * per_sample_mse
+
+        # Reduce to scalar
+        loss = scaled_mse.mean()
+
+        # Compute entity metrics for logging
+        per_atom_se = mse_per_atom(pred, true_aligned)  # [batch, n_sample, n_atom]
+        per_atom_se_avg = per_atom_se.mean(dim=-2)  # [batch, n_atom]
+
+        entity_masks = {
+            "protein": context.entity.is_protein,
+            "dna": context.entity.is_dna,
+            "rna": context.entity.is_rna,
+            "ligand": context.entity.is_ligand,
+        }
+        metrics = compute_entity_metrics(
+            per_atom_se_avg, context.mask.atom_loss_mask, entity_masks
+        )
+        metrics["mse_loss"] = [
+            scaled_mse.mean(dim=-1)[i].item() for i in range(pred.shape[0])
+        ]
+
+        return loss, metrics

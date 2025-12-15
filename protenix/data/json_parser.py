@@ -31,6 +31,7 @@ class TaskType(str, Enum):
 
     MOTIF = "motif"
     SEQUENCE = "sequence"
+    PACKING = "packing"
 
 
 class InferenceInputDict(BaseModel):
@@ -54,14 +55,16 @@ class InferenceInputDict(BaseModel):
     spec: dict[str, Any] = Field(..., description="Task-specific input data")
 
 
-def parse_input_dict(input_dict: dict[str, Any]) -> MotifInput | SequenceDesignInput:
+def parse_input_dict(
+    input_dict: dict[str, Any],
+) -> MotifInput | SequenceDesignInput | PackingInput:
     """Parse a single input dict from the inference dataset JSON.
 
     Args:
         input_dict: Dictionary containing 'name', 'task', and 'spec' keys
 
     Returns:
-        Parsed and validated XInput object (MotifInput or SequenceDesignInput)
+        Parsed and validated XInput object (MotifInput or SequenceDesignInput or PackingInput)
 
     Raises:
         pydantic.ValidationError: If input_dict doesn't match expected structure
@@ -91,6 +94,21 @@ def parse_input_dict(input_dict: dict[str, Any]) -> MotifInput | SequenceDesignI
 
             return SequenceDesignInput(**spec_with_name)
 
+        case TaskType.PACKING:
+            # Conveert string cif_file to CIFFile object format if needed
+            if "cif_file" in spec_with_name:
+                cif_file_value = spec_with_name["cif_file"]
+                if isinstance(cif_file_value, str):
+                    spec_with_name["cif_file"] = {"path": cif_file_value}
+
+            # Convert string fasta_file to FastaFile object format if needed
+            if "fasta_file" in spec_with_name:
+                fasta_file_value = spec_with_name["fasta_file"]
+                if isinstance(fasta_file_value, str):
+                    spec_with_name["fasta_file"] = {"path": fasta_file_value}
+
+            return PackingInput(**spec_with_name)
+
 
 # ---------------------------------------------------------------------------
 # Common models
@@ -114,6 +132,26 @@ class CIFFile(BaseModel):
         valid_suffixes = {".cif", ".mmcif"}
         if v.suffix.lower() not in valid_suffixes:
             raise ValueError(f"File must be .cif or .mmcif, got '{v.suffix}'")
+        return v
+
+
+class FastaFile(BaseModel):
+    """A FASTA file.
+
+    Used by packing inputs.
+
+    Example:
+        {"path": "path/to/sequence.fasta"}
+    """
+
+    path: Path = Field(..., description="Path to FASTA file")
+
+    @field_validator("path")
+    @classmethod
+    def validate_file_suffix(cls, v: Path) -> Path:
+        valid_suffixes = {".fasta", ".fa"}
+        if v.suffix.lower() not in valid_suffixes:
+            raise ValueError(f"File must be .fasta or .fa, got '{v.suffix}'")
         return v
 
 
@@ -335,6 +373,9 @@ class SequenceDesignInput(BaseModel):
                 {"chain_id": "A", "res_id": 94, "residue": "HIS"},
                 {"chain_id": "A", "res_id": 96, "residue": "HIS"},
                 {"chain_id": "A", "res_id": 119, "residue": "H"}
+            ],
+            "ligands": [
+                {"type": "smiles", "smiles": "CC(C)c1ccc([S:1](=[O:2])(=[O:3])[N:4])cc1"}
             ]
         }
     """
@@ -346,6 +387,9 @@ class SequenceDesignInput(BaseModel):
     fixed_residues: list[FixedResidue] = Field(
         default_factory=list,
         description="Residues with constrained amino acid identity",
+    )
+    ligands: list[FullLigand] = Field(
+        ..., description="Ligands present in the structure."
     )
 
     @model_validator(mode="after")
@@ -360,6 +404,20 @@ class SequenceDesignInput(BaseModel):
                 )
             seen.add(key)
         return self
+
+
+# ---------------------------------------------------------------------------
+# Packing models
+# ---------------------------------------------------------------------------
+
+
+class PackingInput(BaseModel):
+    name: str | None = Field(default=None, description="Job identifier")
+    cif_file: CIFFile = Field(
+        ..., description="Poly-glycine backbone CIF with ligand(s)"
+    )
+    fasta_file: FastaFile = Field(..., description="Fasta file with sequence")
+    ligands: list[FullLigand] = Field(..., description="Ligands to pack.")
 
 
 # ---------------------------------------------------------------------------

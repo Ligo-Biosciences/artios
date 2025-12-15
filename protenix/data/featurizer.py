@@ -462,7 +462,7 @@ class ContextGenerator(object):
             token=self.get_token_context(),
             reference=self.get_reference_conformer_context(),
             chain_perm=self.get_chain_perm_context(),
-            atom_perm=self.get_atom_permutation_list(),
+            # atom_perm=self.get_atom_permutation_list(),
             mask=self.get_mask_context(),
             motif=self.get_motif_context(),
             index=self.get_index_context(),

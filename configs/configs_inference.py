@@ -221,11 +221,7 @@ inference_configs = {
     "dump_dir": "./output",
     "need_atom_confidence": False,
     "sorted_by_ranking_score": False,
-    "input_json_path": "input_new.json",
-    "load_checkpoint_path": os.path.join(
-        code_directory, "./release_data/checkpoint/model_v0.2.0.pt"
-    ),
+    "input_json_path": "i",
     "num_workers": 16,
     "use_msa": False,
-    # "guidance_model_configs": guidance_model_configs,
 }

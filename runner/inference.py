@@ -52,7 +52,7 @@ class InferenceRunner(object):
         self.init_basics()
         self.init_env()
         self.init_model()
-        self.load_checkpoint()
+        # self.load_checkpoint()
 
     def init_env(self) -> None:
         self.print(
@@ -180,7 +180,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                             field_in_b_factor_col="is_motif",
                         )
                     case ModelType.MPNN:
-                        _ = save_model_output_to_fasta(
+                        _ = save_model_output_to_fasta(  # TODO: implement me!
                             output_dir_list=configs.dump_dir_list,
                             output=output,
                             pdb_id=sample_name,

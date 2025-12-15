@@ -92,7 +92,8 @@ class InferenceRunner(object):
         os.makedirs(self.dump_dir, exist_ok=True)
 
         self.dump_dir_list = [
-            os.path.join(self.dump_dir, str(i)) for i in range(self.configs.N_sample)
+            os.path.join(self.dump_dir, str(i))
+            for i in range(self.configs.sample_diffusion.N_sample)
         ]
         for dump_path in self.dump_dir_list:
             os.makedirs(dump_path, exist_ok=True)

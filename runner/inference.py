@@ -164,12 +164,8 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
         seed_everything(seed=seed, deterministic=configs.deterministic)
         for batch in dataloader:
             try:
-                context, data_error_message = batch[0]
+                context = batch[0]
                 sample_name = context.basic.pdb_id
-
-                if len(data_error_message) > 0:
-                    logger.info(data_error_message)
-                    raise Exception(data_error_message)
 
                 output = runner.predict(context)
 

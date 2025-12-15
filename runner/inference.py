@@ -84,7 +84,7 @@ class InferenceRunner(object):
         os.makedirs(self.dump_dir, exist_ok=True)
 
         # self.dump_path_list = self.configs.dump_dir_list
-        self.error_dir = opjoin(self.configs.error_dir, "ERR")
+        self.error_dir = opjoin(self.configs.dump_dir, "ERR")
 
         # for dump_path in self.dump_path_list:
         #     os.makedirs(dump_path.parent, exist_ok=True)

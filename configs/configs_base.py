@@ -381,14 +381,12 @@ loss_configs = {
         # },
         "backbone": {
             "mse": {
-                "weight_mse": 1 / 3,
                 "weight_protein": 1.0,
-                "weight_dna": 1.0,
-                "weight_rna": 1.0,
-                "weight_ligand": 1.0,
-                "weight_motif": 0.0,  # a supplementary weighting. 0.0 means weighted same as all other atoms
-                "weight_motif_related": 0.0,
-                "eps": 1e-6,
+                "weight_dna": 0.0,
+                "weight_rna": 0.0,
+                "weight_ligand": 5.0,
+                "weight_motif": 0.0,
+                "weight_motif_related": 10.0,
             },
             "sigma_coord": GlobalConfigValue("sigma_coord"),
         },
@@ -401,14 +399,12 @@ loss_configs = {
         },
         "packing": {
             "mse": {
-                "weight_mse": 1 / 3,
                 "weight_protein": 1.0,
-                "weight_dna": 1.0,
-                "weight_rna": 1.0,
-                "weight_ligand": 1.0,
-                "weight_motif": 0.0,
-                "weight_motif_related": 0.0,
-                "enable_alignment": True,  # No alignment for packing since we align to backbone
+                "weight_dna": 0.0,
+                "weight_rna": 0.0,
+                "weight_ligand": 4.0,
+                # "weight_motif": 0.0,
+                # "weight_motif_related": 0.0,
                 "eps": 1e-6,
             },
             "sigma_coord": 2.0,  # local sigma coord for packing

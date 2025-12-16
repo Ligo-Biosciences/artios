@@ -45,8 +45,6 @@ class ArtiosPacking(nn.Module):
             dna=mse_cfg.weight_dna,
             rna=mse_cfg.weight_rna,
             ligand=mse_cfg.weight_ligand,
-            motif=mse_cfg.weight_motif,
-            motif_related=mse_cfg.weight_motif_related,
         )
 
         # Fixed eval generator for reproducibility
@@ -263,8 +261,6 @@ class ArtiosPacking(nn.Module):
             is_dna=context.entity.is_dna,
             is_rna=context.entity.is_rna,
             is_ligand=context.entity.is_ligand,
-            is_motif=context.motif.is_motif,
-            is_motif_related=context.motif.is_motif_related,
         )
         atom_weights = repeat(atom_weights, "b n -> b s n", s=n_sample)
 

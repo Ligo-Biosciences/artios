@@ -22,7 +22,7 @@ class ModelConfig:
 
     model_class: type[nn.Module]
     checkpoint_path_key: str
-    n_sample_key: str | None = None
+    n_sample_key: str = ""
 
 
 # TODO: n_sample key required before we introduce better configs with Hydra

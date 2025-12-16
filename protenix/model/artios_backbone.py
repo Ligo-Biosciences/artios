@@ -13,7 +13,9 @@ from protenix.model.generator import (
     stochasticity_from_config,
 )
 from protenix.model.loss_new import (
+    LossWeightConfig,
     align_to_prediction,
+    build_atom_weights,
     compute_entity_metrics,
     mse_loss,
     mse_per_atom,
@@ -29,6 +31,16 @@ class ArtiosBackbone(nn.Module):
     def __init__(self, configs):
         super(ArtiosBackbone, self).__init__()
         self.configs = configs
+
+        mse_cfg = configs.loss.backbone.mse
+        self.loss_weight_config = LossWeightConfig(
+            protein=mse_cfg.weight_protein,
+            dna=mse_cfg.weight_dna,
+            rna=mse_cfg.weight_rna,
+            ligand=mse_cfg.weight_ligand,
+            motif=mse_cfg.weight_motif,
+            motif_related=mse_cfg.weight_motif_related,
+        )
 
         self.N_model_seed = self.configs.model.N_model_seed
 
@@ -212,15 +224,27 @@ class ArtiosBackbone(nn.Module):
         pred = output.coordinate  # [batch, n_sample, n_atom, 3]
         n_sample = pred.shape[-3]
 
+        # Build atom weights
+        atom_weights = build_atom_weights(
+            config=self.loss_weight_config,
+            is_protein=context.entity.is_protein,
+            is_dna=context.entity.is_dna,
+            is_rna=context.entity.is_rna,
+            is_ligand=context.entity.is_ligand,
+            is_motif=context.motif.is_motif,
+            is_motif_related=context.motif.is_motif_related,
+        )
+        atom_weights = repeat(atom_weights, "b n -> b s n", s=n_sample)
+
         # Expand ground truth and masks to match samples
         true = repeat(context.coordinate.coordinate, "b n c -> b s n c", s=n_sample)
         mask = repeat(context.mask.atom_loss_mask, "b n -> b s n", s=n_sample)
 
         # Align ground truth to prediction
-        true_aligned = align_to_prediction(pred, true, mask)
+        true_aligned = align_to_prediction(pred, true, mask, weight=atom_weights)
 
         # Compute per-sample MSE loss
-        per_sample_mse = mse_loss(pred, true_aligned, mask)  # [batch, n_sample]
+        per_sample_mse = mse_loss(pred, true_aligned, mask, weight=atom_weights)
 
         # Scale by timestep
         scale = timestep_scale(output.timestep, sigma=self.sigma_coord)
@@ -231,6 +255,7 @@ class ArtiosBackbone(nn.Module):
 
         # Compute entity metrics for logging
         per_atom_se = mse_per_atom(pred, true_aligned)  # [batch, n_sample, n_atom]
+        per_atom_se = per_atom_se * scale[..., None]  # scale by timestep
         per_atom_se_avg = per_atom_se.mean(dim=-2)  # [batch, n_atom]
 
         entity_masks = {

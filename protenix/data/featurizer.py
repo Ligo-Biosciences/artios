@@ -673,7 +673,8 @@ def _extract_backbone_atoms(
                 atom = atom_array[global_idx]
                 backbone_coords[token_idx, bb_idx] = atom.coord
                 backbone_mask[token_idx, bb_idx] = atom.is_resolved.astype(int)
-                atom_coords[atom_name] = atom.coord
+                if atom.is_resolved:
+                    atom_coords[atom_name] = atom.coord
 
         # Compute virtual Cβ for proteins
         if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):

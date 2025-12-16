@@ -1,4 +1,6 @@
-import functools
+# import functools
+# TODO: re-write this stuff for efficiency. Currently, indexing at a certain dimension and backproping
+# is very slow for large number of atoms.
 
 import torch
 from torch import Tensor
@@ -6,7 +8,7 @@ from torch import Tensor
 from protenix.model.utils import index_at_dim, reshape_at_dim
 
 
-@functools.lru_cache(maxsize=10)
+# @functools.lru_cache(maxsize=10)
 def _get_key_trunk_indices(n, n_queries, n_keys):
     # Key windows centered around the trunk centers
     trunk_centers = torch.arange(n_queries // 2, n, n_queries)

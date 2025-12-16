@@ -263,6 +263,8 @@ class ArtiosBackbone(nn.Module):
             "dna": context.entity.is_dna,
             "rna": context.entity.is_rna,
             "ligand": context.entity.is_ligand,
+            "motif": context.motif.is_motif,
+            "motif_related": context.motif.is_motif_related,
         }
         metrics = compute_entity_metrics(
             per_atom_se_avg, context.mask.atom_loss_mask, entity_masks

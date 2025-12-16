@@ -165,8 +165,8 @@ class SidechainPacker(nn.Module):
             n_steps=n_steps,
         )
 
-    # @typecheck
-    @torch.compile
+    @typecheck
+    # @torch.compile
     def f_forward(
         self,
         r_noisy: Float[Tensor, "... n_sample n_atom 3"],
@@ -190,6 +190,9 @@ class SidechainPacker(nn.Module):
         token_mask = context.mask.token_mask
         restype = context.token.restype
         n_token = restype.shape[-2]
+
+        print(f"n_token before packing: {n_token}")
+        print(f"asym id n_token: {context.token.asym_id.shape[-1]}")
 
         # Compute pair mask
         token_mask = token_mask.unsqueeze(-2)  # add n_sample dim

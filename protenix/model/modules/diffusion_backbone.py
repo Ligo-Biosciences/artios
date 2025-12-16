@@ -610,6 +610,7 @@ class DiffusionModule(nn.Module):
         )
 
     @typecheck
+    @torch.compile
     def f_forward(
         self,
         r_noisy: Float[Tensor, "... n_sample n_atom 3"],

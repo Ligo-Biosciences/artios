@@ -70,7 +70,7 @@ data_configs = {
     "test_crop_size": 256,
     "test_max_n_token": -1,
     "train_lig_atom_rename": False,  # TODO:
-    "train_shuffle_mols": False,
+    "train_shuffle_mols": True,
     "train_shuffle_sym_ids": False,
     "test_lig_atom_rename": False,
     "test_shuffle_mols": False,
@@ -123,7 +123,7 @@ model_configs = {
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
     "sigma_coord": 12.0,
-    "cfg_drop_probability": 0.1,
+    "local_sigma_coord": 2.0,
     "diffusion_batch_size": 16,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(
@@ -233,13 +233,15 @@ model_configs = {
     "artios_packing": {
         "model": {  # TODO: these configs will be tidier once Hydra in
             "c_token": 768,
-            "local_sigma_coord": 2.0,  # TODO: make global sigma coord
+            "local_sigma_coord": GlobalConfigValue(
+                "local_sigma_coord"
+            ),  # TODO: make global sigma coord
             "atom_encoder": {
                 "num_blocks": 3,
                 "num_heads": 4,
             },
             "transformer": {
-                "num_blocks": 10,
+                "num_blocks": 16,
                 "num_heads": 16,
             },
             "atom_decoder": {
@@ -259,7 +261,7 @@ model_configs = {
             },
         },
         "sample_diffusion": {
-            "local_sigma_coord": 1.0,
+            "local_sigma_coord": GlobalConfigValue("local_sigma_coord"),
             "alpha": 1.0,
             "stoch_type": "deterministic",
             "gamma": 1.0,

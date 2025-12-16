@@ -54,7 +54,7 @@ basic_configs = {
     "deterministic": False,
     "deterministic_seed": False,
     "post_hoc_ema_checkpoint_dir": "",
-    "ema_vae_decay": 0.999,
+    "ema_decay": 0.999,
     "power_law_ema_sigma": ListValue([0.08, 0.12]),
     "post_hoc_ema_sigma": ListValue([0.08]),
     "calc_post_hoc_ema_during_training": True,

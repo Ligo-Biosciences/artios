@@ -70,7 +70,7 @@ data_configs = {
     "test_crop_size": 256,
     "test_max_n_token": -1,
     "train_lig_atom_rename": False,  # TODO:
-    "train_shuffle_mols": True,
+    "train_shuffle_mols": False,
     "train_shuffle_sym_ids": False,
     "test_lig_atom_rename": False,
     "test_shuffle_mols": False,

@@ -165,7 +165,8 @@ class SidechainPacker(nn.Module):
             n_steps=n_steps,
         )
 
-    @typecheck
+    # @typecheck
+    @torch.compile
     def f_forward(
         self,
         r_noisy: Float[Tensor, "... n_sample n_atom 3"],

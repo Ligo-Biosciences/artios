@@ -819,7 +819,6 @@ def main():
     )
 
     print(configs.run_name)
-    print(configs)
     trainer = ArtiosPackingTrainer(configs)
     trainer.run()
 

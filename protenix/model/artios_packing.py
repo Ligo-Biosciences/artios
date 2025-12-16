@@ -50,7 +50,6 @@ class ArtiosPacking(nn.Module):
         self.sampling_configs = configs.artios_packing.sample_diffusion
 
         self.diffusion_batch_size = self.configs.diffusion_batch_size
-        self.cfg_drop_probability = self.configs.cfg_drop_probability
 
         self.sigma_coord = configs.sigma_coord
         self.local_sigma_coord = configs.artios_packing.model.local_sigma_coord

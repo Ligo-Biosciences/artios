@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See the LICENSE file for details.
 
+import os
 import typing
 
 from beartype import beartype
@@ -20,7 +21,8 @@ from jaxtyping import (
 
 # Modules are only loaded and executed the first time they are imported, so the value of
 # should_typecheck will constant over the lifetime of the program.
-should_typecheck = True
+# Set TYPECHECK=0 or TYPECHECK=false to disable runtime type checking.
+should_typecheck = os.environ.get("TYPECHECK", "1").lower() not in ("0", "false", "no")
 
 
 Func = typing.TypeVar("Func")

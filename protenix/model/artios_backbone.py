@@ -41,7 +41,6 @@ class ArtiosBackbone(nn.Module):
         self.sampling_configs = configs.sample_diffusion
 
         self.diffusion_batch_size = self.configs.diffusion_batch_size
-        self.cfg_drop_probability = self.configs.cfg_drop_probability
 
         self.diffusion_module = DiffusionModule(**configs.model.diffusion_module)
         self.sigma_coord = configs.sigma_coord

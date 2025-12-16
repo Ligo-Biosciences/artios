@@ -29,8 +29,8 @@ from protenix.data.rdkit import is_valid_smiles, parse_smiles
 class TaskType(str, Enum):
     """Supported inference task types."""
 
-    MOTIF = "motif"
-    SEQUENCE = "sequence"
+    BACKBONE = "backbone"
+    SEQUENCE_DESIGN = "sequence_design"
     PACKING = "packing"
 
 
@@ -42,7 +42,7 @@ class InferenceInputDict(BaseModel):
     Example:
         {
             "name": "carbonic-motif",
-            "task": "motif",
+            "task": "backbone",
             "spec": {
                 "design": [{"length": 256}],
                 "motif": {"cif_file": "motif.cif", "ligands": [...]}
@@ -57,14 +57,14 @@ class InferenceInputDict(BaseModel):
 
 def parse_input_dict(
     input_dict: dict[str, Any],
-) -> MotifInput | SequenceDesignInput | PackingInput:
+) -> BackboneInput | SequenceDesignInput | PackingInput:
     """Parse a single input dict from the inference dataset JSON.
 
     Args:
         input_dict: Dictionary containing 'name', 'task', and 'spec' keys
 
     Returns:
-        Parsed and validated XInput object (MotifInput or SequenceDesignInput or PackingInput)
+        Parsed and validated XInput object (BackboneInput or SequenceDesignInput or PackingInput)
 
     Raises:
         pydantic.ValidationError: If input_dict doesn't match expected structure
@@ -72,20 +72,20 @@ def parse_input_dict(
     """
     validated_input = InferenceInputDict(**input_dict)
 
-    # Add name to spec for downstream compatibility TODO: tidy plz
+    # Add name to spec
     spec_with_name = {"name": validated_input.name, **validated_input.spec}
 
     match validated_input.task:
-        case TaskType.MOTIF:
+        case TaskType.BACKBONE:
             # Convert string cif_file to CIFFile object format if needed
             if "motif" in spec_with_name and "cif_file" in spec_with_name["motif"]:
                 cif_file_value = spec_with_name["motif"]["cif_file"]
                 if isinstance(cif_file_value, str):
                     spec_with_name["motif"]["cif_file"] = {"path": cif_file_value}
 
-            return MotifInput(**spec_with_name)
+            return BackboneInput(**spec_with_name)
 
-        case TaskType.SEQUENCE:
+        case TaskType.SEQUENCE_DESIGN:
             # Convert string cif_file to CIFFile object format if needed
             if "cif_file" in spec_with_name:
                 cif_file_value = spec_with_name["cif_file"]
@@ -296,8 +296,8 @@ class MotifSpec(BaseModel):
     )
 
 
-class MotifInput(BaseModel):
-    """Top-level input for motif scaffolding inference.
+class BackboneInput(BaseModel):
+    """Top-level input for backbone inference with motif scaffolding capabilities.
 
     Example:
         {
@@ -314,7 +314,7 @@ class MotifInput(BaseModel):
     design: list[Backbone] = Field(
         ..., min_length=1, description="Protein chains to design"
     )
-    motif: MotifSpec
+    motif: MotifSpec | None = Field(default=None, description="Motif specification")
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +468,9 @@ def parse_sequence_design_json(
     return SequenceDesignInput(**data)
 
 
-def parse_motif_json(file_path: str | Path, resolve_paths: bool = True) -> MotifInput:
+def parse_motif_json(
+    file_path: str | Path, resolve_paths: bool = True
+) -> BackboneInput:
     """Parse a motif scaffolding input JSON file.
 
     Args:
@@ -505,4 +507,4 @@ def parse_motif_json(file_path: str | Path, resolve_paths: bool = True) -> Motif
 
         data["motif"]["cif_file"] = {"path": str(cif_path)}
 
-    return MotifInput(**data)
+    return BackboneInput(**data)

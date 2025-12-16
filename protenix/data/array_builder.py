@@ -30,8 +30,8 @@ from protenix.common.residue_names import PROTEIN_COMMON_ONE_TO_THREE as PROTEIN
 from protenix.data import ccd
 from protenix.data.json_parser import (
     Backbone,
+    BackboneInput,
     CCDLigand,
-    MotifInput,
     PackingInput,
     SequenceDesignInput,
     SMILESLigand,
@@ -58,12 +58,12 @@ def set_chain_and_seq_ids(
     return atom_array
 
 
-def motif_input_to_atom_array(motif_input: MotifInput) -> AtomArray:
+def backbone_input_to_atom_array(backbone_input: BackboneInput) -> AtomArray:
     """Process motif scaffolding input and builds AtomArray."""
-    assert len(motif_input.design) == 1, "Only one design entity is supported"
+    assert len(backbone_input.design) == 1, "Only one design entity is supported"
 
     # Build protein array
-    sequence = [PROTEIN_1to3["G"] for _ in range(motif_input.design[0].length)]
+    sequence = [PROTEIN_1to3["G"] for _ in range(backbone_input.design[0].length)]
     design_atom_array = _build_polymer_atom_array(sequence)
     design_atom_array = add_reference_features(design_atom_array)
     design_atom_array = set_chain_and_seq_ids(design_atom_array, chain_id=0)
@@ -74,10 +74,12 @@ def motif_input_to_atom_array(motif_input: MotifInput) -> AtomArray:
     design_atom_array.set_annotation("is_motif", [False] * len(design_atom_array))
 
     # Build motif
-    motif_atom_array = build_motif(Motif.from_input(motif_input))
-    motif_atom_array = set_chain_and_seq_ids(motif_atom_array, chain_id=1)
+    if backbone_input.motif is not None:
+        motif_atom_array = build_motif(Motif.from_input(backbone_input))
+        motif_atom_array = set_chain_and_seq_ids(motif_atom_array, chain_id=1)
+        design_atom_array += motif_atom_array
 
-    return design_atom_array + motif_atom_array
+    return design_atom_array
 
 
 def sequence_input_to_atom_array(sequence_input: SequenceDesignInput) -> AtomArray:
@@ -178,12 +180,12 @@ def packing_input_to_atom_array(packing_input: PackingInput) -> AtomArray:
 
 
 def process_input_to_atom_array(
-    input: MotifInput | SequenceDesignInput | PackingInput,
+    input: BackboneInput | SequenceDesignInput | PackingInput,
 ) -> AtomArray:
     """Dispatch to appropriate task-specific processor based on input structure."""
     match input:
-        case MotifInput():
-            return motif_input_to_atom_array(input)
+        case BackboneInput():
+            return backbone_input_to_atom_array(input)
         case SequenceDesignInput():
             return sequence_input_to_atom_array(input)
         case PackingInput():

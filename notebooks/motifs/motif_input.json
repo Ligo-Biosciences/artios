@@ -1,34 +1,36 @@
-{
-    "name": "carbonic-motif",
-    "task": "motif",
-    "spec": {
-        "design": [
-            {
-                "length": 256
-            }
-        ],
-        "motif": {
-            "cif_file": "./motifs/carbonic_anhydrase_motif_no_h.cif",
-            "ligands": [
+[
+    {
+        "name": "carbonic-motif",
+        "task": "backbone",
+        "spec": {
+            "design": [
                 {
-                    "cif_res_name": "ZN",
-                    "full_ligand": {
-                        "type": "ccd",
-                        "codes": [
-                            "ZN"
-                        ]
-                    }
-                },
-                {
-                    "cif_res_name": "AL5",
-                    "full_ligand": {
-                        "type": "ccd",
-                        "codes": [
-                            "AL5"
-                        ]
-                    }
+                    "length": 256
                 }
-            ]
+            ],
+            "motif": {
+                "cif_file": "./motifs/carbonic_anhydrase_motif_no_h.cif",
+                "ligands": [
+                    {
+                        "cif_res_name": "ZN",
+                        "full_ligand": {
+                            "type": "ccd",
+                            "codes": [
+                                "ZN"
+                            ]
+                        }
+                    },
+                    {
+                        "cif_res_name": "AL5",
+                        "full_ligand": {
+                            "type": "ccd",
+                            "codes": [
+                                "AL5"
+                            ]
+                        }
+                    }
+                ]
+            }
         }
     }
-}
+]

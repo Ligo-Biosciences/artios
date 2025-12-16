@@ -207,12 +207,19 @@ data_configs = {
         "atom_bin_ends": ListValue([1536, 1728]),
         "token_bin_ends": ListValue([440, 600]),
     },
-    "train_sets": ListValue(["trousers_train"]),  # "trousers_train"
+    "train_sets": ListValue(
+        [
+            "weightedPDB_before2109_wopb_nometalc_0925",
+            "trousers_train",
+            "shirts_with_no_pockets",
+            "shirts_with_small_pockets",
+        ]
+    ),
     "train_sampler": {
-        "train_sample_weights": ListValue([1.0]),
+        "train_sample_weights": ListValue([0.01, 0.8, 0.1, 0.09]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["trousers_val"]),
+    "test_sets": ListValue(["trousers_val", "recentPDB_1536_sample384_0925"]),
     "weightedPDB_before2109_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),

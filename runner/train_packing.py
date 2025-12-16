@@ -4,7 +4,6 @@ import os
 import time
 import warnings
 from contextlib import nullcontext
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -31,7 +30,6 @@ from protenix.model.modules.transformer import DiffusionTransformer, DiTBlock
 from protenix.model.output import ModelOutput
 from protenix.model.utils import Mode
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
-from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.monitoring import grad_norm
@@ -39,7 +37,7 @@ from protenix.utils.profiler import profile_function
 from protenix.utils.seed import seed_everything
 from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
-from runner.ema import PowerLawEMAWrapper
+from runner.ema import EMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -72,7 +70,6 @@ class ArtiosPackingTrainer(object):
         self.run_dir = f"{self.configs.base_dir}/{self.run_name}"
         self.checkpoint_dir = f"{self.run_dir}/checkpoints"
         self.ema_checkpoint_dir = f"{self.run_dir}/ema_checkpoints"
-        self.post_hoc_ema_checkpoint_dir = f"{self.run_dir}/post_hoc_ema_checkpoints"
         self.prediction_dir = f"{self.run_dir}/predictions"
         self.training_samples_dir = f"{self.run_dir}/training_samples"
         self.dump_dir = f"{self.run_dir}/dumps"
@@ -85,7 +82,6 @@ class ArtiosPackingTrainer(object):
             os.makedirs(self.run_dir)
             os.makedirs(self.checkpoint_dir)
             os.makedirs(self.ema_checkpoint_dir)
-            os.makedirs(self.post_hoc_ema_checkpoint_dir)
             os.makedirs(self.prediction_dir)
             os.makedirs(self.training_samples_dir)
             os.makedirs(self.dump_dir)
@@ -98,7 +94,7 @@ class ArtiosPackingTrainer(object):
 
         self.print(
             f"Using run name: {self.run_name}, run dir: {self.run_dir}, checkpoint_dir: "
-            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, post_hoc_ema_checkpoint_dir: {self.post_hoc_ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, "
+            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, "
             + f"{self.error_dir} training_samples_dir: {self.training_samples_dir}"
         )
 
@@ -195,19 +191,14 @@ class ArtiosPackingTrainer(object):
         else:
             self.packing_model = self.raw_packing_model
 
-        if self.configs.get("power_law_ema_sigma", []):
-            self.power_law_ema_wrappers = []
-            for sigma in self.configs.power_law_ema_sigma:
-                wrapper = PowerLawEMAWrapper(
-                    model=self.packing_model,
-                    sigma=sigma,
-                    mutable_param_keywords=self.configs.ema_mutable_param_keywords,
-                )
-                wrapper.register()
-                self.power_law_ema_wrappers.append(wrapper)
-            self.print(
-                f"Initialized {len(self.power_law_ema_wrappers)} power law EMA wrappers with standard deviations: {self.configs.power_law_ema_sigma}"
+        if self.configs.get("ema_decay", None):
+            self.ema_wrapper = EMAWrapper(
+                model=self.packing_model,
+                decay=self.configs.ema_decay,
+                mutable_param_keywords=self.configs.ema_mutable_param_keywords,
             )
+            self.ema_wrapper.register()
+            self.print(f"Initialized EMA wrapper with decay: {self.configs.ema_decay}")
 
         torch.cuda.empty_cache()
         self.optimizer = get_optimizer(self.configs, self.packing_model)
@@ -304,60 +295,17 @@ class ArtiosPackingTrainer(object):
 
             return model
 
-        # Load power-law EMA wrappers from checkpoint
-        if self.configs.load_ema_checkpoint_paths_directory:
-            checkpoint_dir = self.configs.load_ema_checkpoint_paths_directory
-            if not os.path.exists(checkpoint_dir):
-                raise Exception(
-                    f"EMA checkpoint directory does not exist: {checkpoint_dir}"
-                )
-
-            checkpoint_files = [
-                f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")
-            ]
-            self.print(
-                f"Found {len(checkpoint_files)} EMA checkpoints in {checkpoint_dir}"
+        # Load EMA checkpoint if specified
+        if self.configs.get("load_ema_checkpoint_path"):
+            ema_checkpoint_path = self.configs.load_ema_checkpoint_path
+            if not os.path.exists(ema_checkpoint_path):
+                raise Exception(f"EMA checkpoint does not exist: {ema_checkpoint_path}")
+            _load_checkpoint(
+                ema_checkpoint_path, load_params_only=True, model=self.packing_model
             )
-
-            sigma_to_wrapper = {
-                wrapper.sigma: wrapper for wrapper in self.power_law_ema_wrappers
-            }
-            sigma_to_latest_checkpoint = {}
-
-            for checkpoint_file in checkpoint_files:
-                try:
-                    parts = checkpoint_file.replace(".pt", "").split("_ema_")
-                    step = int(parts[0])
-                    sigma = float(parts[1])
-                except (IndexError, ValueError):
-                    self.print(
-                        f"Warning: Could not extract step and sigma from checkpoint filename: {checkpoint_file}"
-                    )
-                    continue
-
-                if (
-                    sigma not in sigma_to_latest_checkpoint
-                    or step > sigma_to_latest_checkpoint[sigma][0]
-                ):
-                    sigma_to_latest_checkpoint[sigma] = (step, checkpoint_file)
-
-            for sigma, (step, checkpoint_file) in sigma_to_latest_checkpoint.items():
-                if sigma not in sigma_to_wrapper:
-                    self.print(
-                        f"Warning: No matching wrapper found for sigma={sigma} in checkpoint: {checkpoint_file}"
-                    )
-                    continue
-
-                checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
-
-                _load_checkpoint(
-                    checkpoint_path, load_params_only=True, model=self.packing_model
-                )
-                matching_wrapper = sigma_to_wrapper[sigma]
-                matching_wrapper.register()
-                self.print(
-                    f"Loaded and registered latest EMA checkpoint for sigma={sigma} at step {step}: {checkpoint_file}"
-                )
+            if hasattr(self, "ema_wrapper"):
+                self.ema_wrapper.register()
+            self.print(f"Loaded EMA checkpoint from {ema_checkpoint_path}")
 
         # Load model parameters from checkpoint
         if self.configs.load_packing_checkpoint_path:
@@ -413,38 +361,17 @@ class ArtiosPackingTrainer(object):
 
     @torch.no_grad()
     def evaluate(self):
-        """Run evaluation on all test datasets, including post-hoc EMA if configured."""
-        all_eval_metrics = {}
+        """Run evaluation on all test datasets, including EMA if configured."""
+        if not self.configs.get("eval_ema_only", False):
+            self._evaluate()
 
-        if not self.configs.eval_ema_only:
-            metrics = self._evaluate()
-            all_eval_metrics["None-EMA"] = metrics
-
-        if self.configs.calc_post_hoc_ema_during_training:
-            post_hoc_checkpoints = self.calc_post_hoc_ema()
-
-            current_state = {
-                k: v.clone() for k, v in self.packing_model.state_dict().items()
-            }
-
-            for checkpoint_path in post_hoc_checkpoints:
-                sigma = float(checkpoint_path.stem.split("_post_hoc_ema_")[-1])
-                checkpoint = torch.load(checkpoint_path, map_location=self.device)
-                self.packing_model.load_state_dict(checkpoint["model"])
-
-                self.print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
-                metrics = self._evaluate()
-                all_eval_metrics[f"post_hoc_ema_{sigma}"] = metrics
-
-                del checkpoint
-                wait_for_all_processes()
-                if DIST_WRAPPER.rank == 0:
-                    os.remove(checkpoint_path)
-
-            self.packing_model.load_state_dict(current_state)
-
-        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
+        # Run EMA evaluation if EMA wrapper is configured
+        use_ema = hasattr(self, "ema_wrapper")
+        if use_ema:
+            self.ema_wrapper.apply_shadow()
+            self.print("Beginning evaluation with EMA weights")
+            self._evaluate(ema_suffix=f"ema_{self.configs.ema_decay}")
+            self.ema_wrapper.restore()
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "") -> dict:
@@ -679,35 +606,6 @@ class ArtiosPackingTrainer(object):
         )
         return
 
-    def calc_post_hoc_ema(self):
-        """
-        Calculate post-hoc EMA checkpoints using the utility function from ema_utils.
-        """
-        ema_checkpoint_paths = [
-            Path(os.path.join(self.ema_checkpoint_dir, f))
-            for f in os.listdir(self.ema_checkpoint_dir)
-            if f.endswith(".pt")
-        ]
-
-        if len(ema_checkpoint_paths) == 0:
-            self.print(f"No EMA checkpoints found in {self.ema_checkpoint_dir}")
-            return
-
-        self.print(
-            f"Found {len(ema_checkpoint_paths)} EMA checkpoints in {self.ema_checkpoint_dir}"
-        )
-
-        save_dir = Path(self.post_hoc_ema_checkpoint_dir)
-        target_sigma_values = self.configs.post_hoc_ema_sigma
-
-        output_paths = calculate_post_hoc_ema(
-            ema_checkpoint_paths=ema_checkpoint_paths,
-            target_sigma_values=target_sigma_values,
-            save_dir=save_dir,
-        )
-        self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
-        return output_paths
-
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""
         if (
@@ -779,8 +677,8 @@ class ArtiosPackingTrainer(object):
             self.evaluate()
             if self.configs.eval_only:
                 return
-        use_ema = hasattr(self, "power_law_ema_wrappers")
-        self.print(f"Using power law ema's: {use_ema}")
+        use_ema = hasattr(self, "ema_wrapper")
+        self.print(f"Using EMA: {use_ema}")
 
         enable_profiling = self.configs.get("enable_profiling", False)
 
@@ -849,8 +747,7 @@ class ArtiosPackingTrainer(object):
                     self.train_step(context)
 
                     if use_ema and is_update_step:
-                        for wrapper in self.power_law_ema_wrappers:
-                            wrapper.update(t=self.step + 1)
+                        self.ema_wrapper.update()
 
                     if step_need_log or is_last_step:
                         metrics = self.train_metric_wrapper.calc()
@@ -877,13 +774,12 @@ class ArtiosPackingTrainer(object):
                         self.print(f"Saving checkpoint at step {self.step}")
                         self.save_checkpoint()
                         if use_ema:
-                            for wrapper in self.power_law_ema_wrappers:
-                                wrapper.apply_shadow()
-                                self.save_checkpoint(
-                                    ema_suffix=f"ema_{wrapper.sigma}",
-                                    save_model_only=True,
-                                )
-                                wrapper.restore()
+                            self.ema_wrapper.apply_shadow()
+                            self.save_checkpoint(
+                                ema_suffix=f"ema_{self.configs.ema_decay}",
+                                save_model_only=True,
+                            )
+                            self.ema_wrapper.restore()
                             wait_for_all_processes()
 
                     if step_need_eval or is_last_step:

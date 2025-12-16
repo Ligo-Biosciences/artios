@@ -652,10 +652,12 @@ def _extract_backbone_atoms(
         mol_type = centre_atom.mol_type
         is_standard = centre_atom.res_name in STD_RESIDUES
 
-        # Ligands or non-standard residues: use centre atom only
-        if centre_atom.is_resolved and (mol_type == "ligand" or not is_standard):
-            backbone_coords[token_idx, 0] = centre_atom.coord
-            backbone_mask[token_idx, 0] = 1.0
+        # Ligands or non-standard residues: use centre atom only (no backbone)
+        if mol_type == "ligand" or not is_standard:
+            if centre_atom.is_resolved:
+                backbone_coords[token_idx, 0] = centre_atom.coord
+                backbone_mask[token_idx, 0] = 1.0
+            # If not resolved, leave zeros (already initialized)
             continue
 
         # Standard protein or nucleic acid

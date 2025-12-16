@@ -25,9 +25,9 @@ default_test_configs = {
     "cropping_configs": {
         "method_weights": [
             0.0,  # ContiguousCropping
-            0.0,  # SpatialCropping
+            0.5,  # SpatialCropping
             0.5,  # SpatialInterfaceCropping (legacy: 1.0)
-            0.5,  # PocketCropping
+            0.0,  # PocketCropping
         ],
         "crop_size": GlobalConfigValue("test_crop_size"),  # -1
     },

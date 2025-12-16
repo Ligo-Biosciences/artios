@@ -177,6 +177,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
             try:
                 sample_name = context.basic.pdb_id[0]
                 n_atom = context.basic.n_atom[0]
+                n_token = context.basic.n_token[0]
 
                 output = runner.predict(context)
 
@@ -191,9 +192,10 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                             field_in_b_factor_col="is_motif",
                         )
                     case ModelType.SEQUENCE_DESIGN:
-                        _ = save_model_output_to_fasta(  # TODO: implement me!
+                        _ = save_model_output_to_fasta(
                             output_dir_list=runner.dump_dir_list,
                             output=output,
+                            n_token=n_token,
                             pdb_id=sample_name,
                         )
 

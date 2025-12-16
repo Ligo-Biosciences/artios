@@ -190,7 +190,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                             pdb_id=sample_name,
                             field_in_b_factor_col="is_motif",
                         )
-                    case ModelType.MPNN:
+                    case ModelType.SEQUENCE_DESIGN:
                         _ = save_model_output_to_fasta(  # TODO: implement me!
                             output_dir_list=runner.dump_dir_list,
                             output=output,

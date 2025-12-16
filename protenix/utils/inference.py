@@ -12,7 +12,7 @@ class ModelType(Enum):
     """Enum for supported model types in inference."""
 
     BACKBONE = "backbone"
-    MPNN = "mpnn"
+    SEQUENCE_DESIGN = "sequence_design"
     PACKING = "packing"
 
 
@@ -25,13 +25,15 @@ class ModelConfig:
     n_sample_key: str | None = None
 
 
+# TODO: n_sample key required before we introduce better configs with Hydra
+# Same probably applies with checkpoint path as well
 MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
     ModelType.BACKBONE: ModelConfig(
         model_class=ArtiosBackbone,
         checkpoint_path_key="load_backbone_checkpoint_path",
         n_sample_key="sample_diffusion.N_sample",
     ),
-    ModelType.MPNN: ModelConfig(
+    ModelType.SEQUENCE_DESIGN: ModelConfig(
         model_class=ArtiosMPNN,
         checkpoint_path_key="load_mpnn_checkpoint_path",
     ),

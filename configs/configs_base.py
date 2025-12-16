@@ -70,7 +70,7 @@ data_configs = {
     "test_crop_size": 256,
     "test_max_n_token": -1,
     "train_lig_atom_rename": False,  # TODO:
-    "train_shuffle_mols": False,
+    "train_shuffle_mols": True,
     "train_shuffle_sym_ids": False,
     "test_lig_atom_rename": False,
     "test_shuffle_mols": False,
@@ -241,7 +241,7 @@ model_configs = {
                 "num_heads": 4,
             },
             "transformer": {
-                "num_blocks": 10,
+                "num_blocks": 16,
                 "num_heads": 16,
             },
             "atom_decoder": {

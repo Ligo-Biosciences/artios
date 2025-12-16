@@ -1,17 +1,22 @@
+import logging
 import os
 from pathlib import Path
 from typing import List, Optional, Union
 
+import biotite.sequence.io as seqio
 import biotite.structure.io as strucio
 import numpy as np
 import torch
+from biotite.sequence import ProteinSequence
 from biotite.structure import AtomArray
 from biotite.structure.io.mol import MOLFile
 
-from protenix.common.constants import mmcif_restype_3to1
+from protenix.common.constants import STD_RESIDUES_AND_GAP, mmcif_restype_3to1
 from protenix.data.parser import MMCIFParser
 from protenix.data.utils import save_structure_cif
 from protenix.model.output import ModelOutput
+
+logger = logging.getLogger(__name__)
 
 
 def load_structure(path_to_file: Path) -> AtomArray:
@@ -222,9 +227,43 @@ def save_model_output_to_cif(
 def save_model_output_to_fasta(
     output_dir_list: List[str],
     output: ModelOutput,
+    n_token: int,
     pdb_id: str,
 ):
     """
-    Saves outputs to FASTA files. Used for the MPNN model. Need seq_logits in ModelOutput.
+    Saves outputs to FASTA files. Used for the MPNN model. Need restype in ModelOutput.
+
+    Args:
+        output_dir_list (List[str]): List of output directories for each sample in the batch.
+        output (ModelOutput): Model output containing one-hot encoded restype.
+            restype shape: [batch, n_token, num_residue_types]
+        n_token (int): Number of tokens in the un-padded sequence.
+        pdb_id (str): PDB ID used in the output filename.
+
+    Returns:
+        List[Path]: List of paths to the saved FASTA files.
     """
-    raise NotImplementedError("Saving to FASTA files is not implemented yet.")
+    assert (
+        output.restype is not None
+    ), "ModelOutput must contain restype for FASTA saving"
+    assert output.restype.shape[0] == 1, "Batch size must be one"
+
+    restype = output.restype[0, :n_token]
+
+    idx_to_restype = {v: k for k, v in STD_RESIDUES_AND_GAP.items()}
+
+    saved_files = []
+    output_dir = Path(output_dir_list[0])
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = output_dir / f"{pdb_id}_sequence.fasta"
+
+    indices = restype.argmax(dim=-1).cpu().numpy().astype(np.int32)  # [n_token]
+
+    seq_list = [idx_to_restype.get(idx, "UNK") for idx in indices]
+    sequence = ProteinSequence(seq_list)
+    seqio.save_sequence(output_path, sequence)
+
+    saved_files.append(output_path)
+    logger.info(f"Saved FASTA sequence to {output_path}")
+
+    return saved_files

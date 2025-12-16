@@ -225,6 +225,7 @@ model_configs = {
             "temperature": 0.1,
             "zero_shot": False,
             "smoothing_factor": 0.5,
+            "N_sample": 10,
         },
     },
     "artios_packing": {

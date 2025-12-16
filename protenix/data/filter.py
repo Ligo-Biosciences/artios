@@ -696,9 +696,7 @@ class Filter(object):
         return backbone_array
 
     @staticmethod
-    def remove_non_motif_residue_sidechains(
-        atom_array: AtomArray, motif_training: bool = False
-    ) -> AtomArray:
+    def remove_non_motif_residue_sidechains(atom_array: AtomArray) -> AtomArray:
         """
         Removes side chain atoms only from residues that aren't part of the motif. This is only performed
         during motif training.
@@ -714,9 +712,6 @@ class Filter(object):
         (say in binder design), so it feels like we're repeating filtering logic. It would be nice if this could be completely
         unified.
         """
-        # if not motif_training:
-        #     return atom_array
-
         assert hasattr(
             atom_array, "is_motif"
         ), "Atom array must have is_motif annotation."

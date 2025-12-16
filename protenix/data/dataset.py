@@ -455,36 +455,36 @@ class BaseSingleDataset(Dataset):
             atom_array.sym_id_int[mask] = _shuffle(atom_array.sym_id_int[mask])
         return atom_array
 
-    @staticmethod
-    def _assign_binding_target(
-        atom_array: AtomArray,
-        train_with_binding_target: bool,
-        binding_target_train_rate: float,
-    ):
-        """
-        Assign a random asymmetric unit as the target if train_with_binding_target is True.
-        Otherwise, assign all False. If there is only one asym_id, set is_target to False.
-        """
-        # Pick target chain
-        unique_asym_ids = np.unique(atom_array.asym_id_int)
+    # @staticmethod
+    # def _assign_binding_target(
+    #     atom_array: AtomArray,
+    #     train_with_binding_target: bool,
+    #     binding_target_train_rate: float,
+    # ):
+    #     """
+    #     Assign a random asymmetric unit as the target if train_with_binding_target is True.
+    #     Otherwise, assign all False. If there is only one asym_id, set is_target to False.
+    #     """
+    #     # Pick target chain
+    #     unique_asym_ids = np.unique(atom_array.asym_id_int)
 
-        # If there's only one asym_id, set all is_target to False
-        if len(unique_asym_ids) == 1:
-            atom_array.set_annotation(
-                "is_target", np.zeros_like(atom_array.asym_id_int, dtype=bool)
-            )
-        elif train_with_binding_target and np.random.rand() < binding_target_train_rate:
-            target_asym_id = np.random.choice(unique_asym_ids)
-            # Add target annotation to atom array
-            atom_array.set_annotation(
-                "is_target", atom_array.asym_id_int == target_asym_id
-            )
-        else:
-            atom_array.set_annotation(
-                "is_target", np.zeros_like(atom_array.asym_id_int, dtype=bool)
-            )
+    #     # If there's only one asym_id, set all is_target to False
+    #     if len(unique_asym_ids) == 1:
+    #         atom_array.set_annotation(
+    #             "is_target", np.zeros_like(atom_array.asym_id_int, dtype=bool)
+    #         )
+    #     elif train_with_binding_target and np.random.rand() < binding_target_train_rate:
+    #         target_asym_id = np.random.choice(unique_asym_ids)
+    #         # Add target annotation to atom array
+    #         atom_array.set_annotation(
+    #             "is_target", atom_array.asym_id_int == target_asym_id
+    #         )
+    #     else:
+    #         atom_array.set_annotation(
+    #             "is_target", np.zeros_like(atom_array.asym_id_int, dtype=bool)
+    #         )
 
-        return atom_array
+    #     return atom_array
 
     @staticmethod
     def _filter_for_unique_id(atom_array: AtomArray, id_type: str) -> AtomArray:
@@ -609,13 +609,13 @@ class BaseSingleDataset(Dataset):
         )
 
         t3 = time.time()
-        cropped_atom_array = (
-            self._assign_binding_target(  # TODO: all references to targets can go
-                atom_array=cropped_atom_array,
-                train_with_binding_target=self.train_with_binding_target,
-                binding_target_train_rate=self.binding_target_train_rate,
-            )
-        )
+        # cropped_atom_array = (
+        #     self._assign_binding_target(  # TODO: all references to targets can go
+        #         atom_array=cropped_atom_array,
+        #         train_with_binding_target=self.train_with_binding_target,
+        #         binding_target_train_rate=self.binding_target_train_rate,
+        #     )
+        # )
         timings["assign_binding_target"] = time.time() - t3
 
         # Motif handling
@@ -631,10 +631,10 @@ class BaseSingleDataset(Dataset):
 
         cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
 
-        cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
-            cropped_atom_array,
-            motif_training=self.motif_configs["motif_train_rate"] > 0.0,
-        )
+        if self.motif_configs["motif_train_rate"] > 0.0:
+            cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
+                cropped_atom_array,
+            )
 
         cropped_atom_array = self._update_ids_to_unindex_motif_residues(
             cropped_atom_array

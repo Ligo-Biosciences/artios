@@ -158,7 +158,7 @@ def save_model_output_to_cif(
     field_in_b_factor_col: Optional[str] = None,
 ):
     """
-    Saves model outputs to CIF files. Used for ArtiosBackbone and ArtiosMPNN models.
+    Saves model outputs to CIF files. Used for ArtiosBackbone and ArtiosPacking during inference.
 
     Args:
         output_dir_list: List of output directory paths for each sample

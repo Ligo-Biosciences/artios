@@ -29,7 +29,6 @@ from protenix.common.constants import BACKBONE_DEFS
 from protenix.common.residue_names import PROTEIN_COMMON_ONE_TO_THREE as PROTEIN_1to3
 from protenix.data import ccd
 from protenix.data.json_parser import (
-    Backbone,
     BackboneInput,
     CCDLigand,
     PackingInput,
@@ -234,18 +233,6 @@ def _build_polymer_atom_array(ccd_seqs: list[str]) -> AtomArray:
     return chain
 
 
-def build_backbone(backbone: Backbone) -> AtomArray:
-    """
-    Build a backbone from a Backbone pydantic object.
-    """
-    sequence = [PROTEIN_1to3["G"] for _ in range(backbone.length)]
-    atom_array = _build_polymer_atom_array(sequence)
-
-    atom_array = add_reference_features(atom_array)
-
-    return atom_array
-
-
 def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
     """Build a ligand AtomArray from a typed ligand specification.
 
@@ -258,8 +245,6 @@ def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
     Raises:
         TypeError: If ligand is neither CCDLigand nor SMILESLigand
     """
-    # NOTE: the res_ids assigned here will either need to be changed downstream
-    # or inside this function.
     if isinstance(ligand, CCDLigand):
         atom_array = AtomArray(0)
         res_ids = []

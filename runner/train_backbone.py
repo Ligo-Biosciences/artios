@@ -30,7 +30,9 @@ from protenix.model.modules.transformer import DiffusionTransformer, DiTBlock
 from protenix.model.output import ModelOutput
 from protenix.model.utils import Mode
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
-from protenix.utils.ema_utils import calculate_post_hoc_ema, log_ema_validation_curves
+from protenix.utils.ema_utils import (
+    calculate_post_hoc_ema,  # , log_ema_validation_curves
+)
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.monitoring import grad_norm
@@ -438,7 +440,7 @@ class ArtiosBackboneTrainer(object):
         all_eval_metrics = {}
 
         if not self.configs.eval_ema_only:
-            metrics = self._evaluate()
+            metrics = self._evaluate(ema_suffix="")
             all_eval_metrics["None-EMA"] = metrics
 
         if self.configs.calc_post_hoc_ema_during_training:
@@ -454,7 +456,7 @@ class ArtiosBackboneTrainer(object):
                 self.backbone_model.load_state_dict(checkpoint["model"])
 
                 self.print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
-                metrics = self._evaluate()
+                metrics = self._evaluate(ema_suffix=f"post_hoc_ema_{sigma}")
                 all_eval_metrics[f"post_hoc_ema_{sigma}"] = metrics
 
                 del checkpoint
@@ -464,12 +466,15 @@ class ArtiosBackboneTrainer(object):
 
             self.backbone_model.load_state_dict(current_state)
 
-        if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
+        # if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+        #     log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
 
     @torch.no_grad()
-    def _evaluate(self) -> dict:
+    def _evaluate(self, ema_suffix: str = "") -> dict:
         """Run evaluation loop on all test datasets.
+
+        Args:
+            ema_suffix: Suffix for logging (e.g., "post_hoc_ema_0.28" or "").
 
         Returns:
             Dictionary of evaluation metrics.
@@ -508,6 +513,14 @@ class ArtiosBackboneTrainer(object):
 
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
+
+            # Log validation metrics to Neptune
+            if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                prefix = f"{ema_suffix}/" if ema_suffix else ""
+                prefixed_metrics = {
+                    f"{prefix}{test_name}/{k}": v for k, v in metrics.items()
+                }
+                self.neptune_run.log_metrics(prefixed_metrics, step=self.step)
 
         return metrics
 

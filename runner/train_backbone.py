@@ -37,7 +37,7 @@ from protenix.utils.monitoring import grad_norm
 from protenix.utils.profiler import profile_function
 from protenix.utils.seed import seed_everything
 from protenix.utils.torchwatcher import TorchWatcher
-from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
+from protenix.utils.training import flatten_nested, get_optimizer
 from runner.ema import PowerLawEMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -554,10 +554,10 @@ class ArtiosBackboneTrainer(object):
             output = self.model_forward(context, mode=Mode.TRAIN)
             loss, loss_dict = self.get_loss(output, context)
 
-        if self.configs.dtype in ["bf16", "fp32"]:
-            if is_loss_nan_check(loss):
-                self.print(f"Skip iteration with NaN loss: {self.step} steps")
-                loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
+        # if self.configs.dtype in ["bf16", "fp32"]:
+        #     if is_loss_nan_check(loss):
+        #         self.print(f"Skip iteration with NaN loss: {self.step} steps")
+        #         loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
         self.backward_pass(loss)
 
         # For simplicity, the global training step is used

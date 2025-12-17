@@ -168,7 +168,7 @@ model_configs = {
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
-        "N_sample": 10,  # changed from 1, BATCH SIZE AT SAMPLING
+        "N_sample": 5,  # changed from 1, BATCH SIZE AT SAMPLING
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type": "non_singular",
@@ -225,7 +225,7 @@ model_configs = {
             "temperature": 0.1,
             "zero_shot": False,
             "smoothing_factor": 0.5,
-            "N_sample": 10,
+            "N_sample": 5,
         },
     },
     "artios_packing": {

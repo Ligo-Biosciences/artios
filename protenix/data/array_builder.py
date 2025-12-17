@@ -88,15 +88,14 @@ def sequence_input_to_atom_array(sequence_input: SequenceDesignInput) -> AtomArr
 
     arrays = []
     # Build protein array
-    res_ids = np.unique(
-        designed_array[designed_array.chain_id == "A"].res_id
-    )  # TODO: chain ID always 0 in future
+    res_ids = np.unique(designed_array[designed_array.chain_id == 0].res_id)
     len_sequence = len(res_ids)
 
     res_id_to_idx = {res_id: idx for idx, res_id in enumerate(res_ids)}
 
     sequence = [PROTEIN_1to3["G"] for _ in range(len_sequence)]
 
+    fixed_res_ids = []
     for res in sequence_input.fixed_residues:
         residue = res.residue
         if len(residue) == 1:
@@ -104,6 +103,7 @@ def sequence_input_to_atom_array(sequence_input: SequenceDesignInput) -> AtomArr
 
         idx = res_id_to_idx[res.res_id]
         sequence[idx] = residue
+        fixed_res_ids.append(idx + 1)  # protein_array uses 1-indexed res_id
 
     protein_array = _build_polymer_atom_array(sequence)
     protein_array = add_reference_features(protein_array)
@@ -127,6 +127,11 @@ def sequence_input_to_atom_array(sequence_input: SequenceDesignInput) -> AtomArr
 
     combined.set_annotation("is_motif_related", [False] * len(combined))
     combined.set_annotation("is_motif", [False] * len(combined))
+
+    # Mark fixed residues as motif-related so MPNN preserves restype
+    for res_id in fixed_res_ids:
+        res_id_mask = (combined.res_id == res_id) & (combined.chain_id == "0")
+        combined.is_motif_related[res_id_mask] = True
 
     return combined
 

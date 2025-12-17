@@ -302,8 +302,8 @@ def create_test_context(
     # Each atom maps to identity (itself) - using modulo n_tokens as ref_space_uid
     # Format: perms[batch_idx] = [[atom_0_perms], [atom_1_perms], ...]
     # For identity permutation with no symmetry, each atom has just one permutation option
-    atom_perm_perms = [[[i] for i in range(n_atoms)] for _ in range(batch_size)]
-    atom_perm = AtomPermContext(perms=atom_perm_perms)
+    # atom_perm_perms = [[[i] for i in range(n_atoms)] for _ in range(batch_size)]
+    # atom_perm = AtomPermContext(perms=atom_perm_perms)
 
     # BasicContext (non-tensor metadata)
     # For batched contexts, metadata fields should be lists with length batch_size
@@ -321,7 +321,7 @@ def create_test_context(
         token=token,
         reference=reference,
         chain_perm=chain_perm,
-        atom_perm=atom_perm,
+        # atom_perm=atom_perm,
         mask=mask,
         motif=motif,
         index=index,

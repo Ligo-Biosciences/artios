@@ -280,6 +280,7 @@ class DistributedDataLoader(DataLoader):
             pin_memory=True,
             persistent_workers=True if num_workers > 0 else False,
             prefetch_factor=prefetch_factor,
+            in_order=False,
         )
         self.counter = 0
 

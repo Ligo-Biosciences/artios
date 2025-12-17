@@ -72,9 +72,13 @@ class CollateContexts:
 
         for field in fields(FullContext):
             field_values = [getattr(c, field.name) for c in contexts]
-            kwargs[field.name] = self._stack_context_group(
-                field_values, type(field_values[0])
-            )
+            # Skip None fields (optional features that were disabled)
+            if field_values[0] is None:
+                kwargs[field.name] = None
+            else:
+                kwargs[field.name] = self._stack_context_group(
+                    field_values, type(field_values[0])
+                )
 
         return FullContext(**kwargs)
 
@@ -86,7 +90,10 @@ class CollateContexts:
         for field in fields(contexts[0]):
             values = [getattr(c, field.name) for c in contexts]
 
-            if torch.is_tensor(values[0]):
+            # Handle None fields (optional features that were disabled)
+            if values[0] is None:
+                kwargs[field.name] = None
+            elif torch.is_tensor(values[0]):
                 kwargs[field.name] = torch.stack(values, dim=0)
             elif isinstance(values[0], (int, float, str, list, AtomArray, TokenArray)):
                 kwargs[field.name] = values

@@ -295,8 +295,7 @@ class ArtiosPacking(nn.Module):
         metrics = compute_entity_metrics(
             per_atom_se_avg, context.mask.atom_loss_mask, entity_masks
         )
-        metrics["mse_loss"] = [
-            scaled_mse.mean(dim=-1)[i].item() for i in range(pred.shape[0])
-        ]
+        # Return tensor directly to avoid CUDA sync - will be converted in metrics aggregator
+        metrics["mse_loss"] = scaled_mse.mean(dim=-1)  # [batch]
 
         return loss, metrics

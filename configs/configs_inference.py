@@ -220,6 +220,7 @@ inference_configs = {
     "seeds": ListValue([101]),
     "model_type": "packing",
     "dump_dir": "./output",
+    "dump_dir_list": ValueMaybeNone([]),
     "need_atom_confidence": False,
     "sorted_by_ranking_score": False,
     "input_json_path": "",

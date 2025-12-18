@@ -10,11 +10,13 @@ import torch
 from biotite.sequence import ProteinSequence
 from biotite.structure import AtomArray
 from biotite.structure.io.mol import MOLFile
+from typing_extensions import assert_never
 
 from protenix.common.constants import STD_RESIDUES_AND_GAP, mmcif_restype_3to1
 from protenix.data.parser import MMCIFParser
 from protenix.data.utils import save_structure_cif
 from protenix.model.output import ModelOutput
+from protenix.utils.inference import ModelType
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +154,7 @@ def cif_to_pdb(
 def save_model_output_to_cif(
     output_dir_list: List[str],
     output: ModelOutput,
+    model_type: ModelType,
     atom_array: List[AtomArray],
     n_atom: int,
     pdb_id: str,
@@ -200,10 +203,18 @@ def save_model_output_to_cif(
             "b_factor", np.zeros(len(predicted_atom_array))
         )
 
-        # Determine output file path
         output_dir = Path(output_dir_list[idx])
         os.makedirs(output_dir, exist_ok=True)
-        output_path = output_dir / f"{pdb_id}_sample_{idx}.cif"
+
+        match model_type:
+            case ModelType.BACKBONE:
+                uid = int(output_dir.name)
+                output_path = output_dir / f"backbone_{uid}.cif"
+            case ModelType.PACKING:
+                uid = int(output_dir.parent.name)
+                output_path = output_dir / f"uid_{uid}_packing_{idx}.cif"
+            case _:
+                assert_never(model_type)
 
         try:
             save_structure_cif(
@@ -215,7 +226,6 @@ def save_model_output_to_cif(
                 field_in_b_factor_col=field_in_b_factor_col,
             )
             saved_files.append(output_path)
-            print(f"Saved backbone sample {idx} to {output_path}")
 
         except Exception as e:
             print(f"Error saving backbone sample {idx}: {e}")

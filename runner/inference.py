@@ -16,6 +16,7 @@ import logging
 import os
 import traceback
 from contextlib import nullcontext
+from dataclasses import dataclass
 from os.path import join as opjoin
 from typing import Any
 
@@ -29,10 +30,13 @@ from configs.configs_inference import inference_configs
 from protenix.config import parse_configs, parse_sys_args
 from protenix.data.features import FullContext
 from protenix.data.infer_data_pipeline import get_inference_dataloader
+from protenix.model.artios_backbone import ArtiosBackbone
+from protenix.model.artios_mpnn import ArtiosMPNN
+from protenix.model.artios_packing import ArtiosPacking
 from protenix.model.output import ModelOutput
 from protenix.model.utils import Mode
 from protenix.utils.distributed import DIST_WRAPPER
-from protenix.utils.inference import MODEL_REGISTRY, ModelType
+from protenix.utils.inference import ModelType
 from protenix.utils.seed import seed_everything
 from protenix.utils.structure_io import (
     save_model_output_to_cif,
@@ -40,6 +44,33 @@ from protenix.utils.structure_io import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ModelConfig:
+    """Configuration for a specific model type."""
+
+    model_class: type[nn.Module]
+    checkpoint_path_key: str
+    n_sample_key: str = ""
+
+
+MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
+    ModelType.BACKBONE: ModelConfig(
+        model_class=ArtiosBackbone,
+        checkpoint_path_key="load_backbone_checkpoint_path",
+        n_sample_key="sample_diffusion.N_sample",
+    ),
+    ModelType.SEQUENCE_DESIGN: ModelConfig(
+        model_class=ArtiosMPNN,
+        checkpoint_path_key="load_mpnn_checkpoint_path",
+    ),
+    ModelType.PACKING: ModelConfig(
+        model_class=ArtiosPacking,
+        checkpoint_path_key="load_packing_checkpoint_path",
+        n_sample_key="artios_packing.sample_diffusion.N_sample",
+    ),
+}
 
 
 class InferenceRunner(object):
@@ -83,7 +114,8 @@ class InferenceRunner(object):
 
         Sets up a list of dump directories for each sample, and ensures the error directory exists.
 
-        Creates N_sample dump subdirectories inside dump_dir: dump_dir/0, dump_dir/1, ... etc.
+        Creates N_sample dump subdirectories inside dump_dir: dump_dir/0, dump_dir/1, ... etc if not
+        given by a dump_dir_list.
 
         Raises:
             ValueError: If configs.N_sample is not a positive integer
@@ -92,10 +124,14 @@ class InferenceRunner(object):
         os.makedirs(self.dump_dir, exist_ok=True)
 
         n_sample = self.configs.get(self.model_config.n_sample_key, None)
-        self.dump_dir_list = [
-            os.path.join(self.dump_dir, str(i))
-            for i in range(n_sample if n_sample is not None else 1)
-        ]
+
+        if self.configs.dump_dir_list:
+            self.dump_dir_list = self.configs.dump_dir_list
+        else:
+            self.dump_dir_list = [
+                os.path.join(self.dump_dir, str(i))
+                for i in range(n_sample if n_sample is not None else 1)
+            ]
         for dump_path in self.dump_dir_list:
             os.makedirs(dump_path, exist_ok=True)
 
@@ -187,6 +223,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                         _ = save_model_output_to_cif(
                             output_dir_list=runner.dump_dir_list,
                             output=output,
+                            model_type=model_type,
                             atom_array=context.basic.atom_array,
                             n_atom=n_atom,
                             pdb_id=sample_name,

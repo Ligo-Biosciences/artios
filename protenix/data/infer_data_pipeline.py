@@ -25,7 +25,6 @@ from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
 from protenix.data.json_parser import parse_input_dict
 from protenix.data.json_to_feature import SampleDictToFeatures
-from protenix.data.utils import data_type_transform
 from protenix.utils.distributed import DIST_WRAPPER
 
 logger = logging.getLogger(__name__)
@@ -131,7 +130,10 @@ class InferenceDataset(Dataset):
         # )
 
         # Transform to right data type TODO: work out if required
-        feat = data_type_transform(feat_or_label_dict=features_dict)
+        feat = (
+            features_dict  # NOTE: we rely on context generator to give the right types
+        )
+        # data_type_transform(feat_or_label_dict=features_dict)
 
         t2 = time.time()
 

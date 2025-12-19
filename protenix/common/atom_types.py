@@ -286,7 +286,7 @@ TIP_ATOMS: Mapping[str, tuple[str, ...]] = {
     residue_names.MET: (CG, CE, SD),
     residue_names.PHE: (CG, CD1, CD2, CE1, CE2, CZ),
     residue_names.PRO: (N, CB, CG, CD),
-    residue_names.SER: (OG),
+    residue_names.SER: (OG,),
     residue_names.THR: (CB, CG2, OG1),
     residue_names.TRP: (CG, CD1, CD2, CE2, CE3, CZ2, CZ3, CH2, NE1),
     residue_names.TYR: (CG, CD1, CD2, CE1, CE2, CZ, OH),

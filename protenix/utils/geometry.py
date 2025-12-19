@@ -12,6 +12,32 @@ from protenix.utils.typing import Bool, Float, typecheck
 
 
 @typecheck
+def rot_vec_mul(
+    r: Float[Tensor, "*batch u v"], t: Float[Tensor, "*batch xyz"]
+) -> Float[Tensor, "*batch xyz"]:
+    """Apply rotation matrix to vector.
+
+    Written out by hand to avoid AMP downcasting.
+
+    Args:
+        r: The rotation matrices.
+        t: The coordinate tensors.
+
+    Returns:
+        The rotated coordinates.
+    """
+    x, y, z = torch.unbind(input=t, dim=-1)
+    return torch.stack(
+        tensors=[
+            r[..., 0, 0] * x + r[..., 0, 1] * y + r[..., 0, 2] * z,
+            r[..., 1, 0] * x + r[..., 1, 1] * y + r[..., 1, 2] * z,
+            r[..., 2, 0] * x + r[..., 2, 1] * y + r[..., 2, 2] * z,
+        ],
+        dim=-1,
+    )
+
+
+@typecheck
 def calc_centroid(
     coords: Float[Tensor, "*batch n_atom xyz"],
     mask: Bool[Tensor, "*batch n_atom"] | None = None,
@@ -117,32 +143,6 @@ def uniform_random_rotation(n_sample: int = 1) -> Float[Tensor, "n_sample u v"]:
     rotation = Rotation.random(num=n_sample)
     rot_matrix = torch.from_numpy(rotation.as_matrix()).float()
     return rot_matrix
-
-
-@typecheck
-def rot_vec_mul(
-    r: Float[Tensor, "*batch u v"], t: Float[Tensor, "*batch xyz"]
-) -> Float[Tensor, "*batch xyz"]:
-    """Apply rotation matrix to vector.
-
-    Written out by hand to avoid AMP downcasting.
-
-    Args:
-        r: The rotation matrices.
-        t: The coordinate tensors.
-
-    Returns:
-        The rotated coordinates.
-    """
-    x, y, z = torch.unbind(input=t, dim=-1)
-    return torch.stack(
-        tensors=[
-            r[..., 0, 0] * x + r[..., 0, 1] * y + r[..., 0, 2] * z,
-            r[..., 1, 0] * x + r[..., 1, 1] * y + r[..., 1, 2] * z,
-            r[..., 2, 0] * x + r[..., 2, 1] * y + r[..., 2, 2] * z,
-        ],
-        dim=-1,
-    )
 
 
 # =============================================================================

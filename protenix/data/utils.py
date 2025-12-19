@@ -74,7 +74,7 @@ def get_inter_residue_bonds(atom_array: AtomArray) -> np.ndarray:
         np.ndarray: inter residue bonds, shape = (n,2)
     """
     if atom_array.bonds is None:
-        return []
+        return np.empty((0, 2), dtype=int)
     idx_i = atom_array.bonds._bonds[:, 0]
     idx_j = atom_array.bonds._bonds[:, 1]
     chain_id_diff = atom_array.chain_id[idx_i] != atom_array.chain_id[idx_j]
@@ -298,7 +298,9 @@ class CIFWriter:
     Write AtomArray to cif.
     """
 
-    def __init__(self, atom_array: AtomArray, entity_poly_type: dict[str, str] = None):
+    def __init__(
+        self, atom_array: AtomArray, entity_poly_type: dict[str, str] | None = None
+    ):
         """
         Args:
             atom_array (AtomArray): Biotite AtomArray object.
@@ -363,7 +365,7 @@ class CIFWriter:
     def save_to_cif(
         self,
         output_path: str,
-        entry_id: str = None,
+        entry_id: str | None = None,
         include_bonds: bool = False,
         field_in_b_factor_col: Optional[str] = None,
     ):
@@ -468,7 +470,7 @@ def get_lig_lig_bonds(
     return lig_polymer_bonds
 
 
-def pdb_to_cif(input_fname: str, output_fname: str, entry_id: str = None):
+def pdb_to_cif(input_fname: str, output_fname: str, entry_id: str | None = None):
     """
     Convert PDB to CIF.
 

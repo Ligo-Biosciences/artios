@@ -397,7 +397,7 @@ def pad_at_dim(
 
 
 def reshape_at_dim(
-    x: Tensor, dim: int, target_shape: Union[tuple[int], list[int]]
+    x: Tensor, dim: int, target_shape: Union[tuple[int, ...], list[int]]
 ) -> Tensor:
     """reshape dimension dim of x to target_shape
 

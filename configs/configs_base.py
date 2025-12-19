@@ -233,9 +233,7 @@ model_configs = {
     "artios_packing": {
         "model": {  # TODO: these configs will be tidier once Hydra in
             "c_token": 768,
-            "local_sigma_coord": GlobalConfigValue(
-                "local_sigma_coord"
-            ),  # TODO: make global sigma coord
+            "local_sigma_coord": GlobalConfigValue("local_sigma_coord"),
             "atom_encoder": {
                 "num_blocks": 3,
                 "num_heads": 4,

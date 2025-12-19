@@ -69,6 +69,9 @@ class GaussianRBF(nn.Module):
     Encodes distances using Gaussian kernels centered at regular intervals.
     """
 
+    gamma: Tensor
+    centers: Tensor
+
     def __init__(
         self,
         num_kernels: int = 16,
@@ -95,8 +98,8 @@ class GaussianRBF(nn.Module):
         # Gamma controls the width of the Gaussians
         # Use spacing between centers to determine width
         spacing = (max_distance - min_distance) / (num_kernels - 1)
-        gamma = 1.0 / (spacing**2)
-        self.register_buffer("gamma", torch.tensor(gamma))
+        # gamma_ =
+        self.register_buffer("gamma", torch.tensor(1.0 / (spacing**2)))
 
     def forward(
         self,

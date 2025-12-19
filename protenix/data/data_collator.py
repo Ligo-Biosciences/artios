@@ -45,6 +45,7 @@ class CollateContexts:
     def _get_atom_padding_length(self, batch: List[FullContext]) -> int:
         """Gets the maximum atom padding length for a batch."""
         max_atom_in_batch = max(context.basic.n_atom for context in batch)
+        assert isinstance(max_atom_in_batch, int), "Expected unbatched contexts"
 
         if self.motif_training:
             max_bin_end = 4 * self.crop_size + DENSE_ATOM_NUM * self.max_motif_residues
@@ -56,6 +57,7 @@ class CollateContexts:
     def _get_token_padding_length(self, batch: List[FullContext]) -> int:
         """Gets the maximum token padding length for a batch."""
         max_token_in_batch = max(context.basic.n_token for context in batch)
+        assert isinstance(max_token_in_batch, int), "Expected unbatched contexts"
 
         if self.motif_training:
             max_bin_end = self.crop_size + DENSE_ATOM_NUM * self.max_motif_residues

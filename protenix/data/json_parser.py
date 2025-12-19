@@ -75,12 +75,13 @@ def parse_input_dict(input_dict: dict[str, Any]) -> MotifInput | SequenceDesignI
     match validated_input.task:
         case TaskType.MOTIF:
             # Convert string cif_file to CIFFile object format if needed
-            if "motif" in spec_with_name and "cif_file" in spec_with_name["motif"]:
-                cif_file_value = spec_with_name["motif"]["cif_file"]
+            motif_spec = spec_with_name.get("motif")
+            if isinstance(motif_spec, dict) and "cif_file" in motif_spec:
+                cif_file_value = motif_spec["cif_file"]
                 if isinstance(cif_file_value, str):
-                    spec_with_name["motif"]["cif_file"] = {"path": cif_file_value}
+                    motif_spec["cif_file"] = {"path": cif_file_value}
 
-            return MotifInput(**spec_with_name)
+            return MotifInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
 
         case TaskType.SEQUENCE:
             # Convert string cif_file to CIFFile object format if needed
@@ -89,7 +90,9 @@ def parse_input_dict(input_dict: dict[str, Any]) -> MotifInput | SequenceDesignI
                 if isinstance(cif_file_value, str):
                     spec_with_name["cif_file"] = {"path": cif_file_value}
 
-            return SequenceDesignInput(**spec_with_name)
+            return SequenceDesignInput(
+                **spec_with_name
+            )  # ty: ignore[invalid-argument-type]
 
 
 # ---------------------------------------------------------------------------

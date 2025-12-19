@@ -169,7 +169,7 @@ class DataPipeline(object):
     @staticmethod
     def get_msa_raw_features(
         bioassembly_dict: dict[str, Any],
-        selected_indices: np.ndarray,
+        selected_indices: np.ndarray | None,
         msa_featurizer: Optional[MSAFeaturizer],
     ) -> Optional[dict[str, np.ndarray]]:
         """
@@ -203,7 +203,7 @@ class DataPipeline(object):
     @staticmethod
     def get_template_raw_features(
         bioassembly_dict: dict[str, Any],
-        selected_indices: np.ndarray,
+        selected_indices: np.ndarray | None,
         template_featurizer=None,
     ) -> Optional[dict[str, np.ndarray]]:
         """
@@ -246,7 +246,7 @@ class DataPipeline(object):
         spatial_crop_complete_lig: bool = False,
         drop_last: bool = False,
         remove_metal: bool = False,
-    ) -> tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any]]:
+    ) -> tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any], int]:
         """
         Crop data based on the crop size and reference chain indices.
 

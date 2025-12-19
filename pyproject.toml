@@ -168,6 +168,14 @@ python = ".venv"
 # Ignore nn.Module custom __setattr__ complaints for self.x = x patterns
 unresolved-attribute = "ignore"
 
+[[tool.ty.overrides]]
+# features.py uses Feature(), Label(), etc. as type constructors that return Annotated types.
+# This pattern works at runtime but violates static typing rules.
+include = ["protenix/data/features.py"]
+
+[tool.ty.overrides.rules]
+invalid-type-form = "ignore"
+
 [dependency-groups]
 dev = [
     "ipykernel>=6.30.1",

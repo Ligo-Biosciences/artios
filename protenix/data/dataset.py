@@ -30,6 +30,7 @@ from torch.utils.data import Dataset
 
 from protenix.common.constants import BACKBONE_DEFS, EvaluationChainInterface
 from protenix.data.data_pipeline import DataPipeline
+from protenix.data.features import FullContext
 from protenix.data.featurizer import ContextGenerator
 from protenix.data.filter import Filter
 from protenix.data.motif_maker import MotifMaker
@@ -64,7 +65,7 @@ class BaseSingleDataset(Dataset):
         msa_featurizer: Optional[MSAFeaturizer] = None,
         template_featurizer: Optional[Any] = None,
         motif_maker: Optional[MotifMaker] = None,
-        name: str = None,
+        name: Optional[str] = None,
         **kwargs,
     ) -> None:
         super(BaseSingleDataset, self).__init__()
@@ -99,7 +100,7 @@ class BaseSingleDataset(Dataset):
         # Configs for data filters
         self.max_n_token = kwargs.get("max_n_token", -1)
         self.pdb_list = kwargs.get("pdb_list", None)
-        if len(self.pdb_list) == 0:
+        if self.pdb_list is not None and len(self.pdb_list) == 0:
             self.pdb_list = None
         # Used for removing rows in the indices list. Column names and excluded values are specified in this dict.
         self.exclusion_dict = kwargs.get("exclusion", {})
@@ -137,7 +138,7 @@ class BaseSingleDataset(Dataset):
         self.indices_list = self.read_indices_list(indices_fpath)
 
     @staticmethod
-    def read_pdb_list(pdb_list: Union[list, str]) -> Optional[list]:
+    def read_pdb_list(pdb_list: Union[list[str], str]) -> list[str]:
         """
         Reads a list of PDB IDs from a file or directly from a list.
 
@@ -145,11 +146,8 @@ class BaseSingleDataset(Dataset):
             pdb_list: A list of PDB IDs or a file path containing PDB IDs.
 
         Returns:
-            A list of PDB IDs if the input is valid, otherwise None.
+            A list of PDB IDs.
         """
-        if pdb_list is None:
-            return None
-
         if isinstance(pdb_list, list):
             return pdb_list
 
@@ -161,7 +159,9 @@ class BaseSingleDataset(Dataset):
                     pdb_filter_list.append(line)
         return pdb_filter_list
 
-    def read_indices_list(self, indices_fpath: Union[str, Path]) -> pd.DataFrame:
+    def read_indices_list(
+        self, indices_fpath: Union[str, Path]
+    ) -> Union[pd.DataFrame, list[pd.DataFrame]]:
         """
         Reads and processes a list of indices from a CSV file.
 
@@ -171,7 +171,7 @@ class BaseSingleDataset(Dataset):
         Returns:
             A DataFrame containing the processed indices.
         """
-        indices_list = read_indices_csv(indices_fpath)
+        indices_list: pd.DataFrame = read_indices_csv(indices_fpath)
         num_data = len(indices_list)
         logger.info(f"#Rows in indices list: {num_data}")
         # Filter by pdb_list
@@ -209,29 +209,23 @@ class BaseSingleDataset(Dataset):
         # Group by pdb_id
         # A list of dataframe. Each contains one pdb with multiple rows.
         if self.group_by_pdb_id:
-            indices_list = [
+            grouped_list: list[pd.DataFrame] = [
                 df.reset_index() for _, df in indices_list.groupby("pdb_id", sort=True)
             ]
 
-        if self.sort_by_n_token:
-            # Sort the dataset in a descending order, so that if OOM it will raise Error at an early stage.
-            if self.group_by_pdb_id:
-                indices_list = sorted(
-                    indices_list,
+            if self.sort_by_n_token:
+                # Sort in descending order, so if OOM it will raise Error early.
+                grouped_list = sorted(
+                    grouped_list,
                     key=lambda df: int(df["num_tokens"].iloc[0]),
                     reverse=True,
                 )
-            else:
-                indices_list = indices_list.sort_values(
-                    by="num_tokens", key=lambda x: x.astype(int), ascending=False
-                ).reset_index(drop=True)
 
-        if self.find_eval_chain_interface:
-            # Remove data that does not contain eval_type in the EvaluationChainInterface list
-            if self.group_by_pdb_id:
-                indices_list = [
+            if self.find_eval_chain_interface:
+                # Remove data that does not contain eval_type in the EvaluationChainInterface list
+                grouped_list = [
                     df
-                    for df in indices_list
+                    for df in grouped_list
                     if len(
                         set(df["eval_type"].to_list()).intersection(
                             set(EvaluationChainInterface)
@@ -239,12 +233,27 @@ class BaseSingleDataset(Dataset):
                     )
                     > 0
                 ]
-            else:
-                indices_list = indices_list[
-                    indices_list["eval_type"].apply(
-                        lambda x: x in EvaluationChainInterface
-                    )
-                ]
+
+            if self.limits > 0 and len(grouped_list) > self.limits:
+                logger.info(
+                    f"Limit indices list size from {len(grouped_list)} to {self.limits}"
+                )
+                grouped_list = grouped_list[: self.limits]
+            return grouped_list
+
+        # Non-grouped path: indices_list remains a DataFrame
+        if self.sort_by_n_token:
+            # Sort in descending order, so if OOM it will raise Error early.
+            indices_list = indices_list.sort_values(
+                by="num_tokens", key=lambda x: x.astype(int), ascending=False
+            ).reset_index(drop=True)
+
+        if self.find_eval_chain_interface:
+            # Remove data that does not contain eval_type in the EvaluationChainInterface list
+            indices_list = indices_list[
+                indices_list["eval_type"].apply(lambda x: x in EvaluationChainInterface)
+            ]
+
         if self.limits > 0 and len(indices_list) > self.limits:
             logger.info(
                 f"Limit indices list size from {len(indices_list)} to {self.limits}"
@@ -356,21 +365,20 @@ class BaseSingleDataset(Dataset):
                     continue
                 else:
                     raise Exception(e)
-        return data
+        raise RuntimeError(f"Failed to load data after 10 attempts for idx {idx}")
 
     @profile_function("dataset._get_bioassembly_data")
-    def _get_bioassembly_data(
-        self, idx: int
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def _get_bioassembly_data(self, idx: int) -> tuple[pd.Series, dict[str, Any], str]:
         sample_indice = self._get_sample_indice(idx=idx)
-        if self.bioassembly_dict_dir is not None:
-            bioassembly_dict_fpath = os.path.join(
-                self.bioassembly_dict_dir,
-                sample_indice.pdb_id + ".pkl.gz",  # .pkl.gz
+        if self.bioassembly_dict_dir is None:
+            raise ValueError(
+                "bioassembly_dict_dir must be set to load bioassembly data"
             )
-        else:
-            bioassembly_dict_fpath = None
 
+        bioassembly_dict_fpath = os.path.join(
+            self.bioassembly_dict_dir,
+            sample_indice.pdb_id + ".pkl.gz",  # .pkl.gz
+        )
         bioassembly_dict = DataPipeline.get_data_bioassembly(
             bioassembly_dict_fpath=bioassembly_dict_fpath
         )
@@ -495,7 +503,7 @@ class BaseSingleDataset(Dataset):
     @profile_function("dataset.process_one")
     def process_one(
         self, idx: int, return_atom_token_array: bool = False
-    ) -> dict[str, dict]:
+    ) -> FullContext:
         """
         Processes a single data sample by retrieving bioassembly data, applying various transformations, and cropping the data.
         It then extracts features and labels, and optionally returns the processed atom and token arrays.
@@ -696,7 +704,7 @@ class BaseSingleDataset(Dataset):
         spatial_crop_complete_lig: bool = False,
         drop_last: bool = True,
         remove_metal: bool = True,
-    ) -> tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any]]:
+    ) -> tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any], int]:
         """
         Crops the bioassembly data based on the specified configurations.
 
@@ -730,8 +738,10 @@ class BaseSingleDataset(Dataset):
         """
         if self.group_by_pdb_id:
             # Row-0 of PDB-idx
+            assert isinstance(self.indices_list, list)
             sample_indice = self.indices_list[idx].iloc[0]
         else:
+            assert isinstance(self.indices_list, pd.DataFrame)
             sample_indice = self.indices_list.iloc[idx]
         return sample_indice
 
@@ -749,8 +759,10 @@ class BaseSingleDataset(Dataset):
             A tuple containing the evaluation type, cluster ID, chain 1 mask, and chain 2 mask.
         """
         if self.group_by_pdb_id:
+            assert isinstance(self.indices_list, list)
             df = self.indices_list[idx]
         else:
+            assert isinstance(self.indices_list, pd.DataFrame)
             df = self.indices_list.iloc[idx : idx + 1]
 
         # Only consider chain/interfaces defined in EvaluationChainInterface
@@ -908,7 +920,7 @@ class BaseSingleDataset(Dataset):
         template_features: dict[str, Any],
         full_atom_array: AtomArray,
         is_spatial_crop: bool = True,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    ) -> FullContext:
         """
         Get feature and label information for a given data point.
         It uses a Featurizer object to obtain input features and labels, and applies several
@@ -1103,7 +1115,7 @@ class WeightedMultiDataset(Dataset):
         datasets: list[Dataset],
         dataset_names: list[str],
         datapoint_weights: list[list[float]],
-        dataset_sample_weights: list[torch.tensor],
+        dataset_sample_weights: list[torch.Tensor],
     ):
         """
         Initializes the WeightedMultiDataset.
@@ -1259,7 +1271,7 @@ def calc_weights_for_df(
 
 def get_sample_weights(
     sampler_type: str,
-    indices_df: pd.DataFrame = None,
+    indices_df: Optional[pd.DataFrame] = None,
     beta_dict: dict = {
         "chain": 0.5,
         "interface": 1,
@@ -1371,6 +1383,8 @@ def get_datasets(
         dataset_param["motif_training"] = data_config.get("motif_training", {})
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
+        # Training datasets don't use group_by_pdb_id, so indices_list is a DataFrame
+        assert isinstance(train_dataset.indices_list, pd.DataFrame)
         datapoint_weights.append(
             get_sample_weights(
                 **data_config[train_name]["sampler_configs"],

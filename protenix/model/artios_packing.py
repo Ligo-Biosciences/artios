@@ -27,11 +27,11 @@ from protenix.model.utils import (
     Mode,
     average_atom_to_token,
     broadcast_token_to_atom,
-    centre_random_augmentation,
-    expand_at_dim,
     noise_w_flow_matching,
 )
 from protenix.utils.casting import disable_autocast
+from protenix.utils.geometry import centre_random_augmentation
+from protenix.utils.tensor_utils import expand_at_dim
 
 
 class ArtiosPacking(nn.Module):

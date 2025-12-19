@@ -15,14 +15,13 @@
 import torch
 
 from protenix.metrics.rmsd import rmsd
-from protenix.model.utils import expand_at_dim
 from protenix.utils.distributed import traverse_and_aggregate
 from protenix.utils.logger import get_logger
 from protenix.utils.permutation.chain_permutation.utils import (
     apply_transform,
     get_optimal_transform,
-    num_unique_matches,
 )
+from protenix.utils.tensor_utils import expand_at_dim
 
 logger = get_logger(__name__)
 
@@ -73,7 +72,9 @@ def permute_pred_to_optimize_pocket_aligned_rmsd(
     for i in torch.unique(atom_asym_id[atom_entity_id == pocket_entity_id]):
         i = i.item()
         pocket_mask = atom_asym_id == i
-        pocket_mask = pocket_mask * torch.isin(mol_atom_index, mol_atom_index[true_pocket_mask])
+        pocket_mask = pocket_mask * torch.isin(
+            mol_atom_index, mol_atom_index[true_pocket_mask]
+        )
         assert pocket_mask.sum() == true_pocket_mask.sum()
         candidate_pockets[i] = pocket_mask.clone()
     candidate_ligands = {}
@@ -85,7 +86,9 @@ def permute_pred_to_optimize_pocket_aligned_rmsd(
                 f"The ligand selected by 'mol_id' has {lig_mask_j.sum().item()} atoms."
                 + f"The true ligand selected by 'asym_id' has {true_ligand_mask.sum().item()} atoms."
             )
-            lig_mask_j = lig_mask_j * torch.isin(mol_atom_index, mol_atom_index[true_ligand_mask])
+            lig_mask_j = lig_mask_j * torch.isin(
+                mol_atom_index, mol_atom_index[true_ligand_mask]
+            )
         assert lig_mask_j.sum() == true_ligand_mask.sum()
         candidate_ligands[j] = lig_mask_j
 

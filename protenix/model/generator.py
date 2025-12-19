@@ -5,10 +5,8 @@ from typing import Protocol, runtime_checkable
 import torch
 from torch import Tensor
 
-from protenix.model.utils import (
-    beta_function,
-    centre_random_augmentation,
-)
+from protenix.model.utils import beta_function
+from protenix.utils.geometry import centre_random_augmentation
 from protenix.utils.typing import Bool, Float, typecheck
 
 

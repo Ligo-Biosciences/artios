@@ -9,7 +9,7 @@ from torch import Tensor, nn
 
 import protenix.model.modules.message_passing as mp
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
-from protenix.model.utils import expand_at_dim
+from protenix.utils.tensor_utils import expand_at_dim
 
 
 class BaseMPNNLayer(nn.Module, ABC):

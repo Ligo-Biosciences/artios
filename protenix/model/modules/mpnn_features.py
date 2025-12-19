@@ -14,7 +14,7 @@ from protenix.data.features import FullContext
 from protenix.model.modules.embedders import RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.utils import average_atom_to_token
-from protenix.utils.torch_utils import cdist
+from protenix.utils.tensor_utils import cdist
 from protenix.utils.typing import typecheck
 
 

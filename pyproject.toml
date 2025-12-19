@@ -159,7 +159,7 @@ module = [
 ignore_missing_imports = true
 
 [tool.ty.src]
-exclude = ["tests/"]
+exclude = ["tests/", "protenix/openfold_local/"]
 
 [tool.ty.environment]
 python = ".venv"

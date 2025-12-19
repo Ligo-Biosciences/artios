@@ -158,6 +158,9 @@ module = [
 ]
 ignore_missing_imports = true
 
+[tool.ty.src]
+exclude = ["tests/"]
+
 [tool.ty.environment]
 python = ".venv"
 

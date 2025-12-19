@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional, overload
 
 import torch
 from einops import rearrange
@@ -224,6 +224,32 @@ def self_aligned_rmsd(
     return aligned_rmsd, transformed_pred_pose, rot, trans
 
 
+@overload
+def weighted_rigid_align(
+    x: Float[Tensor, "*batch n 3"],
+    x_target: Float[Tensor, "*batch n 3"],
+    atom_weight: Float[Tensor, "*batch n"] | Float[Tensor, "n"],
+    mask: Bool[Tensor, "*batch n"],
+    stop_gradient: bool = True,
+    return_transform: Literal[False] = False,
+) -> Float[Tensor, "*batch n 3"]: ...
+
+
+@overload
+def weighted_rigid_align(
+    x: Float[Tensor, "*batch n 3"],
+    x_target: Float[Tensor, "*batch n 3"],
+    atom_weight: Float[Tensor, "*batch n"] | Float[Tensor, "n"],
+    mask: Bool[Tensor, "*batch n"],
+    stop_gradient: bool,
+    return_transform: Literal[True],
+) -> tuple[
+    Float[Tensor, "*batch n 3"],
+    Float[Tensor, "*batch 3 3"],
+    Float[Tensor, "*batch 1 3"],
+]: ...
+
+
 @typecheck
 def weighted_rigid_align(
     x: Float[Tensor, "*batch n 3"],
@@ -231,6 +257,7 @@ def weighted_rigid_align(
     atom_weight: Float[Tensor, "*batch n"] | Float[Tensor, "n"],
     mask: Bool[Tensor, "*batch n"],
     stop_gradient: bool = True,
+    return_transform: bool = False,
 ) -> (
     Float[Tensor, "*batch n 3"]
     | tuple[
@@ -247,21 +274,24 @@ def weighted_rigid_align(
         atom_weight: Weights for each atom.
         mask: Mask for the atoms.
         stop_gradient: If True, detach output and run with no_grad.
+        return_transform: If True, also return rotation and translation.
 
     Returns:
-        If stop_gradient: aligned coordinates only.
-        Otherwise: tuple of (aligned_coords, rotation, translation).
+        If return_transform is False: aligned coordinates only.
+        If return_transform is True: tuple of (aligned_coords, rotation, translation).
     """
     if stop_gradient:
         with torch.no_grad():
-            x_aligned, _, _ = align_pred_to_true(
+            x_aligned, rot, trans = align_pred_to_true(
                 pred_pose=x,
                 true_pose=x_target,
                 atom_mask=mask,
                 weight=atom_weight,
                 allowing_reflection=False,
             )
-            return x_aligned.detach()
+            x_aligned = x_aligned.detach()
+            rot = rot.detach()
+            trans = trans.detach()
     else:
         x_aligned, rot, trans = align_pred_to_true(
             pred_pose=x,
@@ -270,4 +300,7 @@ def weighted_rigid_align(
             weight=atom_weight,
             allowing_reflection=False,
         )
+
+    if return_transform:
         return x_aligned, rot, trans
+    return x_aligned

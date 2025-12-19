@@ -238,7 +238,7 @@ def get_clean_data(atom_array: AtomArray) -> AtomArray:
 def save_atoms_to_cif(
     output_cif_file: str,
     atom_array: AtomArray,
-    entity_poly_type: dict[str, str],
+    entity_poly_type: dict[str, str] | None,
     pdb_id: str,
     field_in_b_factor_col: Optional[str] = None,
 ) -> None:
@@ -268,7 +268,7 @@ def save_structure_cif(
     atom_array: AtomArray,
     pred_coordinate: torch.Tensor,
     output_fpath: str,
-    entity_poly_type: dict[str, str],
+    entity_poly_type: dict[str, str] | None,
     pdb_id: str,
     field_in_b_factor_col: Optional[str] = None,
 ):

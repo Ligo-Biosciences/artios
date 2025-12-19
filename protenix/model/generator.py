@@ -219,7 +219,7 @@ class LaProteinaCoordScheduler(InferenceTimestepScheduler):
             Timesteps tensor of shape [n_steps + 1].
         """
         steps = torch.arange(n_steps + 1, dtype=dtype, device=device) / n_steps
-        t = (1 - self.scale ** (-2 * steps)) / (1 - self.scale ** (-2))
+        t = (1 - torch.pow(self.scale, -2 * steps)) / (1 - self.scale ** (-2))
         return t
 
 

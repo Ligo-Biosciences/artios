@@ -12,7 +12,7 @@ from protenix.model.generator import (
     ProteinaCoordSampler,
     stochasticity_from_config,
 )
-from protenix.model.loss_new import (
+from protenix.model.loss import (
     LossWeightConfig,
     align_to_prediction,
     build_atom_weights,
@@ -22,7 +22,7 @@ from protenix.model.loss_new import (
     timestep_scale,
 )
 from protenix.model.modules.sidechain_packer import SidechainPacker
-from protenix.model.output import ModelOutput
+from protenix.model.output import DiffusionOutput, ModelOutput
 from protenix.model.utils import (
     Mode,
     average_atom_to_token,
@@ -110,7 +110,7 @@ class ArtiosPacking(nn.Module):
         self,
         context: FullContext,
         seed: Optional[int] = None,
-    ) -> ModelOutput:
+    ) -> DiffusionOutput:
         """
         Main training (and evaluation) loop for the Artios sidechain packing model.
 
@@ -201,7 +201,7 @@ class ArtiosPacking(nn.Module):
 
         # symmetry_corrected = result.coordinate
 
-        return ModelOutput(coordinate=pred, timestep=timestep)
+        return DiffusionOutput(coordinate=pred, timestep=timestep)
 
     def forward(
         self,
@@ -239,9 +239,9 @@ class ArtiosPacking(nn.Module):
     @disable_autocast
     def compute_loss(
         self,
-        output: ModelOutput,
+        output: DiffusionOutput,
         context: FullContext,
-    ) -> tuple[Tensor, dict[str, list[float]]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """Compute loss from model output and context.
 
         Args:

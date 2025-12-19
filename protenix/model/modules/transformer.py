@@ -11,6 +11,7 @@ Cross attention and self attention are separated.
 
 from functools import partial
 
+import torch
 from einops import rearrange
 from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint
@@ -644,6 +645,7 @@ class LocalAttnTransformer(nn.Module):
         return blocks
 
     # @profile_function("atom_transformer")
+    @torch.compile
     @typecheck
     def forward(
         self,

@@ -54,7 +54,7 @@ basic_configs = {
     "deterministic": False,
     "deterministic_seed": False,
     "post_hoc_ema_checkpoint_dir": "",
-    "ema_vae_decay": 0.999,
+    "ema_decay": 0.999,
     "power_law_ema_sigma": ListValue([0.08, 0.12]),
     "post_hoc_ema_sigma": ListValue([0.08]),
     "calc_post_hoc_ema_during_training": True,
@@ -70,7 +70,7 @@ data_configs = {
     "test_crop_size": 256,
     "test_max_n_token": -1,
     "train_lig_atom_rename": False,  # TODO:
-    "train_shuffle_mols": True,
+    "train_shuffle_mols": False,
     "train_shuffle_sym_ids": False,
     "test_lig_atom_rename": False,
     "test_shuffle_mols": False,
@@ -381,14 +381,12 @@ loss_configs = {
         # },
         "backbone": {
             "mse": {
-                "weight_mse": 1 / 3,
                 "weight_protein": 1.0,
-                "weight_dna": 1.0,
-                "weight_rna": 1.0,
-                "weight_ligand": 1.0,
-                "weight_motif": 0.0,  # a supplementary weighting. 0.0 means weighted same as all other atoms
-                "weight_motif_related": 0.0,
-                "eps": 1e-6,
+                "weight_dna": 0.0,
+                "weight_rna": 0.0,
+                "weight_ligand": 5.0,
+                "weight_motif": 0.0,
+                "weight_motif_related": 10.0,
             },
             "sigma_coord": GlobalConfigValue("sigma_coord"),
         },
@@ -401,14 +399,12 @@ loss_configs = {
         },
         "packing": {
             "mse": {
-                "weight_mse": 1 / 3,
                 "weight_protein": 1.0,
-                "weight_dna": 1.0,
-                "weight_rna": 1.0,
-                "weight_ligand": 1.0,
-                "weight_motif": 0.0,
-                "weight_motif_related": 0.0,
-                "enable_alignment": True,  # No alignment for packing since we align to backbone
+                "weight_dna": 0.0,
+                "weight_rna": 0.0,
+                "weight_ligand": 4.0,
+                # "weight_motif": 0.0,
+                # "weight_motif_related": 0.0,
                 "eps": 1e-6,
             },
             "sigma_coord": 2.0,  # local sigma coord for packing

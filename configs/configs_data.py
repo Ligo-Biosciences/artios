@@ -314,6 +314,7 @@ data_configs = {
             "sort_by_n_token": False,
             "group_by_pdb_id": True,
             "find_eval_chain_interface": False,
+            "random_sample_if_failed": True,
         },
         **deepcopy(default_test_configs),
     },

@@ -31,7 +31,9 @@ class AtomAttentionSkipConnections:
 
     q: Float[Tensor, "... n_sample n_atom c_atom"]
     c: Float[Tensor, "... #n_sample n_atom c_atom"]
-    p: Float[Tensor, "... #n_sample n_blocks n_queries n_keys c_atompair"]
+    p: Float[
+        Tensor, "... #n_sample n_blocks n_queries n_keys c_atompair"
+    ]  # TODO: p should never be n_sample?
     local_attn_mask: Bool[Tensor, "... #n_sample n_blocks n_queries n_keys"]
 
 
@@ -156,6 +158,7 @@ class AtomAttentionEncoder(nn.Module):
             out_features=self.c_token,
         )
 
+    @torch.compile
     @typecheck
     def _per_atom_conditioning(
         self,
@@ -239,6 +242,7 @@ class AtomAttentionEncoder(nn.Module):
 
         return c_l, p_lm
 
+    @torch.compile
     @typecheck
     def forward(
         self,

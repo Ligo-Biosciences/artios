@@ -566,6 +566,7 @@ class BaseSingleDataset(Dataset):
             )
         timings["preprocessing"] = time.time() - t1
 
+        t_frag = time.time()
         p = np.random.rand()
         # Filter for a unique fragment/domain. Used for Distillation data.
         if p < self.filter_unique_fragment_prob:
@@ -582,6 +583,7 @@ class BaseSingleDataset(Dataset):
             )
             tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
             bioassembly_dict["token_array"] = tokenizer.get_token_array()
+        timings["fragment_filter"] = time.time() - t_frag
 
         # Crop
         t2 = time.time()
@@ -600,6 +602,7 @@ class BaseSingleDataset(Dataset):
         timings["crop"] = time.time() - t2
 
         # Centre random augment
+        t_aug = time.time()
         cropped_atom_array.coord = random_transform(
             points=cropped_atom_array.coord,
             max_translation=1.0,
@@ -607,6 +610,7 @@ class BaseSingleDataset(Dataset):
             centralize=True,
             mask=cropped_atom_array.is_resolved,
         )
+        timings["augmentation"] = time.time() - t_aug
 
         t3 = time.time()
         # cropped_atom_array = (
@@ -671,8 +675,10 @@ class BaseSingleDataset(Dataset):
                 f"{total_time:.2f}s - "
                 f"bioassembly={timings.get('get_bioassembly', 0):.3f}s, "
                 f"preprocess={timings.get('preprocessing', 0):.3f}s, "
-                f"motif={timings.get('motif', 0):.3f}s, "
+                f"frag_filter={timings.get('fragment_filter', 0):.3f}s, "
                 f"crop={timings.get('crop', 0):.3f}s, "
+                f"augment={timings.get('augmentation', 0):.3f}s, "
+                f"motif={timings.get('motif', 0):.3f}s, "
                 f"features={timings.get('get_feature_and_label', 0):.3f}s, "
                 f"padding={timings.get('padding', 0):.3f}s"
             )

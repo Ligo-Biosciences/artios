@@ -45,32 +45,40 @@ class SimpleMetricAggregator(object):
 
     @profile_function("metric_aggregator_add")
     def add(self, key, value, namespace="default"):
+        """Add a metric value. Defers CPU transfer to calc() to avoid CUDA syncs."""
         value_dict = self._metric_data.setdefault(namespace, {})
         value_dict.setdefault(key, [])
         if isinstance(value, (float, int)):
-            value = np.array([value])
+            value_dict[key].append(np.array([value]))
         elif isinstance(value, torch.Tensor):
-            # First detach and move to CPU, then convert to numpy
-            try:
-                value = value.detach()
-                if value.dim() == 0:
-                    value = np.array([value.cpu().item()])
-                else:
-                    value = value.cpu().numpy()
-            except RuntimeError as e:
-                raise RuntimeError(f"Error converting tensor for key {key}: {str(e)}")
+            # Keep tensor on device, just detach - defer CPU transfer to calc()
+            # This avoids CUDA synchronization on every add() call
+            value_dict[key].append(value.detach())
         elif isinstance(value, np.ndarray):
-            pass
+            value_dict[key].append(value)
         elif isinstance(value, list):
             for item in value:
                 self.add(key, item, namespace)
-            return
         else:
             raise ValueError(f"Unsupported type for metric data: {type(value)}")
-        value_dict[key].append(value)
 
     def calc(self):
         metric_data, self._metric_data = self._metric_data, {}
+
+        # Convert all deferred tensors to numpy (single sync point)
+        for namespace, value_dict in metric_data.items():
+            for key, data_list in value_dict.items():
+                converted = []
+                for v in data_list:
+                    if isinstance(v, torch.Tensor):
+                        if v.dim() == 0:
+                            converted.append(np.array([v.cpu().item()]))
+                        else:
+                            converted.append(v.cpu().numpy())
+                    else:
+                        converted.append(v)
+                value_dict[key] = converted
+
         if self.need_gather and self.gather_before_calc:
             metric_data = gather_and_merge(
                 metric_data, aggregation_func=lambda x: sum(x, [])

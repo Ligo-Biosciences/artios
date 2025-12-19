@@ -191,7 +191,8 @@ class ContextGenerator(object):
             entity_id=torch.Tensor(self.centre_atoms.entity_id_int).long(),
             sym_id=torch.Tensor(self.centre_atoms.sym_id_int).long(),
             restype=restype_onehot,
-            token_bonds=self.get_bonds(),
+            # NOTE: token_bonds disabled - expensive, only needed for MPNN
+            # token_bonds=self.get_bonds(),
         )
         return context
 
@@ -387,7 +388,8 @@ class ContextGenerator(object):
             atom_mask=torch.ones(len(self.cropped_atom_array)).bool(),
             is_resolved=torch.Tensor(self.cropped_atom_array.is_resolved).bool(),
             centre_atom_is_resolved=torch.Tensor(centre_atom_is_resolved).bool(),
-            backbone_mask=torch.Tensor(self.backbone_atoms_and_mask[1]).bool(),
+            # NOTE: backbone_mask disabled - expensive, only needed for MPNN
+            # backbone_mask=torch.Tensor(self.backbone_atoms_and_mask[1]).bool(),
             atom_loss_mask=torch.Tensor(
                 atom_is_resolved * atom_in_token_w_resolved_centre_atom
             ).bool(),
@@ -440,7 +442,8 @@ class ContextGenerator(object):
         return CoordinateContext(
             coordinate=torch.Tensor(self.cropped_atom_array.coord).float(),
             centre_coordinate=torch.Tensor(self.centre_atoms.coord),
-            backbone_coordinate=self.backbone_atoms_and_mask[0],
+            # NOTE: backbone_coordinate disabled - expensive, only needed for MPNN
+            # backbone_coordinate=self.backbone_atoms_and_mask[0],
             resolution=float(self.cropped_atom_array.resolution[0]),
         )
 
@@ -462,7 +465,8 @@ class ContextGenerator(object):
             token=self.get_token_context(),
             reference=self.get_reference_conformer_context(),
             chain_perm=self.get_chain_perm_context(),
-            atom_perm=self.get_atom_permutation_list(),
+            # NOTE: atom_perm disabled - expensive, currently unused
+            # atom_perm=self.get_atom_permutation_list(),
             mask=self.get_mask_context(),
             motif=self.get_motif_context(),
             index=self.get_index_context(),
@@ -673,7 +677,8 @@ def _extract_backbone_atoms(
                 atom = atom_array[global_idx]
                 backbone_coords[token_idx, bb_idx] = atom.coord
                 backbone_mask[token_idx, bb_idx] = atom.is_resolved.astype(int)
-                atom_coords[atom_name] = atom.coord
+                if atom.is_resolved:
+                    atom_coords[atom_name] = atom.coord
 
         # Compute virtual Cβ for proteins
         if mol_type == "protein" and {"N", "CA", "C"}.issubset(atom_coords):

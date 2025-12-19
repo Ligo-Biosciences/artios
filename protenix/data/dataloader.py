@@ -278,8 +278,10 @@ class DistributedDataLoader(DataLoader):
             shuffle=False,
             collate_fn=collate_fn,
             pin_memory=True,
+            # multiprocessing_context="spawn",
             persistent_workers=True if num_workers > 0 else False,
             prefetch_factor=prefetch_factor,
+            in_order=False,
         )
         self.counter = 0
 

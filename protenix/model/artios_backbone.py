@@ -23,7 +23,7 @@ from protenix.model.loss import (
 )
 from protenix.model.modules.diffusion_backbone import DiffusionModule
 from protenix.model.output import DiffusionOutput, ModelOutput
-from protenix.model.utils import Mode, noise_w_flow_matching
+from protenix.model.utils import Mode
 from protenix.utils.casting import disable_autocast
 from protenix.utils.geometry import centre_random_augmentation
 
@@ -144,10 +144,9 @@ class ArtiosBackbone(nn.Module):
             * self.sigma_coord
         )
 
-        # Apply flow matching interpolation
-        r_noisy = noise_w_flow_matching(
-            x_target_augment, noise, timestep[..., :, None, None]
-        )
+        # Flow matching interpolation
+        t = timestep[..., :, None, None]
+        r_noisy = t * x_target_augment + (1 - t) * noise
 
         # Denoising
         pred = self.diffusion_module(

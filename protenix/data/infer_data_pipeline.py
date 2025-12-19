@@ -17,14 +17,15 @@ import logging
 import time
 import traceback
 import warnings
-from typing import Any, Mapping
+from typing import Any
 
 import torch
 from biotite.structure import AtomArray
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
-from protenix.data.json_parser import parse_input_dict
+from protenix.data.json_parser import MotifInput, SequenceDesignInput, parse_input_dict
 from protenix.data.json_to_feature import SampleDictToFeatures
+from protenix.data.tokenizer import TokenArray
 from protenix.utils.distributed import DIST_WRAPPER
 
 logger = logging.getLogger(__name__)
@@ -78,8 +79,8 @@ class InferenceDataset(Dataset):
 
     def process_one(
         self,
-        sample_input: Mapping[str, Any],
-    ) -> tuple[dict[str, torch.Tensor], AtomArray, dict[str, float]]:
+        sample_input: MotifInput | SequenceDesignInput,
+    ) -> tuple[dict[str, Any], AtomArray, TokenArray, dict[str, float]]:
         """
         Processes a single sample from the input JSON to generate features and statistics.
 
@@ -201,7 +202,9 @@ class InferenceDataset(Dataset):
     def __len__(self) -> int:
         return len(self.inputs)
 
-    def __getitem__(self, index: int) -> tuple[dict[str, torch.Tensor], AtomArray, str]:
+    def __getitem__(
+        self, index: int
+    ) -> tuple[dict[str, Any], AtomArray | None, TokenArray | None, str]:
         try:
             input_dict = self.inputs[index]
 

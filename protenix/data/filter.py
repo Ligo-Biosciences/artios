@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Optional
+
 import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray, get_molecule_indices
@@ -178,7 +180,7 @@ class Filter(object):
         clash_records: np.ndarray,
         chain_ids: list[str],
         chain_resolved_atom_nums: list[int],
-        core_chain_id: np.ndarray = [],
+        core_chain_id: Optional[np.ndarray] = None,
     ) -> list[str]:
         """
         Perform pairwise comparisons on the chains, and select the chain IDs
@@ -195,6 +197,8 @@ class Filter(object):
         Returns:
             list[str]: A list of chain IDs that have been determined for deletion.
         """
+        if core_chain_id is None:
+            core_chain_id = np.array([])
         removed_chain_ids = []
         for i in range(len(chain_ids)):
             atom_num_i = chain_resolved_atom_nums[i]
@@ -379,9 +383,9 @@ class Filter(object):
         atom_array: AtomArray,
         interface_radius: int = 15,
         max_chains_num: int = 20,
-        core_indices: list[int] = None,
-        max_tokens_num: int = None,
-    ) -> tuple[AtomArray, int]:
+        core_indices: Optional[list[int]] = None,
+        max_tokens_num: Optional[int] = None,
+    ) -> tuple[Optional[AtomArray], int]:
         """
         Ref: AlphaFold3 SI Chapter 2.5.4
 
@@ -520,8 +524,8 @@ class Filter(object):
     @staticmethod
     def remove_clashing_chains(
         atom_array: AtomArray,
-        core_indices: list[int] = None,
-    ) -> AtomArray:
+        core_indices: Optional[list[int]] = None,
+    ) -> tuple[AtomArray, list[str]]:
         """
         Ref: AlphaFold3 SI Chapter 2.5.4
 

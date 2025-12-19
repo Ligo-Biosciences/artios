@@ -482,8 +482,11 @@ class FullContext:
 
     def pad(self, n_max_atoms: int, n_max_tokens: int) -> FullContext:
         """Pad all features to n_max_tokens/n_max_atoms."""
+        # Padding is done before batching, so these are always int
         current_n_token = self.basic.n_token
         current_n_atom = self.basic.n_atom
+        assert isinstance(current_n_token, int)
+        assert isinstance(current_n_atom, int)
 
         assert n_max_tokens >= current_n_token
         assert n_max_atoms >= current_n_atom

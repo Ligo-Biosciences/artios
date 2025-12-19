@@ -79,7 +79,7 @@ def get_muon(
     muon_momentum: float,
     betas: tuple[float, float],  # TODO: adamw momentum, betas
     device_type: str,
-) -> torch.optim.AdamW:
+) -> torch.optim.Optimizer:
     """
     Create a Muon optimizer for the given model with specified parameters.
 

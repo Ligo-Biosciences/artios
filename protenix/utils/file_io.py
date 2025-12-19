@@ -22,7 +22,7 @@ from typing import Any, Union
 import lz4.frame
 import numpy as np
 import pandas as pd
-from biotite.structure import AtomArray, BondList
+from biotite.structure import AtomArray, BondList  # ty: ignore[unresolved-import]
 
 from protenix.utils.logger import get_logger
 from protenix.utils.torch_utils import map_values_to_list

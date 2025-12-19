@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Optional
+
 import numpy as np
 import torch
 
@@ -34,13 +36,18 @@ class SimpleMetricAggregator(object):
     """A quite simple metrics calculator that only do simple metrics aggregation."""
 
     def __init__(
-        self, aggregator_names=None, gather_before_calc=True, need_gather=True
+        self,
+        aggregator_names: Optional[list[str]] = None,
+        gather_before_calc: bool = True,
+        need_gather: bool = True,
     ):
         super(SimpleMetricAggregator, self).__init__()
         self.gather_before_calc = gather_before_calc
         self.need_gather = need_gather
-        self._metric_data = {}
+        self._metric_data: dict = {}
 
+        if aggregator_names is None:
+            aggregator_names = ["avg"]
         self.aggregators = {name: common_aggregator[name] for name in aggregator_names}
 
     @profile_function("metric_aggregator_add")

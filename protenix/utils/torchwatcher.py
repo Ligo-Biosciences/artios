@@ -208,7 +208,7 @@ class TorchWatcher:
         model: nn.Module,
         run: Any,  # Made more flexible to support different logging mechanisms
         track_layers: Optional[List[Type[nn.Module]]] = None,
-        track_layers_name_includes: Optional[List[str]] = "",
+        track_layers_name_includes: Optional[List[str]] = None,
         tensor_stats: Optional[
             List[Literal["mean", "std", "norm", "min", "max", "var", "abs_mean"]]
         ] = None,

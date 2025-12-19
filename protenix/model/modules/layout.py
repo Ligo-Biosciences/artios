@@ -5,7 +5,7 @@
 import torch
 from torch import Tensor
 
-from protenix.model.utils import index_at_dim, reshape_at_dim
+from protenix.utils.tensor_utils import index_at_dim, reshape_at_dim
 
 
 # @functools.lru_cache(maxsize=10)

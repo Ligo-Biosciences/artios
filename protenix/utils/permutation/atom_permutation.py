@@ -5,9 +5,9 @@ import torch
 from torch import Tensor
 
 from protenix.metrics.rmsd import rmsd, self_aligned_rmsd
-from protenix.model.utils import expand_at_dim, pad_at_dim
 from protenix.utils.logger import get_logger
 from protenix.utils.permutation.utils import Checker, save_permutation_error
+from protenix.utils.tensor_utils import expand_at_dim, pad_at_dim
 from protenix.utils.typing import Bool, Float, Int, typecheck
 
 logger = get_logger(__name__)

@@ -5,7 +5,7 @@ from protenix.model.modules.layout import (
     rearrange_to_key_subset,
     rearrange_to_query_subset,
 )
-from protenix.model.utils import expand_at_dim
+from protenix.utils.tensor_utils import expand_at_dim
 
 
 class TestGetKeyTrunkIndices:

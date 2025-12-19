@@ -22,12 +22,8 @@ from protenix.model.modules.components import Transition
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.modules.transformer import DiffusionTransformer
-from protenix.model.utils import (
-    average_atom_to_token,
-    broadcast_token_to_atom,
-    centre_random_augmentation,
-    one_hot,
-)
+from protenix.model.utils import average_atom_to_token, broadcast_token_to_atom, one_hot
+from protenix.utils.geometry import centre_random_augmentation
 from protenix.utils.typing import typecheck
 
 

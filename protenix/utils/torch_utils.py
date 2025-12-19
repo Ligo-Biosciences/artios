@@ -33,17 +33,6 @@ def to_device(obj, device, non_blocking=False):
     return obj
 
 
-def cdist(a: torch.Tensor, b: torch.Tensor = None):
-    # for tensor shape [1, 512 * 14, 3], donot_use_mm_for_euclid_dist mode costs 0.0489s,
-    # while use_mm_for_euclid_dist_if_necessary costs 0.0419s on cpu. On GPU there two costs
-    # will be neglectible. So there is no need to sacrifice accuracy for speed here.
-    return torch.cdist(
-        a,
-        b if b is not None else a,
-        compute_mode="donot_use_mm_for_euclid_dist",
-    )
-
-
 def map_values_to_list(data: dict, recursive: bool = True) -> dict:
     """
     Convert values in a dictionary to lists.

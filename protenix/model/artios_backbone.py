@@ -23,8 +23,9 @@ from protenix.model.loss import (
 )
 from protenix.model.modules.diffusion_backbone import DiffusionModule
 from protenix.model.output import DiffusionOutput, ModelOutput
-from protenix.model.utils import Mode, centre_random_augmentation, noise_w_flow_matching
+from protenix.model.utils import Mode, noise_w_flow_matching
 from protenix.utils.casting import disable_autocast
+from protenix.utils.geometry import centre_random_augmentation
 
 
 class ArtiosBackbone(nn.Module):

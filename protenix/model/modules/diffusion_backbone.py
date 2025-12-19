@@ -486,7 +486,10 @@ class DiffusionModule(nn.Module):
             in_features=c_s, out_features=c_token, init="zeros"
         )
         self.diffusion_transformer = DiffusionTransformer(
-            **transformer, c_token=c_token, c_s=c_s, c_z=c_z
+            **transformer,  # type: ignore[invalid-argument-type]
+            c_token=c_token,
+            c_s=c_s,
+            c_z=c_z,
         )
         self.layernorm_a = LayerNorm(c_token)
 

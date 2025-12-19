@@ -158,6 +158,13 @@ module = [
 ]
 ignore_missing_imports = true
 
+[tool.ty.environment]
+python = ".venv"
+
+[tool.ty.rules]
+# Ignore nn.Module custom __setattr__ complaints for self.x = x patterns
+unresolved-attribute = "ignore"
+
 [dependency-groups]
 dev = [
     "ipykernel>=6.30.1",

@@ -119,7 +119,7 @@ def extract_protein_from_cif(
 
 
 def cif_to_pdb(
-    cif_file: Union[str, Path], output_path: Union[str, Path] = None
+    cif_file: Union[str, Path], output_path: Optional[Union[str, Path]] = None
 ) -> None:
     """
     Convert a CIF file to PDB format and save it.

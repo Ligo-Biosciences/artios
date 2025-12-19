@@ -369,7 +369,7 @@ def expand_at_dim(x: Tensor, dim: int, n: int) -> Tensor:
 def pad_at_dim(
     x: Tensor,
     dim: int,
-    pad_length: Union[tuple[int], list[int]],
+    pad_length: Union[tuple[int, int], list[int]],
     value: float = 0,
 ) -> Tensor:
     """pad to input x at dimension dim with length pad_length[0] to the left and and pad_length[1] to the right.
@@ -486,12 +486,9 @@ def beta_function(
     elif not mean_std_provided and not alpha_beta_provided:
         raise ValueError("Must specify either (mean, std) or (alpha, beta) parameters.")
 
+    # Compute alpha and beta values (as floats first for validation)
     if mean_std_provided:
-        # Convert mean and std to alpha and beta parameters
-        if device is not None and dtype is not None:
-            mean = torch.tensor(mean, device=device, dtype=dtype)
-            std = torch.tensor(std, device=device, dtype=dtype)
-
+        assert mean is not None and std is not None
         var = std**2
 
         # Ensure the parameters are valid
@@ -501,25 +498,29 @@ def beta_function(
             )
 
         common_term = (mean * (1 - mean) / var) - 1
-        alpha = mean * common_term
-        beta = (1 - mean) * common_term
+        alpha_val = mean * common_term
+        beta_val = (1 - mean) * common_term
     else:
-        # Use alpha and beta directly
+        assert alpha is not None and beta is not None
         if alpha <= 0 or beta <= 0:
             raise ValueError(
                 f"Alpha and beta must be positive. Got alpha={alpha}, beta={beta}"
             )
+        alpha_val = alpha
+        beta_val = beta
 
-        if device is not None and dtype is not None:
-            alpha = torch.tensor(alpha, device=device, dtype=dtype)
-            beta = torch.tensor(beta, device=device, dtype=dtype)
+    # Convert to tensors for computation
+    alpha_t = torch.tensor(alpha_val, device=t.device, dtype=t.dtype)
+    beta_t = torch.tensor(beta_val, device=t.device, dtype=t.dtype)
 
     # Calculate Beta function normalization constant using log-gamma
     # B(alpha, beta) = Γ(alpha)Γ(beta)/Γ(alpha+beta)
-    log_norm = torch.lgamma(alpha) + torch.lgamma(beta) - torch.lgamma(alpha + beta)
+    log_norm = (
+        torch.lgamma(alpha_t) + torch.lgamma(beta_t) - torch.lgamma(alpha_t + beta_t)
+    )
     normalization = torch.exp(log_norm)
 
-    return t ** (alpha - 1) * (1 - t) ** (beta - 1) / normalization
+    return t ** (alpha_t - 1) * (1 - t) ** (beta_t - 1) / normalization
 
 
 def masked_mean(

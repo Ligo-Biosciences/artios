@@ -36,6 +36,7 @@ class MotifResidue:
 class MotifLigand:
     """Ligand specification combining motif CIF fragment with full ligand description."""
 
+    res_id: int  # Original res_id from the CIF file
     cif_res_name: str  # Residue / CCD name in the CIF (e.g., "ZN", "AL5", "LIG")
     atom_names: tuple[str, ...]  # Atom names from CIF (e.g., ("O1A", "S1", "N21"))
     coords: np.ndarray  # (n_atoms, 3) coordinates from CIF
@@ -110,6 +111,7 @@ class Motif:
             elif res_name in ligand_mappings:
                 ligands.append(
                     MotifLigand(
+                        res_id=res_id,
                         cif_res_name=res_name,
                         atom_names=atom_names,
                         coords=coords,

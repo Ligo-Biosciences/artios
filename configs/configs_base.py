@@ -110,7 +110,7 @@ optim_configs = {
 }
 model_configs = {
     # Model
-    "c_s": 256,  # 192
+    "c_s": 384,  # 192
     "c_z": 128,  # 64
     "c_s_inputs": 256,  # c_s_inputs == c_token + 32
     "c_atom": 256,  # 64
@@ -263,7 +263,7 @@ model_configs = {
             "gamma": 1.0,
             "sigma_coord": 1.0,
             "N_sample": 10,
-            "N_step": 200,
+            "N_step": 10,
             "eps": 1e-5,
         },
     },

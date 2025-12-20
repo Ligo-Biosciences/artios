@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import logging
 import os
 import traceback
@@ -82,7 +83,7 @@ class InferenceRunner(object):
         self.init_basics()
         self.init_env()
         self.init_model()
-        # self.load_checkpoint()
+        self.load_checkpoint()
 
     def init_env(self) -> None:
         self.print(
@@ -219,7 +220,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                 output = runner.predict(context)
 
                 match model_type:
-                    case ModelType.BACKBONE | ModelType.PACKING:
+                    case ModelType.BACKBONE:
                         _ = save_model_output_to_cif(
                             output_dir_list=runner.dump_dir_list,
                             output=output,
@@ -229,6 +230,25 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                             pdb_id=sample_name,
                             field_in_b_factor_col="is_motif",
                         )
+                        parent_dir = os.path.dirname(runner.dump_dir)
+                        mapping_path = opjoin(
+                            parent_dir, f"{sample_name}_motif_mapping.json"
+                        )
+                        if not os.path.exists(mapping_path):
+                            with open(mapping_path, "w") as f:
+                                json.dump(context.basic.original_motif_mapping, f)
+
+                    case ModelType.PACKING:
+                        _ = save_model_output_to_cif(
+                            output_dir_list=runner.dump_dir_list,
+                            output=output,
+                            model_type=model_type,
+                            atom_array=context.basic.atom_array,
+                            n_atom=n_atom,
+                            pdb_id=sample_name,
+                            field_in_b_factor_col="is_motif",
+                        )
+
                     case ModelType.SEQUENCE_DESIGN:
                         _ = save_model_output_to_fasta(
                             output_dir_list=runner.dump_dir_list,

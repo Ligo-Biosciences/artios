@@ -4,7 +4,7 @@ import torch
 from einops import rearrange
 from torch import Tensor
 
-from protenix.model.utils import expand_at_dim
+from protenix.utils.tensor_utils import expand_at_dim
 from protenix.utils.typing import Float, Int, Shaped, typecheck
 
 

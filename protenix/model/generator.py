@@ -5,10 +5,8 @@ from typing import Protocol, runtime_checkable
 import torch
 from torch import Tensor
 
-from protenix.model.utils import (
-    beta_function,
-    centre_random_augmentation,
-)
+from protenix.model.utils import beta_function
+from protenix.utils.geometry import centre_random_augmentation
 from protenix.utils.typing import Bool, Float, typecheck
 
 
@@ -219,7 +217,7 @@ class LaProteinaCoordScheduler(InferenceTimestepScheduler):
             Timesteps tensor of shape [n_steps + 1].
         """
         steps = torch.arange(n_steps + 1, dtype=dtype, device=device) / n_steps
-        t = (1 - self.scale ** (-2 * steps)) / (1 - self.scale ** (-2))
+        t = (1 - torch.pow(self.scale, -2 * steps)) / (1 - self.scale ** (-2))
         return t
 
 

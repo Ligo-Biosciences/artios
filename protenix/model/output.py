@@ -18,6 +18,18 @@ class ModelOutput:
     seq_logits: Optional[Float[Tensor, "batch n_token num_residue_types"]] = None
     timestep: Optional[Float[Tensor, "batch n_sample"]] = None
 
+
+@typecheck
+@dataclass
+class DiffusionOutput(ModelOutput):
+    """Output from diffusion-based models (backbone, packing).
+
+    Unlike ModelOutput, coordinate and timestep are required fields.
+    """
+
+    coordinate: Float[Tensor, "batch n_sample n_atom 3"]  # type: ignore[assignment]
+    timestep: Float[Tensor, "batch n_sample"]  # type: ignore[assignment]
+
     def save_samples_to_cif(
         self,
         atom_arrays: list[AtomArray],

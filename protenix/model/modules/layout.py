@@ -5,7 +5,7 @@
 import torch
 from torch import Tensor
 
-from protenix.model.utils import index_at_dim, reshape_at_dim
+from protenix.utils.tensor_utils import index_at_dim, reshape_at_dim
 
 
 # @functools.lru_cache(maxsize=10)
@@ -14,7 +14,7 @@ def _get_key_trunk_indices(n, n_queries, n_keys):
     trunk_centers = torch.arange(n_queries // 2, n, n_queries)
     key_indices = (
         trunk_centers[:, None] + torch.arange(-n_keys // 2, n_keys // 2)[None, :]
-    ).to(dtype=int)
+    ).long()
 
     # Shift key indices to be within bounds
     for row in range(key_indices.shape[0]):
@@ -27,7 +27,7 @@ def _get_key_trunk_indices(n, n_queries, n_keys):
 
 
 # @profile_function("rearrange_to_query_subset")
-@torch.compiler.disable
+@torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
 def rearrange_to_query_subset(
     q_x: Tensor, rearrange_dim: int, num_queries: int
 ) -> Tensor:
@@ -51,7 +51,7 @@ def rearrange_to_query_subset(
 
 
 ##@profile_function("rearrange_to_key_subset")
-@torch.compiler.disable
+@torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
 def rearrange_to_key_subset(
     k_x: Tensor, rearrange_dim: int, num_keys: int, num_queries: int
 ) -> Tensor:
@@ -79,7 +79,7 @@ def rearrange_to_key_subset(
 
 
 ##@profile_function("gather_trunk_pair_embedding")
-@torch.compiler.disable
+@torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
 def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
     """
     Selectively gather elements from a tensor using two sets of indices.
@@ -123,7 +123,7 @@ def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
 
 
 # @profile_function("broadcast_token_to_local_atom_pair")
-@torch.compiler.disable
+@torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
 def broadcast_token_to_local_atom_pair(
     z_token: Tensor,
     atom_to_token_idx: Tensor,

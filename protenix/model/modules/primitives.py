@@ -117,7 +117,7 @@ class Linear(nn.Linear):
         out_features: int,
         bias: bool = True,
         init: str = "default",
-        init_fn: Optional[Callable[[Tensor, Tensor], None]] = None,
+        init_fn: Optional[Callable[[Tensor, Optional[Tensor]], None]] = None,
         high_precision: bool = False,
     ) -> None:
         """
@@ -196,8 +196,22 @@ class Linear(nn.Linear):
 class LinearNoBias(Linear):
     """Linear layer with bias=False."""
 
-    def __init__(self, *args, **kwargs):
-        super(LinearNoBias, self).__init__(*args, bias=False, **kwargs)
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        init: str = "default",
+        init_fn: Optional[Callable[[Tensor, Optional[Tensor]], None]] = None,
+        high_precision: bool = False,
+    ) -> None:
+        super().__init__(
+            in_features,
+            out_features,
+            bias=False,
+            init=init,
+            init_fn=init_fn,
+            high_precision=high_precision,
+        )
 
 
 class BiasInitLinear(Linear):
@@ -278,7 +292,7 @@ class LayerNorm(nn.Module):
 
 
 @typecheck
-@torch.compiler.disable
+@torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
 def attention(
     q: Float[Tensor, "... n_q d"],
     k: Float[Tensor, "... n_kv d"],

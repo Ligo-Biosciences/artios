@@ -33,28 +33,12 @@ UNL = sys.intern("UNL")
 MSE = sys.intern("MSE")
 
 # 20 standard protein amino acids (no unknown).
+# fmt: off
 PROTEIN_TYPES: tuple[str, ...] = (
-    ALA,
-    ARG,
-    ASN,
-    ASP,
-    CYS,
-    GLN,
-    GLU,
-    GLY,
-    HIS,
-    ILE,
-    LEU,
-    LYS,
-    MET,
-    PHE,
-    PRO,
-    SER,
-    THR,
-    TRP,
-    TYR,
-    VAL,
-)  # pyformat: disable
+    ALA, ARG, ASN, ASP, CYS, GLN, GLU, GLY, HIS, ILE,
+    LEU, LYS, MET, PHE, PRO, SER, THR, TRP, TYR, VAL,
+)
+# fmt: on
 
 # 20 standard protein amino acids plus the unknown (UNK) amino acid.
 PROTEIN_TYPES_WITH_UNKNOWN: tuple[str, ...] = PROTEIN_TYPES + (UNK,)
@@ -63,28 +47,12 @@ PROTEIN_TYPES_WITH_UNKNOWN: tuple[str, ...] = PROTEIN_TYPES + (UNK,)
 # Reproduce it by taking 3-letter AA codes and sorting them alphabetically.
 # For legacy reasons this only refers to protein residues.
 
+# fmt: off
 PROTEIN_TYPES_ONE_LETTER: tuple[str, ...] = (
-    "A",
-    "R",
-    "N",
-    "D",
-    "C",
-    "Q",
-    "E",
-    "G",
-    "H",
-    "I",
-    "L",
-    "K",
-    "M",
-    "F",
-    "P",
-    "S",
-    "T",
-    "W",
-    "Y",
-    "V",
-)  # pyformat: disable
+    "A", "R", "N", "D", "C", "Q", "E", "G", "H", "I",
+    "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V",
+)
+# fmt: on
 
 PROTEIN_TYPES_ONE_LETTER_WITH_UNKNOWN: tuple[str, ...] = PROTEIN_TYPES_ONE_LETTER + (
     "X",

@@ -16,11 +16,8 @@ from protenix.model.modules.layout import (
 )
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.modules.transformer import LocalAttnTransformer
-from protenix.model.utils import (
-    average_atom_to_token,
-    broadcast_token_to_atom,
-    expand_at_dim,
-)
+from protenix.model.utils import average_atom_to_token, broadcast_token_to_atom
+from protenix.utils.tensor_utils import expand_at_dim
 from protenix.utils.typing import Bool, Float, Int, typecheck
 
 

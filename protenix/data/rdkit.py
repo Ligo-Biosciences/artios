@@ -208,7 +208,9 @@ def atom_array_from_rdkit(
             atom_array.set_annotation(key, vals)
 
     if remove_hydrogens:
-        atom_array = atom_array[not_isin(atom_array.element, HYDROGEN_LIKE_SYMBOLS)]
+        atom_array = atom_array[
+            not_isin(atom_array.element, np.array(HYDROGEN_LIKE_SYMBOLS))
+        ]
 
     if remove_inferred_atoms:
         atom_array = atom_array[atom_array.rdkit_atom_id != -1]

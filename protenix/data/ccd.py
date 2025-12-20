@@ -160,7 +160,7 @@ def get_mol_type_str(ccd_code: str) -> str:
 
 
 @functools.lru_cache(maxsize=None)
-def get_smiles_str(ccd_code: str) -> str:
+def get_smiles_str(ccd_code: str) -> str | None:
     """Get CACTVS canonical SMILES string from CCD components file.
 
     Returns only the CACTVS canonical SMILES representation. Returns None if either
@@ -320,7 +320,7 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> Optional[RefInf
         coord=coord,
         mask=mol.ref_mask,
         charge=charge,
-        perm=perm if return_perm else np.array([]),
+        perm=perm if perm is not None else np.array([]),
     )
 
 

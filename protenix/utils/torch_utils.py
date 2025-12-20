@@ -33,17 +33,6 @@ def to_device(obj, device, non_blocking=False):
     return obj
 
 
-def cdist(a: torch.Tensor, b: torch.Tensor = None):
-    # for tensor shape [1, 512 * 14, 3], donot_use_mm_for_euclid_dist mode costs 0.0489s,
-    # while use_mm_for_euclid_dist_if_necessary costs 0.0419s on cpu. On GPU there two costs
-    # will be neglectible. So there is no need to sacrifice accuracy for speed here.
-    return torch.cdist(
-        a,
-        b if b is not None else a,
-        compute_mode="donot_use_mm_for_euclid_dist",
-    )
-
-
 def map_values_to_list(data: dict, recursive: bool = True) -> dict:
     """
     Convert values in a dictionary to lists.
@@ -126,26 +115,3 @@ def autocasting_disable_decorator(disable_casting: bool):
         return new_func
 
     return func_wrapper
-
-
-def dict_to_tensor(feature_dict: dict) -> dict:
-    """
-    Convert values in a dictionary to tensors and ensure they have the correct dtype.
-
-    Args:
-        feature_dict (dict): The dictionary whose values need to be converted to tensors.
-
-    Returns:
-        dict: The dictionary with values converted to tensors and adjusted to the correct dtype.
-    """
-    for k, v in feature_dict.items():
-        if not isinstance(v, torch.Tensor):
-            dtype = feature_dict[k].dtype
-            feature_dict[k] = torch.tensor(v)
-
-            if dtype in [np.int64, np.int32]:
-                feature_dict[k] = feature_dict[k].to(torch.int64)
-            elif dtype in [np.float32, np.float64]:
-                feature_dict[k] = feature_dict[k].to(torch.float32)
-
-    return feature_dict

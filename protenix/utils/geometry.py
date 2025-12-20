@@ -1,19 +1,153 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import numpy as np
+import torch
+from einops import repeat
 from scipy.spatial.transform import Rotation
+from torch import Tensor
+
+from protenix.utils.typing import Bool, Float, typecheck
+
+# =============================================================================
+# Torch geometry utilities
+# =============================================================================
+
+
+@typecheck
+def rot_vec_mul(
+    r: Float[Tensor, "*batch u v"], t: Float[Tensor, "*batch xyz"]
+) -> Float[Tensor, "*batch xyz"]:
+    """Apply rotation matrix to vector.
+
+    Written out by hand to avoid AMP downcasting.
+
+    Args:
+        r: The rotation matrices.
+        t: The coordinate tensors.
+
+    Returns:
+        The rotated coordinates.
+    """
+    x, y, z = torch.unbind(input=t, dim=-1)
+    return torch.stack(
+        tensors=[
+            r[..., 0, 0] * x + r[..., 0, 1] * y + r[..., 0, 2] * z,
+            r[..., 1, 0] * x + r[..., 1, 1] * y + r[..., 1, 2] * z,
+            r[..., 2, 0] * x + r[..., 2, 1] * y + r[..., 2, 2] * z,
+        ],
+        dim=-1,
+    )
+
+
+@typecheck
+def calc_centroid(
+    coords: Float[Tensor, "*batch n_atom xyz"],
+    mask: Bool[Tensor, "*batch n_atom"] | None = None,
+    eps: float = 1e-12,
+) -> Float[Tensor, "... xyz"]:
+    """Calculate the centroid (center of mass) of coordinates.
+
+    Args:
+        coords: Input coordinates.
+        mask: Optional mask for valid atoms. If None, all atoms are considered valid.
+        eps: Small epsilon to avoid division by zero.
+
+    Returns:
+        The centroid of the coordinates.
+    """
+    if mask is None:
+        return coords.mean(dim=-2)
+    else:
+        masked_coords = coords * mask.unsqueeze(dim=-1)
+        centroid = masked_coords.sum(dim=-2) / (mask.sum(dim=-1, keepdim=True) + eps)
+        return centroid
+
+
+@typecheck
+def centre_random_augmentation(
+    x_input_coords: Float[Tensor, "*batch n_atom xyz"],
+    n_sample: int = 1,
+    s_trans: float = 1.0,
+    centre_only: bool = False,
+    mask: Bool[Tensor, "*batch n_atom"] | None = None,
+    eps: float = 1e-12,
+) -> Float[Tensor, "... n_sample n_atom xyz"]:
+    """Implements Algorithm 19 in AF3.
+
+    Args:
+        x_input_coords: Input coords.
+        n_sample: The total number of augmentation. Defaults to 1.
+        s_trans: Scale factor of trans. Defaults to 1.0.
+        centre_only: If set true, will only perform centering without applying
+            random translation and rotation.
+        mask: Masking for the coords.
+        eps: Small number used for masked mean.
+
+    Returns:
+        The augmentation version of input coords.
+    """
+    n_atom = x_input_coords.size(-2)
+    device = x_input_coords.device
+
+    # Create all-True mask if not provided
+    if mask is None:
+        mask = torch.ones_like(x_input_coords[..., 0], dtype=torch.bool)
+
+    # Move to origin [..., n_atom, 3]
+    centroid = calc_centroid(x_input_coords, mask=mask, eps=eps)
+    x_input_coords = x_input_coords - centroid.unsqueeze(dim=-2)
+
+    # Expand to [..., n_sample, n_atom, 3]
+    x_input_coords = repeat(
+        x_input_coords, "... n_atom xyz -> ... n_sample n_atom xyz", n_sample=n_sample
+    )
+
+    if centre_only:
+        x_input_coords = x_input_coords * mask[..., None, :, None]
+        return x_input_coords
+
+    # n_augment = batch_size * n_sample
+    n_augment = torch.numel(x_input_coords[..., 0, 0])
+
+    # Generate n_augment (rot, trans) pairs
+    batch_size_shape = x_input_coords.shape[:-3]
+    rot_matrix_random = (
+        uniform_random_rotation(n_sample=n_augment)
+        .to(device)
+        .reshape(*batch_size_shape, n_sample, 3, 3)
+    ).detach()  # [..., n_sample, 3, 3]
+    trans_random = s_trans * torch.randn(size=(*batch_size_shape, n_sample, 3)).to(
+        device
+    )  # [..., n_sample, 3]
+    rot_expanded = repeat(
+        rot_matrix_random, "... n_sample u v -> ... n_sample n_atom u v", n_atom=n_atom
+    )
+    x_augment_coords = (
+        rot_vec_mul(r=rot_expanded, t=x_input_coords) + trans_random[..., None, :]
+    )  # [..., n_sample, n_atom, 3]
+
+    # Apply the mask
+    x_augment_coords = x_augment_coords * mask[..., None, :, None]
+    return x_augment_coords
+
+
+# Note: Rotation.random is not supported by torch.compile()
+@typecheck
+def uniform_random_rotation(n_sample: int = 1) -> Float[Tensor, "n_sample u v"]:
+    """Generate random rotation matrices with scipy.spatial.transform.Rotation.
+
+    Args:
+        n_sample: The total number of rotation matrices to generate.
+
+    Returns:
+        n_sample rotation matrices [n_sample, 3, 3].
+    """
+    rotation = Rotation.random(num=n_sample)
+    rot_matrix = torch.from_numpy(rotation.as_matrix()).float()
+    return rot_matrix
+
+
+# =============================================================================
+# Numpy geometry utilities
+# =============================================================================
 
 
 def angle_3p(a, b, c):

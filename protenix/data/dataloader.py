@@ -260,7 +260,7 @@ class DistributedDataLoader(DataLoader):
         seed: int = 42,
         drop_last: bool = True,
         shuffle: bool = True,
-        sampler: Sampler = None,
+        sampler: Optional[Sampler] = None,
         prefetch_factor: int = 2,
     ):
         if sampler is not None:

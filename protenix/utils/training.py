@@ -13,12 +13,10 @@
 # limitations under the License.
 
 import inspect
-from typing import List
 
 import torch
 import torch.distributed as dist
 
-from protenix.model.utils import expand_at_dim
 from protenix.utils.muon import BatchedMuonWithAdam  # MuonWithAuxAdam
 
 
@@ -81,7 +79,7 @@ def get_muon(
     muon_momentum: float,
     betas: tuple[float, float],  # TODO: adamw momentum, betas
     device_type: str,
-) -> torch.optim.AdamW:
+) -> torch.optim.Optimizer:
     """
     Create a Muon optimizer for the given model with specified parameters.
 
@@ -224,43 +222,3 @@ def flatten_nested(d, parent_key="", sep="/"):
         return d
 
     return items
-
-
-def prepare_latent_table_rows(
-    latents_mean: torch.Tensor,
-    restype: torch.Tensor,
-) -> List[List[float]]:
-    """
-    Flatten latents and ground-truth restypes into rows for logging.
-
-    Args:
-        latents_mean: Tensor of shape [..., N_sample, N_token, c_latent]
-        restype: Tensor of shape [..., N_token, N_restype]
-
-    Returns:
-        rows: A list where each element is
-              [restype_idx, latent_0, latent_1, ..., latent_{c_latent-1}]
-              suitable for wandb.Table.add_data or CSV writing.
-    """
-    N_sample = latents_mean.shape[-3]
-    N_token = latents_mean.shape[-2]
-    c_latent = latents_mean.shape[-1]
-
-    # Detach tensors to CPU
-    z = latents_mean.detach().cpu()
-    r_onehot = restype.detach().cpu()
-
-    # Convert one-hot to indices
-    restype_idx = torch.argmax(r_onehot, dim=-1)
-
-    # Expand restype indices across samples # [...,N_token] -> [...,N_sample * N_token]
-    restype_flat = expand_at_dim(restype_idx, dim=-2, n=N_sample)
-    restype_flat = restype_flat.reshape(*restype_flat.shape[:-2], N_sample * N_token)
-
-    # Flatten latent vectors across N_sample and N_token
-    z_flat = z.reshape(*z.shape[:-3], N_sample * N_token, c_latent)
-
-    # Build rows: first element = restype, remainder = latent values
-    rows = [[r, *vec.tolist()] for r, vec in zip(restype_flat, z_flat)]
-
-    return rows

@@ -12,7 +12,7 @@ from protenix.model.generator import (
     ProteinaCoordSampler,
     stochasticity_from_config,
 )
-from protenix.model.loss_new import (
+from protenix.model.loss import (
     LossWeightConfig,
     align_to_prediction,
     build_atom_weights,
@@ -22,9 +22,10 @@ from protenix.model.loss_new import (
     timestep_scale,
 )
 from protenix.model.modules.diffusion_backbone import DiffusionModule
-from protenix.model.output import ModelOutput
-from protenix.model.utils import Mode, centre_random_augmentation, noise_w_flow_matching
+from protenix.model.output import DiffusionOutput, ModelOutput
+from protenix.model.utils import Mode
 from protenix.utils.casting import disable_autocast
+from protenix.utils.geometry import centre_random_augmentation
 
 
 class ArtiosBackbone(nn.Module):
@@ -97,7 +98,7 @@ class ArtiosBackbone(nn.Module):
         context: FullContext,
         inplace_safe: bool = False,
         seed: Optional[int] = None,
-    ) -> ModelOutput:
+    ) -> DiffusionOutput:
         """
         Main training (and evaluation) loop for the Artios All-Atom model.
 
@@ -115,7 +116,9 @@ class ArtiosBackbone(nn.Module):
 
         n_sample = self.diffusion_batch_size
         generator = (
-            torch.Generator(device).manual_seed(seed) if not self.training else None
+            torch.Generator(device).manual_seed(seed)
+            if not self.training and seed is not None
+            else None
         )
 
         # Augment target coordinates
@@ -141,10 +144,9 @@ class ArtiosBackbone(nn.Module):
             * self.sigma_coord
         )
 
-        # Apply flow matching interpolation
-        r_noisy = noise_w_flow_matching(
-            x_target_augment, noise, timestep[..., :, None, None]
-        )
+        # Flow matching interpolation
+        t = timestep[..., :, None, None]
+        r_noisy = t * x_target_augment + (1 - t) * noise
 
         # Denoising
         pred = self.diffusion_module(
@@ -167,7 +169,7 @@ class ArtiosBackbone(nn.Module):
 
         # symmetry_corrected = result.coordinate if result else pred
 
-        return ModelOutput(coordinate=pred, timestep=timestep)
+        return DiffusionOutput(coordinate=pred, timestep=timestep)
 
     def forward(
         self,
@@ -209,9 +211,9 @@ class ArtiosBackbone(nn.Module):
     @disable_autocast
     def compute_loss(
         self,
-        output: ModelOutput,
+        output: DiffusionOutput,
         context: FullContext,
-    ) -> tuple[Tensor, dict[str, list[float]]]:
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         """Compute loss from model output and context.
 
         Args:

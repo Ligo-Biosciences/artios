@@ -36,8 +36,8 @@ class ContextGenerator(object):
         self,
         cropped_token_array: TokenArray,
         cropped_atom_array: AtomArray,
-        pdb_id: str,
-        bioassembly_dict_fpath: str,
+        pdb_id: str = "unknown",
+        bioassembly_dict_fpath: str = "",
         ref_pos_augment: bool = True,
         lig_atom_rename: bool = False,
     ) -> None:
@@ -45,6 +45,8 @@ class ContextGenerator(object):
         Args:
             cropped_token_array (TokenArray): TokenArray object after cropping
             cropped_atom_array (AtomArray): AtomArray object after cropping
+            pdb_id (str): PDB identifier for metadata tracking
+            bioassembly_dict_fpath (str): Path to bioassembly dict file for metadata
             ref_pos_augment (bool): Boolean indicating whether apply random rotation and translation on ref_pos
             lig_atom_rename (bool): Boolean indicating whether rename atom name for ligand atoms
         """
@@ -271,7 +273,7 @@ class ContextGenerator(object):
             ).long(),
             ref_charge=torch.Tensor(self.cropped_atom_array.ref_charge).long(),
             ref_atom_name_chars=ContextGenerator.ref_atom_name_chars_encoded(
-                atom_names
+                atom_names.tolist()
             ).long(),
             ref_space_uid=torch.Tensor(self.cropped_atom_array.ref_space_uid).long(),
         )

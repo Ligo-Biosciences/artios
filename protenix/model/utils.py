@@ -13,150 +13,13 @@
 # limitations under the License.
 
 from enum import Enum
-from typing import Optional, Union
+from typing import Optional
 
 import torch
-import torch.nn as nn
-from einops import repeat
-from scipy.spatial.transform import Rotation
 from torch import Tensor
 
 from protenix.utils.scatter_utils import scatter
 from protenix.utils.typing import Bool, Float, Int, typecheck
-
-
-@typecheck
-def calc_centroid(
-    coords: Float[Tensor, "*batch n_atom xyz"],
-    mask: Bool[Tensor, "*batch n_atom"] | None = None,
-    eps: float = 1e-12,
-) -> Float[Tensor, "... xyz"]:
-    """Calculate the centroid (center of mass) of coordinates.
-
-    Args:
-        coords: Input coordinates.
-        mask: Optional mask for valid atoms. If None, all atoms are considered valid.
-        eps: Small epsilon to avoid division by zero.
-
-    Returns:
-        The centroid of the coordinates.
-    """
-    if mask is None:
-        return coords.mean(dim=-2)
-    else:
-        masked_coords = coords * mask.unsqueeze(dim=-1)
-        centroid = masked_coords.sum(dim=-2) / (mask.sum(dim=-1, keepdim=True) + eps)
-        return centroid
-
-
-@typecheck
-def centre_random_augmentation(
-    x_input_coords: Float[Tensor, "*batch n_atom xyz"],
-    n_sample: int = 1,
-    s_trans: float = 1.0,
-    centre_only: bool = False,
-    mask: Bool[Tensor, "*batch n_atom"] | None = None,
-    eps: float = 1e-12,
-) -> Float[Tensor, "... n_sample n_atom xyz"]:
-    """Implements Algorithm 19 in AF3
-
-    Args:
-        x_input_coords: Input coords.
-        n_sample: The total number of augmentation. Defaults to 1.
-        s_trans: Scale factor of trans. Defaults to 1.0.
-        centre_only: If set true, will only perform centering without applying random translation and rotation.
-        mask: Masking for the coords.
-        eps: Small number used for masked mean.
-
-    Returns:
-        The augmentation version of input coords.
-    """
-    n_atom = x_input_coords.size(-2)
-    device = x_input_coords.device
-
-    # Create all-True mask if not provided
-    if mask is None:
-        mask = torch.ones_like(x_input_coords[..., 0], dtype=torch.bool)
-
-    # Move to origin [..., n_atom, 3]
-    centroid = calc_centroid(x_input_coords, mask=mask, eps=eps)
-    x_input_coords = x_input_coords - centroid.unsqueeze(dim=-2)
-
-    # Expand to [..., n_sample, n_atom, 3]
-    x_input_coords = repeat(
-        x_input_coords, "... n_atom xyz -> ... n_sample n_atom xyz", n_sample=n_sample
-    )
-
-    if centre_only:
-        x_input_coords = x_input_coords * mask[..., None, :, None]
-        return x_input_coords
-
-    # n_augment = batch_size * n_sample
-    n_augment = torch.numel(x_input_coords[..., 0, 0])
-
-    # Generate n_augment (rot, trans) pairs
-    batch_size_shape = x_input_coords.shape[:-3]
-    rot_matrix_random = (
-        uniform_random_rotation(n_sample=n_augment)
-        .to(device)
-        .reshape(*batch_size_shape, n_sample, 3, 3)
-    ).detach()  # [..., n_sample, 3, 3]
-    trans_random = s_trans * torch.randn(size=(*batch_size_shape, n_sample, 3)).to(
-        device
-    )  # [..., n_sample, 3]
-    rot_expanded = repeat(
-        rot_matrix_random, "... n_sample u v -> ... n_sample n_atom u v", n_atom=n_atom
-    )
-    x_augment_coords = (
-        rot_vec_mul(r=rot_expanded, t=x_input_coords) + trans_random[..., None, :]
-    )  # [..., n_sample, n_atom, 3]
-
-    # Apply the mask
-    x_augment_coords = x_augment_coords * mask[..., None, :, None]
-    return x_augment_coords
-
-
-# Comment: Rotation.random is not supported by torch.compile()
-@typecheck
-def uniform_random_rotation(n_sample: int = 1) -> Float[Tensor, "n_sample u v"]:
-    """Generate random rotation matrices with scipy.spatial.transform.Rotation
-
-    Args:
-        N_sample (int, optional): the total number of augmentation. Defaults to 1.
-
-    Returns:
-        Tensor: n_sample rot matrics
-            [n_sample, 3, 3]
-    """
-    rotation = Rotation.random(num=n_sample)
-    rot_matrix = torch.from_numpy(rotation.as_matrix()).float()  # [N_sample, 3, 3]
-    return rot_matrix
-
-
-@typecheck
-def rot_vec_mul(
-    r: Float[Tensor, "*batch u v"], t: Float[Tensor, "*batch xyz"]
-) -> Float[Tensor, "*batch xyz"]:
-    """Apply rot matrix to vector
-    Applies a rotation to a vector. Written out by hand to avoid transfer
-    to avoid AMP downcasting.
-
-    Args:
-        r: the rotation matrices
-        t: the coordinate tensors
-
-    Returns:
-        the rotated coordinates
-    """
-    x, y, z = torch.unbind(input=t, dim=-1)
-    return torch.stack(
-        tensors=[
-            r[..., 0, 0] * x + r[..., 0, 1] * y + r[..., 0, 2] * z,
-            r[..., 1, 0] * x + r[..., 1, 1] * y + r[..., 1, 2] * z,
-            r[..., 2, 0] * x + r[..., 2, 1] * y + r[..., 2, 2] * z,
-        ],
-        dim=-1,
-    )
 
 
 @typecheck
@@ -285,168 +148,6 @@ def average_atom_to_token(
     return out_mean
 
 
-def sample_indices(
-    n: int,
-    device: torch.device = torch.device("cpu"),
-    lower_bound=1,
-    strategy: str = "random",
-) -> Tensor:
-    """Sample msa indices k from uniform[1,n]
-
-    Args:
-        n (int): the msa num
-        strategy (str): the strategy to sample msa index, random or topk
-
-    Returns:
-        Tensor: the sampled indices k
-    """
-    assert strategy in ["random", "topk"]
-    sample_size = torch.randint(low=min(lower_bound, n), high=n + 1, size=(1,)).item()
-    if strategy == "random":
-        indices = torch.randperm(n=n, device=device)[:sample_size]
-    if strategy == "topk":
-        indices = torch.arange(sample_size, device=device)
-    return indices
-
-
-def sample_msa_feature_dict_random_without_replacement(
-    feat_dict: dict[str, Tensor],
-    dim_dict: dict[str, int],
-    cutoff: int = 512,
-    lower_bound: int = 1,
-    strategy: str = "random",
-) -> dict[str, Tensor]:
-    """Sample a dict of MSA features randomly without replacement.
-
-    Args:
-        feat_dict (dict[str, Tensor]): A dict containing the MSA features.
-        dim_dict (dict[str, int]): A dict containing the dimensions of the MSA features.
-        cutoff (int): The maximum number of features to sample.
-        lower_bound (int): The minimum number of features to sample.
-        strategy (str): The sampling strategy to use. Can be either "random" or "sequential".
-
-    Returns:
-        dict[str, Tensor]: A dict containing the sampled MSA features.
-    """
-    msa_len = feat_dict["msa"].size(dim=dim_dict["msa"])
-    indices = sample_indices(
-        n=msa_len,
-        device=feat_dict["msa"].device,
-        lower_bound=lower_bound,
-        strategy=strategy,
-    )
-    if cutoff > 0:
-        indices = indices[:cutoff]
-
-    msa_feat_dict = {
-        feat_name: torch.index_select(
-            input=feat_dict[feat_name], dim=dim, index=indices
-        )
-        for feat_name, dim in dim_dict.items()
-    }
-    return msa_feat_dict
-
-
-def expand_at_dim(x: Tensor, dim: int, n: int) -> Tensor:
-    """expand a tensor at specific dim by n times
-
-    Args:
-        x (Tensor): input
-        dim (int): dimension to expand
-        n (int): expand size
-
-    Returns:
-        Tensor: expanded tensor of shape [..., n, ...]
-    """
-    x = x.unsqueeze(dim=dim)
-    if dim < 0:
-        dim = x.dim() + dim
-    before_shape = x.shape[:dim]
-    after_shape = x.shape[dim + 1 :]
-    return x.expand(*before_shape, n, *after_shape)
-
-
-def pad_at_dim(
-    x: Tensor,
-    dim: int,
-    pad_length: Union[tuple[int], list[int]],
-    value: float = 0,
-) -> Tensor:
-    """pad to input x at dimension dim with length pad_length[0] to the left and and pad_length[1] to the right.
-
-    Args:
-        x (Tensor): input
-        dim (int): padding dimension
-        pad_length (Union[Tuple[int], List[int]]): length to pad to the beginning and end.
-
-    Returns:
-        Tensor: padded tensor
-    """
-    n_dim = len(x.shape)
-    if dim < 0:
-        dim = n_dim + dim
-
-    pad = (pad_length[0], pad_length[1])
-    if pad == (0, 0):
-        return x
-    k = n_dim - (dim + 1)
-    if k > 0:
-        pad_skip = (0, 0) * k
-        pad = (*pad_skip, *pad)
-    return nn.functional.pad(x, pad=pad, value=value)
-
-
-def reshape_at_dim(
-    x: Tensor, dim: int, target_shape: Union[tuple[int], list[int]]
-) -> Tensor:
-    """reshape dimension dim of x to target_shape
-
-    Args:
-        x (Tensor): input
-        dim (int): dimension to reshape
-        target_shape (Union[Tuple[int], List[int]]): target_shape of dim
-
-    Returns:
-        Tensor: reshaped tensor
-    """
-    n_dim = len(x.shape)
-    if dim < 0:
-        dim = n_dim + dim
-
-    target_shape = tuple(target_shape)
-    target_shape = (*x.shape[:dim], *target_shape)
-    if dim + 1 < n_dim:
-        target_shape = (*target_shape, *x.shape[dim + 1 :])
-    return x.reshape(target_shape)
-
-
-def index_at_dim(x: Tensor, dim: int, idx: Tensor) -> Tensor:
-    """Return x indexed by idx along `dim`, preserving all other dims.
-    If idx is [T, K], the result inserts those two dims at `dim`."""
-    if dim < 0:
-        dim += x.ndim
-    index = [slice(None)] * x.ndim
-    index[dim] = idx
-    return x[tuple(index)]
-
-
-def sample_logit_normal(
-    size, device, dtype=torch.float32, loc=0, scale=1, generator=None
-):
-    """Sample from a logit-normal distribution. Used to generate timesteps for flow matching."""
-    normal_samples = torch.normal(
-        loc, scale, size, device=device, dtype=dtype, generator=generator
-    )
-    return torch.sigmoid(normal_samples)
-
-
-def noise_w_flow_matching(data, noise, timestep, sigma_min=1e-5):
-    """Flow-matching interpolation between the data and noise.
-    Requires data, noise and timestep to be broadcastable.
-    """
-    return timestep * data + (1 - (1 - sigma_min) * timestep) * noise
-
-
 def beta_function(
     t: Tensor,
     mean: Optional[float] = None,
@@ -486,12 +187,9 @@ def beta_function(
     elif not mean_std_provided and not alpha_beta_provided:
         raise ValueError("Must specify either (mean, std) or (alpha, beta) parameters.")
 
+    # Compute alpha and beta values (as floats first for validation)
     if mean_std_provided:
-        # Convert mean and std to alpha and beta parameters
-        if device is not None and dtype is not None:
-            mean = torch.tensor(mean, device=device, dtype=dtype)
-            std = torch.tensor(std, device=device, dtype=dtype)
-
+        assert mean is not None and std is not None
         var = std**2
 
         # Ensure the parameters are valid
@@ -501,25 +199,29 @@ def beta_function(
             )
 
         common_term = (mean * (1 - mean) / var) - 1
-        alpha = mean * common_term
-        beta = (1 - mean) * common_term
+        alpha_val = mean * common_term
+        beta_val = (1 - mean) * common_term
     else:
-        # Use alpha and beta directly
+        assert alpha is not None and beta is not None
         if alpha <= 0 or beta <= 0:
             raise ValueError(
                 f"Alpha and beta must be positive. Got alpha={alpha}, beta={beta}"
             )
+        alpha_val = alpha
+        beta_val = beta
 
-        if device is not None and dtype is not None:
-            alpha = torch.tensor(alpha, device=device, dtype=dtype)
-            beta = torch.tensor(beta, device=device, dtype=dtype)
+    # Convert to tensors for computation
+    alpha_t = torch.tensor(alpha_val, device=t.device, dtype=t.dtype)
+    beta_t = torch.tensor(beta_val, device=t.device, dtype=t.dtype)
 
     # Calculate Beta function normalization constant using log-gamma
     # B(alpha, beta) = Γ(alpha)Γ(beta)/Γ(alpha+beta)
-    log_norm = torch.lgamma(alpha) + torch.lgamma(beta) - torch.lgamma(alpha + beta)
+    log_norm = (
+        torch.lgamma(alpha_t) + torch.lgamma(beta_t) - torch.lgamma(alpha_t + beta_t)
+    )
     normalization = torch.exp(log_norm)
 
-    return t ** (alpha - 1) * (1 - t) ** (beta - 1) / normalization
+    return t ** (alpha_t - 1) * (1 - t) ** (beta_t - 1) / normalization
 
 
 def masked_mean(

@@ -1,703 +1,285 @@
-"""Model losses and aggregation logic."""
+"""Core loss functions for model training.
 
-from abc import ABC, abstractmethod
+This module provides typechecked pure functions for computing losses.
+Models should call these functions and compose their own `compute_loss` methods.
+"""
+
 from dataclasses import dataclass
-from operator import attrgetter
-from typing import Optional
 
 import torch
-import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 
-from protenix.data.features import FullContext
 from protenix.metrics.rmsd import weighted_rigid_align
-from protenix.model.output import ModelOutput
-from protenix.model.utils import expand_at_dim, masked_mean
+from protenix.model.utils import masked_mean
+from protenix.utils.typing import Bool, Float, typecheck
 
 
-def loss_reduction(loss: Tensor, method: str = "mean") -> Tensor:
-    """reduction wrapper
+@dataclass(frozen=True)
+class LossWeightConfig:
+    """Configuration for per-atom loss weighting.
 
-    Args:
-        loss (Tensor): loss
-            [...]
-        method (str, optional): reduction method. Defaults to "mean".
-
-    Returns:
-        Tensor: reduced loss
-            [] or [...]
+    All weights are additive adjustments to a base weight of 1.0.
+    E.g., ligand=0.5 means ligand atoms get weight 1.5.
     """
 
-    if method is None:
-        return loss
-    assert method in ["mean", "sum", "add", "max", "min"]
-    if method == "add":
-        method = "sum"
-    return getattr(torch, method)(loss)
+    protein: float = 0.0
+    dna: float = 0.0
+    rna: float = 0.0
+    ligand: float = 0.0
+    motif: float = 0.0
+    motif_related: float = 0.0
 
 
-def softmax_cross_entropy(logits: Tensor, labels: Tensor) -> Tensor:
-    """Softmax cross entropy
+# =============================================================================
+# Core Loss Functions
+# =============================================================================
+
+
+@typecheck
+def mse_loss(
+    pred: Float[Tensor, "*batch n_atom 3"],
+    true: Float[Tensor, "*batch n_atom 3"],
+    mask: Bool[Tensor, "*batch n_atom"],
+    weight: Float[Tensor, "*batch n_atom"] | None = None,
+    eps: float = 1e-6,
+) -> Float[Tensor, "*batch"]:
+    """Compute masked MSE loss over atoms.
+
+    Masked coordinates are zeroed before computing squared error.
 
     Args:
-        logits (Tensor): classification logits
-            [..., num_class]
-        labels (Tensor): classification labels (value = probability)
-            [..., num_class]
+        pred: Predicted coordinates.
+        true: Ground truth coordinates.
+        mask: Valid atom mask.
+        weight: Optional per-atom weights applied before reduction.
+        eps: Epsilon for numerical stability in masked mean.
 
     Returns:
-        Tensor: softmax cross entropy
-            [...]
+        Per-batch MSE loss (weighted mean over atoms).
     """
-    loss = -1 * torch.sum(
-        labels * F.log_softmax(logits, dim=-1),
-        dim=-1,
+    # Zero out masked coordinates to avoid large values from invalid atoms
+    pred_masked = pred * mask[..., None]
+    true_masked = true * mask[..., None]
+    per_atom_se = ((pred_masked - true_masked) ** 2).sum(dim=-1)  # [..., n_atom]
+
+    if weight is not None:
+        per_atom_se = per_atom_se * weight
+
+    return masked_mean(per_atom_se, mask, axes=-1, eps=eps)
+
+
+@typecheck
+def mse_per_atom(
+    pred: Float[Tensor, "*batch n_atom 3"],
+    true: Float[Tensor, "*batch n_atom 3"],
+) -> Float[Tensor, "*batch n_atom"]:
+    """Compute per-atom squared error (sum over xyz).
+
+    Useful for computing entity-specific metrics.
+
+    Args:
+        pred: Predicted coordinates.
+        true: Ground truth coordinates.
+
+    Returns:
+        Per-atom squared error.
+    """
+    return ((pred - true) ** 2).sum(dim=-1)
+
+
+@typecheck
+def nll_loss(
+    logits: Float[Tensor, "*batch n_class"],
+    labels: Float[Tensor, "*batch n_class"],
+    mask: Bool[Tensor, "*batch"],
+    label_smoothing: float = 0.0,
+    eps: float = 1e-6,
+) -> Float[Tensor, ""]:
+    """Compute masked negative log-likelihood loss with optional label smoothing.
+
+    Args:
+        logits: Classification logits.
+        labels: One-hot or soft labels (probabilities).
+        mask: Valid position mask.
+        label_smoothing: Label smoothing factor.
+        eps: Epsilon for numerical stability.
+
+    Returns:
+        Scalar NLL loss.
+    """
+    n_class = labels.shape[-1]
+
+    if label_smoothing > 0:
+        labels_smoothed = labels + (label_smoothing / n_class)
+        labels_smoothed = labels_smoothed / (
+            labels_smoothed.sum(dim=-1, keepdim=True) + eps
+        )
+    else:
+        labels_smoothed = labels
+
+    per_position_loss = -torch.sum(
+        labels_smoothed * F.log_softmax(logits, dim=-1), dim=-1
     )
-    return loss
+    return masked_mean(per_position_loss, mask, axes=-1, eps=eps).mean()
 
 
-class BaseLoss(nn.Module, ABC):
-    """Base class for all losses."""
-
-    def __init__(self, reduction: str = "mean"):
-        super().__init__()
-        self.reduction = reduction
-
-    @abstractmethod
-    def compute_loss(
-        self,
-        output: ModelOutput,
-        context: FullContext,
-    ) -> tuple[Tensor, dict[str, Tensor]]:
-        """Compute the loss from model outputs and any neccessary context."""
-        pass
-
-    def forward(
-        self,
-        output: ModelOutput,
-        context: FullContext,
-    ) -> tuple[Tensor, dict[str, Tensor]]:
-        """Forward pass with reduction."""
-        loss, metrics = self.compute_loss(output, context)
-        loss = loss_reduction(loss, self.reduction)
-        return loss, metrics
+# =============================================================================
+# Loss Utilities
+# =============================================================================
 
 
-@dataclass
-class LossComponent:
-    """Configuration for a single loss component."""
+@typecheck
+def timestep_scale(
+    timestep: Float[Tensor, "*batch"],
+    sigma: float,
+    clamp_max: float = 0.98,
+) -> Float[Tensor, "*batch"]:
+    """Compute per-sample scale factor from timestep.
 
-    name: str
-    loss: BaseLoss
-    weight: float
+    Implements the weighting: 1 / (sqrt(2) * (sigma * (1 - t))^2)
 
+    Args:
+        timestep: Timestep values in [0, 1].
+        sigma: Sigma parameter for scaling.
+        clamp_max: Maximum value to clamp timestep to avoid division by zero.
 
-class AggregatedLoss(BaseLoss):
-    """A loss composed of multiple weighted loss components."""
-
-    def __init__(
-        self, components: list[LossComponent], reduction: str = "mean"
-    ) -> None:
-        """Initialize AggregatedLoss.
-
-        Args:
-            components: List of LossComponent objects
-            reduction: Reduction method for final loss
-        """
-        super().__init__(reduction)
-        self.components = components
-
-    def compute_loss(
-        self,
-        output: ModelOutput,
-        context: FullContext,
-    ) -> tuple[Tensor, dict[str, Tensor]]:
-        """Compute weighted sum of all component losses."""
-        total_loss = torch.tensor(0.0, device=context.token.token_index.device)
-        all_metrics = {}
-
-        for loss_component in self.components:
-            name = loss_component.name
-            loss_fn = loss_component.loss
-            weight = loss_component.weight
-
-            loss, metrics = loss_fn(output, context)
-
-            total_loss = total_loss + weight * loss
-
-            all_metrics[name] = loss.detach()
-            all_metrics[f"weighted_{name}"] = (weight * loss).detach()
-            all_metrics.update({k: v for k, v in metrics.items()})
-
-        all_metrics["total"] = total_loss.detach()
-        return total_loss, all_metrics
+    Returns:
+        Per-sample scale factors.
+    """
+    sqrt2 = 1.414
+    t_clamped = torch.clamp(timestep, max=clamp_max)
+    return 1.0 / (sqrt2 * (sigma * (1 - t_clamped)) ** 2)
 
 
-class MSELoss(BaseLoss):
-    """MSE Loss inheriting from the BaseLoss. Built to be mask native."""
+@typecheck
+def align_to_prediction(
+    pred: Float[Tensor, "*batch n_atom 3"],
+    true: Float[Tensor, "*batch n_atom 3"],
+    mask: Bool[Tensor, "*batch n_atom"],
+    weight: Float[Tensor, "*batch n_atom"] | None = None,
+) -> Float[Tensor, "*batch n_atom 3"]:
+    """Align ground truth to predicted coordinates using weighted rigid alignment.
 
-    def __init__(
-        self,
-        # Tensor key configuration
-        pred_key: str = "coordinate",
-        true_key: str = "coordinate",
-        mask_key: str = "atom_loss_mask",
-        # Entity mask keys
-        protein_mask_key: str = "entity.is_protein",
-        dna_mask_key: str = "entity.is_dna",
-        rna_mask_key: str = "entity.is_rna",
-        ligand_mask_key: str = "entity.is_ligand",
-        motif_mask_key: str = "motif.is_motif",
-        motif_related_mask_key: str = "motif.is_motif_related",
-        # Loss weights
-        weight_protein: float = 1.0,
-        weight_dna: float = 1.0,
-        weight_rna: float = 1.0,
-        weight_ligand: float = 1.0,
-        weight_motif: float = 0.0,
-        weight_motif_related: float = 0.0,
-        # Behaviour flags
-        enable_alignment: bool = True,
-        expand_ground_truth: bool = True,
-        # Standard params
-        reduction: str = "mean",
-        eps: float = 1e-6,
-        # (Optional) Extra filter mask key
-        extra_filter_mask_key: Optional[str] = None,
-        # (Optional) Per sample scale keys
-        timestep_key: Optional[str] = None,
-        timestep_scale_clamp: Optional[float] = 0.98,
-        sigma: Optional[float] = None,
-        metric_suffix: Optional[str] = "",
-    ) -> None:
-        """Initialize MSELoss.
+    Masked coordinates are zeroed before alignment.
 
-        Args:
-            pred_key: Key to extract prediction from pred_dict.
-            true_key: Key to extract ground truth from label_dict.
-            mask_key: Key to extract mask from label_dict.
-            protein_mask_key: Key for protein mask in feat_dict.
-            dna_mask_key: Key for DNA mask in feat_dict.
-            rna_mask_key: Key for RNA mask in feat_dict.
-            ligand_mask_key: Key for ligand mask in feat_dict.
-            motif_mask_key: Key for motif mask in feat_dict.
-            motif_related_mask_key: Key for motif related mask in feat_dict.
-            weight_protein: Weight for protein.
-            weight_dna: Weight for DNA.
-            weight_rna: Weight for RNA.
-            weight_ligand: Weight for ligand.
-            weight_motif: Weight for motif.
-            weight_motif_related: Weight for motif related.
-            enable_alignment: Whether to align before MSE.
-            expand_ground_truth: Whether to expand GT over samples.
-            reduction: Reduction method.
-            eps: Epsilon for stability.
-            extra_filter_mask_key: Key to extract extra filter mask from label_dict.
-            timestep_key: Key to extract timestep from pred_dict.
-            timestep_scale_clamp: Clamp the timestep to this value.
-            sigma: The sigma for per-sample scale computation.
-            metric_suffix: Suffix for the metric key. One of "centre_atom" or "latent".
-                If empty, no suffix is added.
-        """
-        super().__init__(reduction=reduction)
+    Args:
+        pred: Predicted coordinates.
+        true: Ground truth coordinates.
+        mask: Valid atom mask.
+        weight: Optional per-atom weights for alignment. If None, uses mask as weights.
 
-        # Store keys
-        self.pred_key = pred_key
-        self.true_key = true_key
-        self.mask_key = mask_key
+    Returns:
+        Aligned ground truth coordinates (masked positions zeroed).
+    """
+    if weight is None:
+        weight = mask.float()
 
-        # Store entity mask keys
-        self.protein_mask_key = protein_mask_key
-        self.dna_mask_key = dna_mask_key
-        self.rna_mask_key = rna_mask_key
-        self.ligand_mask_key = ligand_mask_key
-        self.motif_mask_key = motif_mask_key
-        self.motif_related_mask_key = motif_related_mask_key
-        # Store weights
-        self.weight_protein = weight_protein
-        self.weight_dna = weight_dna
-        self.weight_rna = weight_rna
-        self.weight_ligand = weight_ligand
-        self.weight_motif = weight_motif
-        self.weight_motif_related = weight_motif_related
-        # Store flags
-        self.enable_alignment = enable_alignment
-        self.expand_ground_truth = expand_ground_truth
+    # Zero out masked coordinates to avoid large values from invalid atoms
+    pred_masked = pred * mask[..., None]
+    true_masked = true * mask[..., None]
 
-        # Store per sample scale keys
-        self.timestep_key = timestep_key
-        self.timestep_scale_clamp = timestep_scale_clamp
-        self.sigma = sigma
-        self.use_per_sample_scale = timestep_key is not None and sigma is not None
-        self.metric_suffix = metric_suffix
+    dtype = pred.dtype
+    with torch.amp.autocast("cuda", enabled=False):
+        true_aligned = weighted_rigid_align(
+            x=true_masked.to(torch.float32),
+            x_target=pred_masked.to(torch.float32),
+            atom_weight=weight.to(torch.float32),
+            mask=mask.bool(),
+            stop_gradient=True,
+        )
+    return true_aligned.to(dtype)
 
-        self.eps = eps
 
-    def _extract_tensors(
-        self,
-        output: ModelOutput,
-        context: FullContext,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """
-        Retrieves the predicted, target and mask tensor.
-        """
-        pred_tensor = attrgetter(self.pred_key)(output)
-        true_tensor = attrgetter(self.true_key)(context)
-        valid_mask = attrgetter(self.mask_key)(context)
-        return pred_tensor, true_tensor, valid_mask
+@typecheck
+def build_atom_weights(
+    config: LossWeightConfig,
+    is_protein: Bool[Tensor, "*batch n_atom"],
+    is_dna: Bool[Tensor, "*batch n_atom"],
+    is_rna: Bool[Tensor, "*batch n_atom"],
+    is_ligand: Bool[Tensor, "*batch n_atom"],
+    is_motif: Bool[Tensor, "*batch n_atom"] | None = None,
+    is_motif_related: Bool[Tensor, "*batch n_atom"] | None = None,
+) -> Float[Tensor, "*batch n_atom"]:
+    """Build per-atom weights for loss computation.
 
-    def _extract_entity_masks(
-        self,
-        context: FullContext,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
-        """Retrieves the entity masks."""
-        is_protein = attrgetter(self.protein_mask_key)(context)
-        is_dna = attrgetter(self.dna_mask_key)(context)
-        is_rna = attrgetter(self.rna_mask_key)(context)
-        is_ligand = attrgetter(self.ligand_mask_key)(context)
-        is_motif = attrgetter(self.motif_mask_key)(context)
-        is_motif_related = attrgetter(self.motif_related_mask_key)(context)
-        return is_protein, is_dna, is_rna, is_ligand, is_motif, is_motif_related
+    Uses additive semantics: starts with base weight of 1.0, then adds
+    adjustments based on entity type and motif membership.
 
-    def _calculate_per_sample_scale(
-        self,
-        output: ModelOutput,
-    ) -> Tensor:
-        """Calculates the per-sample scale."""
-        sqrt2 = 1.414
-        timestep = attrgetter(self.timestep_key)(output)
-        timestep = torch.clamp(timestep, max=self.timestep_scale_clamp)
-        return 1 / (sqrt2 * (self.sigma * (1 - timestep)) ** 2)
+    Args:
+        config: Weight configuration specifying adjustments per category.
+        is_protein: Boolean mask for protein atoms.
+        is_dna: Boolean mask for DNA atoms.
+        is_rna: Boolean mask for RNA atoms.
+        is_ligand: Boolean mask for ligand atoms.
+        is_motif: Boolean mask for motif atoms.
+        is_motif_related: Boolean mask for motif-related atoms.
 
-    def weighted_rigid_align(
-        self,
-        pred_coordinate: Tensor,
-        true_coordinate: Tensor,
-        weight: Tensor,
-        mask: Tensor,
-    ) -> tuple[Tensor, Tensor]:
-        """Compute weighted rigid alignment results
+    Returns:
+        Per-atom weights (base 1.0 + adjustments).
+    """
+    weights = torch.ones(
+        is_protein.shape, dtype=torch.float32, device=is_protein.device
+    )
 
-        Args:
-            pred_coordinate (Tensor): the denoised coordinates from diffusion module
-                [..., N_sample, N, 3]
-            true_coordinate (Tensor): the ground truth coordinates
-                [..., N_sample, N, 3]
-            weight (Tensor): weights for each atom
-                [..., N_sample, N]
-            mask (Tensor): mask for the atoms.
-                [..., N]
+    weights = weights + is_protein.float() * config.protein
+    weights = weights + is_dna.float() * config.dna
+    weights = weights + is_rna.float() * config.rna
+    weights = weights + is_ligand.float() * config.ligand
 
-        Returns:
-            true_coordinate_aligned (Tensor): aligned coordinates for each sample
-                [..., N_sample, N, 3]
-            weight (Tensor): weights for each atom
-                [..., N_sample, N]
-        """
-        # Align GT coords to predicted coords
-        d = pred_coordinate.dtype
-        # Some ops in weighted_rigid_align do not support BFloat16 training
-        with torch.amp.autocast("cuda", enabled=False):
-            true_coordinate_aligned = weighted_rigid_align(
-                x=true_coordinate.to(torch.float32),  # [..., N_sample, N_atom, 3]
-                x_target=pred_coordinate.to(
-                    torch.float32
-                ),  # [..., N_sample, N_atom, 3]
-                atom_weight=weight.to(torch.float32),  # [..., N_sample, N_atom]
-                mask=mask.bool(),  # Must be bool for weighted_rigid_align
-                stop_gradient=True,
-            )  # [..., N_sample, N_atom, 3]
-            true_coordinate_aligned = true_coordinate_aligned.to(d)
+    if is_motif is not None:
+        weights = weights + is_motif.float() * config.motif
+    if is_motif_related is not None:
+        weights = weights + is_motif_related.float() * config.motif_related
 
-        return true_coordinate_aligned
+    return weights
 
-    def compute_loss(
-        self,
-        output: ModelOutput,
-        context: FullContext,
-    ) -> tuple[Tensor, dict[str, Tensor]]:
-        """
-        Args:
-            output: the model output.
-            context: the full context.
 
-        Returns:
-            tuple[Tensor, dict[str, Tensor]]:
-                - loss (Tensor): the loss
-                - metrics (dict[str, Tensor]): dict containing the following keys:
-                    - "mse_protein_loss": List[float]
-                    - "mse_dna_loss": List[float]
-                    - "mse_rna_loss": List[float]
-                    - "mse_ligand_loss": List[float]
-                    - "mse_motif_loss": List[float]
-                    - "mse_motif_related_loss": List[float]
-                    The list contains the losses for each item in the batch. The list
-                    contains NaNs if the loss for that item is 0.0.
-        """
-        # Extract data
-        pred_tensor, true_tensor, valid_mask = self._extract_tensors(
-            output=output, context=context
+@typecheck
+def compute_entity_metrics(
+    per_atom_loss: Float[Tensor, "*batch n_atom"],
+    mask: Bool[Tensor, "*batch n_atom"],
+    entity_masks: dict[str, Bool[Tensor, "*batch n_atom"]],
+    eps: float = 1e-6,
+) -> dict[str, Tensor]:
+    """Compute per-entity-type loss metrics for logging.
+
+    Args:
+        per_atom_loss: Per-atom loss values (e.g., squared error).
+        mask: Valid atom mask.
+        entity_masks: Dictionary mapping entity names to their masks.
+
+    Returns:
+        Dictionary mapping metric names to tensors of per-batch-item values.
+        Values are NaN if no atoms of that type exist in that batch item.
+
+    Note:
+        Returns tensors instead of Python floats to avoid CUDA synchronization.
+        The tensors will be converted to floats when metrics are logged.
+    """
+    # batch_size = per_atom_loss.shape[0]
+    # device = per_atom_loss.device
+    metrics: dict[str, Tensor] = {}
+
+    for entity_name, entity_mask in entity_masks.items():
+        # Compute combined mask for all batch items at once
+        combined_mask = mask & entity_mask  # [batch, n_atom]
+
+        # Compute masked mean per batch item without .item() calls
+        # Use masked operations to avoid sync
+        masked_loss = per_atom_loss * combined_mask
+        sum_loss = masked_loss.sum(dim=-1)  # [batch]
+        count = combined_mask.sum(dim=-1).clamp(min=eps)  # [batch]
+        per_batch_metrics = sum_loss / count  # [batch]
+
+        # Set NaN where no atoms exist (count was clamped from 0)
+        no_atoms = combined_mask.sum(dim=-1) == 0
+        per_batch_metrics = torch.where(
+            no_atoms,
+            torch.full_like(per_batch_metrics, float("nan")),
+            per_batch_metrics,
         )
 
-        # Extract masks
-        is_protein, is_dna, is_rna, is_ligand, is_motif, is_motif_related = (
-            self._extract_entity_masks(context=context)
-        )
+        metrics[f"mse_{entity_name}_loss"] = per_batch_metrics
 
-        # Expand masks
-        N_sample = pred_tensor.shape[-3]
-        valid_mask = expand_at_dim(valid_mask, dim=-2, n=N_sample)  # [..., N_sample, N]
-        is_protein = expand_at_dim(is_protein, dim=-2, n=N_sample)  # [..., N_sample, N]
-        is_dna = expand_at_dim(is_dna, dim=-2, n=N_sample)  # [..., N_sample, N]
-        is_rna = expand_at_dim(is_rna, dim=-2, n=N_sample)  # [..., N_sample, N]
-        is_ligand = expand_at_dim(is_ligand, dim=-2, n=N_sample)  # [..., N_sample, N]
-        is_motif = expand_at_dim(is_motif, dim=-2, n=N_sample)  # [..., N_sample, N]
-        is_motif_related = expand_at_dim(
-            is_motif_related, dim=-2, n=N_sample
-        )  # [..., N_sample, N]
-
-        # Calculate weights
-        weight = (
-            self.weight_protein * is_protein
-            + self.weight_dna * is_dna
-            + self.weight_rna * is_rna
-            + self.weight_ligand * is_ligand
-            + self.weight_motif * is_motif
-            + self.weight_motif_related * is_motif_related
-        )  # [..., N]
-
-        weight = weight * valid_mask
-
-        # Expand ground truth
-        if self.expand_ground_truth:
-            true_tensor = expand_at_dim(
-                true_tensor, dim=-3, n=N_sample
-            )  # [..., N_sample, N, 3]
-
-        # Mask coords
-        true_tensor = true_tensor * valid_mask[..., None]
-        pred_tensor = pred_tensor * valid_mask[..., None]
-
-        # Align
-        if self.enable_alignment:
-            with torch.no_grad():
-                # TODO: is this right? should we be aligning batched coords ??
-                true_tensor = self.weighted_rigid_align(
-                    pred_coordinate=pred_tensor,
-                    true_coordinate=true_tensor,
-                    weight=weight,
-                    mask=valid_mask,
-                )
-
-        assert (
-            true_tensor.shape == pred_tensor.shape
-        ), f"True coordinate shape {true_tensor.shape} does not match pred coordinate shape {pred_tensor.shape}"
-
-        # Apply per-sample scaling if configured
-        if self.use_per_sample_scale:
-            per_sample_scale = self._calculate_per_sample_scale(
-                output=output,
-            ).unsqueeze(-1)  # [..., N_sample, 1]
-        else:
-            per_sample_scale = 1.0
-
-        # Calculate MSE loss
-        per_atom_se = per_sample_scale * ((pred_tensor - true_tensor) ** 2).sum(
-            dim=-1
-        )  # [..., N_sample, N]
-
-        # Calculate masked mean
-        per_sample_weighted_mse = masked_mean(
-            per_atom_se * weight, valid_mask, axes=-1, eps=self.eps
-        )  # [..., N_sample]
-
-        ### Logging of different molecule types
-        logging_loss = per_atom_se.detach().clone()
-
-        def _get_masked_loss_for_type(
-            logging_loss_i: torch.Tensor,
-            valid_mask_i: torch.Tensor,
-            is_type_i: torch.Tensor,
-            eps: float,
-        ) -> torch.Tensor:
-            """compute masked mean loss for a specific molecule type."""
-            loss = masked_mean(
-                logging_loss_i * is_type_i,
-                valid_mask_i * is_type_i,
-                axes=-1,
-                eps=eps,
-            ).mean()  # [N_sample, N_atom] -> [N_sample] -> [1]
-            return torch.nan if loss == 0.0 else loss
-
-        # Define molecule types and their masks
-        molecule_types = {
-            "protein": is_protein,
-            "dna": is_dna,
-            "rna": is_rna,
-            "ligand": is_ligand,
-            "motif": is_motif,
-            "motif_related": is_motif_related,
-        }
-
-        # Calculate losses for all molecule types
-        # Each mol type loss is a list of losses for each item in batch
-        mol_type_losses = {
-            mol_type: [
-                _get_masked_loss_for_type(
-                    logging_loss[i], valid_mask[i], is_type_mask[i], self.eps
-                )
-                for i in range(logging_loss.shape[0])
-            ]
-            for mol_type, is_type_mask in molecule_types.items()
-        }
-
-        # Create loss_metrics
-        loss_metrics = {
-            f"mse_{mol_type}{self.metric_suffix}_loss": loss_list
-            for mol_type, loss_list in mol_type_losses.items()
-        }
-
-        return per_sample_weighted_mse, loss_metrics
-
-
-class NLLLoss(BaseLoss):
-    """Negative log likelihood loss for training MPNN (includes label smoothing)"""
-
-    def __init__(
-        self,
-        label_smoothing: float = 0.1,
-        reduction: str = "mean",
-        weight_protein: float = 1.0,
-        weight_dna: float = 1.0,
-        weight_rna: float = 1.0,
-        weight_ligand: float = 1.0,
-    ):
-        super().__init__(reduction=reduction)
-        self.label_smoothing = label_smoothing
-
-        self.weight_protein = weight_protein
-        self.weight_dna = weight_dna
-        self.weight_rna = weight_rna
-        self.weight_ligand = weight_ligand
-
-    def _extract_entity_masks(
-        self,
-        context: FullContext,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        """Retrieves the entity masks."""
-        is_protein = context.entity.is_protein_token
-        is_dna = context.entity.is_dna_token
-        is_rna = context.entity.is_rna_token
-        is_ligand = context.entity.is_ligand_token
-        return is_protein, is_dna, is_rna, is_ligand
-
-    def compute_loss(
-        self,
-        output: ModelOutput,
-        context: FullContext,
-    ) -> tuple[Tensor, dict[str, Tensor]]:
-        """
-        Computes the cross-entropy loss with label smoothing. Loss metrics dict contains
-        per entity-type losses
-        """
-        logits = output.seq_logits
-        gt_sequence = context.token.restype
-        mask = context.mask.centre_atom_is_resolved
-
-        num_residue_types = gt_sequence.shape[-1]
-
-        # Label smoothing
-        gt_sequence_smoothed = gt_sequence + (self.label_smoothing / num_residue_types)
-        gt_sequence_smoothed = gt_sequence_smoothed / (
-            gt_sequence_smoothed.sum(dim=-1, keepdim=True) + 1e-3
-        )
-
-        # Calculate weights
-        is_protein, is_dna, is_rna, is_ligand = self._extract_entity_masks(
-            context=context
-        )
-        weight = (
-            self.weight_protein * is_protein
-            + self.weight_dna * is_dna
-            + self.weight_rna * is_rna
-            + self.weight_ligand * is_ligand
-        )  # [..., N]
-        weight = weight * mask  # [..., N]
-
-        # cross entropy loss
-        raw_loss = softmax_cross_entropy(logits, gt_sequence_smoothed)  # [..., n_token]
-        weighted_loss = torch.sum(raw_loss * weight, dim=-1) / 384  # [...]
-
-        ### logging of different molecule types
-        logging_loss = masked_mean(
-            softmax_cross_entropy(logits, gt_sequence), mask, axes=-1
-        ).detach()  # [...]
-
-        def _get_masked_loss_for_type(
-            logging_loss_i: torch.Tensor,
-            valid_mask_i: torch.Tensor,
-            is_type_i: torch.Tensor,
-        ) -> torch.Tensor:
-            """compute masked mean loss for a specific molecule type."""
-            loss = masked_mean(
-                logging_loss_i * is_type_i,
-                valid_mask_i * is_type_i,
-                axes=-1,
-            ).mean()  # [N_token] -> [1] -> scalar
-            return torch.nan if loss == 0.0 else loss
-
-        # Define molecule types and their masks
-        molecule_types = {
-            "protein": is_protein,
-            "dna": is_dna,
-            "rna": is_rna,
-            "ligand": is_ligand,
-        }
-
-        # Calculate losses for all molecule types
-        # Each mol type loss is a list of losses for each item in batch
-        mol_type_losses = {
-            mol_type: [
-                _get_masked_loss_for_type(
-                    logging_loss[i],
-                    mask[i],
-                    is_type_mask[i],
-                )
-                for i in range(logging_loss.shape[0])  # loop over batch
-            ]
-            for mol_type, is_type_mask in molecule_types.items()
-        }
-
-        loss_metrics = {
-            f"nll_{mol_type}_loss": loss_list
-            for mol_type, loss_list in mol_type_losses.items()
-        }
-
-        return weighted_loss, loss_metrics
-
-
-class BackboneLoss(AggregatedLoss):
-    """Backbone loss."""
-
-    def __init__(self, configs):
-        components = [
-            # TODO: change the loss configs !!!
-            LossComponent(
-                name="mse_loss",
-                weight=configs.loss.backbone.mse.weight_mse,
-                loss=MSELoss(
-                    # Tensor keys
-                    pred_key="coordinate",
-                    true_key="coordinate.coordinate",
-                    mask_key="mask.atom_loss_mask",
-                    # Entity mask keys
-                    protein_mask_key="entity.is_protein",
-                    dna_mask_key="entity.is_dna",
-                    rna_mask_key="entity.is_rna",
-                    ligand_mask_key="entity.is_ligand",
-                    motif_mask_key="motif.is_motif",
-                    motif_related_mask_key="motif.is_motif_related",
-                    # Weights
-                    weight_protein=configs.loss.backbone.mse.weight_protein,
-                    weight_dna=configs.loss.backbone.mse.weight_dna,
-                    weight_rna=configs.loss.backbone.mse.weight_rna,
-                    weight_ligand=configs.loss.backbone.mse.weight_ligand,
-                    weight_motif=configs.loss.backbone.mse.weight_motif,
-                    weight_motif_related=configs.loss.backbone.mse.weight_motif_related,
-                    # Behaviour
-                    enable_alignment=True,
-                    expand_ground_truth=True,
-                    # Per sample scale keys
-                    timestep_key="timestep",
-                    sigma=configs.loss.backbone.sigma_coord,
-                    metric_suffix="_coord",
-                ),
-            ),
-        ]
-        super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
-
-
-class PackingLoss(AggregatedLoss):
-    """Packing loss for sidechain packing model."""
-
-    def __init__(self, configs):
-        components = [
-            LossComponent(
-                name="mse_loss",
-                weight=configs.loss.packing.mse.weight_mse,
-                loss=MSELoss(
-                    # Tensor keys
-                    pred_key="coordinate",
-                    true_key="coordinate.coordinate",
-                    mask_key="mask.atom_loss_mask",
-                    # Entity mask keys
-                    protein_mask_key="entity.is_protein",
-                    dna_mask_key="entity.is_dna",
-                    rna_mask_key="entity.is_rna",
-                    ligand_mask_key="entity.is_ligand",
-                    motif_mask_key="motif.is_motif",
-                    motif_related_mask_key="motif.is_motif_related",
-                    # Weights
-                    weight_protein=configs.loss.packing.mse.weight_protein,
-                    weight_dna=configs.loss.packing.mse.weight_dna,
-                    weight_rna=configs.loss.packing.mse.weight_rna,
-                    weight_ligand=configs.loss.packing.mse.weight_ligand,
-                    weight_motif=configs.loss.packing.mse.weight_motif,
-                    weight_motif_related=configs.loss.packing.mse.weight_motif_related,
-                    # Behaviour
-                    enable_alignment=configs.loss.packing.mse.enable_alignment,
-                    expand_ground_truth=True,
-                    # Per sample scale keys
-                    timestep_key="timestep",
-                    sigma=configs.loss.packing.sigma_coord,
-                    metric_suffix="_coord",
-                ),
-            ),
-        ]
-        super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
-
-
-class MPNNLoss(AggregatedLoss):
-    """MPNN loss."""
-
-    def __init__(self, configs):
-        components = [
-            LossComponent(
-                name="nll_loss",
-                weight=1.0,
-                loss=NLLLoss(
-                    label_smoothing=configs.loss.mpnn.label_smoothing,
-                    weight_protein=configs.loss.mpnn.weight_protein,
-                    weight_dna=configs.loss.mpnn.weight_dna,
-                    weight_rna=configs.loss.mpnn.weight_rna,
-                    weight_ligand=configs.loss.mpnn.weight_ligand,
-                ),
-            ),
-            LossComponent(
-                name="mse_loss",
-                weight=1.0,
-                loss=MSELoss(
-                    # Tensor keys
-                    pred_key="coordinate",
-                    true_key="coordinate.coordinate",
-                    mask_key="mask.atom_loss_mask",
-                    # Entity mask keys
-                    protein_mask_key="entity.is_protein",
-                    dna_mask_key="entity.is_dna",
-                    rna_mask_key="entity.is_rna",
-                    ligand_mask_key="entity.is_ligand",
-                    # Weights
-                    weight_protein=1.0,
-                    weight_dna=1.0,
-                    weight_rna=1.0,
-                    weight_ligand=10.0,
-                    # Behaviour
-                    enable_alignment=True,
-                    expand_ground_truth=True,
-                    timestep_key="timestep",
-                    sigma=1.0,
-                ),
-            ),
-        ]
-        super().__init__(components, reduction=configs.loss.get("reduction", "mean"))
+    return metrics

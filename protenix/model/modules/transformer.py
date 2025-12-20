@@ -10,6 +10,7 @@ Cross attention and self attention are separated.
 """
 
 from functools import partial
+from typing import Callable
 
 import torch
 from einops import rearrange
@@ -134,7 +135,7 @@ class Transformer(nn.Module):
 
     def _prep_blocks(
         self, pair_biases: Tensor, pair_mask: Tensor
-    ) -> list[TransformerBlock]:
+    ) -> list[Callable[..., Tensor]]:
         """Prepare the transformer blocks."""
         blocks = [
             partial(block, pair_bias=pair_biases[i], pair_mask=pair_mask)

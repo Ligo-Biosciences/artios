@@ -8,13 +8,8 @@ import torch
 from biotite.structure import AtomArray
 from biotite.structure.io.mol import MOLFile
 
-from protenix.common.atom_utils import (
-    create_atom_array_from_predictions,
-    dense_atoms_to_flat_atoms,
-)
 from protenix.common.constants import mmcif_restype_3to1
 from protenix.data.parser import MMCIFParser
-from protenix.data.tokenizer import TokenArray
 from protenix.data.utils import save_structure_cif
 
 
@@ -124,7 +119,7 @@ def extract_protein_from_cif(
 
 
 def cif_to_pdb(
-    cif_file: Union[str, Path], output_path: Union[str, Path] = None
+    cif_file: Union[str, Path], output_path: Optional[Union[str, Path]] = None
 ) -> None:
     """
     Convert a CIF file to PDB format and save it.
@@ -146,96 +141,6 @@ def cif_to_pdb(
 
     # Save as PDB using Biotite's functionality
     strucio.save_structure(output_path, structure)
-
-
-def save_outputs(
-    output_dir_list: List[str],
-    pred_dict: dict,
-    input_feature_dict: dict,
-    atom_array: AtomArray,
-    token_array: TokenArray,
-    pdb_id: str,
-    ema_suffix: Optional[str] = None,
-):
-    """
-    Saves all atom outputs to CIFs.
-
-    Returns:
-        List[Path]: List of paths to the saved CIF files
-    """
-    is_ligand_token = input_feature_dict["is_ligand_token"].cpu().numpy()
-
-    # Get predictions
-    coordinate = pred_dict["coordinate"].detach().cpu().numpy()
-    seq_logits = pred_dict["seq_logits"].detach().float().cpu().numpy()
-
-    restype_onehot = np.eye(seq_logits.shape[-1])[
-        np.argmax(seq_logits, axis=-1)
-    ].astype(np.float32)  # [..., N_sample, N_token, NUM_RESIDUES]
-
-    # Get chain, res_id's
-    centre_atom_indices = token_array.get_annotation("centre_atom_index")
-    centre_atoms = atom_array[centre_atom_indices]
-
-    chain_ids = centre_atoms.chain_id  # [N_token]
-    res_ids = centre_atoms.res_id  # [N_token]
-    label_entity_ids = centre_atoms.label_entity_id
-
-    # Save each sample
-    saved_files = []
-
-    assert (
-        len(output_dir_list) == coordinate.shape[-4]
-    ), f"Number of output directories must match number of samples, got {len(output_dir_list)=} and {coordinate.shape[-4]=}"
-
-    for idx in range(coordinate.shape[-4]):
-        sample_dense_coords = coordinate[idx]
-        sample_restype_onehot = restype_onehot[idx]
-
-        # Calculate flattened coordinates
-        flattened_coords, atoms_per_token = dense_atoms_to_flat_atoms(
-            restype_onehot=sample_restype_onehot,
-            dense_atom_coords=sample_dense_coords,
-            is_ligand_token=is_ligand_token,
-        )  # [..., N_atom_flat, 3], [..., N_token]
-
-        predicted_atom_array = create_atom_array_from_predictions(
-            flattened_coords=flattened_coords,
-            atoms_per_token=atoms_per_token,
-            restype_onehot=sample_restype_onehot,
-            chain_ids=chain_ids,
-            res_ids=res_ids,
-            is_ligand_token=is_ligand_token,
-            label_entity_ids=label_entity_ids,
-        )
-
-        predicted_atom_array.set_annotation(
-            "b_factor", np.zeros(len(predicted_atom_array))
-        )
-
-        # Determine output file path
-        output_path = output_dir_list[idx]
-
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        # Call save_to_cif function
-        try:
-            save_structure_cif(
-                atom_array=predicted_atom_array,
-                pred_coordinate=torch.Tensor(predicted_atom_array.coord),
-                output_fpath=output_path,
-                entity_poly_type=None,
-                pdb_id=pdb_id,
-            )
-            saved_files.append(output_path)
-            print(f"Saved sample {idx} to {output_path}")
-
-        except Exception as e:
-            print(f"Error saving sample {idx}: {e}")
-            continue
-
-    return saved_files
 
 
 def save_outputs_backbone(

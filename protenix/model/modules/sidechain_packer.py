@@ -49,6 +49,7 @@ class SidechainPacker(nn.Module):
             c_token=c_token,
             has_coords=True,
             has_s=True,
+            has_z=True,
             c_atom=c_atom,
             c_atompair=c_atompair,
             c_s=c_s,
@@ -64,7 +65,7 @@ class SidechainPacker(nn.Module):
 
         # DiT
         self.diffusion_transformer = DiffusionTransformer(
-            **transformer,
+            **transformer,  # type: ignore[invalid-argument-type]
             c_token=c_token,
             c_s=c_s,
             c_z=c_z,

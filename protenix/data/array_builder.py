@@ -71,6 +71,9 @@ def backbone_input_to_atom_array(backbone_input: BackboneInput) -> AtomArray:
         "is_motif_related", [False] * len(design_atom_array)
     )
     design_atom_array.set_annotation("is_motif", [False] * len(design_atom_array))
+    design_atom_array.set_annotation(
+        "original_motif_res_id", np.full(len(design_atom_array), -1, dtype=int)
+    )
 
     # Build motif
     if backbone_input.motif is not None:
@@ -127,6 +130,9 @@ def sequence_input_to_atom_array(sequence_input: SequenceDesignInput) -> AtomArr
 
     combined.set_annotation("is_motif_related", [False] * len(combined))
     combined.set_annotation("is_motif", [False] * len(combined))
+    combined.set_annotation(
+        "original_motif_res_id", np.full(len(combined), -1, dtype=int)
+    )
 
     # Mark fixed residues as motif-related so MPNN preserves restype
     for res_id in fixed_res_ids:
@@ -172,13 +178,16 @@ def packing_input_to_atom_array(packing_input: PackingInput) -> AtomArray:
     )
 
     # Add the coordinates to combined array
-    assert sum(backbone_combined_mask.astype(int)) == sum(
-        backbone_design_mask.astype(int)
-    )
+    assert (
+        sum(backbone_combined_mask.astype(int)) == sum(backbone_design_mask.astype(int))
+    ), f"backbone mask has different number of atoms {sum(backbone_combined_mask.astype(int))} vs {sum(backbone_design_mask.astype(int))}"
     combined.coord[backbone_combined_mask] = designed_array.coord[backbone_design_mask]
 
     combined.set_annotation("is_motif_related", [False] * len(combined))
     combined.set_annotation("is_motif", [False] * len(combined))
+    combined.set_annotation(
+        "original_motif_res_id", np.full(len(combined), -1, dtype=int)
+    )
 
     return combined
 
@@ -326,6 +335,13 @@ def build_motif_residue(motif_residue: MotifResidue) -> AtomArray:
     full_residue.set_annotation("is_motif", is_motif)
     full_residue.set_annotation("is_motif_related", np.ones_like(is_motif, dtype=bool))
 
+    # Store original CIF res_id for downstream RMSD computation after stitching.
+    # This survives through set_chain_and_seq_ids and update_ids_to_unindex_motif_residues.
+    full_residue.set_annotation(
+        "original_motif_res_id",
+        np.full(len(full_residue), motif_residue.res_id, dtype=int),
+    )
+
     full_residue = add_reference_features(full_residue)
     return full_residue
 
@@ -408,6 +424,12 @@ def build_motif_ligand(motif_ligand: MotifLigand) -> AtomArray:
     full_ligand_array.set_annotation("is_motif", is_motif)
     full_ligand_array.set_annotation(
         "is_motif_related", np.ones_like(is_motif, dtype=bool)
+    )
+
+    # Store original CIF res_id for downstream RMSD computation after stitching.
+    full_ligand_array.set_annotation(
+        "original_motif_res_id",
+        np.full(len(full_ligand_array), motif_ligand.res_id, dtype=int),
     )
 
     return full_ligand_array

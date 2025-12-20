@@ -107,9 +107,9 @@ class DiffusionConditioning(nn.Module):
         )
 
         ### Token bonds
-        self.token_bonds_embed = LinearNoBias(
-            in_features=1, out_features=self.c_z, init="normal"
-        )
+        # self.token_bonds_embed = LinearNoBias(
+        #     in_features=1, out_features=self.c_z, init="normal"
+        # )
 
         ### Relpos
         self.relpos = RelativePositionEncoding(c_z=c_z)

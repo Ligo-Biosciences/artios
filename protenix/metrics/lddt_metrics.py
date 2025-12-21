@@ -17,8 +17,6 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from protenix.model import sample_confidence
-
 
 def get_complex_level_rankers(scores, keys):
     assert all([k in ["plddt", "gpde", "ranking_score"] for k in keys])
@@ -29,7 +27,9 @@ def get_complex_level_rankers(scores, keys):
         else:
             descending = True
         ranking = scores[key].argsort(dim=0, descending=descending)
-        rankers[f"{key}.rank1"] = lambda x, rank1_idx=ranking[0].item(): x[..., rank1_idx]
+        rankers[f"{key}.rank1"] = lambda x, rank1_idx=ranking[0].item(): x[
+            ..., rank1_idx
+        ]
     return rankers
 
 
@@ -108,13 +108,18 @@ class LDDTMetrics(nn.Module):
         }
         sample_aggregators = {**basic_sample_aggregators, **aggregators}
 
-        return {agg_name: agg_func(vals) for agg_name, agg_func in sample_aggregators.items()}
+        return {
+            agg_name: agg_func(vals)
+            for agg_name, agg_func in sample_aggregators.items()
+        }
 
     def aggregate_lddt(self, lddt_dict):
         complex_lddt = self.aggregate(lddt_dict["complex"])
 
         # Log metrics
-        complex_lddt = {f"lddt/complex/{name}": value for name, value in complex_lddt.items()}
+        complex_lddt = {
+            f"lddt/complex/{name}": value for name, value in complex_lddt.items()
+        }
         return complex_lddt, {}
 
 
@@ -126,7 +131,9 @@ class LDDT(nn.Module):
         self.eps = eps
 
     def _chunk_base_forward(self, pred_distance, true_distance) -> torch.Tensor:
-        distance_error_l1 = torch.abs(pred_distance - true_distance)  # [N_sample, N_pair_sparse]
+        distance_error_l1 = torch.abs(
+            pred_distance - true_distance
+        )  # [N_sample, N_pair_sparse]
         thresholds = [0.5, 1, 2, 4]
         sparse_pair_lddt = (
             torch.stack([distance_error_l1 < t for t in thresholds], dim=-1)
@@ -163,10 +170,18 @@ class LDDT(nn.Module):
             return lddt
 
     def _calc_sparse_dist(self, pred_coordinate, true_coordinate, l_index, m_index):
-        pred_coords_l = pred_coordinate.index_select(-2, l_index)  # [N_sample, N_atom_sparse_l, 3]
-        pred_coords_m = pred_coordinate.index_select(-2, m_index)  # [N_sample, N_atom_sparse_m, 3]
-        true_coords_l = true_coordinate.index_select(-2, l_index)  # [N_atom_sparse_l, 3]
-        true_coords_m = true_coordinate.index_select(-2, m_index)  # [N_atom_sparse_m, 3]
+        pred_coords_l = pred_coordinate.index_select(
+            -2, l_index
+        )  # [N_sample, N_atom_sparse_l, 3]
+        pred_coords_m = pred_coordinate.index_select(
+            -2, m_index
+        )  # [N_sample, N_atom_sparse_m, 3]
+        true_coords_l = true_coordinate.index_select(
+            -2, l_index
+        )  # [N_atom_sparse_l, 3]
+        true_coords_m = true_coordinate.index_select(
+            -2, m_index
+        )  # [N_atom_sparse_m, 3]
 
         pred_distance_sparse_lm = torch.norm(
             pred_coords_l - pred_coords_m, p=2, dim=-1
@@ -220,7 +235,9 @@ class LDDT(nn.Module):
         threshold: float = 15.0,
     ):
         # Distance mask
-        distance_mask = true_coordinate_mask[..., None] * true_coordinate_mask[..., None, :]
+        distance_mask = (
+            true_coordinate_mask[..., None] * true_coordinate_mask[..., None, :]
+        )
         # Distances for all atom pairs
         # Note: we convert to bf16 for saving cuda memory, if performance drops, do not convert it
         distance = (torch.cdist(true_coordinate, true_coordinate) * distance_mask).to(
@@ -237,7 +254,9 @@ class LDDT(nn.Module):
             )
 
         # Zero-out diagonals of c_lm and cast to float
-        c_lm = c_lm * (1 - torch.eye(n=c_lm.size(-1), device=c_lm.device, dtype=distance.dtype))
+        c_lm = c_lm * (
+            1 - torch.eye(n=c_lm.size(-1), device=c_lm.device, dtype=distance.dtype)
+        )
         # Zero-out atom pairs without true coordinates
         c_lm = c_lm * distance_mask  # [..., N_atom, N_atom]
         return c_lm

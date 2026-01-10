@@ -168,19 +168,25 @@ model_configs = {
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
-        "N_sample": 5,  # changed from 1, BATCH SIZE AT SAMPLING
+        "N_sample": 10,  # changed from 1, BATCH SIZE AT SAMPLING
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type": "non_singular",
-        "alpha": 0.3,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha": 0.7,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
         "sigma_coord": GlobalConfigValue("sigma_coord"),
         "second_order": False,
-        "guidance_weight": 1.0,
-        "lower_guidance_limit": 0.3,
+        "cfg_type": "no-guidance",
+        "cfg_weight": 1.0,
+        "lower_guidance_limit": 0.0,
         "upper_guidance_limit": 1.0,
+        "lower_guidance_limit_weight": 3.0,
+        "upper_guidance_limit_weight": 3.0,
         "beta_mean": 0.5,
         "beta_std": 0.233,
+        "track_trajectory": True,
+        "trajectory_step_stride": 10,
+        "centre_and_augment_coords_during_sampling": True,
     },
     "model": {
         "N_model_seed": 1,  # for inference
@@ -237,7 +243,7 @@ model_configs = {
                 "num_heads": 4,
             },
             "transformer": {
-                "num_blocks": 10,
+                "num_blocks": 16,
                 "num_heads": 16,
             },
             "atom_decoder": {
@@ -258,12 +264,12 @@ model_configs = {
         },
         "sample_diffusion": {
             "local_sigma_coord": 1.0,
-            "alpha": 1.0,
-            "stoch_type": "deterministic",
+            "alpha": 0.0,
+            "stoch_type": "non_singular",
             "gamma": 1.0,
             "sigma_coord": 1.0,
-            "N_sample": 10,
-            "N_step": 10,
+            "N_sample": 20,
+            "N_step": 200,
             "eps": 1e-5,
         },
     },

@@ -42,6 +42,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.structure_io import (
     save_model_output_to_cif,
     save_model_output_to_fasta,
+    save_trajectory_to_pdb,
 )
 
 logger = logging.getLogger(__name__)
@@ -230,6 +231,15 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                             pdb_id=sample_name,
                             field_in_b_factor_col="is_motif",
                         )
+                        if output.trajectory is not None:
+                            _ = save_trajectory_to_pdb(
+                                output_dir_list=runner.dump_dir_list,
+                                output=output,
+                                model_type=model_type,
+                                atom_array=context.basic.atom_array,
+                                n_atom=n_atom,
+                                step_stride=configs.sample_diffusion.trajectory_step_stride,  # TODO: make configurable!
+                            )
                         parent_dir = os.path.dirname(runner.dump_dir)
                         mapping_path = opjoin(
                             parent_dir, f"{sample_name}_motif_mapping.json"

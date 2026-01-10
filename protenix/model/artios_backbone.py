@@ -8,6 +8,7 @@ from protenix.data.features import FullContext
 from protenix.model.generator import (
     LaProteinaCoordScheduler,
     ProteinaCoordSampler,
+    cfg_schedule_from_config,
     stochasticity_from_config,
 )
 from protenix.model.modules.diffusion_backbone import DiffusionModule
@@ -58,7 +59,16 @@ class ArtiosBackbone(nn.Module):
             alpha=self.sampling_configs.alpha,
         )
 
-        pred = self.diffusion_module.sample(
+        cfg_schedule = cfg_schedule_from_config(
+            cfg_type=self.sampling_configs.cfg_type,
+            weight=self.sampling_configs.cfg_weight,
+            lower_guidance_limit_weight=self.sampling_configs.lower_guidance_limit_weight,
+            upper_guidance_limit_weight=self.sampling_configs.upper_guidance_limit_weight,
+            lower_guidance_limit=self.sampling_configs.lower_guidance_limit,
+            upper_guidance_limit=self.sampling_configs.upper_guidance_limit,
+        )
+
+        result = self.diffusion_module.sample(
             context=context,
             timestep_scheduler=self.inference_timestep_scheduler,
             n_steps=N_step,
@@ -67,9 +77,12 @@ class ArtiosBackbone(nn.Module):
             n_sample=N_sample,
             second_order=self.sampling_configs.second_order,
             inplace_safe=inplace_safe,
+            cfg_schedule=cfg_schedule,
+            centre_coords=self.sampling_configs.centre_and_augment_coords_during_sampling,
+            track_trajectory=self.sampling_configs.track_trajectory,
         )
 
-        return ModelOutput(coordinate=pred)
+        return ModelOutput(coordinate=result.final, trajectory=result.trajectory)
 
     def main_train_loop(
         self,

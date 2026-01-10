@@ -422,6 +422,133 @@ def stochasticity_from_config(
 
 
 # =============================================================================
+# Classifier-Free Guidance Schedules
+# =============================================================================
+#
+# These define w(t) for CFG: v_cfg = v_uncond + w(t) * (v_cond - v_uncond)
+# When w(t) = 1, no guidance is applied. When w(t) > 1, conditioning is amplified.
+
+
+class CFGSchedule(ABC):
+    """Abstract base class for classifier-free guidance schedules.
+
+    Defines w(t) in: v_cfg = v_uncond + w(t) * (v_cond - v_uncond)
+    """
+
+    @abstractmethod
+    @typecheck
+    def __call__(self, t: Float[Tensor, "*shape"]) -> Float[Tensor, "*shape"]:
+        """Compute guidance scale w(t) at timestep t.
+
+        Args:
+            t: Timesteps tensor of any shape (values in [0, 1]).
+
+        Returns:
+            w(t) values with same shape as input.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class NoCFG(CFGSchedule):
+    """No classifier-free guidance: w(t) = 1.0 for all t.
+
+    This explicitly signals that CFG should be skipped entirely for efficiency.
+    When used, the unconditional predictor is never created or called.
+    """
+
+    @typecheck
+    def __call__(self, t: Float[Tensor, "*shape"]) -> Float[Tensor, "*shape"]:
+        return torch.ones_like(t)
+
+
+@dataclass(frozen=True)
+class ConstantCFG(CFGSchedule):
+    """Constant guidance weight: w(t) = weight for all t."""
+
+    weight: float = 1.5
+
+    @typecheck
+    def __call__(self, t: Float[Tensor, "*shape"]) -> Float[Tensor, "*shape"]:
+        return torch.full_like(t, self.weight)
+
+
+@dataclass(frozen=True)
+class LinearCFG(CFGSchedule):
+    """
+    Linear guidance weight schedule, optionally within a [lower_guidance_limit, upper_guidance_limit] window.
+
+    Guidance is set to 1.0 outside [lower_guidance_limit, upper_guidance_limit], otherwise is
+    linearly interpolated from `lower_guidance_limit_weight` at `lower_guidance_limit`
+    to `upper_guidance_limit_weight` at `upper_guidance_limit`.
+    """
+
+    lower_guidance_limit_weight: float = 2.0
+    upper_guidance_limit_weight: float = 1.0
+    lower_guidance_limit: float = 0.3
+    upper_guidance_limit: float = 0.7
+
+    @typecheck
+    def __call__(self, t: Float[Tensor, "*shape"]) -> Float[Tensor, "*shape"]:
+        one = torch.ones_like(t)
+        mask = (t >= self.lower_guidance_limit) & (t <= self.upper_guidance_limit)
+
+        # Linear interpolation for t in [lower_guidance_limit, upper_guidance_limit]
+        denom = self.upper_guidance_limit - self.lower_guidance_limit
+        delta = (t - self.lower_guidance_limit) / denom
+        interp = (
+            self.lower_guidance_limit_weight
+            + (self.upper_guidance_limit_weight - self.lower_guidance_limit_weight)
+            * delta
+        )
+
+        # Apply piecewise: guidance weight = interp if mask else 1.0
+        return torch.where(mask, interp, one)
+
+
+def cfg_schedule_from_config(
+    cfg_type: str,
+    weight: float = 1.5,
+    lower_guidance_limit_weight: float = 2.0,
+    upper_guidance_limit_weight: float = 1.0,
+    lower_guidance_limit: float = 0.3,
+    upper_guidance_limit: float = 0.7,
+) -> CFGSchedule:
+    """Create a CFGSchedule from config parameters.
+
+    Args:
+        cfg_type: One of "no-guidance", "constant", "linear".
+        weight: Weight for ConstantCFG.
+        lower_guidance_limit_weight: Weight for lower guidance limit.
+        upper_guidance_limit_weight: Weight for upper guidance limit.
+        lower_guidance_limit: Lower guidance limit.
+        upper_guidance_limit: Upper guidance limit.
+
+    Returns:
+        Configured CFGSchedule instance.
+
+    Raises:
+        ValueError: If cfg_type is not recognized.
+    """
+    schedules: dict[str, CFGSchedule] = {
+        "no-guidance": NoCFG(),
+        "constant": ConstantCFG(weight=weight),
+        "linear": LinearCFG(
+            lower_guidance_limit_weight=lower_guidance_limit_weight,
+            upper_guidance_limit_weight=upper_guidance_limit_weight,
+            lower_guidance_limit=lower_guidance_limit,
+            upper_guidance_limit=upper_guidance_limit,
+        ),
+    }
+    if cfg_type not in schedules:
+        valid_types = ", ".join(schedules.keys())
+        raise ValueError(
+            f"Invalid CFG schedule type: {cfg_type}. Must be one of: {valid_types}"
+        )
+    return schedules[cfg_type]
+
+
+# =============================================================================
 # Atomic Integration Primitives
 # =============================================================================
 
@@ -549,6 +676,83 @@ class VelocityScorePredictor(Protocol):
 
 
 @dataclass(frozen=True)
+class CFGPredictor:
+    """Classifier-Free Guidance predictor combining conditional and unconditional.
+
+    Wraps two predictors and returns CFG-weighted combination of their outputs.
+    The guidance scale can vary over timesteps via a CFGSchedule.
+
+    The CFG formula is:
+        v_cfg = v_uncond + w(t) * (v_cond - v_uncond)
+              = (1 - w(t)) * v_uncond + w(t) * v_cond
+
+    When w(t) = 1, this reduces to the conditional predictor (no guidance).
+    When w(t) > 1, conditioning is amplified beyond the conditional prediction.
+
+    Example:
+        >>> cond_predictor = model.as_predictor(context)
+        >>> uncond_predictor = model.as_predictor(context.to_unconditional())
+        >>> cfg_predictor = CFGPredictor(cond_predictor, uncond_predictor, ConstantCFG(1.5))
+        >>> sampler.sample(cfg_predictor, x_init, n_steps=50)
+    """
+
+    cond_predictor: VelocityScorePredictor
+    """Predictor conditioned on motif/ligand features."""
+
+    uncond_predictor: VelocityScorePredictor
+    """Predictor with conditioning features zeroed."""
+
+    guidance_schedule: CFGSchedule
+    """Schedule defining w(t) over diffusion time."""
+
+    @typecheck
+    def __call__(
+        self,
+        x_noisy: Float[Tensor, "*batch n_atom 3"],
+        timestep: Float[Tensor, "*batch"],
+    ) -> tuple[Float[Tensor, "*batch n_atom 3"], Float[Tensor, "*batch n_atom 3"]]:
+        """Compute CFG-weighted velocity and score.
+
+        Args:
+            x_noisy: Noisy coordinates.
+            timestep: Current diffusion timestep.
+
+        Returns:
+            Tuple of (velocity_cfg, score_cfg) tensors.
+        """
+        w = self.guidance_schedule(timestep)
+        v_cond, s_cond = self.cond_predictor(x_noisy, timestep)
+
+        # Skip unconditional pass if no guidance required
+        if torch.all(w == 1.0):
+            return v_cond, s_cond
+
+        v_uncond, s_uncond = self.uncond_predictor(x_noisy, timestep)
+
+        w = w[..., None, None]
+
+        v_cfg = v_uncond + w * (v_cond - v_uncond)
+        s_cfg = s_uncond + w * (s_cond - s_uncond)
+
+        return v_cfg, s_cfg
+
+
+@dataclass
+class SamplingResult:
+    """Result of flow matching sampling, optionally including trajectory.
+
+    Attributes:
+        final: Final denoised coordinates after all integration steps.
+        trajectory: Optional trajectory of coordinates at each step.
+            Shape [..., n_steps+1, n_atom, 3] where index 0 is initial noise
+            and index -1 is final sample. None if save_trajectory=False.
+    """
+
+    final: Float[Tensor, "... n_atom 3"]
+    trajectory: Float[Tensor, "... n_steps_plus_one n_atom 3"] | None = None
+
+
+@dataclass(frozen=True)
 class FlowMatchingSampler:
     """Configurable sampler for flow matching SDEs."""
 
@@ -574,7 +778,8 @@ class FlowMatchingSampler:
         x_init: Float[Tensor, "... n_atom 3"],
         n_steps: int,
         mask: Bool[Tensor, "... n_atom"] | None = None,
-    ) -> Float[Tensor, "... n_atom 3"]:
+        track_trajectory: bool = False,
+    ) -> SamplingResult:
         """Sample from the flow matching SDE.
 
         Args:
@@ -582,9 +787,10 @@ class FlowMatchingSampler:
             x_init: Initial noisy coordinates (typically Gaussian noise scaled by sigma).
             n_steps: Number of integration steps.
             mask: Optional atom mask for coordinate centering.
+            track_trajectory: If True, store coordinates at each step. Memory-intensive.
 
         Returns:
-            Final denoised coordinates.
+            SamplingResult containing final coordinates and optional trajectory.
         """
         device = x_init.device
         dtype = x_init.dtype
@@ -596,7 +802,15 @@ class FlowMatchingSampler:
         g_values = self.stochasticity(timesteps)
         is_deterministic = isinstance(self.stochasticity, Deterministic)
 
-        # Initialize
+        # Initialize trajectory storage if requested
+        # Shape: [..., n_steps+1, n_atom, 3]
+        if track_trajectory:
+            traj_shape = (*x_init.shape[:-2], n_steps + 1, *x_init.shape[-2:])
+            trajectory = torch.zeros(traj_shape, dtype=dtype, device=device)
+            trajectory[..., 0, :, :] = x_init.detach()
+        else:
+            trajectory = None
+
         x = x_init
 
         for i, (t_cur, t_next) in enumerate(zip(timesteps[:-1], timesteps[1:])):
@@ -656,4 +870,8 @@ class FlowMatchingSampler:
                     noise=noise,
                 )
 
-        return x
+            # Store trajectory if requested
+            if track_trajectory:
+                trajectory[..., i + 1, :, :] = x.detach()
+
+        return SamplingResult(final=x, trajectory=trajectory)

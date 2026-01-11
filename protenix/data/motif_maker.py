@@ -207,9 +207,8 @@ class MotifMaker:
 
             if len(graph_nodes) == 0:
                 logger.warning("No nodes in ligand graph. Returning empty motif mask.")
-                logger.info(
-                    "Number of ligand atoms invovled in this empty graph: ",
-                    len(ligand_array),
+                logger.warning(
+                    f"Number of ligand atoms invovled in this empty graph: {len(ligand_array)}"
                 )
                 return is_motif
 

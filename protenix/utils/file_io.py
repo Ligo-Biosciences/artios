@@ -137,7 +137,7 @@ def dump_atomarray_to_npz(atom_array: AtomArray, npz_path: Union[str, Path]) -> 
     for category in atom_array.get_annotation_categories():
         atom_array_dict[category] = atom_array.get_annotation(category)
 
-    np.savez(npz_path, **atom_array_dict)
+    np.savez_compressed(npz_path, **atom_array_dict)
 
 
 def load_atomarray_from_npz(npz_path: Union[str, Path]) -> AtomArray:

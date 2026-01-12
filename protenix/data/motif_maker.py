@@ -60,18 +60,18 @@ class MotifMaker:
         motif_train_rate: float = 0.0,
         complex_ligand_threshold: int = 5,
         complex_ligand_preference_prob: float = 0.9,
-        ligand_region_count_probs: dict[str, float] = {
-            "1": 0.5,
-            "2": 0.4,
-            "3": 0.07,
-            "4": 0.03,
+        ligand_region_count_probs: dict[int, float] = {
+            1: 0.5,
+            2: 0.4,
+            3: 0.07,
+            4: 0.03,
         },
-        ligand_bfs_atom_count_probs: dict[str, float] = {
-            "1": 0.15,
-            "2": 0.25,
-            "3": 0.3,
-            "4": 0.2,
-            "5": 0.1,
+        ligand_bfs_atom_count_probs: dict[int, float] = {
+            1: 0.15,
+            2: 0.25,
+            3: 0.3,
+            4: 0.2,
+            5: 0.1,
         },
         ligand_fixed_size_bfs_prob: float = 0.9,
         supplementary_ligand_distance: float = 5.0,
@@ -101,10 +101,10 @@ class MotifMaker:
                 Ligands with fewer atoms are considered "simple" (e.g., metal ions, small molecules).
             complex_ligand_preference_prob (float): Probability of selecting from complex ligands
                 (if any exist) rather than sampling uniformly from all ligands.
-            ligand_region_count_probs (dict[str, float]): Mapping from number of regions (as string)
-                to probability. Defaults to {"1": 0.5, "2": 0.4, "3": 0.07, "4": 0.03}.
-            ligand_bfs_atom_count_probs (dict[str, float]): Mapping from number of atoms per BFS
-                region (as string) to probability. Defaults to {"1": 0.15, ..., "5": 0.1}.
+            ligand_region_count_probs (dict[int, float]): Mapping from number of regions to
+                probability. Defaults to {1: 0.5, 2: 0.4, 3: 0.07, 4: 0.03}.
+            ligand_bfs_atom_count_probs (dict[int, float]): Mapping from number of atoms per
+                BFS region to probability. Defaults to {1: 0.15, 2: 0.25, 3: 0.3, 4: 0.2, 5: 0.1}.
             ligand_fixed_size_bfs_prob (float): Probability of using fixed-size BFS (sampling from
                 ligand_bfs_atom_count_probs) vs proportion-based BFS. Defaults to 0.9.
             supplementary_ligand_distance (float): Maximum distance (in Angstroms) from seed point
@@ -220,7 +220,7 @@ class MotifMaker:
             int: Number of atoms to collect via BFS.
         """
         if np.random.rand() < self.ligand_fixed_size_bfs_prob:
-            atom_counts = [int(k) for k in self.ligand_bfs_atom_count_probs.keys()]
+            atom_counts = list(self.ligand_bfs_atom_count_probs.keys())
             atom_probs = list(self.ligand_bfs_atom_count_probs.values())
             return int(np.random.choice(atom_counts, p=atom_probs))
         else:
@@ -398,9 +398,9 @@ class MotifMaker:
                 return is_motif
 
             # Sample number of regions
-            region_counts = [int(k) for k in self.ligand_region_count_probs.keys()]
+            region_counts = list(self.ligand_region_count_probs.keys())
             region_probs = list(self.ligand_region_count_probs.values())
-            num_regions = int(np.random.choice(region_counts, p=region_probs))
+            num_regions = np.random.choice(region_counts, p=region_probs)
 
             # Select non-adjacent seed atoms
             seed_atoms = select_non_adjacent_seeds(

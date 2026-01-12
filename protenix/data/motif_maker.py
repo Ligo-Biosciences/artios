@@ -59,6 +59,9 @@ class MotifMaker:
         motif_train_rate: float = 0.0,
         complex_ligand_threshold: int = 5,
         complex_ligand_preference_prob: float = 0.9,
+        ligand_region_count_probs: list[float] = [0.5, 0.4, 0.07, 0.03],
+        ligand_bfs_atom_count_probs: list[float] = [0.15, 0.25, 0.3, 0.2, 0.1],
+        ligand_fixed_size_bfs_prob: float = 0.9,
         **kwargs,
     ):
         """
@@ -82,6 +85,12 @@ class MotifMaker:
                 Ligands with fewer atoms are considered "simple" (e.g., metal ions, small molecules).
             complex_ligand_preference_prob (float): Probability of selecting from complex ligands
                 (if any exist) rather than sampling uniformly from all ligands.
+            ligand_region_count_probs (list[float]): Probabilities for sampling [1, 2, 3, 4]
+                non-contiguous regions in the ligand motif. Defaults to [0.4, 0.3, 0.2, 0.1].
+            ligand_bfs_atom_count_probs (list[float]): Probabilities for sampling [1, 2, 3, 4, 5]
+                atoms per BFS region. Defaults to [0.15, 0.25, 0.3, 0.2, 0.1].
+            ligand_fixed_size_bfs_prob (float): Probability of using fixed-size BFS (sampling from
+                ligand_bfs_atom_count_probs) vs proportion-based BFS. Defaults to 0.9.
         """
         self.ligand_motif_prob = ligand_motif_prob
         self.pocket_motif_prob = pocket_motif_prob
@@ -99,6 +108,9 @@ class MotifMaker:
         self.max_motif_residues = max_motif_residues
         self.complex_ligand_threshold = complex_ligand_threshold
         self.complex_ligand_preference_prob = complex_ligand_preference_prob
+        self.ligand_region_count_probs = ligand_region_count_probs
+        self.ligand_bfs_atom_count_probs = ligand_bfs_atom_count_probs
+        self.ligand_fixed_size_bfs_prob = ligand_fixed_size_bfs_prob
 
     def make_motif(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -180,6 +192,11 @@ class MotifMaker:
         2. With probability complex_ligand_preference_prob, sample from complex pool
         3. Otherwise sample uniformly from all ligands
 
+        For partial ligand motifs, supports multiple non-contiguous regions:
+        - Number of regions sampled from ligand_region_count_probs (1-4 regions)
+        - Each region's size sampled from ligand_bfs_atom_count_probs (1-5 atoms)
+        - Seed atoms for regions are non-adjacent (graph distance >= 2)
+
         Args:
             atom_array (AtomArray): Input Biotite AtomArray
 
@@ -228,7 +245,7 @@ class MotifMaker:
             is_motif[surrounding_mask > 0] = 1
 
         else:
-            # Add partial ligand to motif
+            # Add partial ligand to motif with potentially multiple non-contiguous regions
             ligand_array = atom_array[ligand_atom_mask]
             ligand_graph = ligand_array.bonds.as_graph()
             graph_nodes = list(ligand_graph.nodes())
@@ -236,22 +253,44 @@ class MotifMaker:
             if len(graph_nodes) == 0:
                 logger.warning("No nodes in ligand graph. Returning empty motif mask.")
                 logger.warning(
-                    f"Number of ligand atoms invovled in this empty graph: {len(ligand_array)}"
+                    f"Number of ligand atoms involved in this empty graph: {len(ligand_array)}"
                 )
                 return is_motif
 
-            seed_ligand = np.random.choice(graph_nodes)
-            ligand_proportion = np.random.rand()
-            num_lig_atoms_in_motif = max(1, int(ligand_proportion * len(ligand_graph)))
-
-            # Get nodes via BFS
-            nodes = bfs_nodes_by_count(
-                ligand_graph, seed_ligand, num_lig_atoms_in_motif
+            # Sample number of regions (1-4)
+            num_regions = np.random.choice(
+                [1, 2, 3, 4], p=self.ligand_region_count_probs
             )
+
+            # Select non-adjacent seed atoms
+            seed_atoms = select_non_adjacent_seeds(
+                ligand_graph, graph_nodes, num_regions
+            )
+
+            # Collect all motif nodes from all regions
+            all_motif_nodes: list[int] = []
+            for seed_atom in seed_atoms:
+                # Decide BFS size for this region
+                if np.random.rand() < self.ligand_fixed_size_bfs_prob:
+                    # Fixed-size BFS: sample from 1-5 atoms
+                    num_atoms = np.random.choice(
+                        [1, 2, 3, 4, 5], p=self.ligand_bfs_atom_count_probs
+                    )
+                else:
+                    # Proportion-based BFS (legacy behavior)
+                    ligand_proportion = np.random.rand()
+                    num_atoms = max(1, int(ligand_proportion * len(ligand_graph)))
+
+                # Get nodes via BFS
+                nodes = bfs_nodes_by_count(ligand_graph, seed_atom, num_atoms)
+                all_motif_nodes.extend(nodes)
+
+            # Remove duplicates (in case of overlapping regions)
+            all_motif_nodes = list(set(all_motif_nodes))
 
             # Mark these ligand atoms as motif
             full_ligand_indices = np.where(ligand_atom_mask)[0]
-            partial_ligand_indices = full_ligand_indices[nodes]
+            partial_ligand_indices = full_ligand_indices[all_motif_nodes]
             is_motif[partial_ligand_indices] = 1
 
             # Get seed point from partial ligand
@@ -584,3 +623,36 @@ def bfs_nodes_by_count(G: nx.Graph, source: Any, target_count: int) -> list[Any]
         visited.append(v)
 
     return visited
+
+
+def select_non_adjacent_seeds(
+    graph: nx.Graph,
+    graph_nodes: list[Any],
+    num_seeds: int,
+) -> list[Any]:
+    """
+    Select seed atoms from a graph ensuring they are non-adjacent (graph distance >= 2).
+
+    Args:
+        graph (nx.Graph): The molecular graph.
+        graph_nodes (list[Any]): List of all nodes in the graph.
+        num_seeds (int): Desired number of seed atoms to select.
+
+    Returns:
+        list[Any]: List of selected seed atom indices. May be fewer than num_seeds
+            if not enough non-adjacent nodes are available.
+    """
+    selected_seeds = []
+    available_nodes = set(graph_nodes)
+
+    for _ in range(num_seeds):
+        # Pick a random seed from available nodes
+        seed = np.random.choice(list(available_nodes))
+        selected_seeds.append(seed)
+
+        # Remove the seed and all its neighbors from available nodes
+        # This ensures the next seed has graph distance >= 2 from this one
+        nodes_to_remove = {seed} | set(graph.neighbors(seed))
+        available_nodes -= nodes_to_remove
+
+    return selected_seeds

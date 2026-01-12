@@ -45,6 +45,7 @@ class MotifMaker:
         ligand_motif_prob: float = 0.8,
         pocket_motif_prob: float = 0.8,
         whole_ligand_prob: float = 0.7,
+        drop_ligand_motif_prob: float = 0.1,
         whole_sidechain_prob: float = 0.2,
         pocket_score_threshold: float = 0.18,
         pocket_n_neighbours: int = 25,
@@ -59,9 +60,22 @@ class MotifMaker:
         motif_train_rate: float = 0.0,
         complex_ligand_threshold: int = 5,
         complex_ligand_preference_prob: float = 0.9,
-        ligand_region_count_probs: list[float] = [0.5, 0.4, 0.07, 0.03],
-        ligand_bfs_atom_count_probs: list[float] = [0.15, 0.25, 0.3, 0.2, 0.1],
+        ligand_region_count_probs: dict[int, float] = {
+            1: 0.5,
+            2: 0.4,
+            3: 0.07,
+            4: 0.03,
+        },
+        ligand_bfs_atom_count_probs: dict[int, float] = {
+            1: 0.15,
+            2: 0.25,
+            3: 0.3,
+            4: 0.2,
+            5: 0.1,
+        },
         ligand_fixed_size_bfs_prob: float = 0.9,
+        supplementary_ligand_distance: float = 5.0,
+        supplementary_ligand_prob: float = 0.5,
         **kwargs,
     ):
         """
@@ -69,6 +83,8 @@ class MotifMaker:
             ligand_motif_prob (float): Probability _generate_ligand_motif_mask is used for ligand complexes.
             pocket_motif_prob (float): Probability _generate_pocket_motif_mask is used for complexes with a pocket.
             whole_ligand_prob (float): Probability the whole ligand is used in the motif.
+            drop_ligand_motif_prob (float): Probability of not including ligand atoms in the motif generated
+                around the ligand.
             whole_sidechain_prob (float): Probability the whole sidechain is included vs partial.
             pocket_score_threshold (float): Threshold for pocket score to identify seed atoms.
             pocket_n_neighbours (int): Number of neighbours for pocket score calculation.
@@ -85,16 +101,21 @@ class MotifMaker:
                 Ligands with fewer atoms are considered "simple" (e.g., metal ions, small molecules).
             complex_ligand_preference_prob (float): Probability of selecting from complex ligands
                 (if any exist) rather than sampling uniformly from all ligands.
-            ligand_region_count_probs (list[float]): Probabilities for sampling [1, 2, 3, 4]
-                non-contiguous regions in the ligand motif. Defaults to [0.4, 0.3, 0.2, 0.1].
-            ligand_bfs_atom_count_probs (list[float]): Probabilities for sampling [1, 2, 3, 4, 5]
-                atoms per BFS region. Defaults to [0.15, 0.25, 0.3, 0.2, 0.1].
+            ligand_region_count_probs (dict[int, float]): Mapping from number of regions to
+                probability. Defaults to {1: 0.5, 2: 0.4, 3: 0.07, 4: 0.03}.
+            ligand_bfs_atom_count_probs (dict[int, float]): Mapping from number of atoms per
+                BFS region to probability. Defaults to {1: 0.15, 2: 0.25, 3: 0.3, 4: 0.2, 5: 0.1}.
             ligand_fixed_size_bfs_prob (float): Probability of using fixed-size BFS (sampling from
                 ligand_bfs_atom_count_probs) vs proportion-based BFS. Defaults to 0.9.
+            supplementary_ligand_distance (float): Maximum distance (in Angstroms) from seed point
+                to consider nearby ligand atoms for supplementary ligand inclusion. Defaults to 5.0.
+            supplementary_ligand_prob (float): Probability of including each detected nearby ligand
+                chain as a supplementary ligand in the motif. Defaults to 0.5.
         """
         self.ligand_motif_prob = ligand_motif_prob
         self.pocket_motif_prob = pocket_motif_prob
         self.whole_ligand_prob = whole_ligand_prob
+        self.drop_ligand_motif_prob = drop_ligand_motif_prob
         self.whole_sidechain_prob = whole_sidechain_prob
         self.pocket_score_threshold = pocket_score_threshold
         self.pocket_n_neighbours = pocket_n_neighbours
@@ -111,6 +132,8 @@ class MotifMaker:
         self.ligand_region_count_probs = ligand_region_count_probs
         self.ligand_bfs_atom_count_probs = ligand_bfs_atom_count_probs
         self.ligand_fixed_size_bfs_prob = ligand_fixed_size_bfs_prob
+        self.supplementary_ligand_distance = supplementary_ligand_distance
+        self.supplementary_ligand_prob = supplementary_ligand_prob
 
     def make_motif(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -183,6 +206,113 @@ class MotifMaker:
 
         return is_motif_related
 
+    def _sample_bfs_atom_count(self, ligand_graph_size: int) -> int:
+        """
+        Sample the number of atoms to collect via BFS for a ligand region.
+
+        With probability ligand_fixed_size_bfs_prob, samples from ligand_bfs_atom_count_probs.
+        Otherwise, uses proportion-based sampling.
+
+        Args:
+            ligand_graph_size (int): Number of nodes in the ligand graph.
+
+        Returns:
+            int: Number of atoms to collect via BFS.
+        """
+        if np.random.rand() < self.ligand_fixed_size_bfs_prob:
+            atom_counts = list(self.ligand_bfs_atom_count_probs.keys())
+            atom_probs = list(self.ligand_bfs_atom_count_probs.values())
+            return int(np.random.choice(atom_counts, p=atom_probs))
+        else:
+            ligand_proportion = np.random.rand()
+            return max(1, int(ligand_proportion * ligand_graph_size))
+
+    def _add_supplementary_ligands(
+        self,
+        atom_array: AtomArray,
+        seed_coord: np.ndarray,
+        is_motif: np.ndarray,
+        exclude_asym_id: str,
+    ) -> np.ndarray:
+        """
+        Find and add supplementary ligands near the seed point to the motif.
+
+        For each ligand chain (other than exclude_asym_id) with atoms within
+        supplementary_ligand_distance of seed_coord, with probability supplementary_ligand_prob,
+        performs a BFS from the closest atom and adds those atoms to the motif.
+
+        Args:
+            atom_array (AtomArray): Full atom array.
+            seed_coord (np.ndarray): Coordinates of the seed point.
+            is_motif (np.ndarray): Current motif mask to update.
+            exclude_asym_id (str): The main ligand's asym_id to exclude from consideration.
+
+        Returns:
+            np.ndarray: Updated motif mask with supplementary ligand atoms added.
+        """
+        # Find all ligand atoms (excluding the main ligand)
+        ligand_mask = atom_array.chain_mol_type == "ligand"
+        other_ligand_mask = ligand_mask & (atom_array.label_asym_id != exclude_asym_id)
+
+        if not other_ligand_mask.any():
+            return is_motif
+
+        # Calculate distances from seed point to all other ligand atoms
+        other_ligand_indices = np.where(other_ligand_mask)[0]
+        other_ligand_coords = atom_array.coord[other_ligand_indices]
+        distances = np.linalg.norm(other_ligand_coords - seed_coord, axis=-1)
+
+        # Find atoms within distance threshold
+        within_distance_mask = distances <= self.supplementary_ligand_distance
+        if not within_distance_mask.any():
+            return is_motif
+
+        # Get unique ligand chains that have atoms within distance
+        nearby_indices = other_ligand_indices[within_distance_mask]
+        nearby_distances = distances[within_distance_mask]
+        nearby_asym_ids = atom_array.label_asym_id[nearby_indices]
+        unique_nearby_asym_ids = np.unique(nearby_asym_ids)
+
+        # Process each nearby ligand chain independently
+        for asym_id in unique_nearby_asym_ids:
+            if np.random.rand() >= self.supplementary_ligand_prob:
+                continue
+
+            # Find the closest atom from this chain
+            chain_mask_in_nearby = nearby_asym_ids == asym_id
+            chain_distances = nearby_distances[chain_mask_in_nearby]
+            chain_indices = nearby_indices[chain_mask_in_nearby]
+            closest_idx = chain_indices[np.argmin(chain_distances)]
+
+            # Get the full ligand chain for BFS
+            full_chain_mask = (atom_array.label_asym_id == asym_id) & ligand_mask
+            chain_array = atom_array[full_chain_mask]
+            chain_graph = chain_array.bonds.as_graph()
+            graph_nodes = list(chain_graph.nodes())
+
+            if full_chain_mask.sum() == 1 or len(graph_nodes) == 0:
+                is_motif[closest_idx] = 1
+                continue
+
+            # Find the local index of the closest atom in the chain
+            full_chain_indices = np.where(full_chain_mask)[0]
+            local_closest_idx = np.where(full_chain_indices == closest_idx)[0]
+            if len(local_closest_idx) == 0 or local_closest_idx[0] not in graph_nodes:
+                # Closest atom not in graph, pick a random node instead
+                seed_node = np.random.choice(graph_nodes)
+            else:
+                seed_node = local_closest_idx[0]
+
+            # Sample BFS size and perform BFS
+            num_atoms = self._sample_bfs_atom_count(len(chain_graph))
+            nodes = bfs_nodes_by_count(chain_graph, seed_node, num_atoms)
+
+            # Add to motif
+            selected_indices = full_chain_indices[nodes]
+            is_motif[selected_indices] = 1
+
+        return is_motif
+
     def _generate_ligand_motif_mask(self, atom_array: AtomArray) -> np.ndarray:
         """
         Generates a motif mask centered around a ligand.
@@ -230,8 +360,10 @@ class MotifMaker:
         ) & ligand_mask
 
         if np.random.rand() < self.whole_ligand_prob or ligand_atom_mask.sum() == 1:
-            # Add whole ligand to motif
-            is_motif[ligand_atom_mask] = 1
+            if np.random.rand() < self.drop_ligand_motif_prob:
+                is_motif[ligand_atom_mask] = 0
+            else:
+                is_motif[ligand_atom_mask] = 1
 
             # Get seed point from ligand
             ligand_atoms = atom_array[ligand_atom_mask]
@@ -243,6 +375,14 @@ class MotifMaker:
                 atom_array=atom_array,
             )
             is_motif[surrounding_mask > 0] = 1
+
+            # Add supplementary ligands near seed point
+            is_motif = self._add_supplementary_ligands(
+                atom_array, seed_coord, is_motif, ligand_motif_asym_id
+            )
+
+            if np.random.rand() < self.drop_ligand_motif_prob:
+                is_motif[ligand_atom_mask] = 0
 
         else:
             # Add partial ligand to motif with potentially multiple non-contiguous regions
@@ -257,10 +397,10 @@ class MotifMaker:
                 )
                 return is_motif
 
-            # Sample number of regions (1-4)
-            num_regions = np.random.choice(
-                [1, 2, 3, 4], p=self.ligand_region_count_probs
-            )
+            # Sample number of regions
+            region_counts = list(self.ligand_region_count_probs.keys())
+            region_probs = list(self.ligand_region_count_probs.values())
+            num_regions = np.random.choice(region_counts, p=region_probs)
 
             # Select non-adjacent seed atoms
             seed_atoms = select_non_adjacent_seeds(
@@ -270,18 +410,7 @@ class MotifMaker:
             # Collect all motif nodes from all regions
             all_motif_nodes: list[int] = []
             for seed_atom in seed_atoms:
-                # Decide BFS size for this region
-                if np.random.rand() < self.ligand_fixed_size_bfs_prob:
-                    # Fixed-size BFS: sample from 1-5 atoms
-                    num_atoms = np.random.choice(
-                        [1, 2, 3, 4, 5], p=self.ligand_bfs_atom_count_probs
-                    )
-                else:
-                    # Proportion-based BFS (legacy behavior)
-                    ligand_proportion = np.random.rand()
-                    num_atoms = max(1, int(ligand_proportion * len(ligand_graph)))
-
-                # Get nodes via BFS
+                num_atoms = self._sample_bfs_atom_count(len(ligand_graph))
                 nodes = bfs_nodes_by_count(ligand_graph, seed_atom, num_atoms)
                 all_motif_nodes.extend(nodes)
 
@@ -291,7 +420,10 @@ class MotifMaker:
             # Mark these ligand atoms as motif
             full_ligand_indices = np.where(ligand_atom_mask)[0]
             partial_ligand_indices = full_ligand_indices[all_motif_nodes]
-            is_motif[partial_ligand_indices] = 1
+            if np.random.rand() < self.drop_ligand_motif_prob:
+                is_motif[partial_ligand_indices] = 0
+            else:
+                is_motif[partial_ligand_indices] = 1
 
             # Get seed point from partial ligand
             partial_ligand_atoms = atom_array[partial_ligand_indices]
@@ -303,6 +435,11 @@ class MotifMaker:
                 atom_array=atom_array,
             )
             is_motif[surrounding_mask > 0] = 1
+
+            # Add supplementary ligands near seed point
+            is_motif = self._add_supplementary_ligands(
+                atom_array, seed_coord, is_motif, ligand_motif_asym_id
+            )
 
         return is_motif
 

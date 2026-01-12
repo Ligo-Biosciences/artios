@@ -263,7 +263,7 @@ class MPNNFeaturizer(nn.Module):
             [
                 rearrange(context.reference.ref_charge, "... n -> ... n 1").to(dtype),
                 rearrange(context.reference.ref_mask, "... n -> ... n 1").to(dtype),
-                context.reference.ref_element.to(dtype),
+                context.reference.ref_element.to(dtype),  # TODO: is this correct?
             ],
             dim=-1,
         )

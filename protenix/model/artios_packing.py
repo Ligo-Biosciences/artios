@@ -66,7 +66,7 @@ class ArtiosPacking(nn.Module):
         context: FullContext,
     ) -> ModelOutput:
         """
-        Main inference loop for ArtiosBackbone.
+        Main inference loop for ArtiosPacking.
 
         Returns:
             ModelOutput: Model output containing the prediction.

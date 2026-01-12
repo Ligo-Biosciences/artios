@@ -897,7 +897,11 @@ class BaseSingleDataset(Dataset):
         Returns:
             AtomArray: AtomArray with updated IDs for motif-related residues
         """
-        return AddAtomArrayAnnot.update_ids_to_unindex_motif_residues(atom_array)
+        # Discard the mapping for training - only needed for inference RMSD computation
+        atom_array, _ = AddAtomArrayAnnot.update_ids_to_unindex_motif_residues(
+            atom_array
+        )
+        return atom_array
 
     @staticmethod
     def _update_centre_atom_mask_to_include_motif(atom_array: AtomArray) -> AtomArray:

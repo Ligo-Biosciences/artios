@@ -29,8 +29,9 @@ from protenix.data.rdkit import is_valid_smiles, parse_smiles
 class TaskType(str, Enum):
     """Supported inference task types."""
 
-    MOTIF = "motif"
-    SEQUENCE = "sequence"
+    BACKBONE = "backbone"
+    SEQUENCE_DESIGN = "sequence_design"
+    PACKING = "packing"
 
 
 class InferenceInputDict(BaseModel):
@@ -41,7 +42,7 @@ class InferenceInputDict(BaseModel):
     Example:
         {
             "name": "carbonic-motif",
-            "task": "motif",
+            "task": "backbone",
             "spec": {
                 "design": [{"length": 256}],
                 "motif": {"cif_file": "motif.cif", "ligands": [...]}
@@ -54,14 +55,16 @@ class InferenceInputDict(BaseModel):
     spec: dict[str, Any] = Field(..., description="Task-specific input data")
 
 
-def parse_input_dict(input_dict: dict[str, Any]) -> MotifInput | SequenceDesignInput:
+def parse_input_dict(
+    input_dict: dict[str, Any],
+) -> BackboneInput | SequenceDesignInput | PackingInput:
     """Parse a single input dict from the inference dataset JSON.
 
     Args:
         input_dict: Dictionary containing 'name', 'task', and 'spec' keys
 
     Returns:
-        Parsed and validated XInput object (MotifInput or SequenceDesignInput)
+        Parsed and validated XInput object (BackboneInput or SequenceDesignInput or PackingInput)
 
     Raises:
         pydantic.ValidationError: If input_dict doesn't match expected structure
@@ -69,11 +72,11 @@ def parse_input_dict(input_dict: dict[str, Any]) -> MotifInput | SequenceDesignI
     """
     validated_input = InferenceInputDict(**input_dict)
 
-    # Add name to spec for downstream compatibility TODO: tidy plz
+    # Add name to spec
     spec_with_name = {"name": validated_input.name, **validated_input.spec}
 
     match validated_input.task:
-        case TaskType.MOTIF:
+        case TaskType.BACKBONE:
             # Convert string cif_file to CIFFile object format if needed
             motif_spec = spec_with_name.get("motif")
             if isinstance(motif_spec, dict) and "cif_file" in motif_spec:
@@ -81,9 +84,9 @@ def parse_input_dict(input_dict: dict[str, Any]) -> MotifInput | SequenceDesignI
                 if isinstance(cif_file_value, str):
                     motif_spec["cif_file"] = {"path": cif_file_value}
 
-            return MotifInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
+            return BackboneInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
 
-        case TaskType.SEQUENCE:
+        case TaskType.SEQUENCE_DESIGN:
             # Convert string cif_file to CIFFile object format if needed
             if "cif_file" in spec_with_name:
                 cif_file_value = spec_with_name["cif_file"]
@@ -93,6 +96,36 @@ def parse_input_dict(input_dict: dict[str, Any]) -> MotifInput | SequenceDesignI
             return SequenceDesignInput(
                 **spec_with_name
             )  # ty: ignore[invalid-argument-type]
+
+        case TaskType.PACKING:
+            # Conveert string cif_file to CIFFile object format if needed
+            if "cif_file" in spec_with_name:
+                cif_file_value = spec_with_name["cif_file"]
+                if isinstance(cif_file_value, str):
+                    spec_with_name["cif_file"] = {"path": cif_file_value}
+
+            # Convert string fasta_file to FastaFile object format if needed
+            if "fasta_file" in spec_with_name:
+                fasta_file_value = spec_with_name["fasta_file"]
+                if isinstance(fasta_file_value, str):
+                    spec_with_name["fasta_file"] = {"path": fasta_file_value}
+
+            return PackingInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
+
+        case TaskType.PACKING:
+            # Conveert string cif_file to CIFFile object format if needed
+            if "cif_file" in spec_with_name:
+                cif_file_value = spec_with_name["cif_file"]
+                if isinstance(cif_file_value, str):
+                    spec_with_name["cif_file"] = {"path": cif_file_value}
+
+            # Convert string fasta_file to FastaFile object format if needed
+            if "fasta_file" in spec_with_name:
+                fasta_file_value = spec_with_name["fasta_file"]
+                if isinstance(fasta_file_value, str):
+                    spec_with_name["fasta_file"] = {"path": fasta_file_value}
+
+            return PackingInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +150,26 @@ class CIFFile(BaseModel):
         valid_suffixes = {".cif", ".mmcif"}
         if v.suffix.lower() not in valid_suffixes:
             raise ValueError(f"File must be .cif or .mmcif, got '{v.suffix}'")
+        return v
+
+
+class FastaFile(BaseModel):
+    """A FASTA file.
+
+    Used by packing inputs.
+
+    Example:
+        {"path": "path/to/sequence.fasta"}
+    """
+
+    path: Path = Field(..., description="Path to FASTA file")
+
+    @field_validator("path")
+    @classmethod
+    def validate_file_suffix(cls, v: Path) -> Path:
+        valid_suffixes = {".fasta", ".fa"}
+        if v.suffix.lower() not in valid_suffixes:
+            raise ValueError(f"File must be .fasta or .fa, got '{v.suffix}'")
         return v
 
 
@@ -261,8 +314,8 @@ class MotifSpec(BaseModel):
     )
 
 
-class MotifInput(BaseModel):
-    """Top-level input for motif scaffolding inference.
+class BackboneInput(BaseModel):
+    """Top-level input for backbone inference with motif scaffolding capabilities.
 
     Example:
         {
@@ -279,7 +332,7 @@ class MotifInput(BaseModel):
     design: list[Backbone] = Field(
         ..., min_length=1, description="Protein chains to design"
     )
-    motif: MotifSpec
+    motif: MotifSpec | None = Field(default=None, description="Motif specification")
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +391,9 @@ class SequenceDesignInput(BaseModel):
                 {"chain_id": "A", "res_id": 94, "residue": "HIS"},
                 {"chain_id": "A", "res_id": 96, "residue": "HIS"},
                 {"chain_id": "A", "res_id": 119, "residue": "H"}
+            ],
+            "ligands": [
+                {"type": "smiles", "smiles": "CC(C)c1ccc([S:1](=[O:2])(=[O:3])[N:4])cc1"}
             ]
         }
     """
@@ -349,6 +405,9 @@ class SequenceDesignInput(BaseModel):
     fixed_residues: list[FixedResidue] = Field(
         default_factory=list,
         description="Residues with constrained amino acid identity",
+    )
+    ligands: list[FullLigand] = Field(
+        ..., description="Ligands present in the structure."
     )
 
     @model_validator(mode="after")
@@ -363,6 +422,20 @@ class SequenceDesignInput(BaseModel):
                 )
             seen.add(key)
         return self
+
+
+# ---------------------------------------------------------------------------
+# Packing models
+# ---------------------------------------------------------------------------
+
+
+class PackingInput(BaseModel):
+    name: str | None = Field(default=None, description="Job identifier")
+    cif_file: CIFFile = Field(
+        ..., description="Poly-glycine backbone CIF with ligand(s)"
+    )
+    fasta_file: FastaFile = Field(..., description="Fasta file with sequence")
+    ligands: list[FullLigand] = Field(..., description="Ligands to pack.")
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +486,9 @@ def parse_sequence_design_json(
     return SequenceDesignInput(**data)
 
 
-def parse_motif_json(file_path: str | Path, resolve_paths: bool = True) -> MotifInput:
+def parse_motif_json(
+    file_path: str | Path, resolve_paths: bool = True
+) -> BackboneInput:
     """Parse a motif scaffolding input JSON file.
 
     Args:
@@ -450,4 +525,4 @@ def parse_motif_json(file_path: str | Path, resolve_paths: bool = True) -> Motif
 
         data["motif"]["cif_file"] = {"path": str(cif_path)}
 
-    return MotifInput(**data)
+    return BackboneInput(**data)

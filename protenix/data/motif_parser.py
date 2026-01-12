@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import biotite.structure as struc
 import numpy as np
 
-from protenix.data.json_parser import CCDLigand, MotifInput, SMILESLigand
+from protenix.data.json_parser import BackboneInput, CCDLigand, SMILESLigand
 from protenix.data.parser import MMCIFParser
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ class MotifResidue:
 class MotifLigand:
     """Ligand specification combining motif CIF fragment with full ligand description."""
 
+    res_id: int  # Original res_id from the CIF file
     cif_res_name: str  # Residue / CCD name in the CIF (e.g., "ZN", "AL5", "LIG")
     atom_names: tuple[str, ...]  # Atom names from CIF (e.g., ("O1A", "S1", "N21"))
     coords: np.ndarray  # (n_atoms, 3) coordinates from CIF
@@ -52,15 +53,15 @@ class Motif:
     ligands: list[MotifLigand]
 
     @classmethod
-    def from_input(cls, motif_input: MotifInput) -> Motif:
-        """Build Motif from validated MotifInput.
+    def from_input(cls, backbone_input: BackboneInput) -> Motif:
+        """Build Motif from validated BackboneInput.
 
         Parses the motif CIF file and creates MotifResidue objects for
         protein residues (hetero=False) and MotifLigand objects for
         heteroatoms with mappings in the input.
 
         Args:
-            motif_input: Validated MotifInput from json_parser.py
+            backbone_input: Validated BackboneInput from json_parser.py
 
         Returns:
             Motif object with parsed residues and ligands
@@ -68,7 +69,7 @@ class Motif:
         Raises:
             FileNotFoundError: If the motif CIF file doesn't exist
         """
-        cif_path = motif_input.motif.cif_file.path
+        cif_path = backbone_input.motif.cif_file.path
         if not cif_path.exists():
             raise FileNotFoundError(f"Motif CIF file not found: {cif_path}")
 
@@ -78,7 +79,7 @@ class Motif:
         # Build ligand mapping: cif_res_name -> full_ligand
         ligand_mappings = {
             mapping.cif_res_name: mapping.full_ligand
-            for mapping in motif_input.motif.ligands
+            for mapping in backbone_input.motif.ligands
         }
 
         residues: list[MotifResidue] = []
@@ -110,6 +111,7 @@ class Motif:
             elif res_name in ligand_mappings:
                 ligands.append(
                     MotifLigand(
+                        res_id=res_id,
                         cif_res_name=res_name,
                         atom_names=atom_names,
                         coords=coords,

@@ -57,6 +57,8 @@ class MotifMaker:
         r_max: float = 6.0,
         max_motif_residues: int = 20,
         motif_train_rate: float = 0.0,
+        complex_ligand_threshold: int = 5,
+        complex_ligand_preference_prob: float = 0.9,
         **kwargs,
     ):
         """
@@ -76,6 +78,10 @@ class MotifMaker:
             max_motif_residues (int): Maximum number of residues allowed in motif.
             motif_train_rate (float): Training rate for motif generation.
             use_tip_atoms_only_prob (float): Probability of using only tip atoms in the motif.
+            complex_ligand_threshold (int): Minimum atom count to classify a ligand as "complex".
+                Ligands with fewer atoms are considered "simple" (e.g., metal ions, small molecules).
+            complex_ligand_preference_prob (float): Probability of selecting from complex ligands
+                (if any exist) rather than sampling uniformly from all ligands.
         """
         self.ligand_motif_prob = ligand_motif_prob
         self.pocket_motif_prob = pocket_motif_prob
@@ -91,6 +97,8 @@ class MotifMaker:
         self.r_min = r_min
         self.r_max = r_max
         self.max_motif_residues = max_motif_residues
+        self.complex_ligand_threshold = complex_ligand_threshold
+        self.complex_ligand_preference_prob = complex_ligand_preference_prob
 
     def make_motif(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -167,6 +175,11 @@ class MotifMaker:
         """
         Generates a motif mask centered around a ligand.
 
+        Uses two-stage selection to bias towards complex ligands:
+        1. Classify ligands as "complex" (>= threshold atoms) or "simple"
+        2. With probability complex_ligand_preference_prob, sample from complex pool
+        3. Otherwise sample uniformly from all ligands
+
         Args:
             atom_array (AtomArray): Input Biotite AtomArray
 
@@ -175,10 +188,25 @@ class MotifMaker:
         """
         is_motif = np.zeros(len(atom_array), dtype=int)
 
-        # Select a random ligand
+        # Select a ligand using two-stage selection
         ligand_mask = atom_array.chain_mol_type == "ligand"
         ligand_asym_ids = np.unique(atom_array.label_asym_id[ligand_mask])
-        ligand_motif_asym_id = np.random.choice(ligand_asym_ids)
+
+        # Classify ligands by complexity (atom count)
+        complex_ligand_ids = []
+        for asym_id in ligand_asym_ids:
+            atom_count = (atom_array.label_asym_id == asym_id).sum()
+            if atom_count >= self.complex_ligand_threshold:
+                complex_ligand_ids.append(asym_id)
+
+        # Prefer complex ligands if available
+        if (
+            len(complex_ligand_ids) > 0
+            and np.random.rand() < self.complex_ligand_preference_prob
+        ):
+            ligand_motif_asym_id = np.random.choice(complex_ligand_ids)
+        else:
+            ligand_motif_asym_id = np.random.choice(ligand_asym_ids)
 
         ligand_atom_mask = (
             atom_array.label_asym_id == ligand_motif_asym_id
@@ -207,6 +235,9 @@ class MotifMaker:
 
             if len(graph_nodes) == 0:
                 logger.warning("No nodes in ligand graph. Returning empty motif mask.")
+                logger.warning(
+                    f"Number of ligand atoms invovled in this empty graph: {len(ligand_array)}"
+                )
                 return is_motif
 
             seed_ligand = np.random.choice(graph_nodes)

@@ -12,49 +12,79 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import logging
 import os
 import traceback
-import urllib.request
 from contextlib import nullcontext
-from os.path import exists as opexists
+from dataclasses import dataclass
 from os.path import join as opjoin
-from typing import Any, Mapping, Optional
+from typing import Any
 
 import torch
 import torch.distributed as dist
+import torch.nn as nn
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
 from configs.configs_inference import inference_configs
 from protenix.config import parse_configs, parse_sys_args
+from protenix.data.features import FullContext
 from protenix.data.infer_data_pipeline import get_inference_dataloader
-from protenix.model.artios_ligand import ArtiosLigand
+from protenix.model.artios_backbone import ArtiosBackbone
+from protenix.model.artios_mpnn import ArtiosMPNN
+from protenix.model.artios_packing import ArtiosPacking
+from protenix.model.output import ModelOutput
+from protenix.model.utils import Mode
 from protenix.utils.distributed import DIST_WRAPPER
+from protenix.utils.inference import ModelType
 from protenix.utils.seed import seed_everything
-from protenix.utils.torch_utils import to_device
-from protenix.web_service.dependency_url import URL
-from runner.dumper import DataDumper
+from protenix.utils.structure_io import (
+    save_model_output_to_cif,
+    save_model_output_to_fasta,
+    save_trajectory_to_pdb,
+)
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class ModelConfig:
+    """Configuration for a specific model type."""
+
+    model_class: type[nn.Module]
+    checkpoint_path_key: str
+    n_sample_key: str = ""
+
+
+MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
+    ModelType.BACKBONE: ModelConfig(
+        model_class=ArtiosBackbone,
+        checkpoint_path_key="load_backbone_checkpoint_path",
+        n_sample_key="sample_diffusion.N_sample",
+    ),
+    ModelType.SEQUENCE_DESIGN: ModelConfig(
+        model_class=ArtiosMPNN,
+        checkpoint_path_key="load_mpnn_checkpoint_path",
+    ),
+    ModelType.PACKING: ModelConfig(
+        model_class=ArtiosPacking,
+        checkpoint_path_key="load_packing_checkpoint_path",
+        n_sample_key="artios_packing.sample_diffusion.N_sample",
+    ),
+}
+
+
 class InferenceRunner(object):
-    def __init__(self, configs: Any, model: Optional[Any] = None) -> None:
+    def __init__(self, configs: Any, model_type: ModelType) -> None:
         self.configs = configs
+        self.model_type = model_type
+        self.model_config = MODEL_REGISTRY[model_type]
+
         self.init_basics()
         self.init_env()
-
-        self.guiding_net = None
-        if model is None:
-            self.init_model()
-            self.load_checkpoint()
-        else:
-            self.model = model
-        self.init_dumper(
-            need_atom_confidence=configs.need_atom_confidence,
-            sorted_by_ranking_score=configs.sorted_by_ranking_score,
-        )
+        self.init_model()
+        self.load_checkpoint()
 
     def init_env(self) -> None:
         self.print(
@@ -75,40 +105,55 @@ class InferenceRunner(object):
             self.device = torch.device("cpu")
         if DIST_WRAPPER.world_size > 1 and not dist.is_initialized():
             dist.init_process_group(backend="nccl")
-        if self.configs.use_deepspeed_evo_attention:
-            env = os.getenv("CUTLASS_PATH", None)
-            self.print(f"env: {env}")
-            assert (
-                env is not None
-            ), "if use ds4sci, set `CUTLASS_PATH` env as https://www.deepspeed.ai/tutorials/ds4sci_evoformerattention/"
-            if env is not None:
-                logging.info(
-                    "The kernels will be compiled when DS4Sci_EvoformerAttention is called for the first time."
-                )
-        use_fastlayernorm = os.getenv("LAYERNORM_TYPE", None)
-        if use_fastlayernorm == "fast_layernorm":
-            logging.info(
-                "The kernels will be compiled when fast_layernorm is called for the first time."
-            )
 
+        # Set high precision for tensor core matmul using new API (PyTorch 2.9+)
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
         logging.info("Finished init ENV.")
 
     def init_basics(self) -> None:
+        """Initialize dump directories and error directory.
+
+        Sets up a list of dump directories for each sample, and ensures the error directory exists.
+
+        Creates N_sample dump subdirectories inside dump_dir: dump_dir/0, dump_dir/1, ... etc if not
+        given by a dump_dir_list.
+
+        Raises:
+            ValueError: If configs.N_sample is not a positive integer
+        """
         self.dump_dir = self.configs.dump_dir
-        self.error_dir = opjoin(self.dump_dir, "ERR")
         os.makedirs(self.dump_dir, exist_ok=True)
+
+        n_sample = self.configs.get(self.model_config.n_sample_key, None)
+
+        if self.configs.dump_dir_list:
+            self.dump_dir_list = self.configs.dump_dir_list
+        else:
+            self.dump_dir_list = [
+                os.path.join(self.dump_dir, str(i))
+                for i in range(n_sample if n_sample is not None else 1)
+            ]
+        for dump_path in self.dump_dir_list:
+            os.makedirs(dump_path, exist_ok=True)
+
+        self.error_dir = os.path.join(self.dump_dir, "ERR")
         os.makedirs(self.error_dir, exist_ok=True)
 
     def init_model(self) -> None:
-        self.model = ArtiosLigand(self.configs).to(self.device)
-        if self.configs.guiding_net_path is not None and self.configs.guiding_net_path != "":
-            self.guiding_net = ArtiosLigand(self.configs.guidance_model_configs).to(self.device)
+        model_class = self.model_config.model_class
+        self.model = model_class(self.configs).to(self.device)
 
     def load_checkpoint(self) -> None:
-        def _load_checkpoint(checkpoint_path: str, guiding=False):
+        def _load_checkpoint(
+            checkpoint_path: str,
+            model: nn.Module,
+        ):
             if not os.path.exists(checkpoint_path):
                 raise Exception(f"Given checkpoint path not exist [{checkpoint_path}]")
-            self.print(f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}")
+            self.print(
+                f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}"
+            )
             checkpoint = torch.load(checkpoint_path, self.device)
 
             sample_key = [k for k in checkpoint["model"].keys()][0]
@@ -118,126 +163,43 @@ class InferenceRunner(object):
                     k[len("module.") :]: v for k, v in checkpoint["model"].items()
                 }
 
-            if not guiding:
-                self.model.load_state_dict(
-                    state_dict=checkpoint["model"],
-                    strict=self.configs.load_strict,
-                )
-                self.model.eval()
-            else:
-                self.guiding_net.load_state_dict(
-                    state_dict=checkpoint["model"],
-                    strict=self.configs.load_strict,
-                )
-                self.guiding_net.eval()
+            model.load_state_dict(
+                state_dict=checkpoint["model"],
+                strict=self.configs.load_strict,
+            )
+            model.eval()
 
-        _load_checkpoint(self.configs.load_checkpoint_path, guiding=False)
-        self.print(f"Finished loading checkpoint.")
+            return model
 
-        if self.configs.guiding_net_path is not None and self.configs.guiding_net_path != "":
-            _load_checkpoint(self.configs.guiding_net_path, guiding=True)
-            self.print(f"Finished loading guiding net.")
+        checkpoint_path_key = self.model_config.checkpoint_path_key
+        checkpoint_path = getattr(self.configs, checkpoint_path_key)
+        self.model = _load_checkpoint(checkpoint_path, self.model)
+        self.print(f"Loaded {self.model_type.value} model")
+        self.print("Finished loading checkpoint.")
 
-    def init_dumper(
-        self, need_atom_confidence: bool = False, sorted_by_ranking_score: bool = False
-    ):
-        self.dumper = DataDumper(
-            base_dir=self.dump_dir,
-            need_atom_confidence=need_atom_confidence,
-            sorted_by_ranking_score=sorted_by_ranking_score,
-        )
-
-    # Adapted from runner.train.Trainer.evaluate
     @torch.no_grad()
-    def predict(self, data: Mapping[str, Mapping[str, Any]]) -> dict[str, torch.Tensor]:
-        eval_precision = {
-            "fp32": torch.float32,
-            "bf16": torch.bfloat16,
-            "fp16": torch.float16,
-        }[self.configs.dtype]
-
+    def predict(self, context: FullContext) -> ModelOutput:
         enable_amp = (
-            torch.autocast(device_type="cuda", dtype=eval_precision)
+            torch.autocast(device_type="cuda", dtype=torch.float32)
             if torch.cuda.is_available()
             else nullcontext()
         )
+        context = context.to(self.device)
 
-        data = to_device(data, self.device)
         with enable_amp:
-            prediction, _, _ = self.model(
-                input_feature_dict=data["input_feature_dict"],
-                label_full_dict=None,
-                label_dict=None,
-                mode="inference",
-                guiding_net=self.guiding_net,
+            output = self.model(
+                context=context,
+                mode=Mode.INFERENCE,
             )
 
-        return prediction
+        return output
 
     def print(self, msg: str):
         if DIST_WRAPPER.rank == 0:
             logger.info(msg)
 
-    def update_model_configs(self, new_configs: Any) -> None:
-        self.model.configs = new_configs
 
-
-def download_infercence_cache(configs: Any, model_version: str = "v0.2.0") -> None:
-    current_file_path = os.path.abspath(__file__)
-    current_directory = os.path.dirname(current_file_path)
-    code_directory = os.path.dirname(current_directory)
-
-    data_cache_dir = os.path.join(code_directory, "release_data/ccd_cache")
-    os.makedirs(data_cache_dir, exist_ok=True)
-    for cache_name, fname in [
-        ("ccd_components_file", "components.v20240608.cif"),
-        ("ccd_components_rdkit_mol_file", "components.v20240608.cif.rdkit_mol.pkl"),
-    ]:
-        if not opexists(cache_path := os.path.abspath(opjoin(data_cache_dir, fname))):
-            tos_url = URL[cache_name]
-            logger.info(f"Downloading data cache from\n {tos_url}...")
-            urllib.request.urlretrieve(tos_url, cache_path)
-
-    checkpoint_path = configs.load_checkpoint_path
-
-    if not opexists(checkpoint_path):
-        checkpoint_path = os.path.join(
-            code_directory, f"release_data/checkpoint/model_{model_version}.pt"
-        )
-        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-        tos_url = URL[f"model_{model_version}"]
-        logger.info(f"Downloading model checkpoint from\n {tos_url}...")
-        urllib.request.urlretrieve(tos_url, checkpoint_path)
-        try:
-            ckpt = torch.load(checkpoint_path)
-            del ckpt
-        except:
-            os.remove(checkpoint_path)
-            raise RuntimeError(
-                "Download model checkpoint failed, please download by yourself with "
-                f"wget {tos_url} -O {checkpoint_path}"
-            )
-        configs.load_checkpoint_path = checkpoint_path
-
-
-def update_inference_configs(configs: Any, N_token: int):
-    # Setting the default inference configs for different N_token and N_atom
-    # when N_token is larger than 3000, the default config might OOM even on a
-    # A100 80G GPUS,
-    if N_token > 3840:
-        configs.skip_amp.confidence_head = False
-        configs.skip_amp.sample_diffusion = False
-    elif N_token > 2560:
-        configs.skip_amp.confidence_head = False
-        configs.skip_amp.sample_diffusion = True
-    else:
-        configs.skip_amp.confidence_head = True
-        configs.skip_amp.sample_diffusion = True
-    return configs
-
-
-def infer_predict(runner: InferenceRunner, configs: Any) -> None:
-    # Data
+def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) -> None:
     logger.info(f"Loading data from\n{configs.input_json_path}")
     try:
         dataloader = get_inference_dataloader(configs=configs)
@@ -248,72 +210,87 @@ def infer_predict(runner: InferenceRunner, configs: Any) -> None:
             f.write(error_message)
         return
 
-    num_data = len(dataloader.dataset)
     for seed in configs.seeds:
         seed_everything(seed=seed, deterministic=configs.deterministic)
-        for batch in dataloader:
+        for context in dataloader:
             try:
-                data, atom_array, data_error_message = batch[0]
-                sample_name = data["sample_name"]
+                sample_name = context.basic.pdb_id[0]
+                n_atom = context.basic.n_atom[0]
+                n_token = context.basic.n_token[0]
 
-                if len(data_error_message) > 0:
-                    logger.info(data_error_message)
-                    #with open(opjoin(runner.error_dir, f"{sample_name}.txt"), "a") as f:
-                    #    f.write(data_error_message)
-                    raise Exception(data_error_message)
+                output = runner.predict(context)
+
+                match model_type:
+                    case ModelType.BACKBONE:
+                        _ = save_model_output_to_cif(
+                            output_dir_list=runner.dump_dir_list,
+                            output=output,
+                            model_type=model_type,
+                            atom_array=context.basic.atom_array,
+                            n_atom=n_atom,
+                            pdb_id=sample_name,
+                            field_in_b_factor_col="is_motif",
+                        )
+                        if output.trajectory is not None:
+                            _ = save_trajectory_to_pdb(
+                                output_dir_list=runner.dump_dir_list,
+                                output=output,
+                                model_type=model_type,
+                                atom_array=context.basic.atom_array,
+                                n_atom=n_atom,
+                                step_stride=configs.sample_diffusion.trajectory_step_stride,  # TODO: make configurable!
+                            )
+                        parent_dir = os.path.dirname(runner.dump_dir)
+                        mapping_path = opjoin(
+                            parent_dir, f"{sample_name}_motif_mapping.json"
+                        )
+                        if not os.path.exists(mapping_path):
+                            with open(mapping_path, "w") as f:
+                                json.dump(context.basic.original_motif_mapping, f)
+
+                    case ModelType.PACKING:
+                        _ = save_model_output_to_cif(
+                            output_dir_list=runner.dump_dir_list,
+                            output=output,
+                            model_type=model_type,
+                            atom_array=context.basic.atom_array,
+                            n_atom=n_atom,
+                            pdb_id=sample_name,
+                            field_in_b_factor_col="is_motif",
+                        )
+
+                    case ModelType.SEQUENCE_DESIGN:
+                        _ = save_model_output_to_fasta(
+                            output_dir_list=runner.dump_dir_list,
+                            output=output,
+                            n_token=n_token,
+                            pdb_id=sample_name,
+                        )
 
                 logger.info(
-                    (
-                        f"[Rank {DIST_WRAPPER.rank} ({data['sample_index'] + 1}/{num_data})] {sample_name}: "
-                        f"N_asym {data['N_asym'].item()}, N_token {data['N_token'].item()}, "
-                        f"N_atom {data['N_atom'].item()}, N_msa {data['N_msa'].item()}"
-                    )
-                )
-                new_configs = update_inference_configs(configs, data["N_token"].item())
-                runner.update_model_configs(new_configs)
-                prediction = runner.predict(data)
-                runner.dumper.dump(
-                    dataset_name="",
-                    pdb_id=sample_name,
-                    seed=seed,
-                    pred_dict=prediction,
-                    atom_array=atom_array,
-                    entity_poly_type=data["entity_poly_type"],
-                )
-
-                logger.info(
-                    f"[Rank {DIST_WRAPPER.rank}] {data['sample_name']} succeeded.\n"
+                    f"[Rank {DIST_WRAPPER.rank}] {sample_name} succeeded.\n"
                     f"Results saved to {configs.dump_dir}"
                 )
                 torch.cuda.empty_cache()
             except Exception as e:
-                error_message = f"[Rank {DIST_WRAPPER.rank}]{data['sample_name']} {e}:\n{traceback.format_exc()}"
+                error_message = f"[Rank {DIST_WRAPPER.rank}]{sample_name} {e}:\n{traceback.format_exc()}"
                 logger.info(error_message)
-                # Save error info
-                with open(opjoin(runner.error_dir, f"{sample_name}.txt"), "a") as f:
-                    f.write(error_message)
                 if hasattr(torch.cuda, "empty_cache"):
                     torch.cuda.empty_cache()
 
 
-def main(configs: Any) -> None:
-    # Runner
-    runner = InferenceRunner(configs)
-    infer_predict(runner, configs)
+def main(configs: Any, model_type: ModelType = ModelType.BACKBONE) -> None:
+    runner = InferenceRunner(configs, model_type)
+    infer_predict(runner, configs, model_type)
 
 
 def run() -> None:
-    LOG_FORMAT = (
-        "%(asctime)s,%(msecs)-3d %(levelname)-8s [%(filename)s:%(lineno)s %(funcName)s] %(message)s"
-    )
+    LOG_FORMAT = "%(asctime)s,%(msecs)-3d %(levelname)-8s [%(filename)s:%(lineno)s %(funcName)s] %(message)s"
     logging.basicConfig(
         format=LOG_FORMAT,
         level=logging.INFO,
         datefmt="%Y-%m-%d %H:%M:%S",
         filemode="w",
-    )
-    configs_base["use_deepspeed_evo_attention"] = (
-        os.environ.get("USE_DEEPSPEED_EVO_ATTTENTION", False) == "true"
     )
     configs = {**configs_base, **{"data": data_configs}, **inference_configs}
     configs = parse_configs(
@@ -321,8 +298,7 @@ def run() -> None:
         arg_str=parse_sys_args(),
         fill_required_with_null=True,
     )
-    download_infercence_cache(configs, model_version="v0.2.0")
-    main(configs)
+    main(configs, model_type=ModelType(configs.model_type))
 
 
 if __name__ == "__main__":

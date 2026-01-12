@@ -645,6 +645,75 @@ class TestBatchProcessing:
         assert logits.shape[2] == mpnn_model.num_residue_types
 
 
+@pytest.mark.slow
+class TestFixedResidues:
+    """Tests for fixed residue functionality in sampling."""
+
+    def test_fixed_residues_preserved(self, mpnn_model, single_context):
+        """Test that fixed residues are preserved during sampling."""
+        # Mark positions 5, 10, 15 as fixed with specific residue types
+        fixed_positions = [5, 10, 15]
+        fixed_restype_idx = 3  # e.g., CYS
+
+        # Set up motif context for fixed residues
+        single_context.motif.is_motif_related_token[0, fixed_positions] = True
+        single_context.motif.motif_restype[0, fixed_positions, :] = 0
+        single_context.motif.motif_restype[0, fixed_positions, fixed_restype_idx] = 1
+
+        sampled_sequence, _ = mpnn_model.sample(single_context, temperature=1.0)
+
+        # Check that fixed positions have the expected residue type
+        for pos in fixed_positions:
+            assert (
+                sampled_sequence[0, pos, fixed_restype_idx] == 1
+            ), f"Fixed residue at position {pos} was not preserved"
+            assert (
+                sampled_sequence[0, pos].sum() == 1
+            ), f"Fixed residue at position {pos} is not valid one-hot"
+
+    def test_non_fixed_residues_sampled(self, mpnn_model, single_context):
+        """Test that non-fixed residues are actually sampled (not zeros)."""
+        # Mark only position 0 as fixed
+        single_context.motif.is_motif_related_token[0, 0] = True
+        single_context.motif.motif_restype[0, 0, 5] = 1  # Some residue type
+
+        sampled_sequence, _ = mpnn_model.sample(single_context, temperature=1.0)
+
+        # Non-fixed positions should be valid one-hot (sum to 1)
+        for pos in range(1, single_context.token.token_index.shape[-1]):
+            assert (
+                sampled_sequence[0, pos].sum() == 1
+            ), f"Non-fixed position {pos} was not properly sampled"
+
+    def test_all_fixed_returns_motif_restype(self, mpnn_model, single_context):
+        """Test that when all residues are fixed, output equals motif_restype."""
+        n_tokens = single_context.token.token_index.shape[-1]
+
+        # Fix all positions with random one-hot restypes
+        single_context.motif.is_motif_related_token[0, :] = True
+        for i in range(n_tokens):
+            restype_idx = i % 20  # Cycle through amino acids
+            single_context.motif.motif_restype[0, i, restype_idx] = 1
+
+        sampled_sequence, _ = mpnn_model.sample(single_context, temperature=1.0)
+
+        # Output should exactly match motif_restype
+        assert torch.allclose(
+            sampled_sequence, single_context.motif.motif_restype
+        ), "All-fixed sampling should return motif_restype exactly"
+
+    def test_no_fixed_residues_all_sampled(self, mpnn_model, single_context):
+        """Test that with no fixed residues, all positions are sampled."""
+        # Ensure no fixed residues (default state)
+        assert not single_context.motif.is_motif_related_token.any()
+
+        sampled_sequence, _ = mpnn_model.sample(single_context, temperature=1.0)
+
+        # All positions should be valid one-hot
+        position_sums = sampled_sequence.sum(dim=-1)
+        assert torch.allclose(position_sums, torch.ones_like(position_sums))
+
+
 class TestGradients:
     """Tests for gradient flow."""
 

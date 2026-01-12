@@ -34,10 +34,14 @@ from protenix.utils.geometry import compute_virtual_cb, random_transform
 class ContextGenerator(object):
     def __init__(
         self,
+        # arrays
         cropped_token_array: TokenArray,
         cropped_atom_array: AtomArray,
+        # basic context
         pdb_id: str = "unknown",
         bioassembly_dict_fpath: str = "",
+        original_motif_mapping: list[dict] | None = None,
+        # kwargs
         ref_pos_augment: bool = True,
         lig_atom_rename: bool = False,
     ) -> None:
@@ -49,6 +53,7 @@ class ContextGenerator(object):
             bioassembly_dict_fpath (str): Path to bioassembly dict file for metadata
             ref_pos_augment (bool): Boolean indicating whether apply random rotation and translation on ref_pos
             lig_atom_rename (bool): Boolean indicating whether rename atom name for ligand atoms
+            original_motif_mapping: Mapping from unindexed chain_id to original CIF res_id
         """
         self.cropped_token_array = cropped_token_array
         self.cropped_atom_array = cropped_atom_array
@@ -56,6 +61,7 @@ class ContextGenerator(object):
         self.bioassembly_dict_fpath = bioassembly_dict_fpath
         self.ref_pos_augment = ref_pos_augment
         self.lig_atom_rename = lig_atom_rename
+        self.original_motif_mapping = original_motif_mapping
 
         # Make atom -> token index
         atom_to_token_idx_dict = {}
@@ -459,6 +465,7 @@ class ContextGenerator(object):
             n_asym=len(np.unique(self.centre_atoms.asym_id_int)),
             n_token=len(self.cropped_token_array),
             n_atom=len(self.cropped_atom_array),
+            original_motif_mapping=self.original_motif_mapping,
         )
 
     def get_full_context(self) -> FullContext:

@@ -1,16 +1,26 @@
+import logging
 import os
 from pathlib import Path
 from typing import List, Optional, Union
 
+import biotite.sequence.io as seqio
+import biotite.structure as struc
 import biotite.structure.io as strucio
 import numpy as np
 import torch
-from biotite.structure import AtomArray
+from biotite.sequence import ProteinSequence
+from biotite.structure import AtomArray, superimpose
 from biotite.structure.io.mol import MOLFile
+from biotite.structure.io.pdb import PDBFile
+from typing_extensions import assert_never
 
-from protenix.common.constants import mmcif_restype_3to1
+from protenix.common.constants import STD_RESIDUES_AND_GAP, mmcif_restype_3to1
 from protenix.data.parser import MMCIFParser
 from protenix.data.utils import save_structure_cif
+from protenix.model.output import ModelOutput
+from protenix.utils.inference import ModelType
+
+logger = logging.getLogger(__name__)
 
 
 def load_structure(path_to_file: Path) -> AtomArray:
@@ -143,48 +153,47 @@ def cif_to_pdb(
     strucio.save_structure(output_path, structure)
 
 
-def save_outputs_backbone(
+def save_model_output_to_cif(
     output_dir_list: List[str],
-    pred_dict: dict,
-    atom_array: AtomArray,
+    output: ModelOutput,
+    model_type: ModelType,
+    atom_array: List[AtomArray],
+    n_atom: int,
     pdb_id: str,
     field_in_b_factor_col: Optional[str] = None,
 ):
     """
-    Saves backbone-only outputs to CIFs.
-
-    For backbone models, the predicted coordinates are the same shape as input
-    atom_array, so no flattening or sequence prediction processing is needed.
+    Saves model outputs to CIF files. Used for ArtiosBackbone and ArtiosPacking during inference.
 
     Args:
         output_dir_list: List of output directory paths for each sample
-        pred_dict: Dictionary containing model predictions with 'coordinate' key
-        input_feature_dict: Input features (not used in backbone case but kept for consistency)
+        output: ModelOutput containing model predictions
         atom_array: Input AtomArray structure
-        token_array: Input TokenArray (not used in backbone case but kept for consistency)
+        n_atom: Number of atoms in the input atom array
         pdb_id: PDB identifier for the structure
-        ema_suffix: Optional suffix for EMA models (not used but kept for consistency)
         field_in_b_factor_col (Optional): Field in the AtomArray to use for the b-factor column.
 
     Returns:
         List[Path]: List of paths to the saved CIF files
     """
-    # Get predictions - shape should match input atom_array
-    coordinate = pred_dict["coordinate"].detach().cpu().numpy()  # [N_sample, N_atom, 3]
+    assert output.coordinate is not None, "Coordinate is not in ModelOutput."
+    assert output.coordinate.shape[0] == 1, "Batch size must be 1."
 
-    # Save each sample
+    # Extract first (and only) item from batch
+    coordinate = output.coordinate[0, :, :n_atom].detach().cpu().numpy()
+    atom_array = atom_array[0]
+
     saved_files = []
 
     assert (
-        len(output_dir_list) == coordinate.shape[0]
+        len(output_dir_list) == coordinate.shape[-3]
     ), f"Number of output directories must match number of samples, got {len(output_dir_list)=} and {coordinate.shape[0]=}"
 
     assert (
-        coordinate.shape[1] == len(atom_array)
-    ), f"Predicted coordinates must match input atom array size, got {coordinate.shape[1]=} and {len(atom_array)=}"
+        coordinate.shape[-2] == len(atom_array)
+    ), f"Predicted coordinates must match input atom array size, got {coordinate.shape[-2]=} and {len(atom_array)=}"
 
-    for idx in range(coordinate.shape[0]):
-        assert atom_array is not None, f"Atom array is None for sample {idx}"
+    for idx in range(coordinate.shape[-3]):
         sample_coords = coordinate[idx]  # [N_atom, 3]
 
         # Create a copy of the input atom_array with predicted coordinates
@@ -196,13 +205,19 @@ def save_outputs_backbone(
             "b_factor", np.zeros(len(predicted_atom_array))
         )
 
-        # Determine output file path
-        output_path = output_dir_list[idx]
+        output_dir = Path(output_dir_list[idx])
+        os.makedirs(output_dir, exist_ok=True)
 
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        match model_type:
+            case ModelType.BACKBONE:
+                uid = int(output_dir.name)
+                output_path = output_dir / f"backbone_{uid}.cif"
+            case ModelType.PACKING:
+                uid = int(output_dir.parent.name)
+                output_path = output_dir / f"uid_{uid}_packing_{idx}.cif"
+            case _:
+                assert_never(model_type)
 
-        # Save using save_structure_cif
         try:
             save_structure_cif(
                 atom_array=predicted_atom_array,
@@ -213,10 +228,153 @@ def save_outputs_backbone(
                 field_in_b_factor_col=field_in_b_factor_col,
             )
             saved_files.append(output_path)
-            print(f"Saved backbone sample {idx} to {output_path}")
 
         except Exception as e:
             print(f"Error saving backbone sample {idx}: {e}")
             continue
+
+    return saved_files
+
+
+def save_trajectory_to_pdb(
+    output_dir_list: List[str],
+    output: ModelOutput,
+    model_type: ModelType,
+    atom_array: List[AtomArray],
+    n_atom: int,
+    step_stride: int = 1,  # save every nth step
+) -> List[Path]:
+    """
+    Saves diffusion trajectory to multi-model PDB files for visualization in PyMOL.
+
+    Each frame is aligned to the final structure using backbone atoms (N, CA, C)
+    before saving.
+
+    Args:
+        output_dir_list: List of output directory paths for each sample
+        trajectory: Diffusion trajectory tensor of shape [batch, n_sample, n_steps+1, n_atom, 3]
+        atom_array: Input AtomArray structure (topology is constant across trajectory)
+        n_atom: Number of atoms in the input atom array
+        pdb_id: PDB identifier for the structure
+        model_type: Type of model (BACKBONE or PACKING)
+        step_stride: Save every nth step (default 1 = save all steps)
+
+    Returns:
+        List[Path]: List of paths to the saved PDB trajectory files
+    """
+    assert output.trajectory.shape[0] == 1, "Batch size must be 1."
+
+    # Extract first (and only) item from batch: [n_sample, n_steps+1, n_atom, 3]
+    trajectory = output.trajectory[0, :, :, :n_atom].detach().cpu().numpy()
+    atom_array = atom_array[0]
+
+    n_sample, n_steps_plus_1, n_atoms, _ = trajectory.shape
+
+    assert len(output_dir_list) == n_sample, (
+        f"Number of output directories must match number of samples, "
+        f"got {len(output_dir_list)=} and {n_sample=}"
+    )
+    assert n_atoms == len(atom_array), (
+        f"Trajectory atoms must match input atom array size, "
+        f"got {n_atoms=} and {len(atom_array)=}"
+    )
+
+    backbone_mask = np.isin(atom_array.atom_name, ["N", "CA", "C"])
+
+    saved_files = []
+
+    for sample_idx in range(n_sample):
+        sample_trajectory = trajectory[sample_idx]
+
+        step_indices = list(range(0, n_steps_plus_1, step_stride))
+        # Always include the final step
+        if step_indices[-1] != n_steps_plus_1 - 1:
+            step_indices.append(n_steps_plus_1 - 1)
+
+        # Create reference frame (final structure) for alignment
+        reference_frame = atom_array.copy()
+        reference_frame.coord = sample_trajectory[-1]
+
+        # Build aligned frames
+        frames = []
+        for step_idx in step_indices:
+            frame = atom_array.copy()
+            frame.coord = sample_trajectory[step_idx]
+
+            # Align frame to reference using backbone atoms only
+            fitted, _ = superimpose(reference_frame, frame, atom_mask=backbone_mask)
+            frames.append(fitted)
+
+        atom_array_stack = struc.stack(frames)
+
+        # Determine output path
+        output_dir = Path(output_dir_list[sample_idx])
+        os.makedirs(output_dir, exist_ok=True)
+
+        match model_type:
+            case ModelType.BACKBONE:
+                uid = int(output_dir.name)
+                output_path = output_dir / f"backbone_{uid}_trajectory.pdb"
+            case ModelType.PACKING:
+                uid = int(output_dir.parent.name)
+                output_path = (
+                    output_dir / f"uid_{uid}_packing_{sample_idx}_trajectory.pdb"
+                )
+            case _:
+                assert_never(model_type)
+
+        try:
+            pdb_file = PDBFile()
+            pdb_file.set_structure(atom_array_stack)
+            pdb_file.write(str(output_path))
+            saved_files.append(output_path)
+        except Exception as e:
+            print(f"Error saving trajectory for sample {sample_idx}: {e}")
+            continue
+
+    return saved_files
+
+
+def save_model_output_to_fasta(
+    output_dir_list: List[str],
+    output: ModelOutput,
+    n_token: int,
+    pdb_id: str,
+):
+    """
+    Saves outputs to FASTA files. Used for the MPNN model. Need restype in ModelOutput.
+
+    Args:
+        output_dir_list (List[str]): List of output directories for each sample in the batch.
+        output (ModelOutput): Model output containing one-hot encoded restype.
+            restype shape: [batch, n_token, num_residue_types]
+        n_token (int): Number of tokens in the un-padded sequence.
+        pdb_id (str): PDB ID used in the output filename.
+
+    Returns:
+        List[Path]: List of paths to the saved FASTA files.
+    """
+    assert (
+        output.restype is not None
+    ), "ModelOutput must contain restype for FASTA saving"
+    assert output.restype.shape[0] == 1, "Batch size must be one"
+
+    restype = output.restype[0, :n_token]
+
+    idx_to_restype = {v: k for k, v in STD_RESIDUES_AND_GAP.items()}
+
+    saved_files = []
+    output_dir = Path(output_dir_list[0])
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = output_dir / f"{pdb_id}_sequence.fasta"
+
+    indices = restype.argmax(dim=-1).cpu().numpy().astype(np.int32)  # [n_token]
+
+    seq_list = [idx_to_restype.get(idx, "UNK") for idx in indices]
+    sequence = ProteinSequence(seq_list)
+    seqio.save_sequence(output_path, sequence)
+
+    saved_files.append(output_path)
+    logger.info(f"Saved FASTA sequence to {output_path}")
 
     return saved_files

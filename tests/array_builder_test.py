@@ -9,7 +9,7 @@ from biotite.structure import AtomArray
 from protenix.data.array_builder import (
     build_motif_ligand,
     build_motif_residue,
-    build_sequence_design_structure,
+    build_structure_from_backbone,
 )
 from protenix.data.json_parser import (
     CCDLigand,
@@ -146,7 +146,7 @@ class TestBuildSequenceDesignStructure:
         )
 
         with pytest.raises(FileNotFoundError, match="Backbone CIF file not found"):
-            build_sequence_design_structure(input_data)
+            build_structure_from_backbone(input_data)
 
     @pytest.fixture
     def mock_mmcif_parser(self):
@@ -189,7 +189,7 @@ class TestBuildSequenceDesignStructure:
             ],
         )
 
-        result = build_sequence_design_structure(input_data)
+        result = build_structure_from_backbone(input_data)
 
         # Check is_fixed annotation exists
         assert hasattr(result, "is_fixed")

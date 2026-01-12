@@ -522,11 +522,9 @@ class MPNN(nn.Module):
             node_mask=centre_atom_mask,
         )
 
-        restype = torch.zeros(
-            restype_shape,
-            device=device,
-            dtype=dtype,
-        )
+        # Initialise restype with known motif residues
+        restype = context.motif.motif_restype.clone()
+        is_fixed = context.motif.is_motif_related_token
         logits_at_timestep = torch.zeros(
             restype_shape,
             device=device,
@@ -552,7 +550,11 @@ class MPNN(nn.Module):
             pred_vals = self._sample_from_logits(
                 logits, temperature=temperature, seed=seed
             )
-            restype[batch_idx, next_pos_idx] = pred_vals[batch_idx, next_pos_idx]
+            # Only update positions that are not fixed
+            update_mask = ~is_fixed[batch_idx, next_pos_idx]
+            restype[batch_idx[update_mask], next_pos_idx[update_mask]] = pred_vals[
+                batch_idx[update_mask], next_pos_idx[update_mask]
+            ]
             logits_at_timestep[batch_idx, timestep] = logits[batch_idx, next_pos_idx]
 
         return restype, encoder_output.node_feats

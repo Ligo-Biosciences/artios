@@ -12,9 +12,13 @@ from torch import Tensor
 
 from protenix.data.features import FullContext
 from protenix.model.generator import (
+    CFGPredictor,
+    CFGSchedule,
     Deterministic,
     FlowMatchingSampler,
     InferenceTimestepScheduler,
+    NoCFG,
+    SamplingResult,
     StochasticitySchedule,
     VelocityScorePredictor,
 )
@@ -523,37 +527,58 @@ class DiffusionModule(nn.Module):
         context: FullContext,
         inplace_safe: bool = False,
         eps: float = 1e-5,
+        cfg_schedule: CFGSchedule = NoCFG(),
     ) -> VelocityScorePredictor:
         """Create a VelocityScorePredictor bound to this module and context.
+
+        Optionally wraps with classifier-free guidance if cfg_schedule is not NoCFG.
 
         Args:
             context: Full feature context to use for predictions.
             inplace_safe: Whether to use inplace operations safely.
             eps: Small constant for numerical stability.
+            cfg_schedule: CFG schedule. Use NoCFG() to skip classifier-free guidance
+                entirely (no unconditional forward pass). Defaults to NoCFG().
 
         Returns:
             A callable satisfying VelocityScorePredictor protocol.
+            If cfg_schedule is not NoCFG, returns a CFGPredictor.
         """
-
         # TODO: we can separate the diffusion conditioning from the main network for efficiency.
 
-        def predictor(
-            x_noisy: Float[Tensor, "... n_atom 3"],
-            timestep: Float[Tensor, "..."],
-        ) -> tuple[Float[Tensor, "... n_atom 3"], Float[Tensor, "... n_atom 3"]]:
-            coords_pred = self.forward(
-                r_noisy=x_noisy,
-                timestep=timestep,
-                context=context,
-                inplace_safe=inplace_safe,
-            )
+        def make_predictor(ctx: FullContext) -> VelocityScorePredictor:
+            """Create a predictor bound to a specific context."""
 
-            t = repeat(timestep, "... -> ... 1 1")
-            velocity = (coords_pred - x_noisy) / torch.clamp(1 - t, min=eps)
-            score = t * velocity - x_noisy
-            return velocity, score
+            def predictor(
+                x_noisy: Float[Tensor, "... n_atom 3"],
+                timestep: Float[Tensor, "..."],
+            ) -> tuple[Float[Tensor, "... n_atom 3"], Float[Tensor, "... n_atom 3"]]:
+                coords_pred = self.forward(
+                    r_noisy=x_noisy,
+                    timestep=timestep,
+                    context=ctx,
+                    inplace_safe=inplace_safe,
+                )
 
-        return predictor
+                t = repeat(timestep, "... -> ... 1 1")
+                velocity = (coords_pred - x_noisy) / torch.clamp(1 - t, min=eps)
+                score = t * velocity - x_noisy
+                return velocity, score
+
+            return predictor
+
+        cond_predictor = make_predictor(context)
+
+        if isinstance(cfg_schedule, NoCFG):
+            return cond_predictor
+
+        uncond_context = context.to_unconditional()
+        uncond_predictor = make_predictor(uncond_context)
+        return CFGPredictor(
+            cond_predictor=cond_predictor,
+            uncond_predictor=uncond_predictor,
+            guidance_schedule=cfg_schedule,
+        )
 
     @typecheck
     def sample(
@@ -562,11 +587,14 @@ class DiffusionModule(nn.Module):
         timestep_scheduler: InferenceTimestepScheduler,
         n_steps: int,
         stochasticity: StochasticitySchedule = Deterministic(),
+        cfg_schedule: CFGSchedule = NoCFG(),
         gamma: float = 1.0,
         n_sample: int = 1,
         second_order: bool = False,
         inplace_safe: bool = False,
-    ) -> Float[Tensor, "... n_sample n_atom 3"]:
+        centre_coords: bool = False,
+        track_trajectory: bool = False,
+    ) -> SamplingResult:
         """Backbone denoising sampling using flow matching.
 
         Args:
@@ -574,13 +602,15 @@ class DiffusionModule(nn.Module):
             timestep_scheduler: Scheduler for generating timestep sequence.
             n_steps: Number of integration steps.
             stochasticity: Schedule defining g(t) in the SDE.
+            cfg_schedule: CFG schedule.
             gamma: Temperature parameter for the stochastic term.
             n_sample: Number of samples to generate.
             second_order: Whether to use second-order integration.
             inplace_safe: Whether to use inplace operations safely.
+            track_trajectory: If True, store coordinates at each step.
 
         Returns:
-            Denoised atom coordinates.
+            SamplingResult containing final coordinates and optional trajectory.
         """
         n_atom = context.reference.ref_pos.shape[-2]
         batch_shape = context.token.residue_index.shape[:-1]
@@ -598,14 +628,17 @@ class DiffusionModule(nn.Module):
             stochasticity=stochasticity,
             gamma=gamma,
             second_order=second_order,
-            centre_coords=True,
+            centre_coords=centre_coords,
         )
-        predictor = self.as_predictor(context, inplace_safe=inplace_safe)
+        predictor = self.as_predictor(
+            context, inplace_safe=inplace_safe, cfg_schedule=cfg_schedule
+        )
 
         return sampler.sample(
             predictor=predictor,
             x_init=x_init,
             n_steps=n_steps,
+            track_trajectory=track_trajectory,
         )
 
     @typecheck

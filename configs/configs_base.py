@@ -32,14 +32,11 @@ basic_configs = {
     "iters_to_accumulate": 1,
     "eval_only": False,
     "load_backbone_checkpoint_path": "",
-    "load_packing_checkpoint_path": "",
-    "load_flow_checkpoint_path": "",
     "load_mpnn_checkpoint_path": "",
-    "load_vae_checkpoint_path": "",
+    "load_packing_checkpoint_path": "",
     "load_ema_backbone_checkpoint_path": "",
-    "load_ema_flow_checkpoint_path": "",  # TODO: no need!
-    "load_ema_vae_checkpoint_path": "",  # TODO: no need
-    "load_ema_mpnn_checkpoint_path": "",  # TODO: likely no need
+    "load_ema_mpnn_checkpoint_path": "",
+    "load_ema_packing_checkpoint_path": "",
     "load_strict": True,
     "load_params_only": False,
     "guiding_net_path": ValueMaybeNone(""),
@@ -113,7 +110,7 @@ optim_configs = {
 }
 model_configs = {
     # Model
-    "c_s": 256,  # 192
+    "c_s": 384,  # 192
     "c_z": 128,  # 64
     "c_s_inputs": 256,  # c_s_inputs == c_token + 32
     "c_atom": 256,  # 64
@@ -170,20 +167,26 @@ model_configs = {
         },
     },
     "sample_diffusion": {
-        "N_step": 50,  # 25
-        "N_sample": 8,  # changed from 1, BATCH SIZE AT SAMPLING
+        "N_step": 200,  # 25
+        "N_sample": 10,  # changed from 1, BATCH SIZE AT SAMPLING
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type": "non_singular",
-        "alpha": 0.3,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
+        "alpha": 0.7,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
         "gamma": 1.0,
         "sigma_coord": GlobalConfigValue("sigma_coord"),
         "second_order": False,
-        "guidance_weight": 1.0,
-        "lower_guidance_limit": 0.3,
+        "cfg_type": "no-guidance",
+        "cfg_weight": 1.0,
+        "lower_guidance_limit": 0.0,
         "upper_guidance_limit": 1.0,
+        "lower_guidance_limit_weight": 3.0,
+        "upper_guidance_limit_weight": 3.0,
         "beta_mean": 0.5,
         "beta_std": 0.233,
+        "track_trajectory": True,
+        "trajectory_step_stride": 10,
+        "centre_and_augment_coords_during_sampling": True,
     },
     "model": {
         "N_model_seed": 1,  # for inference
@@ -228,6 +231,7 @@ model_configs = {
             "temperature": 0.1,
             "zero_shot": False,
             "smoothing_factor": 0.5,
+            "N_sample": 5,
         },
     },
     "artios_packing": {
@@ -264,7 +268,7 @@ model_configs = {
             "stoch_type": "deterministic",
             "gamma": 1.0,
             "sigma_coord": 1.0,
-            "N_sample": 10,
+            "N_sample": 20,
             "N_step": 200,
             "eps": 1e-5,
         },

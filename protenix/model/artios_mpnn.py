@@ -16,8 +16,8 @@ class ArtiosMPNN(nn.Module):
         super(ArtiosMPNN, self).__init__()
 
         self.train_zero_shot = configs.artios_mpnn.train_zero_shot
-        self.temp = configs.artios_mpnn.sampling.temperature
         self.sample_zero_shot = configs.artios_mpnn.sampling.zero_shot
+        self.temp = configs.artios_mpnn.sampling.temperature
         self.smoothing_factor = configs.artios_mpnn.sampling.smoothing_factor
 
         self.mpnn = MPNN(**configs.artios_mpnn.model)
@@ -27,7 +27,7 @@ class ArtiosMPNN(nn.Module):
         context: FullContext,
         seed: Optional[int] = None,
     ) -> ModelOutput:
-        logits, _ = self.mpnn.sample(
+        restype, _ = self.mpnn.sample(
             context=context,
             temperature=self.temp,
             zero_shot=self.sample_zero_shot,
@@ -35,7 +35,7 @@ class ArtiosMPNN(nn.Module):
             seed=seed,
         )
 
-        return ModelOutput(seq_logits=logits)
+        return ModelOutput(restype=restype)
 
     def main_train_loop(
         self,

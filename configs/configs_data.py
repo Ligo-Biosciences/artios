@@ -192,6 +192,8 @@ data_configs = {
         "residue_inclusion_prob": 0.4,
         "use_tip_atoms_only_prob": 0.95,
         "max_motif_residues": 15,
+        "complex_ligand_threshold": 4,
+        "complex_ligand_preference_prob": 0.9,
         "r_min": 5.0,
         "r_max": 8.0,
         "save_motifs_for_debugging": False,

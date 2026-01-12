@@ -463,6 +463,8 @@ class BasicContext(Context):
     n_token: int | list[int]
     n_atom: int | list[int]
 
+    original_motif_mapping: list[dict] | list[list[dict]] | list[None] | None = None
+
 
 @dataclass
 class FullContext:
@@ -545,6 +547,45 @@ class FullContext:
             result[f.name] = getattr(self, f.name).to_dict()
         return result
 
+    def to_unconditional(self) -> FullContext:
+        """Create unconditional version with motif and ligand conditioning zeroed.
+        Used for classifier-free guidance.
+
+        Returns:
+            New FullContext with motif and ligand features zeroed.
+        """
+        # uncond_motif = MotifContext(
+        #     is_motif=torch.zeros_like(self.motif.is_motif),
+        #     is_motif_related=torch.zeros_like(self.motif.is_motif_related),
+        #     is_motif_token=torch.zeros_like(self.motif.is_motif_token),
+        #     is_motif_related_token=torch.zeros_like(self.motif.is_motif_related_token),
+        #     motif_restype=torch.zeros_like(self.motif.motif_restype),
+        #     motif_coordinate=torch.zeros_like(self.motif.motif_coordinate),
+        # )
+
+        uncond_entity = EntityContext(
+            is_protein=self.entity.is_protein,
+            is_ligand=torch.zeros_like(self.entity.is_ligand),
+            is_dna=self.entity.is_dna,
+            is_rna=self.entity.is_rna,
+            is_protein_token=self.entity.is_protein_token,
+            is_ligand_token=torch.zeros_like(self.entity.is_ligand_token),
+            is_dna_token=self.entity.is_dna_token,
+            is_rna_token=self.entity.is_rna_token,
+        )
+
+        return FullContext(
+            token=self.token,
+            reference=self.reference,
+            chain_perm=self.chain_perm,
+            mask=self.mask,
+            motif=self.motif,
+            index=self.index,
+            entity=uncond_entity,
+            coordinate=self.coordinate,
+            basic=self.basic,
+        )
+
     @classmethod
     def from_dict(
         cls,
@@ -574,7 +615,7 @@ class FullContext:
         token = TokenContext.from_dict(d.get("token", {}))
         reference = ReferenceConformerContext.from_dict(d.get("reference", {}))
         chain_perm = ChainPermContext.from_dict(d.get("chain_perm", {}))
-        atom_perm = AtomPermContext.from_dict(d.get("atom_perm", {}))
+        # atom_perm = AtomPermContext.from_dict(d.get("atom_perm", {}))
         mask = MaskContext.from_dict(d.get("mask", {}))
         motif = MotifContext.from_dict(d.get("motif", {}))
         index = IndexContext.from_dict(d.get("index", {}))
@@ -608,7 +649,7 @@ class FullContext:
             token=token,
             reference=reference,
             chain_perm=chain_perm,
-            atom_perm=atom_perm,
+            # atom_perm=atom_perm,
             mask=mask,
             motif=motif,
             index=index,

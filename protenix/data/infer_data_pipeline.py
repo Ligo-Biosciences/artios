@@ -43,8 +43,6 @@ def get_inference_dataloader(configs: Any) -> DataLoader:
     """
     inference_dataset = InferenceDataset(
         input_json_path=configs.input_json_path,
-        dump_dir=configs.dump_dir,
-        use_msa=configs.use_msa,
     )
     sampler = DistributedSampler(
         dataset=inference_dataset,

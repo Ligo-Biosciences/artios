@@ -418,6 +418,10 @@ class MotifMaker:
                 atom_array=atom_array,
             )
 
+            logger.info(f"ligand_array has {len(ligand_array)} atoms")
+            logger.info(f"graph_nodes: {graph_nodes[:20]}...")  # first 20 nodes
+            logger.info(f"full_ligand_indices: {full_ligand_indices[:20]}...")
+
         if surrounding_mask.sum() == 0:
             # Avoid returning motif containing solely ligand.
             return np.zeros(len(atom_array), dtype=int)

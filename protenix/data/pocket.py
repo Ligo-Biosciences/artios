@@ -55,7 +55,7 @@ def label_polarity(
         defining_atom_sasa = atom_sasa[sphere.atom_indices]
 
         # Sphere is buried if all defining atoms have low SASA (< sasa_cutoff Å²)
-        sphere.is_buried = bool(np.all(defining_atom_sasa <= sasa_cutoff))
+        sphere.is_buried = np.all(defining_atom_sasa <= sasa_cutoff)
 
     return spheres
 
@@ -87,7 +87,7 @@ def label_confidence(
     # Label each sphere based on pLDDT of its defining atoms
     for sphere in spheres:
         defining_atom_plddt = atom_plddt[sphere.atom_indices]
-        sphere.is_confident = bool(np.all(defining_atom_plddt >= plddt_cutoff))
+        sphere.is_confident = np.all(defining_atom_plddt >= plddt_cutoff)
 
     return spheres
 

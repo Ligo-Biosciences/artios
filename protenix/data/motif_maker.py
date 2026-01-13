@@ -161,7 +161,10 @@ class MotifMaker:
             is_motif_mask = self._generate_chain_motif_mask(atom_array)
 
         # Validate motif size
-        if is_motif_mask is not None and is_motif_mask.any():
+        if is_motif_mask.sum() == 1:
+            logger.warning("Motif only has one atom. Setting all is_motif to 0.")
+            is_motif_mask = np.zeros(len(atom_array), dtype=int)
+        elif is_motif_mask.any():
             num_residues_in_motif = len(np.unique(atom_array[is_motif_mask > 0].res_id))
             if num_residues_in_motif > self.max_motif_residues:
                 logger.warning(
@@ -169,14 +172,9 @@ class MotifMaker:
                     f"Setting all is_motif to 0."
                 )
                 is_motif_mask = np.zeros(len(atom_array), dtype=int)
-        else:
-            # No motif generated
-            is_motif_mask = np.zeros(len(atom_array), dtype=int)
 
-        # Add is_motif annotation to atom array
         atom_array.set_annotation("is_motif", is_motif_mask)
 
-        # Add is_motif_related annotation to atom array
         is_motif_related = self._get_is_motif_related_mask(atom_array)
         atom_array.set_annotation("is_motif_related", is_motif_related)
 

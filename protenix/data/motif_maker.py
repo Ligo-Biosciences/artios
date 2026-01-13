@@ -783,6 +783,8 @@ def select_non_adjacent_seeds(
     available_nodes = set(graph_nodes)
 
     for _ in range(num_seeds):
+        if len(available_nodes) == 0:
+            break
         # Pick a random seed from available nodes
         seed = np.random.choice(list(available_nodes))
         selected_seeds.append(seed)

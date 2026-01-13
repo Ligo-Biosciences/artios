@@ -252,7 +252,7 @@ class MotifMaker:
 
         # Find all ligand atoms (excluding the main ligand)
         ligand_mask = atom_array.chain_mol_type == "ligand"
-        other_ligand_mask = ligand_mask & (atom_array.label_asym_id != exclude_asym_id)
+        other_ligand_mask = ligand_mask & (atom_array.asym_id_int != exclude_asym_id)
 
         if not other_ligand_mask.any():
             return supplementary_ligand_mask
@@ -270,7 +270,7 @@ class MotifMaker:
         # Get unique ligand chains that have atoms within distance
         nearby_indices = other_ligand_indices[within_distance_mask]
         nearby_distances = distances[within_distance_mask]
-        nearby_asym_ids = atom_array.label_asym_id[nearby_indices]
+        nearby_asym_ids = atom_array.asym_id_int[nearby_indices]
         unique_nearby_asym_ids = np.unique(nearby_asym_ids)
 
         # Process each nearby ligand chain independently
@@ -285,7 +285,7 @@ class MotifMaker:
             closest_idx = chain_indices[np.argmin(chain_distances)]
 
             # Get the full ligand chain for BFS
-            full_chain_mask = (atom_array.label_asym_id == asym_id) & ligand_mask
+            full_chain_mask = (atom_array.asym_id_int == asym_id) & ligand_mask
             chain_array = atom_array[full_chain_mask]
             chain_graph = chain_array.bonds.as_graph()
             graph_nodes = list(chain_graph.nodes())
@@ -336,12 +336,12 @@ class MotifMaker:
 
         # Select a ligand using two-stage selection
         ligand_mask = atom_array.chain_mol_type == "ligand"
-        ligand_asym_ids = np.unique(atom_array.label_asym_id[ligand_mask])
+        ligand_asym_ids = np.unique(atom_array.asym_id_int[ligand_mask])
 
         # Classify ligands by complexity (atom count)
         complex_ligand_ids = []
         for asym_id in ligand_asym_ids:
-            atom_count = (atom_array.label_asym_id == asym_id).sum()
+            atom_count = (atom_array.asym_id_int == asym_id).sum()
             if atom_count >= self.complex_ligand_threshold:
                 complex_ligand_ids.append(asym_id)
 
@@ -355,7 +355,7 @@ class MotifMaker:
             ligand_motif_asym_id = np.random.choice(ligand_asym_ids)
 
         ligand_motif_chain_mask = (
-            atom_array.label_asym_id == ligand_motif_asym_id
+            atom_array.asym_id_int == ligand_motif_asym_id
         ) & ligand_mask
 
         if (
@@ -494,9 +494,9 @@ class MotifMaker:
 
         # Pick a random polymer chain
         polymer_atoms = atom_array[polymer_mask]
-        chain_id = np.random.choice(np.unique(polymer_atoms.label_asym_id))
+        chain_id = np.random.choice(np.unique(polymer_atoms.asym_id_int))
 
-        chain_mask = atom_array.label_asym_id == chain_id
+        chain_mask = atom_array.asym_id_int == chain_id
         chain_array = atom_array[chain_mask]
 
         # Compute pocket scores

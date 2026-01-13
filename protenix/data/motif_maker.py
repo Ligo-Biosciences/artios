@@ -428,7 +428,7 @@ class MotifMaker:
 
         # Add supplementary ligands near seed point
         supplementary_ligand_mask = self._add_supplementary_ligands(
-            atom_array, seed_coord, is_motif, ligand_motif_asym_id
+            atom_array, seed_coord, ligand_motif_asym_id
         )
 
         is_motif[supplementary_ligand_mask > 0] = 1

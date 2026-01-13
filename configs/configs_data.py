@@ -196,11 +196,12 @@ data_configs = {
         "complex_ligand_preference_prob": 0.9,
         "ligand_region_count_probs": {"1": 0.5, "2": 0.4, "3": 0.07, "4": 0.03},
         "ligand_bfs_atom_count_probs": {
-            "1": 0.15,
-            "2": 0.25,
-            "3": 0.3,
-            "4": 0.2,
-            "5": 0.1,
+            "1": 0.1,
+            "2": 0.225,
+            "3": 0.25,
+            "4": 0.225,
+            "5": 0.125,
+            "6": 0.075,
         },
         "ligand_fixed_size_bfs_prob": 0.9,
         "drop_ligand_motif_prob": 0.1,
@@ -242,7 +243,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            "pdb_list": ["5jvo", "1knj"],  # ["1s01", "1sr0"]
+            "pdb_list": "",  # ["1s01", "1sr0"]
             "random_sample_if_failed": True,
             "max_n_token": -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,

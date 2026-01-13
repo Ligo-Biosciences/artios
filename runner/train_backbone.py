@@ -4,6 +4,7 @@ import os
 import time
 import warnings
 from contextlib import nullcontext
+from glob import glob
 from pathlib import Path
 from typing import Optional
 
@@ -646,7 +647,7 @@ class ArtiosBackboneTrainer(object):
         self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
         return output_paths
 
-    def _run_inference_and_log(self):
+    def _run_inference(self, log_to_neptune: bool = True):
         """
         Runs inference during evaluation.
         """
@@ -654,6 +655,12 @@ class ArtiosBackboneTrainer(object):
 
         inference_runner = InferenceRunner(self.configs, ModelType.BACKBONE)
         infer_predict(inference_runner, self.configs, ModelType.BACKBONE)
+
+        # Log to neptune
+        if log_to_neptune:
+            filepaths = glob(os.path.join(self.dump_dir, "**/*.cif"), recursive=True)
+            files_dict = {f"structures/{Path(fp).name}": fp for fp in filepaths}
+            self.neptune_run.log_files(files=files_dict, step=self.step)
 
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""

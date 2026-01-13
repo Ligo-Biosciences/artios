@@ -112,21 +112,6 @@ def parse_input_dict(
 
             return PackingInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
 
-        case TaskType.PACKING:
-            # Conveert string cif_file to CIFFile object format if needed
-            if "cif_file" in spec_with_name:
-                cif_file_value = spec_with_name["cif_file"]
-                if isinstance(cif_file_value, str):
-                    spec_with_name["cif_file"] = {"path": cif_file_value}
-
-            # Convert string fasta_file to FastaFile object format if needed
-            if "fasta_file" in spec_with_name:
-                fasta_file_value = spec_with_name["fasta_file"]
-                if isinstance(fasta_file_value, str):
-                    spec_with_name["fasta_file"] = {"path": fasta_file_value}
-
-            return PackingInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
-
 
 # ---------------------------------------------------------------------------
 # Common models

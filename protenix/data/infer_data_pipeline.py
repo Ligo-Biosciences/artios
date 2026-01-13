@@ -72,12 +72,8 @@ class InferenceDataset(Dataset):
     def __init__(
         self,
         input_json_path: str,
-        dump_dir: str,
-        use_msa: bool = True,
     ) -> None:
         self.input_json_path = input_json_path
-        self.dump_dir = dump_dir
-        self.use_msa = use_msa
         with open(self.input_json_path, "r") as f:
             self.inputs = json.load(f)
 

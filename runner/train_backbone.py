@@ -647,17 +647,20 @@ class ArtiosBackboneTrainer(object):
         self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
         return output_paths
 
-    def _run_inference(self, log_to_neptune: bool = True):
+    def _run_inference_and_log(self, log_to_neptune: bool = True):
         """
         Runs inference during evaluation.
         """
         self.configs.dump_dir = os.path.join(self.prediction_dir, f"step_{self.step}")
 
         inference_runner = InferenceRunner(self.configs, ModelType.BACKBONE)
+
+        self.print(f"Running inference for step {self.step}...")
         infer_predict(inference_runner, self.configs, ModelType.BACKBONE)
 
         # Log to neptune
-        if log_to_neptune and DIST_WRAPPER.rank == 0:
+        if log_to_neptune and self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+            self.print(f"Logging inference output to Neptune for step {self.step}")
             filepaths = glob(os.path.join(self.dump_dir, "**/*.cif"), recursive=True)
             files_dict = {f"structures/{Path(fp).name}": fp for fp in filepaths}
             self.neptune_run.log_files(files=files_dict, step=self.step)

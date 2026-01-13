@@ -657,7 +657,7 @@ class ArtiosBackboneTrainer(object):
         infer_predict(inference_runner, self.configs, ModelType.BACKBONE)
 
         # Log to neptune
-        if log_to_neptune:
+        if log_to_neptune and DIST_WRAPPER.rank == 0:
             filepaths = glob(os.path.join(self.dump_dir, "**/*.cif"), recursive=True)
             files_dict = {f"structures/{Path(fp).name}": fp for fp in filepaths}
             self.neptune_run.log_files(files=files_dict, step=self.step)

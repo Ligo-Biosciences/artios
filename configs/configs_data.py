@@ -196,10 +196,10 @@ data_configs = {
         "complex_ligand_preference_prob": 0.9,
         "ligand_region_count_probs": {"1": 0.5, "2": 0.4, "3": 0.07, "4": 0.03},
         "ligand_bfs_atom_count_probs": {
-            "1": 0.1,
-            "2": 0.225,
+            "1": 0.15,
+            "2": 0.2,
             "3": 0.25,
-            "4": 0.225,
+            "4": 0.2,
             "5": 0.125,
             "6": 0.075,
         },

@@ -630,6 +630,12 @@ class BaseSingleDataset(Dataset):
         # )
         timings["assign_binding_target"] = time.time() - t3
 
+        # DEBUG prints
+        # print the label_asym_id of the atoms in the structure with mol_type as ligand
+        ligand_atoms = cropped_atom_array[cropped_atom_array.chain_mol_type == "ligand"]
+        logger.info(f"the ligand atoms are: {ligand_atoms}")
+        logger.info(f"ligand_atoms label_asym_id: {ligand_atoms.label_asym_id}")
+
         # Motif handling
         tmotif = time.time()
         cropped_atom_array = self._get_motif(

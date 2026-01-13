@@ -211,10 +211,10 @@ def save_model_output_to_cif(
         match model_type:
             case ModelType.BACKBONE:
                 uid = int(output_dir.name)
-                output_path = output_dir / f"backbone_{uid}.cif"
+                output_path = output_dir / f"{pdb_id}_backbone_{uid}.cif"
             case ModelType.PACKING:
                 uid = int(output_dir.parent.name)
-                output_path = output_dir / f"uid_{uid}_packing_{idx}.cif"
+                output_path = output_dir / f"{pdb_id}_uid_{uid}_packing_{idx}.cif"
             case _:
                 assert_never(model_type)
 

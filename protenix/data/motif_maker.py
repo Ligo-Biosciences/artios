@@ -375,9 +375,6 @@ class MotifMaker:
             ligand_array = atom_array[ligand_motif_chain_mask]
             ligand_graph = ligand_array.bonds.as_graph()
             graph_nodes = list(ligand_graph.nodes())
-            logger.info(f"ligand_array has {len(ligand_array)} atoms")
-            logger.info(f"graph_nodes: {graph_nodes[:20]}...")  # first 20 nodes
-            logger.info(f"full_ligand_indices: {full_ligand_indices[:20]}...")
 
             if len(graph_nodes) == 0:
                 logger.warning("No nodes in ligand graph. Returning empty motif mask.")

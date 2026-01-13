@@ -159,7 +159,7 @@ def save_model_output_to_cif(
     model_type: ModelType,
     atom_array: List[AtomArray],
     n_atom: int,
-    pdb_id: str,
+    sample_name: str,
     field_in_b_factor_col: Optional[str] = None,
 ):
     """
@@ -170,7 +170,7 @@ def save_model_output_to_cif(
         output: ModelOutput containing model predictions
         atom_array: Input AtomArray structure
         n_atom: Number of atoms in the input atom array
-        pdb_id: PDB identifier for the structure
+        sample_name: Identifier for the structure
         field_in_b_factor_col (Optional): Field in the AtomArray to use for the b-factor column.
 
     Returns:
@@ -211,10 +211,10 @@ def save_model_output_to_cif(
         match model_type:
             case ModelType.BACKBONE:
                 uid = int(output_dir.name)
-                output_path = output_dir / f"{pdb_id}_backbone_{uid}.cif"
+                output_path = output_dir / f"{sample_name}_backbone_{uid}.cif"
             case ModelType.PACKING:
                 uid = int(output_dir.parent.name)
-                output_path = output_dir / f"{pdb_id}_uid_{uid}_packing_{idx}.cif"
+                output_path = output_dir / f"{sample_name}_uid_{uid}_packing_{idx}.cif"
             case _:
                 assert_never(model_type)
 
@@ -224,7 +224,7 @@ def save_model_output_to_cif(
                 pred_coordinate=torch.Tensor(sample_coords),
                 output_fpath=output_path,
                 entity_poly_type=None,
-                pdb_id=pdb_id,
+                pdb_id=sample_name,
                 field_in_b_factor_col=field_in_b_factor_col,
             )
             saved_files.append(output_path)
@@ -242,6 +242,7 @@ def save_trajectory_to_pdb(
     model_type: ModelType,
     atom_array: List[AtomArray],
     n_atom: int,
+    sample_name: str,
     step_stride: int = 1,  # save every nth step
 ) -> List[Path]:
     """
@@ -252,11 +253,11 @@ def save_trajectory_to_pdb(
 
     Args:
         output_dir_list: List of output directory paths for each sample
-        trajectory: Diffusion trajectory tensor of shape [batch, n_sample, n_steps+1, n_atom, 3]
+        output: ModelOutput containing model predictions
+        model_type: ModelType.
         atom_array: Input AtomArray structure (topology is constant across trajectory)
         n_atom: Number of atoms in the input atom array
-        pdb_id: PDB identifier for the structure
-        model_type: Type of model (BACKBONE or PACKING)
+        sample_name: Identifier for the structure
         step_stride: Save every nth step (default 1 = save all steps)
 
     Returns:
@@ -314,11 +315,14 @@ def save_trajectory_to_pdb(
         match model_type:
             case ModelType.BACKBONE:
                 uid = int(output_dir.name)
-                output_path = output_dir / f"backbone_{uid}_trajectory.pdb"
+                output_path = (
+                    output_dir / f"{sample_name}_backbone_{uid}_trajectory.pdb"
+                )
             case ModelType.PACKING:
                 uid = int(output_dir.parent.name)
                 output_path = (
-                    output_dir / f"uid_{uid}_packing_{sample_idx}_trajectory.pdb"
+                    output_dir
+                    / f"{sample_name}_uid_{uid}_packing_{sample_idx}_trajectory.pdb"
                 )
             case _:
                 assert_never(model_type)

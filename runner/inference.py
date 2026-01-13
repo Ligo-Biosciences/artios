@@ -228,7 +228,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                             model_type=model_type,
                             atom_array=context.basic.atom_array,
                             n_atom=n_atom,
-                            pdb_id=sample_name,
+                            sample_name=sample_name,
                             field_in_b_factor_col="is_motif",
                         )
                         if output.trajectory is not None:
@@ -238,7 +238,8 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                                 model_type=model_type,
                                 atom_array=context.basic.atom_array,
                                 n_atom=n_atom,
-                                step_stride=configs.sample_diffusion.trajectory_step_stride,  # TODO: make configurable!
+                                sample_name=sample_name,
+                                step_stride=configs.sample_diffusion.trajectory_step_stride,
                             )
                         parent_dir = os.path.dirname(runner.dump_dir)
                         mapping_path = opjoin(
@@ -255,7 +256,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                             model_type=model_type,
                             atom_array=context.basic.atom_array,
                             n_atom=n_atom,
-                            pdb_id=sample_name,
+                            sample_name=sample_name,
                             field_in_b_factor_col="is_motif",
                         )
 

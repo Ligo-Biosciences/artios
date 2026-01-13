@@ -184,7 +184,7 @@ model_configs = {
         "upper_guidance_limit_weight": 3.0,
         "beta_mean": 0.5,
         "beta_std": 0.233,
-        "track_trajectory": True,
+        "track_trajectory": False,
         "trajectory_step_stride": 10,
         "centre_and_augment_coords_during_sampling": True,
     },

@@ -231,7 +231,6 @@ class MotifMaker:
         self,
         atom_array: AtomArray,
         seed_coord: np.ndarray,
-        is_motif: np.ndarray,
         exclude_asym_id: str,
     ) -> np.ndarray:
         """
@@ -244,18 +243,19 @@ class MotifMaker:
         Args:
             atom_array (AtomArray): Full atom array.
             seed_coord (np.ndarray): Coordinates of the seed point.
-            is_motif (np.ndarray): Current motif mask to update.
             exclude_asym_id (str): The main ligand's asym_id to exclude from consideration.
 
         Returns:
             np.ndarray: Updated motif mask with supplementary ligand atoms added.
         """
+        supplementary_ligand_mask = np.zeros(len(atom_array), dtype=int)
+
         # Find all ligand atoms (excluding the main ligand)
         ligand_mask = atom_array.chain_mol_type == "ligand"
         other_ligand_mask = ligand_mask & (atom_array.label_asym_id != exclude_asym_id)
 
         if not other_ligand_mask.any():
-            return is_motif
+            return supplementary_ligand_mask
 
         # Calculate distances from seed point to all other ligand atoms
         other_ligand_indices = np.where(other_ligand_mask)[0]
@@ -265,7 +265,7 @@ class MotifMaker:
         # Find atoms within distance threshold
         within_distance_mask = distances <= self.supplementary_ligand_distance
         if not within_distance_mask.any():
-            return is_motif
+            return supplementary_ligand_mask
 
         # Get unique ligand chains that have atoms within distance
         nearby_indices = other_ligand_indices[within_distance_mask]
@@ -291,15 +291,14 @@ class MotifMaker:
             graph_nodes = list(chain_graph.nodes())
 
             if full_chain_mask.sum() == 1 or len(graph_nodes) == 0:
-                is_motif[closest_idx] = 1
+                supplementary_ligand_mask[closest_idx] = 1
                 continue
 
             # Find the local index of the closest atom in the chain
             full_chain_indices = np.where(full_chain_mask)[0]
             local_closest_idx = np.where(full_chain_indices == closest_idx)[0]
             if len(local_closest_idx) == 0 or local_closest_idx[0] not in graph_nodes:
-                # Closest atom not in graph, pick a random node instead
-                seed_node = np.random.choice(graph_nodes)
+                continue
             else:
                 seed_node = local_closest_idx[0]
 
@@ -309,9 +308,9 @@ class MotifMaker:
 
             # Add to motif
             selected_indices = full_chain_indices[nodes]
-            is_motif[selected_indices] = 1
+            supplementary_ligand_mask[selected_indices] = 1
 
-        return is_motif
+        return supplementary_ligand_mask
 
     def _generate_ligand_motif_mask(self, atom_array: AtomArray) -> np.ndarray:
         """
@@ -355,38 +354,25 @@ class MotifMaker:
         else:
             ligand_motif_asym_id = np.random.choice(ligand_asym_ids)
 
-        ligand_atom_mask = (
+        ligand_motif_chain_mask = (
             atom_array.label_asym_id == ligand_motif_asym_id
         ) & ligand_mask
 
-        if np.random.rand() < self.whole_ligand_prob or ligand_atom_mask.sum() == 1:
-            if np.random.rand() < self.drop_ligand_motif_prob:
-                is_motif[ligand_atom_mask] = 0
-            else:
-                is_motif[ligand_atom_mask] = 1
-
-            # Get seed point from ligand
-            ligand_atoms = atom_array[ligand_atom_mask]
+        if (
+            np.random.rand() < self.whole_ligand_prob
+            or ligand_motif_chain_mask.sum() == 1
+        ):
+            ligand_atoms = atom_array[ligand_motif_chain_mask]
             seed_coord = get_random_seed_atom_from_array(ligand_atoms)
 
-            # Add surrounding residues
             surrounding_mask = self._generate_motif_around_point_mask(
                 point_coord=seed_coord,
                 atom_array=atom_array,
             )
-            is_motif[surrounding_mask > 0] = 1
-
-            # Add supplementary ligands near seed point
-            is_motif = self._add_supplementary_ligands(
-                atom_array, seed_coord, is_motif, ligand_motif_asym_id
-            )
-
-            if np.random.rand() < self.drop_ligand_motif_prob:
-                is_motif[ligand_atom_mask] = 0
 
         else:
             # Add partial ligand to motif with potentially multiple non-contiguous regions
-            ligand_array = atom_array[ligand_atom_mask]
+            ligand_array = atom_array[ligand_motif_chain_mask]
             ligand_graph = ligand_array.bonds.as_graph()
             graph_nodes = list(ligand_graph.nodes())
 
@@ -397,12 +383,10 @@ class MotifMaker:
                 )
                 return is_motif
 
-            # Sample number of regions
             region_counts = [int(k) for k in self.ligand_region_count_probs.keys()]
             region_probs = list(self.ligand_region_count_probs.values())
             num_regions = int(np.random.choice(region_counts, p=region_probs))
 
-            # Select non-adjacent seed atoms
             seed_atoms = select_non_adjacent_seeds(
                 ligand_graph, graph_nodes, num_regions
             )
@@ -414,19 +398,15 @@ class MotifMaker:
                 nodes = bfs_nodes_by_count(ligand_graph, seed_atom, num_atoms)
                 all_motif_nodes.extend(nodes)
 
-            # Remove duplicates (in case of overlapping regions)
+            # Remove duplicates
             all_motif_nodes = list(set(all_motif_nodes))
 
             # Mark these ligand atoms as motif
-            full_ligand_indices = np.where(ligand_atom_mask)[0]
-            partial_ligand_indices = full_ligand_indices[all_motif_nodes]
-            if np.random.rand() < self.drop_ligand_motif_prob:
-                is_motif[partial_ligand_indices] = 0
-            else:
-                is_motif[partial_ligand_indices] = 1
+            full_ligand_indices = np.where(ligand_motif_chain_mask)[0]
+            ligand_motif_chain_mask = full_ligand_indices[all_motif_nodes]
 
             # Get seed point from partial ligand
-            partial_ligand_atoms = atom_array[partial_ligand_indices]
+            partial_ligand_atoms = atom_array[ligand_motif_chain_mask]
             seed_coord = get_random_seed_atom_from_array(partial_ligand_atoms)
 
             # Add surrounding residues
@@ -434,12 +414,24 @@ class MotifMaker:
                 point_coord=seed_coord,
                 atom_array=atom_array,
             )
-            is_motif[surrounding_mask > 0] = 1
 
-            # Add supplementary ligands near seed point
-            is_motif = self._add_supplementary_ligands(
-                atom_array, seed_coord, is_motif, ligand_motif_asym_id
-            )
+        if surrounding_mask.sum() == 0:
+            # Avoid returning motif containing solely ligand.
+            return np.zeros(len(atom_array), dtype=int)
+
+        is_motif[surrounding_mask > 0] = 1
+
+        if np.random.rand() < self.drop_ligand_motif_prob:
+            is_motif[ligand_motif_chain_mask] = 0
+        else:
+            is_motif[ligand_motif_chain_mask] = 1
+
+        # Add supplementary ligands near seed point
+        supplementary_ligand_mask = self._add_supplementary_ligands(
+            atom_array, seed_coord, is_motif, ligand_motif_asym_id
+        )
+
+        is_motif[supplementary_ligand_mask > 0] = 1
 
         return is_motif
 
@@ -559,18 +551,16 @@ class MotifMaker:
 
         is_motif = np.zeros(len(atom_array), dtype=int)
 
-        # Pick radius
+        # Find polymer atoms within sphere
         r = np.random.uniform(self.r_min, self.r_max)
 
-        # Calculate distances
         distances = np.linalg.norm(atom_array.coord - point_coord, axis=-1)
         within_radius_mask = distances <= r
 
-        # Filter for polymer atoms in sphere
         polymer_mask = np.isin(atom_array.chain_mol_type, ["protein", "RNA", "DNA"])
         atoms_in_sphere_mask = within_radius_mask & polymer_mask
 
-        # Apply optional mask if provided
+        # Apply optional mask
         if optional_mask is not None:
             atoms_in_sphere_mask = atoms_in_sphere_mask & optional_mask
 

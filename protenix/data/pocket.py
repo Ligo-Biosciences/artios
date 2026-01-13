@@ -6,6 +6,7 @@ The polarity detection algorithm label_polarity is modified to use RASA.
 """
 
 import logging
+from dataclasses import replace
 
 import biotite.structure as struc  # type: ignore
 import numpy as np
@@ -36,28 +37,28 @@ def label_polarity(
     Uses solvent accessible surface area (SASA) to determine if atoms
     defining each sphere are buried or exposed to solvent.
 
-    Modifies spheres in place.
-
     Args:
         spheres: list of alpha-spheres
         atomarray: Biotite AtomArray with structure data
         polar_probe_radius: Probe radius for SASA calculation (Å)
 
     Returns:
-        list[AlphaSphere]: Input spheres with is_buried attribute set
+        list[AlphaSphere]: New list of spheres with is_buried attribute set
     """
     # Compute SASA for all atoms
     atom_sasa = struc.sasa(atomarray, probe_radius=polar_probe_radius)
 
     # Label each sphere based on SASA of its defining atoms
+    labeled_spheres = []
     for sphere in spheres:
         # Get SASA values for atoms defining this sphere
         defining_atom_sasa = atom_sasa[sphere.atom_indices]
 
         # Sphere is buried if all defining atoms have low SASA (< sasa_cutoff Å²)
-        sphere.is_buried = np.all(defining_atom_sasa <= sasa_cutoff)
+        is_buried = bool(np.all(defining_atom_sasa <= sasa_cutoff))
+        labeled_spheres.append(replace(sphere, is_buried=is_buried))
 
-    return spheres
+    return labeled_spheres
 
 
 def label_confidence(
@@ -71,25 +72,25 @@ def label_confidence(
     b_factor field to determine if atoms defining each sphere are confidently
     predicted.
 
-    Modifies spheres in place.
-
     Args:
         spheres: list of alpha-spheres
         atomarray: Biotite AtomArray with structure data containing b_factor (pLDDT)
         plddt_cutoff: Minimum pLDDT score for confident prediction. Default: 70.0
 
     Returns:
-        list[AlphaSphere]: Input spheres with is_confident attribute set
+        list[AlphaSphere]: New list of spheres with is_confident attribute set
     """
     # Get pLDDT scores from b_factor field for all atoms
     atom_plddt = atomarray.b_factor
 
     # Label each sphere based on pLDDT of its defining atoms
+    labeled_spheres = []
     for sphere in spheres:
         defining_atom_plddt = atom_plddt[sphere.atom_indices]
-        sphere.is_confident = np.all(defining_atom_plddt >= plddt_cutoff)
+        is_confident = bool(np.all(defining_atom_plddt >= plddt_cutoff))
+        labeled_spheres.append(replace(sphere, is_confident=is_confident))
 
-    return spheres
+    return labeled_spheres
 
 
 def filter_low_confidence_spheres(

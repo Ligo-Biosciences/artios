@@ -199,10 +199,18 @@ class InferenceRunner(object):
             logger.info(msg)
 
 
-def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) -> None:
+def infer_predict(
+    runner: InferenceRunner,
+    configs: Any,
+    model_type: ModelType,
+    use_distributed_sampler: bool = True,
+) -> None:
     logger.info(f"Loading data from\n{configs.input_json_path}")
     try:
-        dataloader = get_inference_dataloader(configs=configs)
+        dataloader = get_inference_dataloader(
+            configs=configs,
+            use_distributed_sampler=use_distributed_sampler,
+        )
         logger.info(f"Loaded {len(dataloader)} samples to do inference on.")
     except Exception as e:
         error_message = f"{e}:\n{traceback.format_exc()}"

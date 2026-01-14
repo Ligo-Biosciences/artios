@@ -37,7 +37,11 @@ from protenix.data.json_parser import (
 )
 from protenix.data.motif_parser import Motif, MotifLigand, MotifResidue
 from protenix.data.parser import MMCIFParser
-from protenix.data.rdkit import AtomInfo, smiles_to_atom_info
+from protenix.data.rdkit import (
+    AtomInfo,
+    infer_atom_map_from_substructure,
+    smiles_to_atom_info,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -356,7 +360,7 @@ def build_motif_ligand(motif_ligand: MotifLigand) -> AtomArray:
     4. Adds is_motif annotation
 
     For CCD ligands: matches by atom_name
-    For SMILES ligands: uses atom_map for mapping
+    For SMILES ligands: uses atom_map if provided, otherwise infers via substructure matching
 
     Args:
         motif_ligand: MotifLigand dataclass with cif_res_name, atom_names,
@@ -371,55 +375,62 @@ def build_motif_ligand(motif_ligand: MotifLigand) -> AtomArray:
 
     is_motif = np.zeros(len(full_ligand_array), dtype=bool)
 
-    # CCD: match by atom_name
-    if isinstance(motif_ligand.full_ligand, CCDLigand):
-        for i, atom_name in enumerate(motif_ligand.atom_names):
-            match_idx = np.where(full_ligand_array.atom_name == atom_name)[0]
-            if len(match_idx) == 0:
-                raise ValueError(
-                    f"Motif atom '{atom_name}' not found in CCD ligand "
-                    f"'{motif_ligand.full_ligand.codes}'. Available atoms: "
-                    f"{full_ligand_array.atom_name.tolist()}"
+    match motif_ligand.full_ligand:
+        case CCDLigand():
+            # CCD: match by atom_name directly
+            for i, atom_name in enumerate(motif_ligand.atom_names):
+                match_idx = np.where(full_ligand_array.atom_name == atom_name)[0]
+                if len(match_idx) == 0:
+                    raise ValueError(
+                        f"Motif atom '{atom_name}' not found in CCD ligand "
+                        f"'{motif_ligand.full_ligand.codes}'. Available atoms: "
+                        f"{full_ligand_array.atom_name.tolist()}"
+                    )
+                full_ligand_array.coord[match_idx[0]] = motif_ligand.coords[i]
+                is_motif[match_idx[0]] = True
+
+        case SMILESLigand(atom_map=atom_map, smiles=smiles):
+            if atom_map is not None:
+                # Use provided atom_map: CIF name -> map number -> full atom name
+                map_num_to_atom_name = ligand_info.atom_map_to_atom_name
+                cif_to_full_atom_name = {}
+                for cif_atom_name in motif_ligand.atom_names:
+                    if cif_atom_name not in atom_map:
+                        raise KeyError(
+                            f"CIF atom '{cif_atom_name}' not found in atom_map. "
+                            f"All motif atoms must be mapped. atom_map keys: "
+                            f"{list(atom_map.keys())}"
+                        )
+                    map_num = atom_map[cif_atom_name]
+                    if map_num not in map_num_to_atom_name:
+                        raise KeyError(
+                            f"Atom map number {map_num} (for '{cif_atom_name}') not found "
+                            f"in SMILES. Use [atom:{map_num}] notation in SMILES string. "
+                            f"Available map numbers: {list(map_num_to_atom_name.keys())}"
+                        )
+                    cif_to_full_atom_name[cif_atom_name] = map_num_to_atom_name[map_num]
+            else:
+                # Infer mapping via substructure matching
+                cif_to_full_atom_name = infer_atom_map_from_substructure(
+                    motif_elements=motif_ligand.elements,
+                    motif_coords=motif_ligand.coords,
+                    motif_atom_names=motif_ligand.atom_names,
+                    full_smiles=smiles,
                 )
-            full_ligand_array.coord[match_idx[0]] = motif_ligand.coords[i]
-            is_motif[match_idx[0]] = True
 
-    # SMILES: use atom_map for coordinate transfer
-    else:
-        atom_map = motif_ligand.full_ligand.atom_map
-        if atom_map is None:
-            raise ValueError(
-                f"SMILES ligand requires atom_map for coordinate transfer. "
-                f"SMILES: {motif_ligand.full_ligand.smiles}"
-            )
+            for i, cif_atom_name in enumerate(motif_ligand.atom_names):
+                target_atom_name = cif_to_full_atom_name[cif_atom_name]
+                match_idx = np.where(full_ligand_array.atom_name == target_atom_name)[0]
+                if len(match_idx) == 0:
+                    raise ValueError(
+                        f"Atom name '{target_atom_name}' not found in ligand array. "
+                        f"This is an internal error."
+                    )
+                full_ligand_array.coord[match_idx[0]] = motif_ligand.coords[i]
+                is_motif[match_idx[0]] = True
 
-        map_num_to_atom_name = ligand_info.atom_map_to_atom_name
-
-        for i, cif_atom_name in enumerate(motif_ligand.atom_names):
-            if cif_atom_name not in atom_map:
-                raise KeyError(
-                    f"CIF atom '{cif_atom_name}' not found in atom_map. "
-                    f"All motif atoms must be mapped. atom_map keys: "
-                    f"{list(atom_map.keys())}"
-                )
-
-            map_num = atom_map[cif_atom_name]
-            if map_num not in map_num_to_atom_name:
-                raise KeyError(
-                    f"Atom map number {map_num} (for '{cif_atom_name}') not found "
-                    f"in SMILES. Use [atom:{map_num}] notation in SMILES string. "
-                    f"Available map numbers: {list(map_num_to_atom_name.keys())}"
-                )
-
-            target_atom_name = map_num_to_atom_name[map_num]
-            match_idx = np.where(full_ligand_array.atom_name == target_atom_name)[0]
-            if len(match_idx) == 0:
-                raise ValueError(
-                    f"Atom name '{target_atom_name}' not found in ligand array. "
-                    f"This is an internal error."
-                )
-            full_ligand_array.coord[match_idx[0]] = motif_ligand.coords[i]
-            is_motif[match_idx[0]] = True
+        case _:
+            assert_never(motif_ligand.full_ligand)
 
     full_ligand_array.set_annotation("is_motif", is_motif)
     full_ligand_array.set_annotation(

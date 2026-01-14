@@ -658,10 +658,13 @@ class ArtiosBackboneTrainer(object):
         self.print(f"Running inference for step {self.step}...")
         infer_predict(inference_runner, self.configs, ModelType.BACKBONE)
 
-        # Log to neptune
+        wait_for_all_processes()
+
         if log_to_neptune and self.configs.use_wandb and DIST_WRAPPER.rank == 0:
             self.print(f"Logging inference output to Neptune for step {self.step}")
             filepaths = glob(os.path.join(self.dump_dir, "**/*.cif"), recursive=True)
+            self.print(f"Found {len(filepaths)} files to log to Neptune")
+
             files_dict = {f"structures/{Path(fp).name}": fp for fp in filepaths}
             self.neptune_run.log_files(files=files_dict, step=self.step)
 

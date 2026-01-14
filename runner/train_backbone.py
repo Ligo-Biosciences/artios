@@ -658,9 +658,7 @@ class ArtiosBackboneTrainer(object):
         self.print(f"Running inference for step {self.step}...")
         infer_predict(inference_runner, self.configs, ModelType.BACKBONE)
 
-        wait_for_all_processes()
-
-        if log_to_neptune and self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+        if log_to_neptune and self.configs.use_wandb:
             self.print(f"Logging inference output to Neptune for step {self.step}")
             filepaths = glob(os.path.join(self.dump_dir, "**/*.cif"), recursive=True)
             self.print(f"Found {len(filepaths)} files to log to Neptune")
@@ -678,7 +676,7 @@ class ArtiosBackboneTrainer(object):
             return
 
         # Perform inference during evaluation
-        if self.configs.run_training_time_inference:
+        if self.configs.run_training_time_inference and DIST_WRAPPER.rank == 0:
             self._run_inference_and_log()
 
         # Calculate and log weight norms for each parameter

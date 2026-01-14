@@ -653,7 +653,11 @@ class ArtiosBackboneTrainer(object):
         """
         self.configs.dump_dir = os.path.join(self.prediction_dir, f"step_{self.step}")
 
-        inference_runner = InferenceRunner(self.configs, ModelType.BACKBONE)
+        inference_runner = InferenceRunner(
+            self.configs,
+            ModelType.BACKBONE,
+            model=self.backbone_model,
+        )
 
         self.print(f"Running inference for step {self.step}...")
         infer_predict(

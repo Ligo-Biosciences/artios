@@ -19,7 +19,7 @@ import traceback
 from contextlib import nullcontext
 from dataclasses import dataclass
 from os.path import join as opjoin
-from typing import Any
+from typing import Any, Optional
 
 import torch
 import torch.distributed as dist
@@ -76,14 +76,17 @@ MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
 
 
 class InferenceRunner(object):
-    def __init__(self, configs: Any, model_type: ModelType) -> None:
+    def __init__(
+        self, configs: Any, model_type: ModelType, model: Optional[nn.Module] = None
+    ) -> None:
         self.configs = configs
         self.model_type = model_type
         self.model_config = MODEL_REGISTRY[model_type]
+        self._model_provided = model is not None
 
         self.init_basics()
         self.init_env()
-        self.init_model()
+        self.init_model(model)
         self.load_checkpoint()
 
     def init_env(self) -> None:
@@ -140,11 +143,18 @@ class InferenceRunner(object):
         self.error_dir = os.path.join(self.dump_dir, "ERR")
         os.makedirs(self.error_dir, exist_ok=True)
 
-    def init_model(self) -> None:
+    def init_model(self, model: Optional[nn.Module] = None) -> None:
         model_class = self.model_config.model_class
-        self.model = model_class(self.configs).to(self.device)
+        if model is None:
+            self.model = model_class(self.configs).to(self.device)
+        else:
+            self.model = model.to(self.device)
 
     def load_checkpoint(self) -> None:
+        if self._model_provided:
+            self.model.eval()
+            return
+
         def _load_checkpoint(
             checkpoint_path: str,
             model: nn.Module,

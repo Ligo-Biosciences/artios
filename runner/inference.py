@@ -203,6 +203,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
     logger.info(f"Loading data from\n{configs.input_json_path}")
     try:
         dataloader = get_inference_dataloader(configs=configs)
+        logger.info(f"Loaded {len(dataloader)} samples to do inference on.")
     except Exception as e:
         error_message = f"{e}:\n{traceback.format_exc()}"
         logger.info(error_message)
@@ -218,6 +219,7 @@ def infer_predict(runner: InferenceRunner, configs: Any, model_type: ModelType) 
                 n_atom = context.basic.n_atom[0]
                 n_token = context.basic.n_token[0]
 
+                logger.info(f"Running inference for sample {sample_name}...")
                 output = runner.predict(context)
 
                 match model_type:

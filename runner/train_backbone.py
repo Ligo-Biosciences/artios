@@ -647,7 +647,7 @@ class ArtiosBackboneTrainer(object):
         self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
         return output_paths
 
-    def _run_inference_and_log(self, log_to_neptune: bool = True):
+    def _run_inference_and_log(self, log_outputs_to_neptune: bool = True):
         """
         Runs inference during evaluation.
         """
@@ -667,7 +667,7 @@ class ArtiosBackboneTrainer(object):
             use_distributed_sampler=False,
         )
 
-        if log_to_neptune and self.configs.use_wandb:
+        if log_outputs_to_neptune and self.configs.use_wandb:
             self.print(f"Logging inference output to Neptune for step {self.step}")
             filepaths = glob(
                 os.path.join(self.prediction_dir, f"step_{self.step}", "**/*.cif"),
@@ -689,7 +689,7 @@ class ArtiosBackboneTrainer(object):
 
         # Perform inference during evaluation
         if self.configs.run_training_time_inference and DIST_WRAPPER.rank == 0:
-            self._run_inference_and_log()
+            self._run_inference_and_log(log_outputs_to_neptune=True)
 
         # Calculate and log weight norms for each parameter
         weight_norms = {}

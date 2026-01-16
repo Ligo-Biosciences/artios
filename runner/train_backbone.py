@@ -4,6 +4,7 @@ import os
 import time
 import warnings
 from contextlib import nullcontext
+from glob import glob
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,7 @@ from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from protenix.utils.ema_utils import (
     calculate_post_hoc_ema,  # , log_ema_validation_curves
 )
+from protenix.utils.inference import ModelType
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.monitoring import grad_norm
@@ -41,6 +43,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer
 from runner.ema import PowerLawEMAWrapper
+from runner.inference import InferenceRunner, infer_predict
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -466,9 +469,6 @@ class ArtiosBackboneTrainer(object):
 
             self.backbone_model.load_state_dict(current_state)
 
-        # if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-        #     log_ema_validation_curves(all_eval_metrics, self.step, self.neptune_run)
-
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "") -> dict:
         """Run evaluation loop on all test datasets.
@@ -647,6 +647,37 @@ class ArtiosBackboneTrainer(object):
         self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
         return output_paths
 
+    def _run_inference_and_log(self, log_outputs_to_neptune: bool = True):
+        """
+        Runs inference during evaluation.
+        """
+        self.configs.dump_dir = os.path.join(self.prediction_dir, f"step_{self.step}")
+
+        inference_runner = InferenceRunner(
+            self.configs,
+            ModelType.BACKBONE,
+            model=self.backbone_model,
+        )
+
+        self.print(f"Running inference for step {self.step}...")
+        infer_predict(
+            inference_runner,
+            self.configs,
+            ModelType.BACKBONE,
+            use_distributed_sampler=False,
+        )
+
+        if log_outputs_to_neptune and self.configs.use_wandb:
+            self.print(f"Logging inference output to Neptune for step {self.step}")
+            filepaths = glob(
+                os.path.join(self.prediction_dir, f"step_{self.step}", "**/*.cif"),
+                recursive=True,
+            )
+            self.print(f"Found {len(filepaths)} files to log to Neptune")
+
+            files_dict = {f"structures/{Path(fp).name}": fp for fp in filepaths}
+            self.neptune_run.log_files(files=files_dict, step=self.step)
+
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""
         if (
@@ -655,6 +686,10 @@ class ArtiosBackboneTrainer(object):
             or not self.configs.monitor.weight_norm
         ):
             return
+
+        # Perform inference during evaluation
+        if self.configs.run_training_time_inference and DIST_WRAPPER.rank == 0:
+            self._run_inference_and_log(log_outputs_to_neptune=True)
 
         # Calculate and log weight norms for each parameter
         weight_norms = {}

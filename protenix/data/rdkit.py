@@ -19,6 +19,7 @@ from atomworks.io.tools.rdkit import (
 )
 from biotite.structure import AtomArray
 from rdkit import Chem
+from rdkit.Chem import AdjustQueryParameters, AdjustQueryProperties
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,110 @@ def smiles_to_atom_info(smiles: str, sanitize: bool = True) -> AtomInfo:
         smiles=smiles, generate_conformers=True, sanitize=sanitize
     )
     return rdkit_mol_to_atom_info(mol)
+
+
+def motif_to_rdkit_mol(
+    elements: tuple[str, ...],
+    coords: np.ndarray,
+) -> Chem.Mol:
+    """Create RDKit mol from elements and coordinates, inferring bonds.
+
+    Only infers connectivity (which atoms are bonded), not bond orders.
+    This is sufficient for substructure matching and avoids failures on
+    molecular fragments that can't satisfy valence rules.
+
+    Args:
+        elements: Tuple of element symbols (e.g., ("C", "N", "O"))
+        coords: (n_atoms, 3) array of coordinates
+
+    Returns:
+        RDKit Mol with inferred connectivity (all single bonds)
+    """
+    from rdkit.Chem import rdDetermineBonds
+
+    # Create editable mol and add atoms
+    mol = Chem.RWMol()
+    for element in elements:
+        atom = Chem.Atom(element)
+        mol.AddAtom(atom)
+
+    # Add conformer with coordinates
+    conf = Chem.Conformer(len(elements))
+    for i, coord in enumerate(coords):
+        conf.SetAtomPosition(i, coord.tolist())
+    mol.AddConformer(conf)
+
+    # Infer connectivity only (not bond orders) - sufficient for substructure matching
+    # Bond order inference fails on molecular fragments that can't satisfy valence rules
+    rdDetermineBonds.DetermineConnectivity(mol)
+
+    return mol.GetMol()
+
+
+def infer_atom_map_from_substructure(
+    motif_elements: tuple[str, ...],
+    motif_coords: np.ndarray,
+    motif_atom_names: tuple[str, ...],
+    full_smiles: str,
+) -> dict[str, str]:
+    """Infer atom name mapping by RDKit's substructure matching of the
+    motif against the full ligand.
+    Uses RDKit substructure matching to find which atoms in the full ligand
+    correspond to the motif atoms, then returns a direct mapping from
+    CIF atom names to the generated atom names in the full ligand.
+
+    Args:
+        motif_elements: Element symbols from motif CIF
+        motif_coords: Coordinates from motif CIF
+        motif_atom_names: Atom names from motif CIF (e.g., "C1", "N3")
+        full_smiles: SMILES string of full ligand
+
+    Returns:
+        Dict mapping CIF atom names to full ligand atom names (e.g., {"C1": "C3", "N3": "N1"})
+
+    Raises:
+        ValueError: If substructure match fails
+    """
+    motif_mol = motif_to_rdkit_mol(motif_elements, motif_coords)
+
+    # Convert to query mol with flexible bond matching (ignore bond orders)
+    # This is necessary because motif_to_rdkit_mol only infers connectivity (single bonds)
+    # while the full mol from SMILES has proper bond orders (aromatic/double)
+    params = AdjustQueryParameters()
+    params.makeBondsGeneric = True  # Match any bond type
+    query_mol = AdjustQueryProperties(motif_mol, params)
+
+    # Build RDKit mol from SMILES
+    full_mol = Chem.MolFromSmiles(full_smiles)
+    if full_mol is None:
+        raise ValueError(f"Failed to parse SMILES: {full_smiles}")
+
+    # Substructure match: returns tuple of full_mol atom indices
+    # that correspond to motif_mol atoms 0, 1, 2, ...
+    match = full_mol.GetSubstructMatch(query_mol)
+
+    if not match:
+        raise ValueError(
+            f"Substructure match failed. Motif ({len(motif_elements)} atoms) "
+            f"not found in full ligand SMILES. This can happen with symmetric "
+            f"molecules or if the motif contains atoms not in the full ligand."
+        )
+
+    # Build index -> atom_name mapping for full mol
+    element_count: Counter = Counter()
+    idx_to_atom_name = {}
+    for atom in full_mol.GetAtoms():
+        element = atom.GetSymbol().upper()
+        element_count[element] += 1
+        idx_to_atom_name[atom.GetIdx()] = f"{element}{element_count[element]}"
+
+    # Build direct mapping: CIF atom name -> full ligand atom name
+    cif_to_full_atom_name = {}
+    for motif_idx, full_idx in enumerate(match):
+        cif_atom_name = motif_atom_names[motif_idx]
+        cif_to_full_atom_name[cif_atom_name] = idx_to_atom_name[full_idx]
+
+    return cif_to_full_atom_name
 
 
 def lig_file_to_atom_info(lig_file_path: str) -> AtomInfo:

@@ -340,15 +340,21 @@ class DataPipeline(object):
         )
 
         if crop_method == "ContiguousCropping":
-            resovled_atom_num = cropped_atom_array.is_resolved.sum()
+            resolved = cropped_atom_array.is_resolved.sum()
             # The criterion of “more than 4 atoms” is chosen arbitrarily.
-            assert (
-                resovled_atom_num > 4
-            ), f"{resovled_atom_num=} <= 4 after ContiguousCropping"
+            assert resolved > 4, f"{resolved=} <= 4 after ContiguousCropping"
 
         assert (
             len(cropped_token_array) >= 10
         ), f"Only {len(cropped_token_array)} tokens after cropping. Trying again..."
+
+        non_lig_attrs = ["is_protein", "is_rna", "is_dna"]
+        num_non_lig_atoms = np.array(
+            [getattr(cropped_atom_array, x) for x in non_lig_attrs]
+        ).sum()
+        assert (
+            num_non_lig_atoms >= 25
+        ), f"Only {num_non_lig_atoms} non ligand atoms in structure. Trying again..."
 
         return (
             crop_method,

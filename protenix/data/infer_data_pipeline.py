@@ -31,31 +31,41 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", module="biotite")
 
 
-def get_inference_dataloader(configs: Any) -> DataLoader:
+def get_inference_dataloader(
+    configs: Any,
+    use_distributed_sampler: bool = True,
+) -> DataLoader:
     """
     Creates and returns a DataLoader for inference using the InferenceDataset.
 
     Args:
         configs: A configuration object containing the necessary parameters for the DataLoader.
+        use_distributed_sampler: Whether to use DistributedSampler to split data across ranks.
+            Set to False for training-time inference where only one rank runs inference
+            but should process all samples.
 
     Returns:
         A DataLoader object configured for inference.
     """
     inference_dataset = InferenceDataset(
         input_json_path=configs.input_json_path,
-        dump_dir=configs.dump_dir,
-        use_msa=configs.use_msa,
     )
-    sampler = DistributedSampler(
-        dataset=inference_dataset,
-        num_replicas=DIST_WRAPPER.world_size,
-        rank=DIST_WRAPPER.rank,
-        shuffle=False,
-    )
+
+    if use_distributed_sampler:
+        sampler = DistributedSampler(
+            dataset=inference_dataset,
+            num_replicas=DIST_WRAPPER.world_size,
+            rank=DIST_WRAPPER.rank,
+            shuffle=False,
+        )
+    else:
+        sampler = None
+
     dataloader = DataLoader(
         dataset=inference_dataset,
         batch_size=1,
         sampler=sampler,
+        shuffle=False,
         collate_fn=CollateContexts(
             atom_bin_ends=configs.data.padding.atom_bin_ends,
             token_bin_ends=configs.data.padding.token_bin_ends,
@@ -72,12 +82,8 @@ class InferenceDataset(Dataset):
     def __init__(
         self,
         input_json_path: str,
-        dump_dir: str,
-        use_msa: bool = True,
     ) -> None:
         self.input_json_path = input_json_path
-        self.dump_dir = dump_dir
-        self.use_msa = use_msa
         with open(self.input_json_path, "r") as f:
             self.inputs = json.load(f)
 

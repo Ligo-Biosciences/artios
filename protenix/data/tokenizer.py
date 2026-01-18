@@ -120,38 +120,46 @@ class AtomArrayTokenizer(object):
         """
         tokens = []
         total_atom_num = 0
+
+        # Pre-extract arrays once for O(1) access instead of O(n) per-element indexing
+        all_atom_names = self.atom_array.atom_name
+        all_elements = self.atom_array.element
+        all_mol_types = self.atom_array.mol_type
+        all_res_names = self.atom_array.res_name
+        all_is_motif_related = getattr(
+            self.atom_array,
+            "is_motif_related",
+            np.zeros(len(self.atom_array), dtype=int),
+        )
+
         for res in struc.residue_iter(self.atom_array):
             atom_num = len(res)
-            first_atom = res[0]
-            res_name = first_atom.res_name
-            mol_type = first_atom.mol_type
-            is_motif_related = getattr(first_atom, "is_motif_related", 0) == 1
+            start_idx = total_atom_num
+            end_idx = total_atom_num + atom_num
+
+            res_name = all_res_names[start_idx]
+            mol_type = all_mol_types[start_idx]
+            is_motif_related = all_is_motif_related[start_idx] == 1
+
             res_token = STD_RESIDUES.get(res_name, None)
             if res_token is not None and mol_type != "ligand" and not is_motif_related:
                 # for std residues
                 token = Token(res_token)
-                atom_indices = [
-                    i for i in range(total_atom_num, total_atom_num + atom_num)
-                ]
-                atom_names = [self.atom_array[i].atom_name for i in atom_indices]
-                token.atom_indices = atom_indices
-                token.atom_names = atom_names
+                token.atom_indices = list(range(start_idx, end_idx))
+                token.atom_names = all_atom_names[start_idx:end_idx].tolist()
                 tokens.append(token)
-                total_atom_num += atom_num
             else:
                 # for ligand and non-std residues
-                for atom in res:
-                    atom_elem = atom.element
-                    atom_token = ELEMS.get(atom_elem, None)
+                for i in range(start_idx, end_idx):
+                    atom_token = ELEMS.get(all_elements[i], None)
                     if atom_token is None:
-                        raise ValueError(f"Unknown atom element: {atom_elem}")
+                        raise ValueError(f"Unknown atom element: {all_elements[i]}")
                     token = Token(atom_token)
-                    token.atom_indices = [total_atom_num]
-                    token.atom_names = [
-                        self.atom_array[token.atom_indices[0]].atom_name
-                    ]
+                    token.atom_indices = [i]
+                    token.atom_names = [all_atom_names[i]]
                     tokens.append(token)
-                    total_atom_num += 1
+
+            total_atom_num = end_idx
 
         assert total_atom_num == len(self.atom_array)
         return tokens

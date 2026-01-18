@@ -254,17 +254,27 @@ class ContextGenerator(object):
         Returns:
             ReferenceConformerContext
         """
-        ref_pos = []
+        ref_pos = np.zeros_like(self.cropped_atom_array.coord)
         for ref_space_uid in np.unique(self.cropped_atom_array.ref_space_uid):
+            mask = self.cropped_atom_array.ref_space_uid == ref_space_uid
             res_ref_pos = random_transform(
-                self.cropped_atom_array.ref_pos[
-                    self.cropped_atom_array.ref_space_uid == ref_space_uid,
-                ],
+                self.cropped_atom_array.ref_pos[mask],
                 apply_augmentation=self.ref_pos_augment,
                 centralize=True,
             )
-            ref_pos.append(res_ref_pos)
-        ref_pos = np.concatenate(ref_pos)
+            ref_pos[mask] = res_ref_pos
+
+        # ref_pos = []
+        # for ref_space_uid in np.unique(self.cropped_atom_array.ref_space_uid):
+        #     res_ref_pos = random_transform(
+        #         self.cropped_atom_array.ref_pos[
+        #             self.cropped_atom_array.ref_space_uid == ref_space_uid,
+        #         ],
+        #         apply_augmentation=self.ref_pos_augment,
+        #         centralize=True,
+        #     )
+        #     ref_pos.append(res_ref_pos)
+        # ref_pos = np.concatenate(ref_pos)
 
         if self.lig_atom_rename:
             atom_names = self.get_renamed_atom_names()

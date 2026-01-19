@@ -11,7 +11,7 @@ from protenix.data.features import FullContext
 from protenix.model.loss import nll_loss
 from protenix.model.modules.mpnn import MPNN
 from protenix.model.output import ModelOutput
-from protenix.model.utils import Mode, masked_mean
+from protenix.model.utils import Mode
 from protenix.utils.casting import disable_autocast
 
 
@@ -167,30 +167,46 @@ class ArtiosMPNN(nn.Module):
             labels * F.log_softmax(logits, dim=-1), dim=-1
         )  # [batch, n_token]
 
-        for entity_name, entity_mask in entity_masks.items():
-            combined_mask = mask & entity_mask
-            if combined_mask.any():
-                entity_nll = masked_mean(per_position_nll, combined_mask, axes=-1)
-                metrics[f"nll_{entity_name}_loss"] = entity_nll.mean()
-
-        # Accuracy metrics
+        # Accuracy computation
         pred_tokens = logits.argmax(dim=-1)  # [batch, n_token]
         true_tokens = labels.argmax(dim=-1)  # [batch, n_token]
-        correct = (pred_tokens == true_tokens) & mask
+        correct = (pred_tokens == true_tokens).float()  # [batch, n_token]
 
-        # Overall accuracy
-        accuracy = correct.sum().float() / mask.sum().float().clamp(min=1e-6)
-        metrics["accuracy"] = accuracy
-
-        # Per-entity accuracy
+        eps = 1e-6
         for entity_name, entity_mask in entity_masks.items():
-            combined_mask = mask & entity_mask
-            if combined_mask.any():
-                entity_correct = correct & entity_mask
-                entity_acc = (
-                    entity_correct.sum().float()
-                    / combined_mask.sum().float().clamp(min=1e-6)
-                )
-                metrics[f"accuracy_{entity_name}"] = entity_acc
+            combined_mask = mask & entity_mask  # [batch, n_token]
+
+            # Compute per-batch NLL (following compute_entity_metrics pattern)
+            masked_nll = per_position_nll * combined_mask
+            sum_nll = masked_nll.sum(dim=-1)  # [batch]
+            count = combined_mask.sum(dim=-1).clamp(min=eps)  # [batch]
+            per_batch_nll = sum_nll / count  # [batch]
+
+            # Compute per-batch accuracy
+            masked_correct = correct * combined_mask
+            sum_correct = masked_correct.sum(dim=-1)  # [batch]
+            per_batch_acc = sum_correct / count  # [batch]
+
+            # Set NaN where no tokens of this type exist
+            no_tokens = combined_mask.sum(dim=-1) == 0
+            per_batch_nll = torch.where(
+                no_tokens,
+                torch.full_like(per_batch_nll, float("nan")),
+                per_batch_nll,
+            )
+            per_batch_acc = torch.where(
+                no_tokens,
+                torch.full_like(per_batch_acc, float("nan")),
+                per_batch_acc,
+            )
+
+            metrics[f"nll_{entity_name}_loss"] = per_batch_nll
+            metrics[f"accuracy_{entity_name}"] = per_batch_acc
+
+        # Overall accuracy (per-batch)
+        masked_correct_all = correct * mask
+        sum_correct_all = masked_correct_all.sum(dim=-1)  # [batch]
+        count_all = mask.sum(dim=-1).clamp(min=eps)  # [batch]
+        metrics["accuracy"] = sum_correct_all / count_all  # [batch]
 
         return loss, metrics

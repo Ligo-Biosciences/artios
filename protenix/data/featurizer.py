@@ -199,7 +199,8 @@ class ContextGenerator(object):
             entity_id=torch.Tensor(self.centre_atoms.entity_id_int).long(),
             sym_id=torch.Tensor(self.centre_atoms.sym_id_int).long(),
             restype=restype_onehot,
-            token_bonds=self.get_bonds(),
+            # NOTE: token_bonds disabled - expensive O(n_token^2) computation, currently unused
+            # token_bonds=self.get_bonds(),
         )
         return context
 

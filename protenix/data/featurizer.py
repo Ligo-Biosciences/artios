@@ -199,8 +199,7 @@ class ContextGenerator(object):
             entity_id=torch.Tensor(self.centre_atoms.entity_id_int).long(),
             sym_id=torch.Tensor(self.centre_atoms.sym_id_int).long(),
             restype=restype_onehot,
-            # NOTE: token_bonds disabled - expensive, only needed for MPNN
-            # token_bonds=self.get_bonds(),
+            token_bonds=self.get_bonds(),
         )
         return context
 
@@ -263,18 +262,6 @@ class ContextGenerator(object):
                 centralize=True,
             )
             ref_pos[mask] = res_ref_pos
-
-        # ref_pos = []
-        # for ref_space_uid in np.unique(self.cropped_atom_array.ref_space_uid):
-        #     res_ref_pos = random_transform(
-        #         self.cropped_atom_array.ref_pos[
-        #             self.cropped_atom_array.ref_space_uid == ref_space_uid,
-        #         ],
-        #         apply_augmentation=self.ref_pos_augment,
-        #         centralize=True,
-        #     )
-        #     ref_pos.append(res_ref_pos)
-        # ref_pos = np.concatenate(ref_pos)
 
         if self.lig_atom_rename:
             atom_names = self.get_renamed_atom_names()
@@ -406,8 +393,7 @@ class ContextGenerator(object):
             atom_mask=torch.ones(len(self.cropped_atom_array)).bool(),
             is_resolved=torch.Tensor(self.cropped_atom_array.is_resolved).bool(),
             centre_atom_is_resolved=torch.Tensor(centre_atom_is_resolved).bool(),
-            # NOTE: backbone_mask disabled - expensive, only needed for MPNN
-            # backbone_mask=torch.Tensor(self.backbone_atoms_and_mask[1]).bool(),
+            backbone_mask=torch.Tensor(self.backbone_atoms_and_mask[1]).bool(),
             atom_loss_mask=torch.Tensor(
                 atom_is_resolved * atom_in_token_w_resolved_centre_atom
             ).bool(),
@@ -460,8 +446,7 @@ class ContextGenerator(object):
         return CoordinateContext(
             coordinate=torch.Tensor(self.cropped_atom_array.coord).float(),
             centre_coordinate=torch.Tensor(self.centre_atoms.coord),
-            # NOTE: backbone_coordinate disabled - expensive, only needed for MPNN
-            # backbone_coordinate=self.backbone_atoms_and_mask[0],
+            backbone_coordinate=self.backbone_atoms_and_mask[0],
             resolution=float(self.cropped_atom_array.resolution[0]),
         )
 

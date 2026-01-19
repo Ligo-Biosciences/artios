@@ -24,6 +24,7 @@ import numpy as np
 import rootutils
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 from neptune_scale import Run
 from neptune_scale.api.run import SourceTrackingConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -146,6 +147,7 @@ class ArtiosMPNNTrainer(object):
             f"Distributed environment: world size: {DIST_WRAPPER.world_size}, "
             + f"global rank: {DIST_WRAPPER.rank}, local rank: {DIST_WRAPPER.local_rank}"
         )
+        mp.set_sharing_strategy("file_system")
         self.use_cuda = torch.cuda.device_count() > 0
         if self.use_cuda:
             self.device = torch.device("cuda:{}".format(DIST_WRAPPER.local_rank))

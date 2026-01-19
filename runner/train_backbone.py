@@ -754,18 +754,6 @@ class ArtiosBackboneTrainer(object):
                 os.path.join(self.training_samples_dir, f"{pdb_id}.cif"), atom_array
             )
 
-    # TODO: Re-add save_outputs method cleanly when inference output saving is needed
-    # def save_outputs(
-    #     self,
-    #     output: ModelOutput,
-    #     context: FullContext,
-    #     ema_suffix: str,
-    #     structure_type: str = "backbone",
-    #     motif_as_b_factor: bool = False,
-    # ):
-    #     """Saves outputs to CIFs."""
-    #     pass
-
     def run(self):
         """
         Main entry for the ArtiosBackboneTrainer.

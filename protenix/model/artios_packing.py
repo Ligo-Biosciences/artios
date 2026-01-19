@@ -89,7 +89,7 @@ class ArtiosPacking(nn.Module):
             alpha=self.sampling_configs.alpha,
         )
 
-        pred = self.sidechain_packer.sample(
+        result = self.sidechain_packer.sample(
             context=context,
             timestep_scheduler=self.inference_timestep_scheduler,
             n_steps=n_step,
@@ -99,7 +99,7 @@ class ArtiosPacking(nn.Module):
             n_sample=n_sample,
         )
 
-        return ModelOutput(coordinate=pred)
+        return ModelOutput(coordinate=result.final)
 
     def main_train_loop(
         self,

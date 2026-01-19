@@ -7,6 +7,7 @@ from protenix.model.generator import (
     Deterministic,
     FlowMatchingSampler,
     InferenceTimestepScheduler,
+    SamplingResult,
     StochasticitySchedule,
     VelocityScorePredictor,
 )
@@ -124,7 +125,7 @@ class SidechainPacker(nn.Module):
         stochasticity: StochasticitySchedule = Deterministic(),
         gamma: float = 1.0,
         n_sample: int = 1,
-    ) -> Float[Tensor, "... n_sample n_atom 3"]:
+    ) -> SamplingResult:
         """All-atom denoising sampling using flow matching.
 
         Args:
@@ -137,7 +138,7 @@ class SidechainPacker(nn.Module):
             n_sample: Number of samples to generate.
 
         Returns:
-            Denoised atom coordinates.
+            SamplingResult containing final denoised coordinates.
         """
         n_atom = context.index.atom_to_token_idx.shape[-1]
         batch_shape = context.token.residue_index.shape[:-1]

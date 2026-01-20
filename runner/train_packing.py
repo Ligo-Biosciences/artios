@@ -16,6 +16,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
+from biotite.structure import AtomArray
 from biotite.structure.io import load_structure
 from neptune_scale import Run
 from neptune_scale.api.run import SourceTrackingConfig
@@ -484,6 +485,56 @@ class ArtiosPackingTrainer(object):
 
         return {"rmsf_overall": rmsf_overall, "rmsf_backbone": rmsf_backbone}
 
+    def _compute_rmsd_to_ground_truth(
+        self,
+        structure_paths: list[Path],
+        ground_truth: AtomArray,
+    ) -> dict[str, float]:
+        """Compute RMSD between predicted structures and ground truth, averaged over samples.
+
+        Args:
+            structure_paths: List of paths to predicted CIF files.
+            ground_truth: Ground truth AtomArray from the context.
+
+        Returns:
+            Dict with 'rmsd_overall' and 'rmsd_backbone' keys (averaged over samples).
+        """
+        if len(structure_paths) == 0:
+            return {"rmsd_overall": 0.0, "rmsd_backbone": 0.0}
+
+        structures = [load_structure(str(p)) for p in structure_paths]
+
+        backbone_atoms = BACKBONE_DEFS["protein"]
+        gt_backbone_mask = np.isin(ground_truth.atom_name, backbone_atoms)
+
+        rmsd_overall_list = []
+        rmsd_backbone_list = []
+
+        for pred_structure in structures:
+            # Align predicted to ground truth
+            superimposed, _ = bs.superimpose(ground_truth, pred_structure)
+
+            # Compute overall RMSD
+            diff = superimposed.coord - ground_truth.coord
+            per_atom_sq_dist = np.sum(diff**2, axis=-1)
+            rmsd_overall = float(np.sqrt(np.mean(per_atom_sq_dist)))
+            rmsd_overall_list.append(rmsd_overall)
+
+            # Compute backbone RMSD
+            if np.sum(gt_backbone_mask) > 0:
+                backbone_sq_dist = per_atom_sq_dist[gt_backbone_mask]
+                rmsd_backbone = float(np.sqrt(np.mean(backbone_sq_dist)))
+                rmsd_backbone_list.append(rmsd_backbone)
+
+        avg_rmsd_overall = (
+            float(np.mean(rmsd_overall_list)) if rmsd_overall_list else 0.0
+        )
+        avg_rmsd_backbone = (
+            float(np.mean(rmsd_backbone_list)) if rmsd_backbone_list else 0.0
+        )
+
+        return {"rmsd_overall": avg_rmsd_overall, "rmsd_backbone": avg_rmsd_backbone}
+
     @torch.no_grad()
     def _run_full_inference_and_log(self, log_outputs_to_neptune: bool = True) -> None:
         """Run inference on a batch and log structures to Neptune.
@@ -616,7 +667,10 @@ class ArtiosPackingTrainer(object):
 
                 # Log structure files to Neptune
                 if self.configs.use_wandb and all_saved_files:
-                    all_rmsf_metrics = {}
+                    # Create mapping from pdb_id to ground truth atom_array
+                    pdb_id_to_atom_array = dict(zip(pdb_ids, atom_arrays))
+
+                    all_metrics = {}
                     files_dict = {}
                     total_files = 0
                     for pdb_id, saved_files in all_saved_files.items():
@@ -628,20 +682,43 @@ class ArtiosPackingTrainer(object):
                             files_dict[neptune_key] = file_path
                             total_files += 1
 
-                        # Calc and log RMSF metrics
+                        # Calc and log RMSF metrics (variance across samples)
                         rmsf_metrics = self._compute_rmsf_metrics(saved_files)
-                        all_rmsf_metrics[
+                        all_metrics[
                             f"inference/{prefix}{test_name}/{pdb_id}/rmsf_overall"
                         ] = rmsf_metrics["rmsf_overall"]
-                        all_rmsf_metrics[
+                        all_metrics[
                             f"inference/{prefix}{test_name}/{pdb_id}/rmsf_backbone"
                         ] = rmsf_metrics["rmsf_backbone"]
-                        self.print(
-                            f"  {pdb_id}: overall={rmsf_metrics['rmsf_overall']:.4f}, "
-                            f"backbone={rmsf_metrics['rmsf_backbone']:.4f}"
-                        )
-                        self.neptune_run.log_metrics(all_rmsf_metrics, step=self.step)
-                        self.print(f"Logged RMSF metrics for {pdb_id}")
+
+                        # Calc and log RMSD to ground truth (averaged over samples)
+                        ground_truth = pdb_id_to_atom_array.get(pdb_id)
+                        if ground_truth is not None:
+                            rmsd_metrics = self._compute_rmsd_to_ground_truth(
+                                saved_files, ground_truth
+                            )
+                            all_metrics[
+                                f"inference/{prefix}{test_name}/{pdb_id}/rmsd_overall"
+                            ] = rmsd_metrics["rmsd_overall"]
+                            all_metrics[
+                                f"inference/{prefix}{test_name}/{pdb_id}/rmsd_backbone"
+                            ] = rmsd_metrics["rmsd_backbone"]
+
+                            self.print(
+                                f"  {pdb_id}: rmsf_overall={rmsf_metrics['rmsf_overall']:.4f}, "
+                                f"rmsf_backbone={rmsf_metrics['rmsf_backbone']:.4f}, "
+                                f"rmsd_overall={rmsd_metrics['rmsd_overall']:.4f}, "
+                                f"rmsd_backbone={rmsd_metrics['rmsd_backbone']:.4f}"
+                            )
+                        else:
+                            self.print(
+                                f"  {pdb_id}: rmsf_overall={rmsf_metrics['rmsf_overall']:.4f}, "
+                                f"rmsf_backbone={rmsf_metrics['rmsf_backbone']:.4f} "
+                                f"(no ground truth for RMSD)"
+                            )
+
+                        self.neptune_run.log_metrics(all_metrics, step=self.step)
+                        self.print(f"Logged metrics for {pdb_id}")
 
                     if files_dict:
                         self.neptune_run.log_files(files=files_dict, step=self.step)

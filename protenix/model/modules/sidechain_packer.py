@@ -19,6 +19,7 @@ from protenix.model.modules.embedders import FourierEmbedding, RelativePositionE
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.modules.transformer import DiffusionTransformer
 from protenix.model.utils import one_hot
+from protenix.utils.geometry import centre_random_augmentation
 from protenix.utils.typing import Float, typecheck
 
 
@@ -212,6 +213,7 @@ class SidechainPacker(nn.Module):
         token_mask = context.mask.token_mask
         restype = context.token.restype
         n_token = restype.shape[-2]
+        n_sample = timestep.shape[-1]
 
         # Compute pair mask
         token_mask = token_mask.unsqueeze(-2)  # add n_sample dim
@@ -264,16 +266,21 @@ class SidechainPacker(nn.Module):
 
         # Compute sequence embedding
         s = self.embed_restype(restype.to(dtype))
+        s = rearrange(s, "... n c -> ... 1 n c")  # [..., 1, n_token, c]
 
-        # Add centre coordinate embedding (non-ligand only)
-        s_centre = self.embed_centre_coords(centre_coords_masked)
-        s = s + s_centre
+        # Add centre coordinate embedding
+        centre_coords_augmented = centre_random_augmentation(
+            centre_coords_masked,
+            mask=context.mask.centre_atom_is_resolved,
+            n_sample=n_sample,
+            s_trans=1.0,
+        )  # [..., n_sample, n_token, 3]
+        s = s + self.embed_centre_coords(centre_coords_augmented)
 
         # Add timestep embedding
         timestep_emb = self.embed_timestep(
             self.fourier_embedding(t_hat_timestep=2 * timestep - 1)
-        )  # .to(z.dtype)
-        s = rearrange(s, "... n c -> ... 1 n c")
+        )
         s = s + repeat(timestep_emb, "... n_sample c -> ... n_sample n c", n=n_token)
 
         # Encode atoms

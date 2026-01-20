@@ -222,12 +222,12 @@ class TokenContext(Context):
     )
 
     # NOTE: Temporarily optional - expensive to compute, only needed for MPNN
-    token_bonds: Feature(
-        Int[Tensor, "*batch n_token n_token"],
-        type=FeatureType.TOKEN_PAIR,
-        encoding=EncodingType.IDENTITY,
-        description="Indicator for ligand-ligand and non-polymer bonds",
-    ) = None
+    # token_bonds: Feature(
+    #     Int[Tensor, "*batch n_token n_token"],
+    #     type=FeatureType.TOKEN_PAIR,
+    #     encoding=EncodingType.IDENTITY,
+    #     description="Indicator for ligand-ligand and non-polymer bonds",
+    # ) = None
 
 
 @typecheck
@@ -372,11 +372,11 @@ class MaskContext(Context):
         description="Token is not padding mask (all true before pad)",
     )
     # NOTE: Temporarily optional - expensive to compute, only needed for MPNN
-    backbone_mask: Mask(
-        Bool[Tensor, "*batch n_token 5"],
-        type=FeatureType.TOKEN,
-        description="Mask for all backbone atoms",
-    ) = None
+    # backbone_mask: Mask(
+    #     Bool[Tensor, "*batch n_token 5"],
+    #     type=FeatureType.TOKEN,
+    #     description="Mask for all backbone atoms",
+    # ) = None
 
 
 @typecheck
@@ -437,11 +437,11 @@ class CoordinateContext(Context):
     )
     resolution: float | list[float]
     # NOTE: Temporarily optional - expensive to compute, only needed for MPNN
-    backbone_coordinate: Feature(
-        Float[Tensor, "*batch n_token 5 3"],
-        type=FeatureType.TOKEN,
-        description="Coordinates of backbone atoms",
-    ) = None
+    # backbone_coordinate: Feature(
+    #     Float[Tensor, "*batch n_token 5 3"],
+    #     type=FeatureType.TOKEN,
+    #     description="Coordinates of backbone atoms",
+    # ) = None
 
 
 @typecheck
@@ -480,7 +480,7 @@ class FullContext:
     coordinate: CoordinateContext
     basic: BasicContext
     # NOTE: Temporarily optional - expensive to compute, currently unused
-    atom_perm: AtomPermContext = field(default_factory=AtomPermContext)
+    # atom_perm: AtomPermContext = field(default_factory=AtomPermContext)
 
     def pad(self, n_max_atoms: int, n_max_tokens: int) -> FullContext:
         """Pad all features to n_max_tokens/n_max_atoms."""

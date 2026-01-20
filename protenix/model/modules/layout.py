@@ -78,6 +78,7 @@ def rearrange_to_key_subset_legacy(
     return index_at_dim(k_x, rearrange_dim, key_indices)
 
 
+@torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
 def rearrange_to_key_subset(
     k_x: Tensor, rearrange_dim: int, num_keys: int, num_queries: int
 ) -> Tensor:

@@ -85,7 +85,7 @@ default_distillation_configs = {
     "filter_unique_domain_prob": 0.0,
 }
 
-DATA_ROOT_DIR = "af3-dev/release_data/"
+DATA_ROOT_DIR = "/af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -225,16 +225,18 @@ data_configs = {
     "train_sets": ListValue(
         [
             "weightedPDB_before2109_wopb_nometalc_0925",
-            "trousers_train",
-            "shirts_with_no_pockets",
-            "shirts_with_small_pockets",
+            # "trousers_train",
+            # "shirts_with_no_pockets",
+            # "shirts_with_small_pockets",
         ]
     ),
     "train_sampler": {
         "train_sample_weights": ListValue([0.01, 0.8, 0.1, 0.09]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["trousers_val", "recentPDB_1536_sample384_0925"]),
+    "test_sets": ListValue(
+        ["trousers_val"]
+    ),  # ListValue(["trousers_val", "recentPDB_1536_sample384_0925"]),
     "weightedPDB_before2109_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
@@ -243,7 +245,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            "pdb_list": "",  # ["1s01", "1sr0"]
+            "pdb_list": ["7ver"],  # ["1s01", "1sr0"]
             "random_sample_if_failed": True,
             "max_n_token": -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,
@@ -279,7 +281,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/trousers_val.csv",
             ),
-            "pdb_list": "",
+            "pdb_list": ["af-a0a399nz51-f1"],
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),

@@ -1,17 +1,23 @@
 import datetime
+import json
 import logging
 import os
 import time
 import warnings
 from contextlib import nullcontext
+from glob import glob
+from pathlib import Path
 from typing import Optional
 
+import biotite.structure as bs
 import numpy as np
 import rootutils
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
+from biotite.structure import AtomArray
+from biotite.structure.io import load_structure
 from neptune_scale import Run
 from neptune_scale.api.run import SourceTrackingConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -19,17 +25,20 @@ from tqdm import tqdm
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
+from protenix.common.constants import BACKBONE_DEFS
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.data.features import FullContext
 from protenix.metrics.lddt_metrics import LDDTMetrics
+from protenix.metrics.rmsd import compute_per_atom_rmsf
 from protenix.model.artios_packing import ArtiosPacking
 from protenix.model.modules.sidechain_packer import SidechainPacker
 from protenix.model.modules.transformer import DiffusionTransformer, DiTBlock
 from protenix.model.output import ModelOutput
 from protenix.model.utils import Mode
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
+from protenix.utils.inference import ModelType
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.monitoring import grad_norm
@@ -38,6 +47,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.ema import EMAWrapper
+from runner.inference import InferenceRunner, infer_predict
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -418,7 +428,7 @@ class ArtiosPackingTrainer(object):
                 # Training-time inference for a subset of samples
                 is_logging_element = (index + 1) % inference_log_interval == 0
                 if run_inference and is_logging_element:
-                    self._run_inference_and_log(
+                    self._run_eval_set_inference_and_log(
                         context=context,
                         test_name=test_name,
                         ema_suffix=ema_suffix,
@@ -442,8 +452,165 @@ class ArtiosPackingTrainer(object):
 
         return metrics
 
+    def _compute_rmsf_metrics(
+        self,
+        structure_paths: list[Path],
+    ) -> dict[str, float]:
+        """Compute overall and backbone RMSF metrics from a list of packed structures.
+
+        Args:
+            structure_paths: List of paths to CIF files (packed samples).
+
+        Returns:
+            Dict with 'rmsf_overall' and 'rmsf_backbone' keys.
+        """
+        structures = [load_structure(str(p)) for p in structure_paths]
+
+        if len(structures) < 2:
+            return {"rmsf_overall": 0.0, "rmsf_backbone": 0.0}
+
+        reference = structures[0]
+        aligned_structures = [reference]
+        for structure in structures[1:]:
+            superimposed, _ = bs.superimpose(reference, structure)
+            aligned_structures.append(superimposed)
+
+        per_atom_rmsf = compute_per_atom_rmsf(aligned_structures)
+
+        rmsf_overall = float(np.mean(per_atom_rmsf))
+
+        backbone_mask = np.isin(reference.atom_name, BACKBONE_DEFS["protein"])
+        backbone_rmsf = per_atom_rmsf[backbone_mask]
+        rmsf_backbone = float(np.mean(backbone_rmsf)) if len(backbone_rmsf) > 0 else 0.0
+
+        return {"rmsf_overall": rmsf_overall, "rmsf_backbone": rmsf_backbone}
+
+    def _compute_rmsd_to_ground_truth(
+        self,
+        structure_paths: list[Path],
+        ground_truth: AtomArray,
+    ) -> dict[str, float]:
+        """Compute RMSD between predicted structures and ground truth, averaged over samples.
+
+        Args:
+            structure_paths: List of paths to predicted CIF files.
+            ground_truth: Ground truth AtomArray from the context.
+
+        Returns:
+            Dict with 'rmsd_overall' and 'rmsd_backbone' keys (averaged over samples).
+        """
+        if len(structure_paths) == 0:
+            return {"rmsd_overall": 0.0, "rmsd_backbone": 0.0}
+
+        structures = [load_structure(str(p)) for p in structure_paths]
+
+        backbone_atoms = BACKBONE_DEFS["protein"]
+        gt_backbone_mask = np.isin(ground_truth.atom_name, backbone_atoms)
+
+        rmsd_overall_list = []
+        rmsd_backbone_list = []
+
+        for pred_structure in structures:
+            # Align predicted to ground truth
+            superimposed, _ = bs.superimpose(ground_truth, pred_structure)
+
+            # Compute overall RMSD
+            diff = superimposed.coord - ground_truth.coord
+            per_atom_sq_dist = np.sum(diff**2, axis=-1)
+            rmsd_overall = float(np.sqrt(np.mean(per_atom_sq_dist)))
+            rmsd_overall_list.append(rmsd_overall)
+
+            # Compute backbone RMSD
+            if np.sum(gt_backbone_mask) > 0:
+                backbone_sq_dist = per_atom_sq_dist[gt_backbone_mask]
+                rmsd_backbone = float(np.sqrt(np.mean(backbone_sq_dist)))
+                rmsd_backbone_list.append(rmsd_backbone)
+
+        avg_rmsd_overall = (
+            float(np.mean(rmsd_overall_list)) if rmsd_overall_list else 0.0
+        )
+        avg_rmsd_backbone = (
+            float(np.mean(rmsd_backbone_list)) if rmsd_backbone_list else 0.0
+        )
+
+        return {"rmsd_overall": avg_rmsd_overall, "rmsd_backbone": avg_rmsd_backbone}
+
     @torch.no_grad()
-    def _run_inference_and_log(
+    def _run_full_inference_and_log(self, log_outputs_to_neptune: bool = True) -> None:
+        """Run inference on a batch and log structures to Neptune.
+
+        Args:
+            log_outputs_to_neptune: Whether to log outputs to Neptune.
+        """
+        step_dir = os.path.join(self.prediction_dir, f"step_{self.step}")
+        self.configs.dump_dir = step_dir
+
+        ### Run inference
+        inference_runner = InferenceRunner(
+            self.configs,
+            ModelType.PACKING,
+            model=self.packing_model,
+        )
+
+        self.print(f"Running inference for step {self.step}...")
+        infer_predict(
+            inference_runner,
+            self.configs,
+            ModelType.PACKING,
+            use_distributed_sampler=False,
+        )
+
+        if not (log_outputs_to_neptune and self.configs.use_wandb):
+            return
+
+        filepaths = glob(os.path.join(step_dir, "**/*.cif"), recursive=True)
+        self.print(f"Found {len(filepaths)} files to log to Neptune")
+        files_dict = {f"structures/{Path(fp).name}": fp for fp in filepaths}
+        self.neptune_run.log_files(files=files_dict, step=self.step)
+
+        ### Compute RMSF metrics
+        with open(self.configs.input_json_path, "r") as f:
+            inference_samples = json.load(f)
+        sample_names = [sample["name"] for sample in inference_samples]
+
+        n_sample = self.configs.artios_packing.sample_diffusion.N_sample
+
+        all_rmsf_metrics = {}
+        for sample_name in sample_names:
+            structure_paths = []
+            for sample_idx in range(n_sample):
+                sample_dir = os.path.join(step_dir, str(sample_idx))
+                cif_pattern = os.path.join(sample_dir, f"{sample_name}*.cif")
+                matching_files = glob(cif_pattern)
+                structure_paths.extend([Path(f) for f in matching_files])
+
+            if len(structure_paths) < 2:
+                self.print(
+                    f"Skipping RMSF for {sample_name}: found {len(structure_paths)} structures"
+                )
+                continue
+
+            try:
+                rmsf_metrics = self._compute_rmsf_metrics(structure_paths)
+                all_rmsf_metrics[f"inference/{sample_name}/rmsf_overall"] = (
+                    rmsf_metrics["rmsf_overall"]
+                )
+                all_rmsf_metrics[f"inference/{sample_name}/rmsf_backbone"] = (
+                    rmsf_metrics["rmsf_backbone"]
+                )
+                self.print(
+                    f"  {sample_name}: overall={rmsf_metrics['rmsf_overall']:.4f}, "
+                    f"backbone={rmsf_metrics['rmsf_backbone']:.4f}"
+                )
+            except Exception as e:
+                self.print(f"Error computing RMSF for {sample_name}: {e}")
+
+        if all_rmsf_metrics:
+            self.neptune_run.log_metrics(all_rmsf_metrics, step=self.step)
+            self.print(f"Logged RMSF metrics for {len(sample_names)} samples")
+
+    @torch.no_grad()
+    def _run_eval_set_inference_and_log(
         self,
         context: FullContext,
         test_name: str,
@@ -500,6 +667,10 @@ class ArtiosPackingTrainer(object):
 
                 # Log structure files to Neptune
                 if self.configs.use_wandb and all_saved_files:
+                    # Create mapping from pdb_id to ground truth atom_array
+                    pdb_id_to_atom_array = dict(zip(pdb_ids, atom_arrays))
+
+                    all_metrics = {}
                     files_dict = {}
                     total_files = 0
                     for pdb_id, saved_files in all_saved_files.items():
@@ -510,6 +681,44 @@ class ArtiosPackingTrainer(object):
                             )
                             files_dict[neptune_key] = file_path
                             total_files += 1
+
+                        # Calc and log RMSF metrics (variance across samples)
+                        rmsf_metrics = self._compute_rmsf_metrics(saved_files)
+                        all_metrics[
+                            f"inference/{prefix}{test_name}/{pdb_id}/rmsf_overall"
+                        ] = rmsf_metrics["rmsf_overall"]
+                        all_metrics[
+                            f"inference/{prefix}{test_name}/{pdb_id}/rmsf_backbone"
+                        ] = rmsf_metrics["rmsf_backbone"]
+
+                        # Calc and log RMSD to ground truth (averaged over samples)
+                        ground_truth = pdb_id_to_atom_array.get(pdb_id)
+                        if ground_truth is not None:
+                            rmsd_metrics = self._compute_rmsd_to_ground_truth(
+                                saved_files, ground_truth
+                            )
+                            all_metrics[
+                                f"inference/{prefix}{test_name}/{pdb_id}/rmsd_overall"
+                            ] = rmsd_metrics["rmsd_overall"]
+                            all_metrics[
+                                f"inference/{prefix}{test_name}/{pdb_id}/rmsd_backbone"
+                            ] = rmsd_metrics["rmsd_backbone"]
+
+                            self.print(
+                                f"  {pdb_id}: rmsf_overall={rmsf_metrics['rmsf_overall']:.4f}, "
+                                f"rmsf_backbone={rmsf_metrics['rmsf_backbone']:.4f}, "
+                                f"rmsd_overall={rmsd_metrics['rmsd_overall']:.4f}, "
+                                f"rmsd_backbone={rmsd_metrics['rmsd_backbone']:.4f}"
+                            )
+                        else:
+                            self.print(
+                                f"  {pdb_id}: rmsf_overall={rmsf_metrics['rmsf_overall']:.4f}, "
+                                f"rmsf_backbone={rmsf_metrics['rmsf_backbone']:.4f} "
+                                f"(no ground truth for RMSD)"
+                            )
+
+                        self.neptune_run.log_metrics(all_metrics, step=self.step)
+                        self.print(f"Logged metrics for {pdb_id}")
 
                     if files_dict:
                         self.neptune_run.log_files(files=files_dict, step=self.step)
@@ -614,6 +823,9 @@ class ArtiosPackingTrainer(object):
             or not self.configs.monitor.weight_norm
         ):
             return
+
+        if self.configs.run_training_time_inference and DIST_WRAPPER.rank == 0:
+            self._run_full_inference_and_log(log_outputs_to_neptune=True)
 
         weight_norms = {}
         for name, param in self.packing_model.named_parameters():

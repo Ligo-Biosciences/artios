@@ -249,9 +249,9 @@ class SidechainPacker(nn.Module):
         )
 
         # Zero out pairs involving ligands
-        non_ligand_pair_mask = (
-            non_ligand_mask[..., :, None] & non_ligand_mask[..., None, :]
-        )
+        mask_i = rearrange(non_ligand_mask, "... n -> ... n 1")
+        mask_j = rearrange(non_ligand_mask, "... n -> ... 1 n")
+        non_ligand_pair_mask = mask_i & mask_j
         centre_pair_dist_onehot = (
             centre_pair_dist_onehot * non_ligand_pair_mask[..., None]
         )
@@ -294,7 +294,6 @@ class SidechainPacker(nn.Module):
             atom_to_token_idx=atom_to_token_idx,
             atom_mask=atom_mask,
         )
-        # denoised_atoms = r_noisy + r_update * self.c_out(timestep[..., None, None])
         return r_update
 
     def c_out(self, timestep: Float[Tensor, "..."]) -> Float[Tensor, "..."]:

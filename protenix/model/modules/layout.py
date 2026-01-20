@@ -5,7 +5,7 @@
 import torch
 from torch import Tensor
 
-from protenix.utils.tensor_utils import index_at_dim, reshape_at_dim
+from protenix.utils.tensor_utils import index_at_dim, pad_at_dim, reshape_at_dim
 
 
 # @functools.lru_cache(maxsize=10)
@@ -52,10 +52,10 @@ def rearrange_to_query_subset(
 
 ##@profile_function("rearrange_to_key_subset")
 @torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
-def rearrange_to_key_subset(
+def rearrange_to_key_subset_legacy(
     k_x: Tensor, rearrange_dim: int, num_keys: int, num_queries: int
 ) -> Tensor:
-    """Rearrange k_x to a key subset.
+    """Rearrange k_x to a key subset (legacy index-based implementation).
 
     Args:
         k_x (Tensor): key tensor. [..., n_k, ...] (n_k is at dimension rearrange_dim)
@@ -76,6 +76,53 @@ def rearrange_to_key_subset(
     key_indices = _get_key_trunk_indices(n_atom, num_queries, num_keys)
     key_indices = key_indices.to(k_x.device)
     return index_at_dim(k_x, rearrange_dim, key_indices)
+
+
+def rearrange_to_key_subset(
+    k_x: Tensor, rearrange_dim: int, num_keys: int, num_queries: int
+) -> Tensor:
+    """Rearrange k_x to overlapping key windows using unfold.
+
+    Creates windows of size num_keys with stride num_queries, centered on each
+    query block. Boundary windows are zero-padded to maintain centering (unlike
+    the legacy implementation which shifts windows to stay in bounds).
+
+    Args:
+        k_x: Key tensor with shape [..., n_atom, ...] where n_atom is at rearrange_dim.
+        rearrange_dim: Dimension containing the atom/sequence axis to window.
+        num_keys: Size of each key window.
+        num_queries: Stride between windows (also the query block size).
+
+    Returns:
+        Tensor with shape [..., n_blocks, num_keys, ...] where n_blocks = n_atom // num_queries.
+    """
+    n_atom = k_x.size(rearrange_dim)
+
+    assert num_keys > num_queries, f"num_keys: {num_keys}, num_queries: {num_queries}"
+    assert num_keys % 2 == 0, f"num_keys: {num_keys}"
+    assert num_queries % 2 == 0, f"num_queries: {num_queries}"
+    assert n_atom % num_queries == 0, f"n_atom: {n_atom}"
+
+    # Normalize negative dimension index
+    if rearrange_dim < 0:
+        rearrange_dim = k_x.ndim + rearrange_dim
+
+    # Pad symmetrically so windows are centered on query blocks
+    # Window center should align with query block center (at n_queries // 2 within each block)
+    pad_each_side = (num_keys - num_queries) // 2
+    k_x_padded = pad_at_dim(
+        k_x, dim=rearrange_dim, pad_length=(pad_each_side, pad_each_side)
+    )
+
+    # unfold(dim, size, step) extracts sliding windows
+    # Output puts the new window dimension at the end
+    k_x_unfolded = k_x_padded.unfold(rearrange_dim, num_keys, num_queries)
+
+    # Move window dim from end to right after the block dim
+    # Shape: [..., n_blocks, <rest>, num_keys] -> [..., n_blocks, num_keys, <rest>]
+    k_x_unfolded = k_x_unfolded.movedim(-1, rearrange_dim + 1)
+
+    return k_x_unfolded
 
 
 ##@profile_function("gather_trunk_pair_embedding")
@@ -147,10 +194,12 @@ def broadcast_token_to_local_atom_pair(
     assert atom_to_token_idx.shape[:-1] == z_token.shape[:-3]
 
     # [..., N_atom] -> [..., n_trunks, n_queries] and [..., n_trunks, n_keys]
+    # NOTE: Use legacy for indices since gather_trunk_pair_embedding expects valid indices
+    # (the unfold version pads with zeros which would index into token 0)
     atom_to_token_idx_q = rearrange_to_query_subset(
         atom_to_token_idx, rearrange_dim=-1, num_queries=num_queries
     )
-    atom_to_token_idx_k = rearrange_to_key_subset(
+    atom_to_token_idx_k = rearrange_to_key_subset_legacy(
         atom_to_token_idx, rearrange_dim=-1, num_keys=num_keys, num_queries=num_queries
     )
 

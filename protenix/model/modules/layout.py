@@ -3,6 +3,7 @@
 # is very slow for large number of atoms.
 
 import torch
+from einops import rearrange, repeat
 from torch import Tensor
 
 from protenix.utils.tensor_utils import index_at_dim, pad_at_dim, reshape_at_dim
@@ -128,19 +129,19 @@ def rearrange_to_key_subset(
 
 ##@profile_function("gather_trunk_pair_embedding")
 @torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
-def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
-    """
-    Selectively gather elements from a tensor using two sets of indices.
-    Batched version of gather_pair_embedding_in_dense_trunk
+def gather_trunk_pair_embedding_legacy(
+    x: Tensor, idx_q: Tensor, idx_k: Tensor
+) -> Tensor:
+    """Legacy implementation using advanced indexing (kept for testing/comparison).
 
     Args:
-        x (Tensor): [..., N_token, N_token, d]
-        idx_q (Tensor): [..., N_b, N_q]
-        idx_k (Tensor): [..., N_b, N_k]
+        x: Pair embedding tensor [..., n_token, n_token, d].
+        idx_q: Query indices [..., n_b, n_q].
+        idx_k: Key indices [..., n_b, n_k].
 
     Returns:
-        y (Tensor): [..., N_b, N_q, N_k, d]
-            where y[..., b, i, j, :] = x[..., idx_q[..., b, i], idx_k[..., b, j], :]
+        Gathered pairs [..., n_b, n_q, n_k, d] where
+        y[..., b, i, j, :] = x[..., idx_q[..., b, i], idx_k[..., b, j], :].
     """
     assert x.shape[:-3] == idx_q.shape[:-2]
     assert x.shape[:-3] == idx_k.shape[:-2]
@@ -170,6 +171,54 @@ def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor):
     return x[tuple(ranges)]
 
 
+@torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
+def gather_trunk_pair_embedding(x: Tensor, idx_q: Tensor, idx_k: Tensor) -> Tensor:
+    """Gather token pairs into local attention blocks using linear indexing.
+
+    More efficient than advanced indexing: flattens the token pair dimensions,
+    computes linear indices, and uses a single torch.gather operation.
+
+    Args:
+        x: Pair embedding tensor [..., n_token, n_token, d].
+        idx_q: Query token indices [..., n_b, n_q].
+        idx_k: Key token indices [..., n_b, n_k].
+
+    Returns:
+        Gathered pairs [..., n_b, n_q, n_k, d] where
+        y[..., b, i, j, :] = x[..., idx_q[..., b, i], idx_k[..., b, j], :].
+    """
+    assert (
+        x.shape[:-3] == idx_q.shape[:-2]
+    ), f"Batch shape mismatch: {x.shape[:-3]} vs {idx_q.shape[:-2]}"
+    assert (
+        x.shape[:-3] == idx_k.shape[:-2]
+    ), f"Batch shape mismatch: {x.shape[:-3]} vs {idx_k.shape[:-2]}"
+    assert (
+        idx_q.shape[:-1] == idx_k.shape[:-1]
+    ), f"Block shape mismatch: {idx_q.shape[:-1]} vs {idx_k.shape[:-1]}"
+
+    batch_shape = x.shape[:-3]
+    n_token, d = x.shape[-2:]
+    n_b, n_q = idx_q.shape[-2:]
+    n_k = idx_k.shape[-1]
+
+    # Flatten token pair dims
+    x_flat = rearrange(x, "... i j d -> ... (i j) d")
+
+    # Compute 2D -> 1D linear indices: [..., n_b, n_q, n_k]
+    idx_q_exp = rearrange(idx_q.long(), "... b q -> ... b q 1")
+    idx_k_exp = rearrange(idx_k.long(), "... b k -> ... b 1 k")
+    linear_idx = idx_q_exp * n_token + idx_k_exp
+
+    linear_idx_flat = rearrange(linear_idx, "... b q k -> ... (b q k)")
+    linear_idx_exp = repeat(linear_idx_flat, "... bqk -> ... bqk d", d=d)
+
+    # Single gather operation: [..., n_token * n_token, d] -> [..., n_b * n_q * n_k, d]
+    result_flat = torch.gather(x_flat, dim=-2, index=linear_idx_exp)
+
+    return result_flat.reshape(*batch_shape, n_b, n_q, n_k, d)
+
+
 # @profile_function("broadcast_token_to_local_atom_pair")
 @torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
 def broadcast_token_to_local_atom_pair(
@@ -178,32 +227,38 @@ def broadcast_token_to_local_atom_pair(
     num_queries: int,
     num_keys: int,
 ) -> Tensor:
-    """Broadcast token pair embedding to atom pair embedding
+    """Broadcast token pair embedding to local atom pair windows.
+
+    For each local attention block, gathers the token pair embeddings corresponding
+    to the (query_atom, key_atom) pairs based on atom-to-token mapping.
+
+    Note: The key indices use unfold-based windowing which zero-pads at boundaries.
+    Padding positions will have index 0, gathering from token 0's pairs. This is
+    safe because the caller must apply trunked_pair_mask after adding this result
+    to p_lm, which zeros out padding positions.
 
     Args:
-        z_token (Tensor): token pair embedding
-            [..., N_token, N_token, d]
-        atom_to_token_idx (Tensor): map atom idx to token idx
-            [..., N_atom]
-        n_queries (int): number of queries
-        n_keys (int): number of keys
+        z_token: Token pair embedding [..., n_token, n_token, d].
+        atom_to_token_idx: Maps each atom to its parent token [..., n_atom].
+        num_queries: Number of query atoms per block.
+        num_keys: Number of key atoms per block (window size).
 
     Returns:
-        z_gathered_blocked (Tensor): atom pair embedding, with local blocked shape
-            [..., n_trunks, n_queries, n_keys, d]
+        Local atom pair embedding [..., n_blocks, num_queries, num_keys, d].
     """
     assert atom_to_token_idx.shape[:-1] == z_token.shape[:-3]
 
-    # [..., N_atom] -> [..., n_trunks, n_queries] and [..., n_trunks, n_keys]
-    # NOTE: Use legacy for indices since gather_trunk_pair_embedding expects valid indices
-    # (the unfold version pads with zeros which would index into token 0)
+    # Window atom-to-token indices into local attention blocks
+    # Query subset: simple reshape (no overlap)
+    # Key subset: overlapping windows with zero-padding at boundaries
     atom_to_token_idx_q = rearrange_to_query_subset(
         atom_to_token_idx, rearrange_dim=-1, num_queries=num_queries
     )
-    atom_to_token_idx_k = rearrange_to_key_subset_legacy(
+    atom_to_token_idx_k = rearrange_to_key_subset(
         atom_to_token_idx, rearrange_dim=-1, num_keys=num_keys, num_queries=num_queries
     )
 
+    # Gather token pairs for each local attention block
     z_gathered_blocked = gather_trunk_pair_embedding(
         z_token, idx_q=atom_to_token_idx_q, idx_k=atom_to_token_idx_k
     )

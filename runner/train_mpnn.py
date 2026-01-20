@@ -380,7 +380,7 @@ class ArtiosMPNNTrainer(object):
     @torch.no_grad()
     def evaluate(self):
         if not self.configs.eval_ema_only:
-            self._evaluate(ema_suffix="none-EMA")
+            self._evaluate(ema_suffix="")
         if hasattr(self, "ema_wrapper"):
             self.ema_wrapper.apply_shadow()
             self._evaluate(ema_suffix=f"ema_{self.ema_wrapper.decay}")
@@ -437,8 +437,9 @@ class ArtiosMPNNTrainer(object):
             # Log validation metrics to Neptune/WandB
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 # Add test_name prefix to metrics for clarity
+                prefix = f"{ema_suffix}/" if ema_suffix else ""
                 prefixed_metrics = {
-                    f"{ema_suffix}/{test_name}/{k}": v for k, v in metrics.items()
+                    f"{prefix}{test_name}/{k}": v for k, v in metrics.items()
                 }
                 self.neptune_run.log_metrics(prefixed_metrics, step=self.step)
 

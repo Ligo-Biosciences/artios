@@ -224,7 +224,7 @@ class ArtiosMPNNTrainer(object):
             assert self.configs.ema_decay < 1
             self.ema_wrapper = EMAWrapper(
                 self.model,
-                self.configs.ema_vae_decay,
+                self.configs.ema_decay,
                 self.configs.ema_mutable_param_keywords,
             )
             self.ema_wrapper.register()

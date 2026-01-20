@@ -220,8 +220,8 @@ class ArtiosMPNNTrainer(object):
             return total_params / 1000.0 / 1000.0
 
         self.print(f"Model Parameters: {count_parameters(self.model)}")
-        if self.configs.get("ema_vae_decay", -1) > 0:
-            assert self.configs.ema_vae_decay < 1
+        if self.configs.get("ema_decay", -1) > 0:
+            assert self.configs.ema_decay < 1
             self.ema_wrapper = EMAWrapper(
                 self.model,
                 self.configs.ema_vae_decay,

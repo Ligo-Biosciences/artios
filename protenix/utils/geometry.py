@@ -61,6 +61,7 @@ def calc_centroid(
         return centroid
 
 
+@torch.compiler.disable
 @typecheck
 def centre_random_augmentation(
     x_input_coords: Float[Tensor, "*batch n_atom xyz"],

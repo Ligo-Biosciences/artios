@@ -125,6 +125,9 @@ class ArtiosMPNNTrainer(object):
                 project=self.configs.project,
                 experiment_name=self.run_name,
                 source_tracking_config=source_config,
+                run_id=self.configs.neptune_run_id
+                if self.configs.neptune_run_id
+                else None,
             )
             # self.torchwatcher = TorchWatcher(
             #     model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,

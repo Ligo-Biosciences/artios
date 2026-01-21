@@ -125,6 +125,12 @@ class ArtiosPackingTrainer(object):
                 run_id=self.configs.neptune_run_id
                 if self.configs.neptune_run_id
                 else None,
+                fork_run_id=self.configs.neptune_fork_run_id
+                if self.configs.neptune_fork_run_id
+                else None,
+                fork_step=int(self.configs.neptune_fork_step)
+                if self.configs.neptune_fork_step
+                else None,
             )
             self.torchwatcher = TorchWatcher(
                 model=self.packing_model.module

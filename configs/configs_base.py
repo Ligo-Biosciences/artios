@@ -47,6 +47,8 @@ basic_configs = {
     "use_wandb": True,
     "wandb_id": "",  # TODO: deprecated
     "neptune_run_id": "",
+    "neptune_fork_run_id": "",
+    "neptune_fork_step": "",
     "seed": 42,
     "deterministic": False,
     "deterministic_seed": False,

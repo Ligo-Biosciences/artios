@@ -25,6 +25,7 @@ basic_configs = {
     "run_name": RequiredValue(str),
     "base_dir": RequiredValue(str),
     # training
+    "checkpoint_grads": True,  # Enable gradient checkpointing in transformers
     "eval_interval": RequiredValue(int),
     "log_interval": RequiredValue(int),
     "checkpoint_interval": -1,
@@ -241,14 +242,17 @@ model_configs = {
             "atom_encoder": {
                 "num_blocks": 3,
                 "num_heads": 4,
+                "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
             },
             "transformer": {
                 "num_blocks": 16,
                 "num_heads": 16,
+                "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
             },
             "atom_decoder": {
                 "num_blocks": 3,
                 "num_heads": 4,
+                "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
             },
         },
         "train_timestep_sampler": {  # uniform

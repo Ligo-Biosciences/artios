@@ -131,7 +131,7 @@ class ArtiosMPNNTrainer(object):
                 fork_run_id=self.configs.neptune_fork_run_id
                 if self.configs.neptune_fork_run_id
                 else None,
-                fork_step=self.configs.neptune_fork_step
+                fork_step=int(self.configs.neptune_fork_step)
                 if self.configs.neptune_fork_step
                 else None,
             )

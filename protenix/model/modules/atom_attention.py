@@ -52,6 +52,7 @@ class AtomAttentionEncoder(nn.Module):
         num_queries: int = 32,
         num_keys: int = 128,
         blocks_per_ckpt: Optional[int] = None,
+        checkpoint_grads: bool = True,
     ) -> None:
         """
         Args:
@@ -66,6 +67,7 @@ class AtomAttentionEncoder(nn.Module):
             num_blocks (int, optional): number of blocks in AtomTransformer. Defaults to 3.
             num_heads (int, optionall): number of heads in AtomTransformer. Defaults to 4.
             blocks_per_ckpt: number of AtomAttentionEncoder/AtomTransformer blocks in each activation checkpoint
+            checkpoint_grads (bool): whether to use gradient checkpointing. Defaults to True.
         """
         super(AtomAttentionEncoder, self).__init__()
 
@@ -149,6 +151,7 @@ class AtomAttentionEncoder(nn.Module):
             c_atompair=c_atompair,
             num_queries=num_queries,
             num_keys=num_keys,
+            checkpoint_grads=checkpoint_grads,
         )
         self.final_linear = LinearNoBias(
             in_features=self.c_atom,
@@ -378,6 +381,7 @@ class AtomAttentionDecoder(nn.Module):
         num_heads: int = 4,
         num_queries: int = 32,
         num_keys: int = 128,
+        checkpoint_grads: bool = True,
     ) -> None:
         super(AtomAttentionDecoder, self).__init__()
         self.c_token = c_token
@@ -395,6 +399,7 @@ class AtomAttentionDecoder(nn.Module):
             num_heads=num_heads,
             num_queries=num_queries,
             num_keys=num_keys,
+            checkpoint_grads=checkpoint_grads,
         )
         self.final_layernorm = LayerNorm(c_atom)
         self.final_linear = LinearNoBias(c_atom, 3, init="zeros", high_precision=True)

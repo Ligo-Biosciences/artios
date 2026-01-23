@@ -1,6 +1,8 @@
 from typing import Literal, Optional, overload
 
+import numpy as np
 import torch
+from biotite.structure import AtomArray
 from einops import rearrange
 from torch import Tensor
 
@@ -304,3 +306,58 @@ def weighted_rigid_align(
     if return_transform:
         return x_aligned, rot, trans
     return x_aligned
+
+
+def compute_per_atom_rmsf(
+    structures: list[AtomArray],
+) -> np.ndarray:
+    """Compute per-atom RMSF across an ensemble of structures.
+
+    All structures must have the same atoms in the same order.
+
+    Args:
+        structures: List of AtomArrays, all with identical atom ordering
+
+    Returns:
+        Array of shape (n_atoms,) containing RMSF for each atom in Angstroms
+    """
+    all_coords = np.stack(
+        [s.coord for s in structures], axis=0
+    )  # [n_structures, n_atoms, 3]
+
+    mean_coords = np.mean(all_coords, axis=0)  # [n_atoms, 3]
+
+    squared_deviations = np.sum(
+        (all_coords - mean_coords) ** 2, axis=2
+    )  # [n_structures, n_atoms]
+
+    rmsf = np.sqrt(np.mean(squared_deviations, axis=0))  # [n_atoms]
+
+    return rmsf
+
+
+def compute_per_residue_rmsf(
+    structure: AtomArray,
+    per_atom_rmsf: np.ndarray,
+) -> dict[tuple[str, int], float]:
+    """Aggregate per-atom RMSF to per-residue RMSF.
+
+    Args:
+        structure: Reference AtomArray
+        per_atom_rmsf: Array of per-atom RMSF values
+
+    Returns:
+        Dict mapping (chain_id, res_id) to mean RMSF over atoms in that residue
+    """
+    residue_rmsf = {}
+
+    chain_res_pairs = list(zip(structure.chain_id, structure.res_id))
+    unique_pairs = sorted(set(chain_res_pairs), key=lambda x: (x[0], x[1]))
+
+    for chain_id, res_id in unique_pairs:
+        mask = (structure.chain_id == chain_id) & (structure.res_id == res_id)
+        atom_rmsf_values = per_atom_rmsf[mask]
+        if len(atom_rmsf_values) > 0:
+            residue_rmsf[(chain_id, res_id)] = float(np.mean(atom_rmsf_values))
+
+    return residue_rmsf

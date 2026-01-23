@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import biotite.structure as struc
 import numpy as np
 
-from protenix.data.json_parser import BackboneInput, CCDLigand, SMILESLigand
+from protenix.data.json_parser import CCDLigand, MotifSpec, SMILESLigand
 from protenix.data.parser import MMCIFParser
 
 logger = logging.getLogger(__name__)
@@ -55,15 +55,15 @@ class Motif:
     ligands: list[MotifLigand]
 
     @classmethod
-    def from_input(cls, backbone_input: BackboneInput) -> Motif:
-        """Build Motif from validated BackboneInput.
+    def from_spec(cls, motif_spec: MotifSpec) -> Motif:
+        """Build Motif from validated MotifSpec.
 
         Parses the motif CIF file and creates MotifResidue objects for
         protein residues (hetero=False) and MotifLigand objects for
         heteroatoms with mappings in the input.
 
         Args:
-            backbone_input: Validated BackboneInput from json_parser.py
+            motif_spec: Validated MotifSpec from json_parser.py
 
         Returns:
             Motif object with parsed residues and ligands
@@ -71,7 +71,7 @@ class Motif:
         Raises:
             FileNotFoundError: If the motif CIF file doesn't exist
         """
-        cif_path = backbone_input.motif.cif_file.path
+        cif_path = motif_spec.cif_file.path
         if not cif_path.exists():
             raise FileNotFoundError(f"Motif CIF file not found: {cif_path}")
 
@@ -81,7 +81,7 @@ class Motif:
         # Build ligand mapping: (cif_res_name, chain_id) -> full_ligand
         ligand_mappings: dict[tuple[str, str], CCDLigand | SMILESLigand] = {
             (mapping.cif_res_name, mapping.chain_id): mapping.full_ligand
-            for mapping in backbone_input.motif.ligands
+            for mapping in motif_spec.ligands
         }
 
         residues: list[MotifResidue] = []

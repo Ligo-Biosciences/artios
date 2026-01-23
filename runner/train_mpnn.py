@@ -125,6 +125,15 @@ class ArtiosMPNNTrainer(object):
                 project=self.configs.project,
                 experiment_name=self.run_name,
                 source_tracking_config=source_config,
+                run_id=self.configs.neptune_run_id
+                if self.configs.neptune_run_id
+                else None,
+                fork_run_id=self.configs.neptune_fork_run_id
+                if self.configs.neptune_fork_run_id
+                else None,
+                fork_step=int(self.configs.neptune_fork_step)
+                if self.configs.neptune_fork_step
+                else None,
             )
             # self.torchwatcher = TorchWatcher(
             #     model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
@@ -318,7 +327,7 @@ class ArtiosMPNNTrainer(object):
         # Load EMA model parameters
         if self.configs.load_ema_mpnn_checkpoint_path:
             _load_checkpoint(
-                self.configs.load_mpnn_vae_checkpoint_path,
+                self.configs.load_ema_mpnn_checkpoint_path,
                 load_params_only=True,
             )
             self.ema_wrapper.register()

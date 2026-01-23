@@ -165,6 +165,66 @@ def load_atomarray_from_npz(npz_path: Union[str, Path]) -> AtomArray:
     return atom_array
 
 
+def dump_multi_sample_atomarray(
+    atom_array: AtomArray,
+    coords: np.ndarray,
+    npz_path: Union[str, Path],
+) -> None:
+    """Save AtomArray topology with multiple coordinate samples.
+
+    Stores the AtomArray structure (bonds, annotations) along with
+    coordinates from multiple samples in a single NPZ file.
+
+    Args:
+        atom_array: The AtomArray containing topology and annotations.
+        coords: Coordinates array of shape (n_sample, n_atom, 3).
+        npz_path: The output NPZ file path.
+    """
+    n_sample, n_atom, _ = coords.shape
+    if n_atom != len(atom_array):
+        raise ValueError(
+            f"Coordinate n_atom ({n_atom}) != atom_array length ({len(atom_array)})"
+        )
+
+    data = {
+        "coords": coords,  # (n_sample, n_atom, 3)
+        "bonds": atom_array.bonds.as_array(),
+    }
+
+    for category in atom_array.get_annotation_categories():
+        data[category] = atom_array.get_annotation(category)
+
+    np.savez_compressed(npz_path, **data)
+
+
+def load_multi_sample_atomarray(
+    npz_path: Union[str, Path],
+) -> tuple[AtomArray, np.ndarray]:
+    """Load AtomArray topology and multi-sample coordinates from NPZ.
+
+    Args:
+        npz_path: Path to NPZ file saved with dump_multi_sample_atomarray.
+
+    Returns:
+        Tuple of (atom_array, coords) where:
+        - atom_array: AtomArray with topology and annotations (coords set to first sample)
+        - coords: Array of shape (n_sample, n_atom, 3)
+    """
+    data = dict(np.load(npz_path, allow_pickle=True))
+
+    coords = data.pop("coords")  # (n_sample, n_atom, 3)
+    n_atoms = coords.shape[1]
+
+    atom_array = AtomArray(length=n_atoms)
+    atom_array.coord = coords[0]  # Default to first sample
+    atom_array.bonds = BondList(n_atoms, bonds=data.pop("bonds"))
+
+    for category, values in data.items():
+        atom_array.set_annotation(category, values)
+
+    return atom_array, coords
+
+
 def load_lz4_pickle(pkl: Union[str, Path]) -> Any:
     """
     Load an lz4 compressed pickle file.

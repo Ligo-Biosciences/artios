@@ -18,6 +18,7 @@ from protenix.common.constants import STD_RESIDUES_AND_GAP, mmcif_restype_3to1
 from protenix.data.parser import MMCIFParser
 from protenix.data.utils import save_structure_cif
 from protenix.model.output import ModelOutput
+from protenix.utils.file_io import dump_multi_sample_atomarray
 from protenix.utils.inference import ModelType
 
 logger = logging.getLogger(__name__)
@@ -234,6 +235,50 @@ def save_model_output_to_cif(
             continue
 
     return saved_files
+
+
+def save_model_output_to_npz(
+    output_dir: str,
+    output: ModelOutput,
+    atom_array: List[AtomArray],
+    n_atom: int,
+    sample_name: str,
+) -> Path:
+    """Save model output coordinates and topology to a single NPZ file.
+
+    Saves all samples in a single file with shape (n_sample, n_atom, 3) for
+    efficient loading in downstream pipelines.
+
+    Args:
+        output_dir: Output directory path.
+        output: ModelOutput containing model predictions.
+        atom_array: Input AtomArray structure (list with batch dim).
+        n_atom: Number of atoms in the input atom array.
+        sample_name: Identifier for the structure.
+
+    Returns:
+        Path to the saved NPZ file.
+    """
+
+    assert output.coordinate is not None, "Coordinate is not in ModelOutput."
+    assert output.coordinate.shape[0] == 1, "Batch size must be 1."
+
+    # Extract coordinates: (batch, n_sample, n_atom, 3) -> (n_sample, n_atom, 3)
+    coords = output.coordinate[0, :, :n_atom].detach().cpu().numpy()
+    base_atom_array = atom_array[0]
+
+    assert coords.shape[-2] == len(base_atom_array), (
+        f"Predicted coordinates must match input atom array size, "
+        f"got {coords.shape[-2]=} and {len(base_atom_array)=}"
+    )
+
+    output_path = Path(output_dir) / f"{sample_name}_backbone.npz"
+    os.makedirs(output_dir, exist_ok=True)
+
+    dump_multi_sample_atomarray(base_atom_array, coords, output_path)
+    logger.info(f"Saved {coords.shape[0]} samples to {output_path}")
+
+    return output_path
 
 
 def save_trajectory_to_pdb(

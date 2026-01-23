@@ -42,6 +42,7 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.structure_io import (
     save_model_output_to_cif,
     save_model_output_to_fasta,
+    save_model_output_to_npz,
     save_trajectory_to_pdb,
 )
 
@@ -242,25 +243,35 @@ def infer_predict(
 
                 match model_type:
                     case ModelType.BACKBONE:
-                        _ = save_model_output_to_cif(
-                            output_dir_list=runner.dump_dir_list,
-                            output=output,
-                            model_type=model_type,
-                            atom_array=context.basic.atom_array,
-                            n_atom=n_atom,
-                            sample_name=sample_name,
-                            field_in_b_factor_col="is_motif",
-                        )
-                        if output.trajectory is not None:
-                            _ = save_trajectory_to_pdb(
+                        output_format = configs.get("output_format", "cif")
+                        if output_format == "npz":
+                            _ = save_model_output_to_npz(
+                                output_dir=runner.dump_dir,
+                                output=output,
+                                atom_array=context.basic.atom_array,
+                                n_atom=n_atom,
+                                sample_name=sample_name,
+                            )
+                        else:
+                            _ = save_model_output_to_cif(
                                 output_dir_list=runner.dump_dir_list,
                                 output=output,
                                 model_type=model_type,
                                 atom_array=context.basic.atom_array,
                                 n_atom=n_atom,
                                 sample_name=sample_name,
-                                step_stride=configs.sample_diffusion.trajectory_step_stride,
+                                field_in_b_factor_col="is_motif",
                             )
+                            if output.trajectory is not None:
+                                _ = save_trajectory_to_pdb(
+                                    output_dir_list=runner.dump_dir_list,
+                                    output=output,
+                                    model_type=model_type,
+                                    atom_array=context.basic.atom_array,
+                                    n_atom=n_atom,
+                                    sample_name=sample_name,
+                                    step_stride=configs.sample_diffusion.trajectory_step_stride,
+                                )
                         parent_dir = os.path.dirname(runner.dump_dir)
                         mapping_path = opjoin(
                             parent_dir, f"{sample_name}_motif_mapping.json"

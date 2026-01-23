@@ -261,18 +261,21 @@ FullLigand = Annotated[
 
 
 class LigandMapping(BaseModel):
-    """Maps a residue in the motif CIF to its full ligand structure.
+    """Maps a ligand in the CIF to its full ligand structure.
+
+    The chain_id is required to distinguish between multiple instances of the
+    same ligand type (e.g., two ZN ions with different chain_ids).
 
     Example:
         {
             "cif_res_name": "ZN",
+            "chain_id": "3",
             "full_ligand": {"type": "ccd", "codes": ["ZN"]}
         }
     """
 
-    cif_res_name: str = Field(
-        ..., description="Residue name as it appears in motif CIF"
-    )
+    cif_res_name: str = Field(..., description="Residue name as it appears in the CIF")
+    chain_id: str = Field(..., description="Chain ID as it appears in the CIF")
     full_ligand: FullLigand
 
 
@@ -331,14 +334,26 @@ class FixedResidue(BaseModel):
     Used to specify catalytic residues, binding site residues, or other
     positions where the amino acid identity is known/required.
 
+    There are two types of fixed residues:
+    - Identity-fixed only (is_motif_residue=False): The residue type is constrained,
+      but sidechain coordinates are not specified. Example: requiring an ARG near
+      an active site without specific coordinate preferences.
+    - Motif residues (is_motif_residue=True): The residue has full sidechain
+      coordinates from motif scaffolding output. These residues will have their
+      sidechains preserved for MPNN attention.
+
     Examples:
-        {"chain_id": "A", "res_id": 94, "residue": "HIS"}
-        {"chain_id": "A", "res_id": 94, "residue": "H"}  # 1-letter also accepted
+        {"chain_id": "A", "res_id": 94, "residue": "HIS", "is_motif_residue": true}
+        {"chain_id": "A", "res_id": 200, "residue": "ARG"}  # identity-fixed only
     """
 
     chain_id: str = Field(..., description="Chain identifier")
     res_id: int = Field(..., ge=1, description="Residue number (1-based)")
     residue: str = Field(..., description="Amino acid (1-letter or 3-letter code)")
+    is_motif_residue: bool = Field(
+        default=False,
+        description="True if this residue has sidechain coordinates from motif scaffolding",
+    )
 
     @field_validator("residue")
     @classmethod
@@ -361,38 +376,50 @@ class FixedResidue(BaseModel):
 class SequenceDesignInput(BaseModel):
     """Top-level input for sequence design inference.
 
-    Given a poly-glycine backbone structure with ligand(s), predict the amino acid
-    sequence that would fold into that structure and bind the ligand.
+    Given a backbone structure from motif scaffolding with ligand(s), predict the
+    amino acid sequence that would fold into that structure and bind the ligand.
 
     The CIF file should contain:
-    - Poly-glycine protein chain(s) with backbone atoms (N, CA, C, O)
-    - Ligand(s) with full atomic coordinates
+    - Protein backbone (chain_id "0") with stitched motif sidechains
+    - Ligand(s) with full atomic coordinates (each with their own chain_id)
+
+    Fixed residues can be:
+    - Motif residues (is_motif_residue=True): Have sidechain coordinates from motif
+      scaffolding. Their sidechains are preserved for MPNN attention.
+    - Identity-fixed only (is_motif_residue=False): Residue type is constrained but
+      no coordinate preferences. Used for additional constraints like "put an ARG here".
+
+    Note: Protein chain must always be "0". This is enforced by validation.
 
     Example:
         {
             "name": "carbonic_anhydrase_redesign",
-            "cif_file": "polyG_backbone.cif",
+            "cif_file": "stitched_backbone.cif",
             "fixed_residues": [
-                {"chain_id": "A", "res_id": 94, "residue": "HIS"},
-                {"chain_id": "A", "res_id": 96, "residue": "HIS"},
-                {"chain_id": "A", "res_id": 119, "residue": "H"}
+                {"chain_id": "0", "res_id": 94, "residue": "HIS", "is_motif_residue": true},
+                {"chain_id": "0", "res_id": 96, "residue": "HIS", "is_motif_residue": true},
+                {"chain_id": "0", "res_id": 119, "residue": "HIS", "is_motif_residue": true}
             ],
             "ligands": [
-                {"type": "smiles", "smiles": "CC(C)c1ccc([S:1](=[O:2])(=[O:3])[N:4])cc1"}
+                {
+                    "cif_res_name": "AL5",
+                    "chain_id": "3",
+                    "full_ligand": {"type": "ccd", "codes": ["AL5"]}
+                }
             ]
         }
     """
 
     name: str | None = Field(default=None, description="Job identifier")
     cif_file: CIFFile = Field(
-        ..., description="Poly-glycine backbone CIF with ligand(s)"
+        ..., description="Backbone CIF with stitched motif sidechains and ligands"
     )
     fixed_residues: list[FixedResidue] = Field(
         default_factory=list,
-        description="Residues with constrained amino acid identity",
+        description="Residues with constrained identity. Motif residues (is_motif_residue=True) also have sidechain coordinates.",
     )
-    ligands: list[FullLigand] = Field(
-        ..., description="Ligands present in the structure."
+    ligands: list[LigandMapping] = Field(
+        ..., description="Ligand mappings from CIF residue names to full ligand specs."
     )
 
     @model_validator(mode="after")
@@ -408,6 +435,17 @@ class SequenceDesignInput(BaseModel):
             seen.add(key)
         return self
 
+    @model_validator(mode="after")
+    def validate_protein_chain_id(self) -> SequenceDesignInput:
+        """Ensure all fixed residues are on protein chain '0'."""
+        for fr in self.fixed_residues:
+            if fr.chain_id != "0":
+                raise ValueError(
+                    f"Fixed residue chain_id must be '0' (protein chain), "
+                    f"got '{fr.chain_id}' for res_id {fr.res_id}"
+                )
+        return self
+
 
 # ---------------------------------------------------------------------------
 # Packing models
@@ -415,12 +453,39 @@ class SequenceDesignInput(BaseModel):
 
 
 class PackingInput(BaseModel):
+    """Top-level input for sidechain packing inference.
+
+    Given a backbone structure and sequence, predict sidechain conformations.
+
+    The CIF file should contain:
+    - Protein backbone (chain_id "0")
+    - Ligand(s) with full atomic coordinates (each with their own chain_id)
+
+    Note: Protein chain must always be "0".
+
+    Example:
+        {
+            "name": "pack_design",
+            "cif_file": "backbone.cif",
+            "fasta_file": "sequence.fasta",
+            "ligands": [
+                {
+                    "cif_res_name": "AL5",
+                    "chain_id": "3",
+                    "full_ligand": {"type": "ccd", "codes": ["AL5"]}
+                }
+            ]
+        }
+    """
+
     name: str | None = Field(default=None, description="Job identifier")
     cif_file: CIFFile = Field(
         ..., description="Poly-glycine backbone CIF with ligand(s)"
     )
     fasta_file: FastaFile = Field(..., description="Fasta file with sequence")
-    ligands: list[FullLigand] = Field(..., description="Ligands to pack.")
+    ligands: list[LigandMapping] = Field(
+        ..., description="Ligand mappings from CIF residue names to full ligand specs."
+    )
 
 
 # ---------------------------------------------------------------------------

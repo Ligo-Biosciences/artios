@@ -36,7 +36,7 @@ from protenix.data.json_parser import (
     SMILESLigand,
 )
 from protenix.data.motif_parser import Motif, MotifLigand, MotifResidue
-from protenix.data.parser import MMCIFParser
+from protenix.data.parser import AddAtomArrayAnnot, MMCIFParser
 from protenix.data.rdkit import (
     AtomInfo,
     infer_atom_map_from_substructure,
@@ -45,6 +45,80 @@ from protenix.data.rdkit import (
 from protenix.utils.file_io import load_atomarray_from_npz
 
 logger = logging.getLogger(__name__)
+
+
+def mse_to_met(atom_array: AtomArray) -> AtomArray:
+    """Convert MSE residues to MET residues.
+
+    Ref: AlphaFold3 SI chapter 2.1
+    MSE residues are converted to MET residues.
+
+    Args:
+        atom_array: Biotite AtomArray object.
+
+    Returns:
+        AtomArray: Biotite AtomArray object after converting MSE to MET.
+    """
+    mse = atom_array.res_name == "MSE"
+    se = mse & (atom_array.atom_name == "SE")
+    atom_array.atom_name[se] = "SD"
+    atom_array.element[se] = "S"
+    atom_array.res_name[mse] = "MET"
+    atom_array.hetero[mse] = False
+    return atom_array
+
+
+def add_atom_array_attributes(
+    atom_array: AtomArray,
+    has_motif: bool = False,
+) -> tuple[AtomArray, list[dict]]:
+    """Add attributes to the Biotite AtomArray.
+
+    Args:
+        atom_array: AtomArray to add attributes to
+        has_motif: Whether this array has motif residues that need special handling.
+            When True, runs motif-specific ID unindexing and centre mask updates.
+
+    Returns:
+        tuple containing:
+            - AtomArray: AtomArray with added attributes
+            - list[dict]: Mapping from unindexed chain to original motif residue info
+                (empty list if has_motif is False)
+
+    Note: The ordering of how we add the annotations is important.
+    """
+    sequences = {entity_id: "" for entity_id in np.unique(atom_array.label_entity_id)}
+
+    atom_array = AddAtomArrayAnnot.add_token_mol_type(atom_array, sequences)
+    atom_array = AddAtomArrayAnnot.add_centre_atom_mask(atom_array)
+    atom_array = AddAtomArrayAnnot.add_cano_seq_resname(atom_array)
+    atom_array = AddAtomArrayAnnot.add_tokatom_idx(atom_array)
+    atom_array = AddAtomArrayAnnot.add_modified_res_mask(atom_array)
+    atom_array = AddAtomArrayAnnot.unique_chain_and_add_ids(atom_array)
+    atom_array = AddAtomArrayAnnot.find_equiv_mol_and_assign_ids(
+        atom_array, check_final_equiv=False
+    )
+    atom_array = AddAtomArrayAnnot.add_ref_space_uid(atom_array)
+
+    original_motif_mapping: list[dict] = []
+    if has_motif:
+        atom_array, original_motif_mapping = (
+            AddAtomArrayAnnot.update_ids_to_unindex_motif_residues(
+                atom_array, update_labels=True
+            )
+        )
+
+    atom_array = AddAtomArrayAnnot.add_atom_mol_type_mask(atom_array)
+
+    if has_motif:
+        atom_array = AddAtomArrayAnnot.update_centre_atom_mask_to_include_motif(
+            atom_array
+        )
+
+    atom_array.set_annotation("resolution", np.ones(len(atom_array)))
+    atom_array.set_annotation("is_resolved", [True] * len(atom_array))
+
+    return atom_array, original_motif_mapping
 
 
 def set_chain_and_seq_ids(
@@ -62,8 +136,16 @@ def set_chain_and_seq_ids(
     return atom_array
 
 
-def backbone_input_to_atom_array(backbone_input: BackboneInput) -> AtomArray:
-    """Process motif scaffolding input and builds AtomArray."""
+def backbone_input_to_atom_array(
+    backbone_input: BackboneInput,
+) -> tuple[AtomArray, list[dict]]:
+    """Process motif scaffolding input and builds AtomArray.
+
+    Returns:
+        tuple containing:
+            - AtomArray: Complete atom array with all annotations
+            - list[dict]: Mapping from unindexed chain to original motif residue info
+    """
     assert len(backbone_input.design) == 1, "Only one design entity is supported"
 
     # Build protein array
@@ -81,14 +163,23 @@ def backbone_input_to_atom_array(backbone_input: BackboneInput) -> AtomArray:
     )
 
     # Build motif (chain_ids already set from CIF in build_motif_residue/build_motif_ligand)
-    if backbone_input.motif is not None:
+    has_motif = backbone_input.motif is not None
+    if has_motif:
         motif_atom_array = build_motif(Motif.from_input(backbone_input))
         design_atom_array += motif_atom_array
 
-    return design_atom_array
+    # Apply MSE->MET conversion and add annotations
+    design_atom_array = mse_to_met(design_atom_array)
+    design_atom_array, original_motif_mapping = add_atom_array_attributes(
+        design_atom_array, has_motif=has_motif
+    )
+
+    return design_atom_array, original_motif_mapping
 
 
-def sequence_input_to_atom_array(sequence_input: SequenceDesignInput) -> AtomArray:
+def sequence_input_to_atom_array(
+    sequence_input: SequenceDesignInput,
+) -> tuple[AtomArray, list[dict]]:
     """Load AtomArray from NPZ file saved during backbone inference.
 
     The NPZ file contains the complete AtomArray with all annotations already set:
@@ -98,19 +189,35 @@ def sequence_input_to_atom_array(sequence_input: SequenceDesignInput) -> AtomArr
     - is_motif, is_motif_related annotations
     - original_motif_res_id annotations
 
+    No additional processing (MSE->MET conversion or annotation addition) is needed
+    since this was already done during the backbone scaffolding phase.
+
     Args:
         sequence_input: SequenceDesignInput with npz_file path
 
     Returns:
-        AtomArray loaded from NPZ with all annotations preserved
+        tuple containing:
+            - AtomArray: Loaded from NPZ with all annotations preserved
+            - list[dict]: Empty list (motif mapping not reconstructed from NPZ)
     """
     atom_array = load_atomarray_from_npz(sequence_input.npz_file.path)
 
-    return atom_array
+    # NPZ already has all annotations from backbone scaffolding phase.
+    # original_motif_mapping is not preserved in NPZ, return empty list.
+    # Downstream code can use original_motif_res_id annotation on atoms if needed.
+    return atom_array, []
 
 
-def packing_input_to_atom_array(packing_input: PackingInput) -> AtomArray:
-    """Process packing input and builds AtomArray."""
+def packing_input_to_atom_array(
+    packing_input: PackingInput,
+) -> tuple[AtomArray, list[dict]]:
+    """Process packing input and builds AtomArray.
+
+    Returns:
+        tuple containing:
+            - AtomArray: Complete atom array with all annotations
+            - list[dict]: Empty list (packing has no motifs)
+    """
     # Load stitched backbone from cif
     designed_array = strucio.load_structure(packing_input.cif_file.path)
 
@@ -156,13 +263,25 @@ def packing_input_to_atom_array(packing_input: PackingInput) -> AtomArray:
         "original_motif_res_id", np.full(len(combined), -1, dtype=int)
     )
 
-    return combined
+    # Apply MSE->MET conversion and add annotations (no motif-specific handling)
+    combined = mse_to_met(combined)
+    combined, original_motif_mapping = add_atom_array_attributes(
+        combined, has_motif=False
+    )
+
+    return combined, original_motif_mapping
 
 
 def process_input_to_atom_array(
     input: BackboneInput | SequenceDesignInput | PackingInput,
-) -> AtomArray:
-    """Dispatch to appropriate task-specific processor based on input structure."""
+) -> tuple[AtomArray, list[dict]]:
+    """Dispatch to appropriate task-specific processor based on input structure.
+
+    Returns:
+        tuple containing:
+            - AtomArray: Complete atom array with all annotations
+            - list[dict]: Mapping from unindexed chain to original motif residue info
+    """
     match input:
         case BackboneInput():
             return backbone_input_to_atom_array(input)

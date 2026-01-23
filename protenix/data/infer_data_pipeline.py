@@ -20,10 +20,12 @@ from typing import Any
 
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
+from protenix.data.array_builder import process_input_to_atom_array
 from protenix.data.data_collator import CollateContexts
 from protenix.data.features import FullContext
+from protenix.data.featurizer import ContextGenerator
 from protenix.data.json_parser import parse_input_dict
-from protenix.data.json_to_context import InputToContext
+from protenix.data.tokenizer import AtomArrayTokenizer
 from protenix.utils.distributed import DIST_WRAPPER
 
 logger = logging.getLogger(__name__)
@@ -99,9 +101,17 @@ class InferenceDataset(Dataset):
             sample_name = sample_input.name
             logger.info(f"Featurizing {sample_name}...")
 
-            context = InputToContext(
-                input=sample_input,
-            ).get_context()
+            atom_array, original_motif_mapping = process_input_to_atom_array(
+                sample_input
+            )
+            token_array = AtomArrayTokenizer(atom_array).get_token_array()
+            context = ContextGenerator(
+                token_array,
+                atom_array,
+                pdb_id=sample_input.name,
+                bioassembly_dict_fpath=sample_input.name,
+                original_motif_mapping=original_motif_mapping,
+            ).get_full_context()
 
         except Exception as e:
             error_message = f"{e}:\n{traceback.format_exc()}"

@@ -165,7 +165,7 @@ def backbone_input_to_atom_array(
     # Build motif (chain_ids already set from CIF in build_motif_residue/build_motif_ligand)
     has_motif = backbone_input.motif is not None
     if has_motif:
-        motif_atom_array = build_motif(Motif.from_input(backbone_input))
+        motif_atom_array = build_motif(Motif.from_spec(backbone_input.motif))
         design_atom_array += motif_atom_array
 
     # Apply MSE->MET conversion and add annotations

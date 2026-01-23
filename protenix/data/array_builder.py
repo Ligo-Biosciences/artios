@@ -42,6 +42,7 @@ from protenix.data.rdkit import (
     infer_atom_map_from_substructure,
     smiles_to_atom_info,
 )
+from protenix.utils.file_io import load_atomarray_from_npz
 
 logger = logging.getLogger(__name__)
 
@@ -88,208 +89,24 @@ def backbone_input_to_atom_array(backbone_input: BackboneInput) -> AtomArray:
 
 
 def sequence_input_to_atom_array(sequence_input: SequenceDesignInput) -> AtomArray:
-    """Process sequence design input and builds AtomArray.
+    """Load AtomArray from NPZ file saved during backbone inference.
 
-    # TODO: add motif related atoms into the atom array
-    # TODO: make sure the unindexing down the line works properly with the outputs
-    # TODO: make sure the coordinate transfer is sanitary and works exactly, not
-    # by coincidence.
-    """
-    # Load stitched backbone from cif
-    designed_array = strucio.load_structure(sequence_input.cif_file.path)
-
-    arrays = []
-    # Build protein array
-    res_ids = np.unique(designed_array[designed_array.chain_id == 0].res_id)
-    len_sequence = len(res_ids)
-
-    res_id_to_idx = {res_id: idx for idx, res_id in enumerate(res_ids)}
-
-    sequence = [PROTEIN_1to3["G"] for _ in range(len_sequence)]
-
-    fixed_res_ids = []
-    for res in sequence_input.fixed_residues:
-        residue = res.residue
-        if len(residue) == 1:
-            residue = PROTEIN_1to3[residue]
-
-        idx = res_id_to_idx[res.res_id]
-        sequence[idx] = residue
-        fixed_res_ids.append(idx + 1)  # protein_array uses 1-indexed res_id
-
-    protein_array = _build_polymer_atom_array(sequence)
-    protein_array = add_reference_features(protein_array)
-    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0)
-
-    arrays.append(protein_array)
-
-    # Build ligand arrays
-    for i, ligand in enumerate(sequence_input.ligands):
-        ligand_array = build_ligand(ligand).atom_array
-        ligand_array = set_chain_and_seq_ids(ligand_array, chain_id=i + 1)
-        arrays.append(ligand_array)
-
-    combined = arrays[0]
-    for arr in arrays[1:]:
-        combined += arr
-
-    # Add the coordinates to combined array
-    assert len(combined) == len(designed_array)
-    # TODO: far more checks here, making sure atom names are the same etc.
-    combined.coord = designed_array.coord
-
-    combined.set_annotation("is_motif_related", [False] * len(combined))
-    combined.set_annotation("is_motif", [False] * len(combined))
-    combined.set_annotation(
-        "original_motif_res_id", np.full(len(combined), -1, dtype=int)
-    )
-
-    # Mark fixed residues as motif-related so MPNN preserves restype
-    for res_id in fixed_res_ids:
-        res_id_mask = (combined.res_id == res_id) & (combined.chain_id == "0")
-        combined.is_motif_related[res_id_mask] = True
-
-    return combined
-
-
-def sequence_input_to_atom_array_v2(sequence_input: SequenceDesignInput) -> AtomArray:
-    """Process sequence design input and build AtomArray with proper coordinate transfer.
-
-    Builds atom arrays from CCD references and transfers coordinates from the input
-    CIF file by matching (chain_id, res_id, atom_name). This ensures coordinates are
-    transferred correctly regardless of atom ordering.
-
-    The CIF file should contain:
-    - Backbone atoms (N, CA, C, O) for all residues
-    - Full sidechain atoms for motif residues
-    - Full ligand atoms
-
-    The CCD-built array contains:
-    - GLY (backbone only) for non-fixed residues
-    - Full residues for fixed residues (both motif and non-motif)
-    - Full ligands
-
-    Matching behavior:
-    - Every CIF atom must match a CCD atom (validation error otherwise)
-    - Unmatched CCD atoms are sidechains of fixed non-motif residues (keep ref coords)
+    The NPZ file contains the complete AtomArray with all annotations already set:
+    - Protein backbone and motif sidechain coordinates
+    - Ligand coordinates
+    - Chain IDs for all entities
+    - is_motif, is_motif_related annotations
+    - original_motif_res_id annotations
 
     Args:
-        sequence_input: SequenceDesignInput with cif_file, fixed_residues, and ligands
+        sequence_input: SequenceDesignInput with npz_file path
 
     Returns:
-        AtomArray with coordinates transferred and motif annotations set
+        AtomArray loaded from NPZ with all annotations preserved
     """
-    # Load CIF to get structure info and coordinates
-    cif_array = strucio.load_structure(sequence_input.cif_file.path)
+    atom_array = load_atomarray_from_npz(sequence_input.npz_file.path)
 
-    # Determine sequence length from CIF (assuming chain_id "0" is the protein)
-    protein_mask = cif_array.chain_id == "0"
-    if not protein_mask.any():
-        # Try numeric chain_id
-        protein_mask = cif_array.chain_id == 0
-    protein_cif = cif_array[protein_mask]
-    res_ids = np.unique(protein_cif.res_id)
-    len_sequence = len(res_ids)
-
-    # Build mapping from CIF res_id to sequence index
-    res_id_to_idx = {res_id: idx for idx, res_id in enumerate(sorted(res_ids))}
-
-    # Build sequence: GLY for all, then replace fixed residues with their types
-    sequence = [PROTEIN_1to3["G"]] * len_sequence
-
-    # Track fixed and motif residues by their internal res_id (1-indexed)
-    fixed_res_ids: list[int] = []
-    motif_res_ids: list[int] = []
-
-    for res in sequence_input.fixed_residues:
-        residue = res.residue
-        # if len(residue) == 1:
-        #     residue = PROTEIN_1to3[residue]
-
-        if res.res_id not in res_id_to_idx:
-            raise ValueError(
-                f"Fixed residue res_id {res.res_id} not found in CIF. "
-                f"Available res_ids: {sorted(res_ids)}"
-            )
-
-        idx = res_id_to_idx[res.res_id]
-        sequence[idx] = residue
-        internal_res_id = idx + 1  # _build_polymer_atom_array uses 1-indexed res_id
-        fixed_res_ids.append(internal_res_id)
-
-        if res.is_motif_residue:
-            motif_res_ids.append(internal_res_id)
-
-    # Build protein array from CCD
-    protein_array = _build_polymer_atom_array(sequence)
-    protein_array = add_reference_features(protein_array)
-    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0)
-
-    # Build ligand arrays from CCD/SMILES
-    arrays = [protein_array]
-    for i, ligand in enumerate(sequence_input.ligands):
-        ligand_array = build_ligand(ligand).atom_array
-        ligand_array = set_chain_and_seq_ids(ligand_array, chain_id=i + 1)
-        arrays.append(ligand_array)
-
-    # Combine all arrays
-    combined = arrays[0]
-    for arr in arrays[1:]:
-        combined += arr
-
-    # Build index for fast lookup: (chain_id, res_id, atom_name) -> atom index
-    ccd_atom_index: dict[tuple[str, int, str], int] = {}
-    for i in range(len(combined)):
-        key = (combined.chain_id[i], combined.res_id[i], combined.atom_name[i])
-        if key in ccd_atom_index:
-            logger.warning(f"Duplicate atom key in CCD array: {key}")
-        ccd_atom_index[key] = i
-
-    # Transfer coordinates from CIF to CCD array by atom name matching
-    matched_cif_atoms = 0
-    for i in range(len(cif_array)):
-        key = (str(cif_array.chain_id[i]), cif_array.res_id[i], cif_array.atom_name[i])
-
-        if key not in ccd_atom_index:
-            raise ValueError(
-                f"CIF atom not found in CCD array: chain_id={key[0]}, "
-                f"res_id={key[1]}, atom_name={key[2]}. "
-                "This indicates a mismatch between CIF and expected structure."
-            )
-
-        ccd_idx = ccd_atom_index[key]
-        combined.coord[ccd_idx] = cif_array.coord[i]
-        matched_cif_atoms += 1
-
-    logger.info(
-        f"Transferred {matched_cif_atoms}/{len(cif_array)} CIF atom coordinates. "
-        f"CCD array has {len(combined)} atoms total."
-    )
-
-    # Initialize motif annotations
-    combined.set_annotation("is_motif_related", np.zeros(len(combined), dtype=bool))
-    combined.set_annotation("is_motif", np.zeros(len(combined), dtype=bool))
-    combined.set_annotation(
-        "original_motif_res_id", np.full(len(combined), -1, dtype=int)
-    )
-
-    # Mark all fixed residues as is_motif_related (MPNN preserves their identity)
-    for res_id in fixed_res_ids:
-        mask = (combined.res_id == res_id) & (combined.chain_id == "0")
-        combined.is_motif_related[mask] = True
-
-    # Mark motif residues with is_motif=True (have sidechain coordinates)
-    for res_id in motif_res_ids:
-        mask = (combined.res_id == res_id) & (combined.chain_id == "0")
-        combined.is_motif[mask] = True
-        combined.original_motif_res_id[mask] = res_id
-
-    # Mark ligands as motif-related (they have coordinates, MPNN should attend to them)
-    ligand_mask = combined.chain_id != "0"
-    combined.is_motif_related[ligand_mask] = True
-    combined.is_motif[ligand_mask] = True
-
-    return combined
+    return atom_array
 
 
 def packing_input_to_atom_array(packing_input: PackingInput) -> AtomArray:
@@ -896,3 +713,148 @@ def add_bonds_to_terminal_residues(atom_array: AtomArray) -> AtomArray:
             atom_array.bonds.add_bond(prev_atom_idx[0], term_atom_idx[0], 1)
 
     return atom_array
+
+
+# ============================================================================
+# Legacy code - to be removed after migration
+# ============================================================================
+
+
+def sequence_input_to_atom_array_v2(sequence_input: SequenceDesignInput) -> AtomArray:
+    """Process sequence design input and build AtomArray with proper coordinate transfer.
+
+    Builds atom arrays from CCD references and transfers coordinates from the input
+    CIF file by matching (chain_id, res_id, atom_name). This ensures coordinates are
+    transferred correctly regardless of atom ordering.
+
+    The CIF file should contain:
+    - Backbone atoms (N, CA, C, O) for all residues
+    - Full sidechain atoms for motif residues
+    - Full ligand atoms
+
+    The CCD-built array contains:
+    - GLY (backbone only) for non-fixed residues
+    - Full residues for fixed residues (both motif and non-motif)
+    - Full ligands
+
+    Matching behavior:
+    - Every CIF atom must match a CCD atom (validation error otherwise)
+    - Unmatched CCD atoms are sidechains of fixed non-motif residues (keep ref coords)
+
+    Args:
+        sequence_input: SequenceDesignInput with cif_file, fixed_residues, and ligands
+
+    Returns:
+        AtomArray with coordinates transferred and motif annotations set
+    """
+    # Load CIF to get structure info and coordinates
+    cif_array = strucio.load_structure(sequence_input.cif_file.path)
+
+    # Determine sequence length from CIF (assuming chain_id "0" is the protein)
+    protein_mask = cif_array.chain_id == "0"
+    if not protein_mask.any():
+        # Try numeric chain_id
+        protein_mask = cif_array.chain_id == 0
+    protein_cif = cif_array[protein_mask]
+    res_ids = np.unique(protein_cif.res_id)
+    len_sequence = len(res_ids)
+
+    # Build mapping from CIF res_id to sequence index
+    res_id_to_idx = {res_id: idx for idx, res_id in enumerate(sorted(res_ids))}
+
+    # Build sequence: GLY for all, then replace fixed residues with their types
+    sequence = [PROTEIN_1to3["G"]] * len_sequence
+
+    # Track fixed and motif residues by their internal res_id (1-indexed)
+    fixed_res_ids: list[int] = []
+    motif_res_ids: list[int] = []
+
+    for res in sequence_input.fixed_residues:
+        residue = res.residue
+        # if len(residue) == 1:
+        #     residue = PROTEIN_1to3[residue]
+
+        if res.res_id not in res_id_to_idx:
+            raise ValueError(
+                f"Fixed residue res_id {res.res_id} not found in CIF. "
+                f"Available res_ids: {sorted(res_ids)}"
+            )
+
+        idx = res_id_to_idx[res.res_id]
+        sequence[idx] = residue
+        internal_res_id = idx + 1  # _build_polymer_atom_array uses 1-indexed res_id
+        fixed_res_ids.append(internal_res_id)
+
+        if res.is_motif_residue:
+            motif_res_ids.append(internal_res_id)
+
+    # Build protein array from CCD
+    protein_array = _build_polymer_atom_array(sequence)
+    protein_array = add_reference_features(protein_array)
+    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0)
+
+    # Build ligand arrays from CCD/SMILES
+    arrays = [protein_array]
+    for i, ligand in enumerate(sequence_input.ligands):
+        ligand_array = build_ligand(ligand).atom_array
+        ligand_array = set_chain_and_seq_ids(ligand_array, chain_id=i + 1)
+        arrays.append(ligand_array)
+
+    # Combine all arrays
+    combined = arrays[0]
+    for arr in arrays[1:]:
+        combined += arr
+
+    # Build index for fast lookup: (chain_id, res_id, atom_name) -> atom index
+    ccd_atom_index: dict[tuple[str, int, str], int] = {}
+    for i in range(len(combined)):
+        key = (combined.chain_id[i], combined.res_id[i], combined.atom_name[i])
+        if key in ccd_atom_index:
+            logger.warning(f"Duplicate atom key in CCD array: {key}")
+        ccd_atom_index[key] = i
+
+    # Transfer coordinates from CIF to CCD array by atom name matching
+    matched_cif_atoms = 0
+    for i in range(len(cif_array)):
+        key = (str(cif_array.chain_id[i]), cif_array.res_id[i], cif_array.atom_name[i])
+
+        if key not in ccd_atom_index:
+            raise ValueError(
+                f"CIF atom not found in CCD array: chain_id={key[0]}, "
+                f"res_id={key[1]}, atom_name={key[2]}. "
+                "This indicates a mismatch between CIF and expected structure."
+            )
+
+        ccd_idx = ccd_atom_index[key]
+        combined.coord[ccd_idx] = cif_array.coord[i]
+        matched_cif_atoms += 1
+
+    logger.info(
+        f"Transferred {matched_cif_atoms}/{len(cif_array)} CIF atom coordinates. "
+        f"CCD array has {len(combined)} atoms total."
+    )
+
+    # Initialize motif annotations
+    combined.set_annotation("is_motif_related", np.zeros(len(combined), dtype=bool))
+    combined.set_annotation("is_motif", np.zeros(len(combined), dtype=bool))
+    combined.set_annotation(
+        "original_motif_res_id", np.full(len(combined), -1, dtype=int)
+    )
+
+    # Mark all fixed residues as is_motif_related (MPNN preserves their identity)
+    for res_id in fixed_res_ids:
+        mask = (combined.res_id == res_id) & (combined.chain_id == "0")
+        combined.is_motif_related[mask] = True
+
+    # Mark motif residues with is_motif=True (have sidechain coordinates)
+    for res_id in motif_res_ids:
+        mask = (combined.res_id == res_id) & (combined.chain_id == "0")
+        combined.is_motif[mask] = True
+        combined.original_motif_res_id[mask] = res_id
+
+    # Mark ligands as motif-related (they have coordinates, MPNN should attend to them)
+    ligand_mask = combined.chain_id != "0"
+    combined.is_motif_related[ligand_mask] = True
+    combined.is_motif[ligand_mask] = True
+
+    return combined

@@ -87,11 +87,11 @@ def parse_input_dict(
             return BackboneInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
 
         case TaskType.SEQUENCE_DESIGN:
-            # Convert string cif_file to CIFFile object format if needed
-            if "cif_file" in spec_with_name:
-                cif_file_value = spec_with_name["cif_file"]
-                if isinstance(cif_file_value, str):
-                    spec_with_name["cif_file"] = {"path": cif_file_value}
+            # Convert string npz_file to NPZFile object format if needed
+            if "npz_file" in spec_with_name:
+                npz_file_value = spec_with_name["npz_file"]
+                if isinstance(npz_file_value, str):
+                    spec_with_name["npz_file"] = {"path": npz_file_value}
 
             return SequenceDesignInput(
                 **spec_with_name
@@ -155,6 +155,25 @@ class FastaFile(BaseModel):
         valid_suffixes = {".fasta", ".fa"}
         if v.suffix.lower() not in valid_suffixes:
             raise ValueError(f"File must be .fasta or .fa, got '{v.suffix}'")
+        return v
+
+
+class NPZFile(BaseModel):
+    """An NPZ file containing a saved AtomArray.
+
+    Used by sequence design inputs to load the atom array from backbone inference.
+
+    Example:
+        {"path": "path/to/backbone_output.npz"}
+    """
+
+    path: Path = Field(..., description="Path to NPZ file")
+
+    @field_validator("path")
+    @classmethod
+    def validate_file_suffix(cls, v: Path) -> Path:
+        if v.suffix.lower() != ".npz":
+            raise ValueError(f"File must be .npz, got '{v.suffix}'")
         return v
 
 
@@ -376,14 +395,17 @@ class FixedResidue(BaseModel):
 class SequenceDesignInput(BaseModel):
     """Top-level input for sequence design inference.
 
-    Given a backbone structure from motif scaffolding with ligand(s), predict the
-    amino acid sequence that would fold into that structure and bind the ligand.
+    Given a backbone structure from motif scaffolding, predict the amino acid
+    sequence that would fold into that structure and bind any ligands.
 
-    The CIF file should contain:
-    - Protein backbone (chain_id "0") with stitched motif sidechains
-    - Ligand(s) with full atomic coordinates (each with their own chain_id)
+    The NPZ file is the saved AtomArray from backbone inference (before stitching).
+    It contains all necessary information including:
+    - Protein backbone coordinates
+    - Ligand coordinates and annotations
+    - Motif residue annotations (is_motif, is_motif_related)
+    - Chain IDs for all entities
 
-    Fixed residues can be:
+    Fixed residues can optionally be provided for additional constraints:
     - Motif residues (is_motif_residue=True): Have sidechain coordinates from motif
       scaffolding. Their sidechains are preserved for MPNN attention.
     - Identity-fixed only (is_motif_residue=False): Residue type is constrained but
@@ -394,32 +416,23 @@ class SequenceDesignInput(BaseModel):
     Example:
         {
             "name": "carbonic_anhydrase_redesign",
-            "cif_file": "stitched_backbone.cif",
+            "npz_file": "backbone_output.npz",
             "fixed_residues": [
                 {"chain_id": "0", "res_id": 94, "residue": "HIS", "is_motif_residue": true},
                 {"chain_id": "0", "res_id": 96, "residue": "HIS", "is_motif_residue": true},
                 {"chain_id": "0", "res_id": 119, "residue": "HIS", "is_motif_residue": true}
-            ],
-            "ligands": [
-                {
-                    "cif_res_name": "AL5",
-                    "chain_id": "3",
-                    "full_ligand": {"type": "ccd", "codes": ["AL5"]}
-                }
             ]
         }
     """
 
-    name: str | None = Field(default=None, description="Job identifier")
-    cif_file: CIFFile = Field(
-        ..., description="Backbone CIF with stitched motif sidechains and ligands"
+    name: str = Field(..., description="Job identifier")
+    npz_file: NPZFile = Field(
+        ...,
+        description="NPZ file from backbone inference containing the full AtomArray",
     )
     fixed_residues: list[FixedResidue] = Field(
         default_factory=list,
-        description="Residues with constrained identity. Motif residues (is_motif_residue=True) also have sidechain coordinates.",
-    )
-    ligands: list[LigandMapping] = Field(
-        ..., description="Ligand mappings from CIF residue names to full ligand specs."
+        description="Optional additional residue constraints. Motif residues (is_motif_residue=True) have sidechain coordinates.",
     )
 
     @model_validator(mode="after")
@@ -501,7 +514,7 @@ def parse_sequence_design_json(
 
     Args:
         file_path: Path to the JSON file
-        resolve_paths: If True, resolve cif_file path relative to the JSON file's directory
+        resolve_paths: If True, resolve npz_file path relative to the JSON file's directory
 
     Returns:
         Validated SequenceDesignInput object
@@ -519,19 +532,19 @@ def parse_sequence_design_json(
     with open(file_path) as f:
         data = json.load(f)
 
-    # Convert cif_file string to CIFFile object format and resolve path
-    if "cif_file" in data:
-        cif_file_value = data["cif_file"]
+    # Convert npz_file string to NPZFile object format and resolve path
+    if "npz_file" in data:
+        npz_file_value = data["npz_file"]
         # Accept either string or dict with "path" key
-        if isinstance(cif_file_value, str):
-            cif_path = Path(cif_file_value)
+        if isinstance(npz_file_value, str):
+            npz_path = Path(npz_file_value)
         else:
-            cif_path = Path(cif_file_value["path"])
+            npz_path = Path(npz_file_value["path"])
 
-        if resolve_paths and not cif_path.is_absolute():
-            cif_path = file_path.parent / cif_path
+        if resolve_paths and not npz_path.is_absolute():
+            npz_path = file_path.parent / npz_path
 
-        data["cif_file"] = {"path": str(cif_path)}
+        data["npz_file"] = {"path": str(npz_path)}
 
     return SequenceDesignInput(**data)
 

@@ -279,7 +279,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/trousers_val.csv",
             ),
-            "pdb_list": "",
+            "pdb_list": "",  # ["af-a0a399nz51-f1"],
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),

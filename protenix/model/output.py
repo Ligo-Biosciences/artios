@@ -21,18 +21,6 @@ class ModelOutput:
         None
     )
 
-
-@typecheck
-@dataclass
-class DiffusionOutput(ModelOutput):
-    """Output from diffusion-based models (backbone, packing).
-
-    Unlike ModelOutput, coordinate and timestep are required fields.
-    """
-
-    coordinate: Float[Tensor, "batch n_sample n_atom 3"]  # type: ignore[assignment]
-    timestep: Float[Tensor, "batch n_sample"]  # type: ignore[assignment]
-
     def save_samples_to_cif(
         self,
         atom_arrays: list[AtomArray],
@@ -108,3 +96,15 @@ class DiffusionOutput(ModelOutput):
             all_saved_files[pdb_id] = saved_files
 
         return all_saved_files
+
+
+@typecheck
+@dataclass
+class DiffusionOutput(ModelOutput):
+    """Output from diffusion-based models (backbone, packing).
+
+    Unlike ModelOutput, coordinate and timestep are required fields.
+    """
+
+    coordinate: Float[Tensor, "batch n_sample n_atom 3"]  # type: ignore[assignment]
+    timestep: Float[Tensor, "batch n_sample"]  # type: ignore[assignment]

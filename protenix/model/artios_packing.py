@@ -99,7 +99,7 @@ class ArtiosPacking(nn.Module):
             n_sample=n_sample,
         )
 
-        return ModelOutput(coordinate=result.final)
+        return ModelOutput(coordinate=result.final, trajectory=result.trajectory)
 
     def main_train_loop(
         self,

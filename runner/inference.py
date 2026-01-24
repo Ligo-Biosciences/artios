@@ -34,17 +34,12 @@ from protenix.data.infer_data_pipeline import get_inference_dataloader
 from protenix.model.artios_backbone import ArtiosBackbone
 from protenix.model.artios_mpnn import ArtiosMPNN
 from protenix.model.artios_packing import ArtiosPacking
-from protenix.model.output import ModelOutput
+from protenix.model.output import BackboneOutput, ModelOutput
 from protenix.model.utils import Mode
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.inference import ModelType
 from protenix.utils.seed import seed_everything
-from protenix.utils.structure_io import (
-    save_model_output_to_cif,
-    save_model_output_to_fasta,
-    save_model_output_to_npz,
-    save_trajectory_to_pdb,
-)
+from protenix.utils.structure_io import SaveContext, save_output
 
 logger = logging.getLogger(__name__)
 
@@ -213,9 +208,18 @@ class InferenceRunner(object):
 def infer_predict(
     runner: InferenceRunner,
     configs: Any,
-    model_type: ModelType,
     use_distributed_sampler: bool = True,
 ) -> None:
+    """Run inference on all samples in the dataloader.
+
+    The output type (BackboneOutput, PackingOutput, SequenceOutput) determines
+    how results are saved - no explicit model_type dispatch needed.
+
+    Args:
+        runner: InferenceRunner with loaded model.
+        configs: Configuration object.
+        use_distributed_sampler: Whether to use distributed sampling.
+    """
     logger.info(f"Loading data from\n{configs.input_json_path}")
     try:
         dataloader = get_inference_dataloader(
@@ -241,63 +245,33 @@ def infer_predict(
                 logger.info(f"Running inference for sample {sample_name}...")
                 output = runner.predict(context)
 
-                match model_type:
-                    case ModelType.BACKBONE:
-                        output_format = configs.get("output_format", "cif")
-                        if output_format == "npz":
-                            _ = save_model_output_to_npz(
-                                output_dir=runner.dump_dir,
-                                output=output,
-                                atom_array=context.basic.atom_array,
-                                n_atom=n_atom,
-                                sample_name=sample_name,
-                            )
-                        else:
-                            _ = save_model_output_to_cif(
-                                output_dir_list=runner.dump_dir_list,
-                                output=output,
-                                model_type=model_type,
-                                atom_array=context.basic.atom_array,
-                                n_atom=n_atom,
-                                sample_name=sample_name,
-                                field_in_b_factor_col="is_motif",
-                            )
-                            if output.trajectory is not None:
-                                _ = save_trajectory_to_pdb(
-                                    output_dir_list=runner.dump_dir_list,
-                                    output=output,
-                                    model_type=model_type,
-                                    atom_array=context.basic.atom_array,
-                                    n_atom=n_atom,
-                                    sample_name=sample_name,
-                                    step_stride=configs.sample_diffusion.trajectory_step_stride,
-                                )
-                        parent_dir = os.path.dirname(runner.dump_dir)
-                        mapping_path = opjoin(
-                            parent_dir, f"{sample_name}_motif_mapping.json"
-                        )
-                        if not os.path.exists(mapping_path):
-                            with open(mapping_path, "w") as f:
-                                json.dump(context.basic.original_motif_mapping, f)
+                # Build save context - output type determines save behavior
+                ctx = SaveContext(
+                    output_dir=runner.dump_dir,
+                    sample_dirs=runner.dump_dir_list,
+                    sample_name=sample_name,
+                    atom_array=context.basic.atom_array[0],
+                    n_atom=n_atom,
+                    n_token=n_token,
+                    output_format=configs.get("output_format", "cif"),
+                    trajectory_step_stride=configs.get(
+                        "sample_diffusion.trajectory_step_stride", 1
+                    ),
+                )
 
-                    case ModelType.PACKING:
-                        _ = save_model_output_to_cif(
-                            output_dir_list=runner.dump_dir_list,
-                            output=output,
-                            model_type=model_type,
-                            atom_array=context.basic.atom_array,
-                            n_atom=n_atom,
-                            sample_name=sample_name,
-                            field_in_b_factor_col="is_motif",
-                        )
+                # Polymorphic save - output type drives behavior
+                saved_files = save_output(output, ctx)
+                logger.debug(f"Saved {len(saved_files)} files")
 
-                    case ModelType.SEQUENCE_DESIGN:
-                        _ = save_model_output_to_fasta(
-                            output_dir_list=runner.dump_dir_list,
-                            output=output,
-                            n_token=n_token,
-                            pdb_id=sample_name,
-                        )
+                # Save motif mapping for backbone outputs (from context, not output)
+                if isinstance(output, BackboneOutput):
+                    parent_dir = os.path.dirname(runner.dump_dir)
+                    mapping_path = opjoin(
+                        parent_dir, f"{sample_name}_motif_mapping.json"
+                    )
+                    if not os.path.exists(mapping_path):
+                        with open(mapping_path, "w") as f:
+                            json.dump(context.basic.original_motif_mapping, f)
 
                 logger.info(
                     f"[Rank {DIST_WRAPPER.rank}] {sample_name} succeeded.\n"
@@ -313,7 +287,7 @@ def infer_predict(
 
 def main(configs: Any, model_type: ModelType = ModelType.BACKBONE) -> None:
     runner = InferenceRunner(configs, model_type)
-    infer_predict(runner, configs, model_type)
+    infer_predict(runner, configs)
 
 
 def run() -> None:

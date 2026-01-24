@@ -10,7 +10,7 @@ from typing_extensions import assert_never
 from protenix.data.features import FullContext
 from protenix.model.loss import nll_loss
 from protenix.model.modules.mpnn import MPNN
-from protenix.model.output import ModelOutput
+from protenix.model.output import ModelOutput, SequenceOutput
 from protenix.model.utils import Mode
 from protenix.utils.casting import disable_autocast
 
@@ -52,7 +52,7 @@ class ArtiosMPNN(nn.Module):
         self,
         context: FullContext,
         seed: Optional[int] = None,
-    ) -> ModelOutput:
+    ) -> SequenceOutput:
         seq_logits, _ = self.mpnn.sample(
             context=context,
             temperature=self.temp,
@@ -61,7 +61,7 @@ class ArtiosMPNN(nn.Module):
             seed=seed,
         )
 
-        return ModelOutput(seq_logits=seq_logits)
+        return SequenceOutput(seq_logits=seq_logits)
 
     def main_train_loop(
         self,

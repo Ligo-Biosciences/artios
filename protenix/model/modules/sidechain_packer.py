@@ -159,7 +159,7 @@ class SidechainPacker(nn.Module):
             n_sample: Number of samples to generate.
 
         Returns:
-            SamplingResult containing final coordinates and optional trajectory.
+            SamplingResult containing final denoised coordinates.
         """
         n_atom = context.index.atom_to_token_idx.shape[-1]
         batch_shape = context.token.residue_index.shape[:-1]

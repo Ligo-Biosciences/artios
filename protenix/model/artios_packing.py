@@ -22,7 +22,7 @@ from protenix.model.loss import (
     timestep_scale,
 )
 from protenix.model.modules.sidechain_packer import SidechainPacker
-from protenix.model.output import DiffusionOutput, ModelOutput
+from protenix.model.output import DiffusionOutput, ModelOutput, PackingOutput
 from protenix.model.utils import Mode, average_atom_to_token, broadcast_token_to_atom
 from protenix.utils.casting import disable_autocast
 from protenix.utils.geometry import centre_random_augmentation
@@ -64,12 +64,12 @@ class ArtiosPacking(nn.Module):
     def main_inference_loop(
         self,
         context: FullContext,
-    ) -> ModelOutput:
+    ) -> PackingOutput:
         """
         Main inference loop for ArtiosPacking.
 
         Returns:
-            ModelOutput: Model output containing the prediction.
+            PackingOutput: Model output containing the prediction.
         """
         n_sample = self.sampling_configs.N_sample
         n_step = self.sampling_configs.N_step
@@ -99,7 +99,10 @@ class ArtiosPacking(nn.Module):
             n_sample=n_sample,
         )
 
-        return ModelOutput(coordinate=result.final, trajectory=result.trajectory)
+        return PackingOutput(
+            coordinate=result.final,
+            trajectory=result.trajectory,
+        )
 
     def main_train_loop(
         self,

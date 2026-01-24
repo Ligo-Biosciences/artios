@@ -16,7 +16,8 @@ import json
 import logging
 import os
 import traceback
-from contextlib import nullcontext
+
+# from contextlib import nullcontext
 from dataclasses import dataclass
 from os.path import join as opjoin
 from typing import Any, Optional
@@ -36,6 +37,7 @@ from protenix.model.artios_mpnn import ArtiosMPNN
 from protenix.model.artios_packing import ArtiosPacking
 from protenix.model.output import BackboneOutput, ModelOutput
 from protenix.model.utils import Mode
+from protenix.utils.casting import disable_autocast
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.inference import ModelType
 from protenix.utils.seed import seed_everything
@@ -126,6 +128,10 @@ class InferenceRunner(object):
 
         n_sample = self.configs.get(self.model_config.n_sample_key, None)
 
+        # TODO: I'm not sure if we need n_sample different directories anymore
+        # If the model outputs are going to be NPZ files, we can shove all of the
+        # n_sample coordinates into the same file and save it as an atom array stack or so.
+
         if self.configs.dump_dir_list:
             self.dump_dir_list = self.configs.dump_dir_list
         else:
@@ -160,6 +166,8 @@ class InferenceRunner(object):
             self.print(
                 f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}"
             )
+            # TODO: this exact code is repeated and looks quite unsafe
+            # We should make this into a method that's safer and call it both during training.
             checkpoint = torch.load(checkpoint_path, self.device)
 
             sample_key = [k for k in checkpoint["model"].keys()][0]
@@ -184,20 +192,13 @@ class InferenceRunner(object):
         self.print("Finished loading checkpoint.")
 
     @torch.no_grad()
+    @disable_autocast
     def predict(self, context: FullContext) -> ModelOutput:
-        enable_amp = (
-            torch.autocast(device_type="cuda", dtype=torch.float32)
-            if torch.cuda.is_available()
-            else nullcontext()
-        )
         context = context.to(self.device)
-
-        with enable_amp:
-            output = self.model(
-                context=context,
-                mode=Mode.INFERENCE,
-            )
-
+        output = self.model(
+            context=context,
+            mode=Mode.INFERENCE,
+        )
         return output
 
     def print(self, msg: str):
@@ -208,7 +209,7 @@ class InferenceRunner(object):
 def infer_predict(
     runner: InferenceRunner,
     configs: Any,
-    use_distributed_sampler: bool = True,
+    use_distributed_sampler: bool = False,
 ) -> None:
     """Run inference on all samples in the dataloader.
 

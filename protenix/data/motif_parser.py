@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import biotite.structure as struc
 import numpy as np
 
-from protenix.data.json_parser import BackboneInput, CCDLigand, SMILESLigand
+from protenix.data.json_parser import CCDLigand, MotifSpec, SMILESLigand
 from protenix.data.parser import MMCIFParser
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ class MotifResidue:
     res_name: str  # e.g., "HIS", "GLU", "THR"
     atom_names: tuple[str, ...]  # e.g., ("CG", "CD2", "ND1", "CE1", "NE2")
     coords: np.ndarray  # (N_atoms, 3)
+    chain_id: str  # Chain ID from the CIF file
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class MotifLigand:
     atom_names: tuple[str, ...]  # Atom names from CIF (e.g., ("O1A", "S1", "N21"))
     coords: np.ndarray  # (n_atoms, 3) coordinates from CIF
     elements: tuple[str, ...]  # Element types (e.g., ("O", "S", "N"))
+    chain_id: str  # Chain ID for this ligand in the output structure
 
     full_ligand: CCDLigand | SMILESLigand
 
@@ -53,15 +55,15 @@ class Motif:
     ligands: list[MotifLigand]
 
     @classmethod
-    def from_input(cls, backbone_input: BackboneInput) -> Motif:
-        """Build Motif from validated BackboneInput.
+    def from_spec(cls, motif_spec: MotifSpec) -> Motif:
+        """Build Motif from validated MotifSpec.
 
         Parses the motif CIF file and creates MotifResidue objects for
         protein residues (hetero=False) and MotifLigand objects for
         heteroatoms with mappings in the input.
 
         Args:
-            backbone_input: Validated BackboneInput from json_parser.py
+            motif_spec: Validated MotifSpec from json_parser.py
 
         Returns:
             Motif object with parsed residues and ligands
@@ -69,17 +71,17 @@ class Motif:
         Raises:
             FileNotFoundError: If the motif CIF file doesn't exist
         """
-        cif_path = backbone_input.motif.cif_file.path
+        cif_path = motif_spec.cif_file.path
         if not cif_path.exists():
             raise FileNotFoundError(f"Motif CIF file not found: {cif_path}")
 
         parser = MMCIFParser(cif_path)
         atoms = parser.get_structure()
 
-        # Build ligand mapping: cif_res_name -> full_ligand
-        ligand_mappings = {
-            mapping.cif_res_name: mapping.full_ligand
-            for mapping in backbone_input.motif.ligands
+        # Build ligand mapping: (cif_res_name, chain_id) -> full_ligand
+        ligand_mappings: dict[tuple[str, str], CCDLigand | SMILESLigand] = {
+            (mapping.cif_res_name, mapping.chain_id): mapping.full_ligand
+            for mapping in motif_spec.ligands
         }
 
         residues: list[MotifResidue] = []
@@ -97,6 +99,8 @@ class Motif:
             elements = tuple(res_atoms.element)
             is_hetero = res_atoms.hetero[0]
 
+            cif_chain_id = str(res_atoms.chain_id[0])
+
             # Protein residue (ATOM records)
             if not is_hetero:
                 residues.append(
@@ -105,24 +109,28 @@ class Motif:
                         res_name=res_name,
                         atom_names=atom_names,
                         coords=coords,
+                        chain_id=cif_chain_id,
                     )
                 )
             # Ligand (HETATM records) - requires mapping
-            elif res_name in ligand_mappings:
-                ligands.append(
-                    MotifLigand(
-                        res_id=res_id,
-                        cif_res_name=res_name,
-                        atom_names=atom_names,
-                        coords=coords,
-                        elements=elements,
-                        full_ligand=ligand_mappings[res_name],
-                    )
-                )
             else:
-                logger.warning(
-                    f"HETATM residue '{res_name}' (res_id={res_id}) has no ligand "
-                    f"mapping in input. Skipping."
-                )
+                key = (res_name, cif_chain_id)
+                if key in ligand_mappings:
+                    ligands.append(
+                        MotifLigand(
+                            res_id=res_id,
+                            cif_res_name=res_name,
+                            atom_names=atom_names,
+                            coords=coords,
+                            elements=elements,
+                            chain_id=cif_chain_id,
+                            full_ligand=ligand_mappings[key],
+                        )
+                    )
+                else:
+                    logger.warning(
+                        f"HETATM residue '{res_name}' (chain_id={cif_chain_id}, res_id={res_id}) "
+                        f"has no ligand mapping in input. Skipping."
+                    )
 
         return cls(residues=residues, ligands=ligands)

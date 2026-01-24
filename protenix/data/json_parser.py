@@ -87,11 +87,11 @@ def parse_input_dict(
             return BackboneInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
 
         case TaskType.SEQUENCE_DESIGN:
-            # Convert string cif_file to CIFFile object format if needed
-            if "cif_file" in spec_with_name:
-                cif_file_value = spec_with_name["cif_file"]
-                if isinstance(cif_file_value, str):
-                    spec_with_name["cif_file"] = {"path": cif_file_value}
+            # Convert string npz_file to NPZFile object format if needed
+            if "npz_file" in spec_with_name:
+                npz_file_value = spec_with_name["npz_file"]
+                if isinstance(npz_file_value, str):
+                    spec_with_name["npz_file"] = {"path": npz_file_value}
 
             return SequenceDesignInput(
                 **spec_with_name
@@ -155,6 +155,25 @@ class FastaFile(BaseModel):
         valid_suffixes = {".fasta", ".fa"}
         if v.suffix.lower() not in valid_suffixes:
             raise ValueError(f"File must be .fasta or .fa, got '{v.suffix}'")
+        return v
+
+
+class NPZFile(BaseModel):
+    """An NPZ file containing a saved AtomArray.
+
+    Used by sequence design inputs to load the atom array from backbone inference.
+
+    Example:
+        {"path": "path/to/backbone_output.npz"}
+    """
+
+    path: Path = Field(..., description="Path to NPZ file")
+
+    @field_validator("path")
+    @classmethod
+    def validate_file_suffix(cls, v: Path) -> Path:
+        if v.suffix.lower() != ".npz":
+            raise ValueError(f"File must be .npz, got '{v.suffix}'")
         return v
 
 
@@ -261,18 +280,21 @@ FullLigand = Annotated[
 
 
 class LigandMapping(BaseModel):
-    """Maps a residue in the motif CIF to its full ligand structure.
+    """Maps a ligand in the CIF to its full ligand structure.
+
+    The chain_id is required to distinguish between multiple instances of the
+    same ligand type (e.g., two ZN ions with different chain_ids).
 
     Example:
         {
             "cif_res_name": "ZN",
+            "chain_id": "3",
             "full_ligand": {"type": "ccd", "codes": ["ZN"]}
         }
     """
 
-    cif_res_name: str = Field(
-        ..., description="Residue name as it appears in motif CIF"
-    )
+    cif_res_name: str = Field(..., description="Residue name as it appears in the CIF")
+    chain_id: str = Field(..., description="Chain ID as it appears in the CIF")
     full_ligand: FullLigand
 
 
@@ -331,14 +353,26 @@ class FixedResidue(BaseModel):
     Used to specify catalytic residues, binding site residues, or other
     positions where the amino acid identity is known/required.
 
+    There are two types of fixed residues:
+    - Identity-fixed only (is_motif_residue=False): The residue type is constrained,
+      but sidechain coordinates are not specified. Example: requiring an ARG near
+      an active site without specific coordinate preferences.
+    - Motif residues (is_motif_residue=True): The residue has full sidechain
+      coordinates from motif scaffolding output. These residues will have their
+      sidechains preserved for MPNN attention.
+
     Examples:
-        {"chain_id": "A", "res_id": 94, "residue": "HIS"}
-        {"chain_id": "A", "res_id": 94, "residue": "H"}  # 1-letter also accepted
+        {"chain_id": "A", "res_id": 94, "residue": "HIS", "is_motif_residue": true}
+        {"chain_id": "A", "res_id": 200, "residue": "ARG"}  # identity-fixed only
     """
 
     chain_id: str = Field(..., description="Chain identifier")
     res_id: int = Field(..., ge=1, description="Residue number (1-based)")
     residue: str = Field(..., description="Amino acid (1-letter or 3-letter code)")
+    is_motif_residue: bool = Field(
+        default=False,
+        description="True if this residue has sidechain coordinates from motif scaffolding",
+    )
 
     @field_validator("residue")
     @classmethod
@@ -361,38 +395,44 @@ class FixedResidue(BaseModel):
 class SequenceDesignInput(BaseModel):
     """Top-level input for sequence design inference.
 
-    Given a poly-glycine backbone structure with ligand(s), predict the amino acid
-    sequence that would fold into that structure and bind the ligand.
+    Given a backbone structure from motif scaffolding, predict the amino acid
+    sequence that would fold into that structure and bind any ligands.
 
-    The CIF file should contain:
-    - Poly-glycine protein chain(s) with backbone atoms (N, CA, C, O)
-    - Ligand(s) with full atomic coordinates
+    The NPZ file is the saved AtomArray from backbone inference (before stitching).
+    It contains all necessary information including:
+    - Protein backbone coordinates
+    - Ligand coordinates and annotations
+    - Motif residue annotations (is_motif, is_motif_related)
+    - Chain IDs for all entities
+
+    Fixed residues can optionally be provided for additional constraints:
+    - Motif residues (is_motif_residue=True): Have sidechain coordinates from motif
+      scaffolding. Their sidechains are preserved for MPNN attention.
+    - Identity-fixed only (is_motif_residue=False): Residue type is constrained but
+      no coordinate preferences. Used for additional constraints like "put an ARG here".
+
+    Note: Protein chain must always be "0". This is enforced by validation.
 
     Example:
         {
             "name": "carbonic_anhydrase_redesign",
-            "cif_file": "polyG_backbone.cif",
+            "npz_file": "backbone_output.npz",
             "fixed_residues": [
-                {"chain_id": "A", "res_id": 94, "residue": "HIS"},
-                {"chain_id": "A", "res_id": 96, "residue": "HIS"},
-                {"chain_id": "A", "res_id": 119, "residue": "H"}
-            ],
-            "ligands": [
-                {"type": "smiles", "smiles": "CC(C)c1ccc([S:1](=[O:2])(=[O:3])[N:4])cc1"}
+                {"chain_id": "0", "res_id": 94, "residue": "HIS", "is_motif_residue": true},
+                {"chain_id": "0", "res_id": 96, "residue": "HIS", "is_motif_residue": true},
+                {"chain_id": "0", "res_id": 119, "residue": "HIS", "is_motif_residue": true}
             ]
         }
     """
 
-    name: str | None = Field(default=None, description="Job identifier")
-    cif_file: CIFFile = Field(
-        ..., description="Poly-glycine backbone CIF with ligand(s)"
+    name: str = Field(..., description="Job identifier")
+    npz_file: NPZFile = Field(
+        ...,
+        description="NPZ file from backbone inference containing the full AtomArray",
     )
     fixed_residues: list[FixedResidue] = Field(
         default_factory=list,
-        description="Residues with constrained amino acid identity",
-    )
-    ligands: list[FullLigand] = Field(
-        ..., description="Ligands present in the structure."
+        description="Optional additional residue constraints. Motif residues (is_motif_residue=True) have sidechain coordinates.",
     )
 
     @model_validator(mode="after")
@@ -408,6 +448,17 @@ class SequenceDesignInput(BaseModel):
             seen.add(key)
         return self
 
+    @model_validator(mode="after")
+    def validate_protein_chain_id(self) -> SequenceDesignInput:
+        """Ensure all fixed residues are on protein chain '0'."""
+        for fr in self.fixed_residues:
+            if fr.chain_id != "0":
+                raise ValueError(
+                    f"Fixed residue chain_id must be '0' (protein chain), "
+                    f"got '{fr.chain_id}' for res_id {fr.res_id}"
+                )
+        return self
+
 
 # ---------------------------------------------------------------------------
 # Packing models
@@ -415,12 +466,39 @@ class SequenceDesignInput(BaseModel):
 
 
 class PackingInput(BaseModel):
+    """Top-level input for sidechain packing inference.
+
+    Given a backbone structure and sequence, predict sidechain conformations.
+
+    The CIF file should contain:
+    - Protein backbone (chain_id "0")
+    - Ligand(s) with full atomic coordinates (each with their own chain_id)
+
+    Note: Protein chain must always be "0".
+
+    Example:
+        {
+            "name": "pack_design",
+            "cif_file": "backbone.cif",
+            "fasta_file": "sequence.fasta",
+            "ligands": [
+                {
+                    "cif_res_name": "AL5",
+                    "chain_id": "3",
+                    "full_ligand": {"type": "ccd", "codes": ["AL5"]}
+                }
+            ]
+        }
+    """
+
     name: str | None = Field(default=None, description="Job identifier")
     cif_file: CIFFile = Field(
         ..., description="Poly-glycine backbone CIF with ligand(s)"
     )
     fasta_file: FastaFile = Field(..., description="Fasta file with sequence")
-    ligands: list[FullLigand] = Field(..., description="Ligands to pack.")
+    ligands: list[LigandMapping] = Field(
+        ..., description="Ligand mappings from CIF residue names to full ligand specs."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +514,7 @@ def parse_sequence_design_json(
 
     Args:
         file_path: Path to the JSON file
-        resolve_paths: If True, resolve cif_file path relative to the JSON file's directory
+        resolve_paths: If True, resolve npz_file path relative to the JSON file's directory
 
     Returns:
         Validated SequenceDesignInput object
@@ -454,19 +532,19 @@ def parse_sequence_design_json(
     with open(file_path) as f:
         data = json.load(f)
 
-    # Convert cif_file string to CIFFile object format and resolve path
-    if "cif_file" in data:
-        cif_file_value = data["cif_file"]
+    # Convert npz_file string to NPZFile object format and resolve path
+    if "npz_file" in data:
+        npz_file_value = data["npz_file"]
         # Accept either string or dict with "path" key
-        if isinstance(cif_file_value, str):
-            cif_path = Path(cif_file_value)
+        if isinstance(npz_file_value, str):
+            npz_path = Path(npz_file_value)
         else:
-            cif_path = Path(cif_file_value["path"])
+            npz_path = Path(npz_file_value["path"])
 
-        if resolve_paths and not cif_path.is_absolute():
-            cif_path = file_path.parent / cif_path
+        if resolve_paths and not npz_path.is_absolute():
+            npz_path = file_path.parent / npz_path
 
-        data["cif_file"] = {"path": str(cif_path)}
+        data["npz_file"] = {"path": str(npz_path)}
 
     return SequenceDesignInput(**data)
 

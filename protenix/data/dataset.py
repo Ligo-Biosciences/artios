@@ -632,29 +632,17 @@ class BaseSingleDataset(Dataset):
 
         # Motif handling
         tmotif = time.time()
-        cropped_atom_array = self._get_motif(
-            atom_array=cropped_atom_array,
-        )
-
-        self._save_motif(
-            atom_array=cropped_atom_array,
-            pdb_id=bioassembly_dict["pdb_id"],
-        )
-
-        cropped_atom_array = self._duplicate_motif_backbone_atoms(cropped_atom_array)
-
         if self.motif_configs["motif_train_rate"] > 0.0:
-            cropped_atom_array = Filter.remove_non_motif_residue_sidechains(
-                cropped_atom_array,
+            cropped_atom_array = self._apply_motif_processing(
+                cropped_atom_array, pdb_id=bioassembly_dict["pdb_id"]
             )
-
-        cropped_atom_array = self._update_ids_to_unindex_motif_residues(
-            cropped_atom_array
-        )
-
-        cropped_atom_array = self._update_centre_atom_mask_to_include_motif(
-            cropped_atom_array
-        )
+        else:
+            cropped_atom_array.set_annotation(
+                "is_motif", np.zeros(len(cropped_atom_array), dtype=int)
+            )
+            cropped_atom_array.set_annotation(
+                "is_motif_related", np.zeros(len(cropped_atom_array), dtype=int)
+            )
 
         tokenizer = AtomArrayTokenizer(cropped_atom_array)
         cropped_token_array = tokenizer.get_token_array()
@@ -798,6 +786,33 @@ class BaseSingleDataset(Dataset):
         chain_2_mask = torch.stack(df["chain_2_mask"].tolist())
 
         return eval_type, cluster_id, chain_1_mask, chain_2_mask
+
+    def _apply_motif_processing(self, atom_array: AtomArray, pdb_id: str) -> AtomArray:
+        """
+        Applies all motif-related processing to the atom array.
+
+        This method consolidates all motif operations:
+        1. Generate motif annotations via MotifMaker
+        2. Optionally save motif for debugging
+        3. Duplicate backbone atoms for motif residues
+        4. Remove non-motif residue sidechains
+        5. Update IDs to un-index motif residues
+        6. Update centre atom mask to include motif atoms
+
+        Args:
+            atom_array: Input atom array to process
+            pdb_id: PDB ID for saving motif files
+
+        Returns:
+            Processed atom array with motif annotations and modifications
+        """
+        atom_array = self._get_motif(atom_array)
+        self._save_motif(atom_array, pdb_id)
+        atom_array = self._duplicate_motif_backbone_atoms(atom_array)
+        atom_array = Filter.remove_non_motif_residue_sidechains(atom_array)
+        atom_array = self._update_ids_to_unindex_motif_residues(atom_array)
+        atom_array = self._update_centre_atom_mask_to_include_motif(atom_array)
+        return atom_array
 
     def _get_motif(self, atom_array: AtomArray) -> AtomArray:
         """

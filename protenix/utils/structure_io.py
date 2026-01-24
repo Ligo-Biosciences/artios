@@ -75,6 +75,10 @@ def save_output(output: ModelOutput, ctx: SaveContext) -> list[Path]:
     Raises:
         ValueError: If batch_size != 1.
         TypeError: If output type is not recognized.
+
+    # TODO: this won't remain the same, batch_size=1 is not what we want
+    for the next step of the pipeline - we want to consume the entire batch from
+    the previous step as an input.
     """
     match output:
         case BackboneOutput():

@@ -22,7 +22,11 @@ from typing import Any, Union
 import lz4.frame
 import numpy as np
 import pandas as pd
-from biotite.structure import AtomArray, BondList  # ty: ignore[unresolved-import]
+from biotite.structure import (  # ty: ignore[unresolved-import]
+    AtomArray,
+    AtomArrayStack,
+    BondList,
+)
 
 from protenix.utils.logger import get_logger
 from protenix.utils.torch_utils import map_values_to_list
@@ -223,6 +227,54 @@ def load_multi_sample_atomarray(
         atom_array.set_annotation(category, values)
 
     return atom_array, coords
+
+
+def dump_atomarray_stack(
+    atom_stack: AtomArrayStack,
+    npz_path: Union[str, Path],
+) -> None:
+    """Save an AtomArrayStack to an NPZ file.
+
+    Stores the full stack including coordinates from all models,
+    bonds, and all annotation categories.
+
+    Args:
+        atom_stack: The AtomArrayStack to save.
+        npz_path: The output NPZ file path.
+    """
+    data = {
+        "coords": atom_stack.coord,  # (n_models, n_atoms, 3)
+        "bonds": atom_stack.bonds.as_array(),
+    }
+
+    for category in atom_stack.get_annotation_categories():
+        data[category] = atom_stack.get_annotation(category)
+
+    np.savez_compressed(npz_path, **data)
+
+
+def load_atomarray_stack(npz_path: Union[str, Path]) -> AtomArrayStack:
+    """Load an AtomArrayStack from an NPZ file.
+
+    Args:
+        npz_path: Path to NPZ file saved with dump_atomarray_stack.
+
+    Returns:
+        AtomArrayStack with coordinates, bonds, and all annotations.
+    """
+    data = dict(np.load(npz_path, allow_pickle=True))
+
+    coords = data.pop("coords")  # (n_models, n_atoms, 3)
+    n_models, n_atoms, _ = coords.shape
+
+    atom_stack = AtomArrayStack(depth=n_models, length=n_atoms)
+    atom_stack.coord = coords
+    atom_stack.bonds = BondList(n_atoms, bonds=data.pop("bonds"))
+
+    for category, values in data.items():
+        atom_stack.set_annotation(category, values)
+
+    return atom_stack
 
 
 def load_lz4_pickle(pkl: Union[str, Path]) -> Any:

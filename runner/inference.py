@@ -249,6 +249,8 @@ def infer_predict(
                 output = runner.predict(context)
 
                 # Build save context - output type determines save behavior
+                # TODO: saving needs to be compatible with atom array stacks and npz files
+                # depending on the model
                 ctx = SaveContext(
                     output_dir=runner.dump_dir,
                     sample_dirs=runner.dump_dir_list,

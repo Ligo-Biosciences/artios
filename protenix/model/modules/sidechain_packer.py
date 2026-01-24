@@ -18,6 +18,8 @@ from protenix.model.modules.atom_attention import (
 from protenix.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
 from protenix.model.modules.transformer import DiffusionTransformer
+from protenix.model.utils import one_hot
+from protenix.utils.geometry import centre_random_augmentation
 from protenix.utils.typing import Float, typecheck
 
 
@@ -38,11 +40,31 @@ class SidechainPacker(nn.Module):
         num_keys: int = 128,
         sigma_coord: float = 10.0,
         local_sigma_coord: float = 1.0,
+        centre_dist_min: float = 2.0,
+        centre_dist_max: float = 22.0,
+        centre_dist_bin_size: float = 0.5,
     ) -> None:
         super().__init__()
         self.sigma_coord = sigma_coord
         self.local_sigma_coord = local_sigma_coord
         self.relpos = RelativePositionEncoding(r_max=32, s_max=2, c_z=c_z)
+
+        # Centre atom distance binning for pair representation
+        n_centre_dist_bins = int(
+            (centre_dist_max - centre_dist_min) / centre_dist_bin_size
+        )
+        centre_lower_bins = torch.arange(
+            centre_dist_min, centre_dist_max, centre_dist_bin_size
+        )
+        centre_upper_bins = torch.cat(
+            [centre_lower_bins[1:], torch.tensor([centre_dist_max])], dim=-1
+        )
+        self.register_buffer("centre_lower_bins", centre_lower_bins)
+        self.register_buffer("centre_upper_bins", centre_upper_bins)
+
+        # Centre atom conditioning embeddings
+        self.embed_centre_coords = LinearNoBias(3, c_s)
+        self.embed_centre_pair_dist = LinearNoBias(n_centre_dist_bins, c_z)
 
         # Encoder
         self.atom_attention_encoder = AtomAttentionEncoder(
@@ -115,7 +137,6 @@ class SidechainPacker(nn.Module):
 
         return predictor
 
-    @typecheck
     def sample(
         self,
         context: FullContext,
@@ -138,7 +159,7 @@ class SidechainPacker(nn.Module):
             n_sample: Number of samples to generate.
 
         Returns:
-            SamplingResult containing final coordinates and optional trajectory.
+            SamplingResult containing final denoised coordinates.
         """
         n_atom = context.index.atom_to_token_idx.shape[-1]
         batch_shape = context.token.residue_index.shape[:-1]
@@ -192,6 +213,7 @@ class SidechainPacker(nn.Module):
         token_mask = context.mask.token_mask
         restype = context.token.restype
         n_token = restype.shape[-2]
+        n_sample = timestep.shape[-1]
 
         # Compute pair mask
         token_mask = token_mask.unsqueeze(-2)  # add n_sample dim
@@ -207,16 +229,58 @@ class SidechainPacker(nn.Module):
             sym_id=context.token.sym_id,
             token_index=context.token.token_index,
         )
+
+        # Add centre atom pairwise distance encoding (non-ligand only)
+        centre_coords = context.coordinate.centre_coordinate  # [..., n_token, 3]
+        is_ligand_token = context.entity.is_ligand_token  # [..., n_token]
+        non_ligand_mask = ~is_ligand_token
+
+        # Zero out ligand centre coordinates
+        centre_coords_masked = centre_coords * non_ligand_mask[..., None]
+
+        # Compute pairwise distances
+        centre_i = rearrange(centre_coords_masked, "... n c -> ... n 1 c")
+        centre_j = rearrange(centre_coords_masked, "... n c -> ... 1 n c")
+        centre_pair_dists = torch.norm(
+            centre_i - centre_j, dim=-1
+        )  # [..., n_token, n_token]
+
+        # One-hot encode distances
+        centre_pair_dist_onehot = one_hot(
+            centre_pair_dists, self.centre_lower_bins, self.centre_upper_bins
+        )
+
+        # Zero out pairs involving ligands
+        mask_i = rearrange(non_ligand_mask, "... n -> ... n 1")
+        mask_j = rearrange(non_ligand_mask, "... n -> ... 1 n")
+        non_ligand_pair_mask = mask_i & mask_j
+        centre_pair_dist_onehot = (
+            centre_pair_dist_onehot * non_ligand_pair_mask[..., None]
+        )
+
+        # Embed and add to pair representation
+        z_centre = self.embed_centre_pair_dist(centre_pair_dist_onehot)
+        z = z + z_centre
+
         z = rearrange(z, "... i j c -> ... 1 i j c")
 
         # Compute sequence embedding
         s = self.embed_restype(restype.to(dtype))
+        s = rearrange(s, "... n c -> ... 1 n c")  # [..., 1, n_token, c]
+
+        # Add centre coordinate embedding
+        centre_coords_augmented = centre_random_augmentation(
+            centre_coords_masked,
+            mask=context.mask.centre_atom_is_resolved,
+            n_sample=n_sample,
+            s_trans=1.0,
+        )  # [..., n_sample, n_token, 3]
+        s = s + self.embed_centre_coords(centre_coords_augmented)
 
         # Add timestep embedding
         timestep_emb = self.embed_timestep(
             self.fourier_embedding(t_hat_timestep=2 * timestep - 1)
-        ).to(z.dtype)
-        s = rearrange(s, "... n c -> ... 1 n c")
+        )
         s = s + repeat(timestep_emb, "... n_sample c -> ... n_sample n c", n=n_token)
 
         # Encode atoms
@@ -237,7 +301,6 @@ class SidechainPacker(nn.Module):
             atom_to_token_idx=atom_to_token_idx,
             atom_mask=atom_mask,
         )
-        # denoised_atoms = r_noisy + r_update * self.c_out(timestep[..., None, None])
         return r_update
 
     def c_out(self, timestep: Float[Tensor, "..."]) -> Float[Tensor, "..."]:

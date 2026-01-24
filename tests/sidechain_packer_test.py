@@ -11,6 +11,7 @@ from protenix.model.generator import (
     Deterministic,
     LaProteinaCoordScheduler,
     NonSingular,
+    SamplingResult,
 )
 from protenix.model.modules.sidechain_packer import SidechainPacker
 from tests.context_utils import create_test_context
@@ -174,7 +175,7 @@ class TestSidechainPacker:
         )
 
         # Sample with deterministic stochasticity
-        output = sidechain_packer.sample(
+        result = sidechain_packer.sample(
             context=context,
             timestep_scheduler=LaProteinaCoordScheduler(scale=10.0),
             n_steps=3,  # Small for fast testing
@@ -184,14 +185,21 @@ class TestSidechainPacker:
             n_sample=n_sample,
         )
 
+        # Check return type
+        assert isinstance(
+            result, SamplingResult
+        ), f"Expected SamplingResult, got {type(result)}"
+
         # Check output shape
         expected_shape = (batch_size, n_sample, n_atoms, 3)
         assert (
-            output.shape == expected_shape
-        ), f"Expected shape {expected_shape}, got {output.shape}"
+            result.final.shape == expected_shape
+        ), f"Expected shape {expected_shape}, got {result.final.shape}"
 
         # Check for finite values
-        assert torch.isfinite(output).all(), "Sample output contains non-finite values"
+        assert torch.isfinite(
+            result.final
+        ).all(), "Sample output contains non-finite values"
 
     def test_sample_stochastic(self, sidechain_packer, context, device):
         """Test the sample method with non-singular stochasticity."""
@@ -205,7 +213,7 @@ class TestSidechainPacker:
         )
 
         # Sample with non-singular stochasticity
-        output = sidechain_packer.sample(
+        result = sidechain_packer.sample(
             context=context,
             timestep_scheduler=LaProteinaCoordScheduler(scale=10.0),
             n_steps=3,  # Small for fast testing
@@ -215,14 +223,21 @@ class TestSidechainPacker:
             n_sample=n_sample,
         )
 
+        # Check return type
+        assert isinstance(
+            result, SamplingResult
+        ), f"Expected SamplingResult, got {type(result)}"
+
         # Check output shape
         expected_shape = (batch_size, n_sample, n_atoms, 3)
         assert (
-            output.shape == expected_shape
-        ), f"Expected shape {expected_shape}, got {output.shape}"
+            result.final.shape == expected_shape
+        ), f"Expected shape {expected_shape}, got {result.final.shape}"
 
         # Check for finite values
-        assert torch.isfinite(output).all(), "Sample output contains non-finite values"
+        assert torch.isfinite(
+            result.final
+        ).all(), "Sample output contains non-finite values"
 
     def test_gradient_flow(self, sidechain_packer, context, device):
         """Test that gradients flow properly through the model."""

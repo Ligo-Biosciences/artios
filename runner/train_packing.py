@@ -125,6 +125,12 @@ class ArtiosPackingTrainer(object):
                 run_id=self.configs.neptune_run_id
                 if self.configs.neptune_run_id
                 else None,
+                fork_run_id=self.configs.neptune_fork_run_id
+                if self.configs.neptune_fork_run_id
+                else None,
+                fork_step=int(self.configs.neptune_fork_step)
+                if self.configs.neptune_fork_step
+                else None,
             )
             self.torchwatcher = TorchWatcher(
                 model=self.packing_model.module
@@ -971,13 +977,17 @@ class ArtiosPackingTrainer(object):
                                     {"train/lr": last_lr},
                                     step=self.step,
                                 )
-                                self.torchwatcher.watch(
-                                    step=self.step,
-                                    track_gradients=False,
-                                    track_activations=True,
-                                    track_parameters=False,
-                                    prefix="train",
-                                )
+                                # Log torchwatcher 10x less frequently
+                                if (self.step + 1) % (
+                                    self.configs.log_interval * 10
+                                ) == 0:
+                                    self.torchwatcher.watch(
+                                        step=self.step,
+                                        track_gradients=False,
+                                        track_activations=True,
+                                        track_parameters=False,
+                                        prefix="train",
+                                    )
                             self.print(f"Step {self.step}, lr: {last_lr}")
                         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                             self.neptune_run.log_metrics(metrics, step=self.step)

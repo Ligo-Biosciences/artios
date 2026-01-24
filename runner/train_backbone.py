@@ -669,7 +669,6 @@ class ArtiosBackboneTrainer(object):
         infer_predict(
             inference_runner,
             self.configs,
-            ModelType.BACKBONE,
             use_distributed_sampler=False,
         )
 

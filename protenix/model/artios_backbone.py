@@ -23,7 +23,7 @@ from protenix.model.loss import (
     timestep_scale,
 )
 from protenix.model.modules.diffusion_backbone import DiffusionModule
-from protenix.model.output import DiffusionOutput, ModelOutput
+from protenix.model.output import BackboneOutput, DiffusionOutput, ModelOutput
 from protenix.model.utils import Mode
 from protenix.utils.casting import disable_autocast
 from protenix.utils.geometry import centre_random_augmentation
@@ -63,7 +63,7 @@ class ArtiosBackbone(nn.Module):
         self,
         context: FullContext,
         inplace_safe: bool = False,
-    ) -> ModelOutput:
+    ) -> BackboneOutput:
         """Main inference loop for ArtiosBackbone.
 
         Args:
@@ -71,7 +71,7 @@ class ArtiosBackbone(nn.Module):
             inplace_safe: Whether to use inplace operations safely.
 
         Returns:
-            ModelOutput: Model output containing the prediction.
+            BackboneOutput: Model output containing the prediction.
         """
         N_sample = self.sampling_configs.N_sample
         N_step = self.sampling_configs.N_step
@@ -104,7 +104,10 @@ class ArtiosBackbone(nn.Module):
             track_trajectory=self.sampling_configs.track_trajectory,
         )
 
-        return ModelOutput(coordinate=result.final, trajectory=result.trajectory)
+        return BackboneOutput(
+            coordinate=result.final,
+            trajectory=result.trajectory,
+        )
 
     def main_train_loop(
         self,

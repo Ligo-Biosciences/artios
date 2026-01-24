@@ -24,6 +24,7 @@ import numpy as np
 import rootutils
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 from neptune_scale import Run
 from neptune_scale.api.run import SourceTrackingConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -34,18 +35,15 @@ from configs.configs_data import data_configs
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
-
-# from protenix.metrics.lddt_metrics import LDDTMetrics
-from protenix.metrics.sequence_metrics import SequenceMetrics
-from protenix.model.allatom_mpnn import ArtiosMPNN
-from protenix.model.loss import MPNNLoss
+from protenix.data.features import FullContext
+from protenix.model.artios_mpnn import ArtiosMPNN
+from protenix.model.output import ModelOutput
+from protenix.model.utils import Mode
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.monitoring import grad_norm
-from protenix.utils.permutation.permutation import SymmetricPermutation
 from protenix.utils.seed import seed_everything
-from protenix.utils.torch_utils import autocasting_disable_decorator, to_device
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.dumper import DataDumper
 from runner.ema import EMAWrapper
@@ -56,7 +54,7 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 os.environ["WANDB_CONSOLE"] = "off"
 
 
-class ArtiosAllAtomTrainer(object):
+class ArtiosMPNNTrainer(object):
     def __init__(self, configs):
         self.configs = configs
         self.init_env()
@@ -127,6 +125,15 @@ class ArtiosAllAtomTrainer(object):
                 project=self.configs.project,
                 experiment_name=self.run_name,
                 source_tracking_config=source_config,
+                run_id=self.configs.neptune_run_id
+                if self.configs.neptune_run_id
+                else None,
+                fork_run_id=self.configs.neptune_fork_run_id
+                if self.configs.neptune_fork_run_id
+                else None,
+                fork_step=int(self.configs.neptune_fork_step)
+                if self.configs.neptune_fork_step
+                else None,
             )
             # self.torchwatcher = TorchWatcher(
             #     model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
@@ -149,6 +156,7 @@ class ArtiosAllAtomTrainer(object):
             f"Distributed environment: world size: {DIST_WRAPPER.world_size}, "
             + f"global rank: {DIST_WRAPPER.rank}, local rank: {DIST_WRAPPER.local_rank}"
         )
+        mp.set_sharing_strategy("file_system")
         self.use_cuda = torch.cuda.device_count() > 0
         if self.use_cuda:
             self.device = torch.device("cuda:{}".format(DIST_WRAPPER.local_rank))
@@ -196,13 +204,8 @@ class ArtiosAllAtomTrainer(object):
         torch._dynamo.config.cache_size_limit = 8
 
     def init_loss(self):
-        self.loss = MPNNLoss(self.configs)
-        self.symmetric_permutation = SymmetricPermutation(
-            self.configs, error_dir=self.error_dir
-        )
-        # self.lddt_metrics = LDDTMetrics(self.configs)
-        self.sequence_metrics = SequenceMetrics()
-        self.curr_loss_dict = {}
+        # Loss computation is handled by the model's compute_loss method
+        pass
 
     def init_model(self):
         self.raw_model = ArtiosMPNN(self.configs).to(self.device)  # TODO: AllatomMPNN
@@ -226,11 +229,11 @@ class ArtiosAllAtomTrainer(object):
             return total_params / 1000.0 / 1000.0
 
         self.print(f"Model Parameters: {count_parameters(self.model)}")
-        if self.configs.get("ema_vae_decay", -1) > 0:
-            assert self.configs.ema_vae_decay < 1
+        if self.configs.get("ema_decay", -1) > 0:
+            assert self.configs.ema_decay < 1
             self.ema_wrapper = EMAWrapper(
                 self.model,
-                self.configs.ema_vae_decay,
+                self.configs.ema_decay,
                 self.configs.ema_mutable_param_keywords,
             )
             self.ema_wrapper.register()
@@ -324,7 +327,7 @@ class ArtiosAllAtomTrainer(object):
         # Load EMA model parameters
         if self.configs.load_ema_mpnn_checkpoint_path:
             _load_checkpoint(
-                self.configs.load_mpnn_vae_checkpoint_path,
+                self.configs.load_ema_mpnn_checkpoint_path,
                 load_params_only=True,
             )
             self.ema_wrapper.register()
@@ -344,81 +347,49 @@ class ArtiosAllAtomTrainer(object):
             logging.info(msg)
 
     def model_forward(
-        self, batch: dict, mode: str = "train", seed: Optional[int] = None
-    ) -> tuple[dict, dict]:
+        self,
+        context: FullContext,
+        mode: Mode = Mode.TRAIN,
+        seed: Optional[int] = None,
+    ) -> ModelOutput:
         """Forward pass of the model.
 
         Args:
-            batch (dict): Batch of data.
-            mode (str): Mode of the forward pass.
-            seed (Optional[int]): Seed for random number generation. Defaults to None.
+            context: Full context containing all features and labels.
+            mode: Mode of the forward pass (TRAIN or EVAL).
+            seed: Seed for random number generation. Defaults to None.
 
         Returns:
-            tuple[dict, dict]: Predictions and log dict.
+            ModelOutput containing the prediction.
         """
-        assert mode in ["train", "eval"]
         try:
-            batch["pred_dict"], batch["label_dict"], log_dict = self.model(
-                input_feature_dict=batch["input_feature_dict"],
-                label_dict=batch["label_dict"],
-                label_full_dict=batch["label_full_dict"],
-                mode=mode,
-                current_step=self.step if mode == "train" else None,
-                # symmetric_permutation=self.symmetric_permutation,
-                # seed=seed,
-            )
+            output = self.model(context=context, mode=mode, seed=seed)
         except Exception as e:
             print(f"Error in model forward: {e}")
-            print(f"pdb_id: {batch['basic']['pdb_id']}, step: {self.step}")
+            print(f"pdb_id: {context.basic.pdb_id}, step: {self.step}")
             raise e
-        return batch, log_dict
+        return output
 
-    def get_loss(self, batch: dict, mode: str = "train") -> tuple[torch.Tensor, dict]:
-        assert mode in ["train", "eval"]
-        self.loss.to(batch["label_dict"]["coordinate"].device)
-        loss, loss_dict = autocasting_disable_decorator(self.configs.skip_amp.loss)(
-            self.loss
-        )(
-            feat_dict=batch["input_feature_dict"],
-            pred_dict=batch["pred_dict"],
-            label_dict=batch["label_dict"],
-        )
-        return loss, loss_dict
+    def get_loss(
+        self,
+        output: ModelOutput,
+        context: FullContext,
+    ) -> tuple[torch.Tensor, dict]:
+        """Compute loss from model output and context.
 
-    @torch.no_grad()
-    def get_metrics(self, batch: dict) -> dict:
-        metrics_dict = {}
+        Args:
+            output: Model output containing predictions.
+            context: Full context containing labels and masks.
 
-        # LDDT metrics
-        # metrics_dict["lddt"] = self.lddt_metrics.compute_lddt(
-        #    batch["pred_dict"], batch["label_dict"]
-        # )
-
-        # Sequence metrics
-        metrics_dict["sequence"] = self.sequence_metrics.compute_metrics(
-            batch["pred_dict"], batch["input_feature_dict"]
-        )
-
-        return metrics_dict
-
-    @torch.no_grad()
-    def aggregate_metrics(self, metrics_dict: dict) -> dict:
-        simple_metrics = {}
-
-        # lddt_dict, _ = self.lddt_metrics.aggregate_lddt(metrics_dict["lddt"])
-        # simple_metrics.update(lddt_dict)
-
-        sequence_dict, _ = self.sequence_metrics.aggregate_sequence_metrics(
-            metrics_dict["sequence"]
-        )
-        simple_metrics.update(sequence_dict)
-
-        return simple_metrics
+        Returns:
+            Tuple of (loss tensor, loss metrics dict).
+        """
+        return self.raw_model.compute_loss(output, context)
 
     @torch.no_grad()
     def evaluate(self):
         if not self.configs.eval_ema_only:
-            self._evaluate(ema_suffix="none-EMA")
+            self._evaluate(ema_suffix="")
         if hasattr(self, "ema_wrapper"):
             self.ema_wrapper.apply_shadow()
             self._evaluate(ema_suffix=f"ema_{self.ema_wrapper.decay}")
@@ -428,10 +399,17 @@ class ArtiosAllAtomTrainer(object):
     def _evaluate(
         self,
         ema_suffix: str = "",
-    ):
-        # NOTE: currently, the test datasets are not being batched.
-        # Init Metric Aggregator
+    ) -> dict:
+        """Run evaluation loop on all test datasets.
+
+        Args:
+            ema_suffix: Suffix for logging (e.g., "ema_0.999" or "").
+
+        Returns:
+            Dictionary of evaluation metrics.
+        """
         simple_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
+
         eval_precision = {
             "fp32": torch.float32,
             "bf16": torch.bfloat16,
@@ -442,97 +420,24 @@ class ArtiosAllAtomTrainer(object):
             if torch.cuda.is_available()
             else nullcontext()
         )
-        self.model.eval()
 
-        # Initialize master monitor dict to collect all metrics
-        # master_monitor_dict = defaultdict(lambda: defaultdict(list))
+        self.model.eval()
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
 
-            for index, batch in enumerate(tqdm(test_dl)):
-                batch = to_device(batch, self.device)
-                pids = batch["basic"]["pdb_id"]
-                assert len(pids) == 1, "More than 1 element in the batch."
-                pid = pids[0]  # first element (batch size=1)
-                is_logging_element = (index + 1) % 10 == 0
+            for index, context in enumerate(tqdm(test_dl)):
+                context = context.to(self.device)
 
-                simple_metrics = {}
                 with enable_amp:
-                    # Model forward - adds the pred_dict and label_dict to batch
-                    batch, _ = self.model_forward(
-                        batch,
-                        mode="train",
-                        seed=index,
-                    )
-                    # Loss forward - forms loss and loss_dict, additionally returns the batch
-                    loss, loss_dict = self.get_loss(
-                        batch, mode="train"
-                    )  # eval, loss evaluated in the same way as train
+                    output = self.model_forward(context, mode=Mode.EVAL, seed=index)
+                    _, loss_dict = self.get_loss(output, context)
 
-                    simple_metrics.update(loss_dict)
-
-                    # Additional metrics
-                    # TODO: the following currently fails
-                    # metrics_dict = self.get_metrics(batch)
-                    # simple_metrics.update(self.aggregate_metrics(metrics_dict))
-
-                # TODO: this might not work with batching.
-                if is_logging_element:  # one in 10
-                    batch, _ = self.model_forward(  # do sampling
-                        batch,
-                        mode="eval",
-                        seed=index,
-                    )
-
-                    if DIST_WRAPPER.rank == 0:
-                        coordinate = batch["pred_dict"]["coordinate"][0]
-                        atom_array = batch["cropped_atom_arrays"][0]
-                        n_atoms = len(atom_array)
-                        # NOTE: this will include the atoms of unresolved residues.
-                        # These were masked when passed through to MPNN so the output
-                        # will be nonsensical. Filtering for these will:
-                        #   1. leave breaks in the backbone if unresolved residues lie
-                        # within the main structure
-                        #   2. remove the "blobs" found in inference outputs caused
-                        # by the inputted PDB data not having any crystallographic data
-                        # and consequently being labelled as is_resolved=False
-                        # NOTE: the above will not be a problem when performing this model
-                        # is placed in our full eval pipeline as our design model will
-                        # not be designing unresolved residues.
-                        # NOTE: I think we still have the age-old problem of attending to
-                        # unresolved residues during training though...
-                        batch["pred_dict"]["coordinate"] = coordinate[..., :n_atoms, :]
-                        saved_files = self.dumper.dump(
-                            dataset_name=test_name,
-                            pdb_id=pid,
-                            seed=0,
-                            pred_dict=batch["pred_dict"],
-                            atom_array=atom_array,
-                            entity_poly_type=None,  # batch["cropped_atom_array"].entity_poly_type,
-                        )
-
-                        # Log structure files to Neptune Scale
-                        if self.configs.use_wandb and saved_files:
-                            files_dict = {}
-                            for file_path in saved_files:
-                                # Create a relative key for Neptune using test_name/pdb_id/filename
-                                filename = os.path.basename(file_path)
-                                neptune_key = f"structures/{test_name}/{pid}/{filename}"
-                                files_dict[neptune_key] = file_path
-
-                            self.neptune_run.log_files(
-                                files=files_dict,
-                                step=self.step,
-                            )
-
-                # Metrics
-                for key, value in simple_metrics.items():
+                for key, value in loss_dict.items():
                     simple_metric_wrapper.add(key, value, namespace="val")
 
-                del batch, simple_metrics
+                del context, output
                 if index % 5 == 0:
-                    # Release some memory periodically
                     torch.cuda.empty_cache()
 
             metrics = simple_metric_wrapper.calc()
@@ -541,8 +446,9 @@ class ArtiosAllAtomTrainer(object):
             # Log validation metrics to Neptune/WandB
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 # Add test_name prefix to metrics for clarity
+                prefix = f"{ema_suffix}/" if ema_suffix else ""
                 prefixed_metrics = {
-                    f"{ema_suffix}/{test_name}/{k}": v for k, v in metrics.items()
+                    f"{prefix}{test_name}/{k}": v for k, v in metrics.items()
                 }
                 self.neptune_run.log_metrics(prefixed_metrics, step=self.step)
 
@@ -553,9 +459,14 @@ class ArtiosAllAtomTrainer(object):
                 self.model.parameters(), self.configs.grad_clip_norm
             )
 
-    def train_step(self, batch: dict):
+    def train_step(self, context: FullContext):
+        """Execute a single training step.
+
+        Args:
+            context: Full context containing features and labels.
+        """
         self.model.train()
-        # FP16 training has not been verified yet
+
         train_precision = {
             "fp32": torch.float32,
             "bf16": torch.bfloat16,
@@ -571,12 +482,12 @@ class ArtiosAllAtomTrainer(object):
 
         scaler = torch.GradScaler(
             device="cuda" if torch.cuda.is_available() else "cpu",
-            enabled=(self.configs.dtype == "float16"),
+            enabled=(self.configs.dtype == "fp16"),
         )
 
         with enable_amp:
-            batch, _ = self.model_forward(batch, mode="train")
-            loss, loss_dict = self.get_loss(batch, mode="train")
+            output = self.model_forward(context, mode=Mode.TRAIN)
+            loss, loss_dict = self.get_loss(output, context)
 
         if self.configs.dtype in ["bf16", "fp32"]:
             if is_loss_nan_check(loss):
@@ -603,8 +514,6 @@ class ArtiosAllAtomTrainer(object):
             self.lr_scheduler.step()
 
         for key, value in loss_dict.items():
-            if "loss" not in key:
-                continue
             self.train_metric_wrapper.add(key, value, namespace="train")
 
     def progress_bar(self, desc: str = ""):
@@ -681,7 +590,7 @@ class ArtiosAllAtomTrainer(object):
 
     def run(self):
         """
-        Main entry for the ArtiosAllAtomTrainer.
+        Main entry for the ArtiosMPNNTrainer.
 
         This function handles the training process, evaluation, logging, and checkpoint saving.
         """
@@ -723,7 +632,7 @@ class ArtiosAllAtomTrainer(object):
         ) as p:
             batch_iter_start = time.time()
             while True:
-                for batch in self.train_dl:
+                for context in self.train_dl:
                     # Track data loading time
                     data_load_time = time.time() - batch_iter_start
                     if data_load_time > 1.0:  # Log slow data loading (> 1 second)
@@ -731,7 +640,7 @@ class ArtiosAllAtomTrainer(object):
                             f"SLOW DATA LOADING at step {self.step} (rank {DIST_WRAPPER.rank}): "
                             f"{data_load_time:.2f}s to get batch from dataloader"
                         )
-                    # Print pdb id and step
+
                     is_update_step = (
                         self.global_step + 1
                     ) % self.iters_to_accumulate == 0
@@ -752,9 +661,9 @@ class ArtiosAllAtomTrainer(object):
                     step_need_eval &= is_update_step
                     step_need_save &= is_update_step
 
-                    batch = to_device(batch, self.device)
+                    context = context.to(self.device, non_blocking=True)
                     self.progress_bar()
-                    self.train_step(batch)
+                    self.train_step(context)
                     if use_ema and is_update_step:
                         self.ema_wrapper.update()
                     if step_need_log or is_last_step:
@@ -830,7 +739,7 @@ def main():
 
     print(configs.run_name)
     print(configs)
-    trainer = ArtiosAllAtomTrainer(configs)
+    trainer = ArtiosMPNNTrainer(configs)
     trainer.run()
 
 

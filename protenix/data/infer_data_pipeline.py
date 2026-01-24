@@ -212,9 +212,10 @@ class PackingDataset(Dataset):
         with open(self.input_json_path, "r") as f:
             self.inputs = json.load(f)
 
-        # Read the input json
-        # Read the NPZ file to create the atom array stack
-        # checks for input properties
+        # TODO: Read the input json
+        # TODO: Read the NPZ file to create the atom array stack
+        # TODO: Read the Fasta file to create some list of sequences
+        # TODO: checks for input properties
 
     def __len__(
         self,
@@ -223,18 +224,24 @@ class PackingDataset(Dataset):
 
     def __getitem__(self, index: int) -> FullContext:
         try:
+            # TODO: index into AtomArrayStack to get AtomArray
             input_dict = self.inputs[index]
 
+            # TODO: index into the list of sequences
+
+            # TODO: will no longer be needed
             sample_input = parse_input_dict(input_dict)
 
             sample_name = sample_input.name
             logger.info(f"Featurizing {sample_name}...")
 
+            # TODO: change to a packing specific function that can takes in the
+            # design atom array as well as the sequence and builds the appropiate
+            # array.
             atom_array, original_motif_mapping = process_input_to_atom_array(
                 sample_input
-            )  # TODO: packing will need a bit of atom array processing,
-            # we need a new atom array that includes all the sidechain atoms
-            # and prepares the array for centre atom extraction properly.
+            )
+
             token_array = AtomArrayTokenizer(atom_array).get_token_array()
             context = ContextGenerator(
                 token_array,

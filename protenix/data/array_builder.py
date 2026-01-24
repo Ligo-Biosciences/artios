@@ -715,8 +715,8 @@ def remove_non_std_ccd_leaving_atoms(atom_array: AtomArray) -> AtomArray:
             ).atom_name
             if idx == 1 and ccd.get_mol_type(res_name) in ("dna", "rna"):
                 staying_atoms = np.append(staying_atoms, ["OP3"])
-            if idx == atom_array.res_id[-1] and ccd.get_mol_type(res_name) == "protein":
-                staying_atoms = np.append(staying_atoms, ["OXT"])
+            # if idx == atom_array.res_id[-1] and ccd.get_mol_type(res_name) == "protein":
+            #     staying_atoms = np.append(staying_atoms, ["OXT"])
             leaving_atoms |= (atom_array.res_id == idx) & (
                 ~np.isin(atom_array.atom_name, staying_atoms)
             )

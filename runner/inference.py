@@ -236,6 +236,8 @@ def infer_predict(
 
     for seed in configs.seeds:
         seed_everything(seed=seed, deterministic=configs.deterministic)
+        # TODO: this currently cannot handle batched outputs it seems like, will need to change that completely.
+        # The inference dataloader needs to be able to return batched inputs for model consumption (MPNN and packing mainly.)
         for context in dataloader:
             try:
                 sample_name = context.basic.pdb_id[0]

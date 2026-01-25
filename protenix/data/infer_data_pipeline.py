@@ -10,11 +10,14 @@ from typing import Any
 
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
-from protenix.data.array_builder import process_input_to_atom_array
+from protenix.data.array_builder import (
+    backbone_input_to_atom_array,
+    process_input_to_atom_array,
+)
 from protenix.data.data_collator import CollateContexts
 from protenix.data.features import FullContext
 from protenix.data.featurizer import ContextGenerator
-from protenix.data.json_parser import parse_input_dict
+from protenix.data.json_parser import BackboneInput, parse_input_dict, parse_motif_json
 from protenix.data.tokenizer import AtomArrayTokenizer
 from protenix.utils.distributed import DIST_WRAPPER
 
@@ -115,37 +118,35 @@ class InferenceDataset(Dataset):
 
 
 class MotifDataset(Dataset):
+    """Dataset for motif scaffolding inference.
+
+    Loads a single motif JSON file and produces a FullContext for inference.
+    The JSON should contain a single BackboneInput specification (not a list).
+    """
+
     def __init__(
         self,
         input_json_path: str,
     ) -> None:
         self.input_json_path = input_json_path
-        with open(self.input_json_path, "r") as f:
-            self.inputs = json.load(f)
+        self.backbone_input: BackboneInput = parse_motif_json(input_json_path)
 
-    def __len__(
-        self,
-    ) -> int:  # TODO: length will be the m dimension of the AtomArrayStack or 1 in the case of motif scaffolding.
-        return len(self.inputs)
+    def __len__(self) -> int:
+        return 1
 
     def __getitem__(self, index: int) -> FullContext:
         try:
-            input_dict = self.inputs[index]
-
-            sample_input = parse_input_dict(input_dict)  # TODO: this might end up
-
-            sample_name = sample_input.name
+            sample_name = self.backbone_input.name
             logger.info(f"Featurizing {sample_name}...")
 
-            atom_array, original_motif_mapping = process_input_to_atom_array(
-                sample_input
-            )  # TODO: rename this to be more specific to motifs
+            atom_array, original_motif_mapping = backbone_input_to_atom_array(
+                self.backbone_input
+            )
             token_array = AtomArrayTokenizer(atom_array).get_token_array()
             context = ContextGenerator(
                 token_array,
                 atom_array,
-                pdb_id=sample_input.name,
-                bioassembly_dict_fpath=sample_input.name,
+                pdb_id=sample_name,
                 original_motif_mapping=original_motif_mapping,
             ).get_full_context()
 

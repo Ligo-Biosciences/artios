@@ -123,16 +123,26 @@ def add_atom_array_attributes(
 
 def set_chain_and_seq_ids(
     atom_array: AtomArray,
-    chain_id: int,
+    chain_id: str | int,
+    entity_id: int,
 ) -> AtomArray:
-    """Assign IDs."""
-    chain_ids = [str(chain_id)] * len(atom_array)
+    """Assign IDs.
+
+    Args:
+        atom_array: AtomArray to modify
+        chain_id: Chain identifier. If int, gets cast to str.
+        entity_id: Entity identifier (1-indexed integer, unique per molecular entity).
+    """
+    if isinstance(chain_id, int):
+        chain_id = str(chain_id)
+
+    chain_ids = [chain_id] * len(atom_array)
     atom_array.set_annotation("label_asym_id", chain_ids)
     atom_array.set_annotation("auth_asym_id", chain_ids)
     atom_array.set_annotation("chain_id", chain_ids)
     atom_array.set_annotation("label_seq_id", atom_array.res_id)
     atom_array.set_annotation("copy_id", ["1"] * len(atom_array))
-    atom_array.set_annotation("label_entity_id", [str(chain_id + 1)] * len(atom_array))
+    atom_array.set_annotation("label_entity_id", [str(entity_id)] * len(atom_array))
     return atom_array
 
 
@@ -152,7 +162,9 @@ def backbone_input_to_atom_array(
     sequence = [PROTEIN_1to3["G"] for _ in range(backbone_input.design[0].length)]
     design_atom_array = _build_polymer_atom_array(sequence)
     design_atom_array = add_reference_features(design_atom_array)
-    design_atom_array = set_chain_and_seq_ids(design_atom_array, chain_id=0)
+    design_atom_array = set_chain_and_seq_ids(
+        design_atom_array, chain_id=0, entity_id=1
+    )
 
     design_atom_array.set_annotation(
         "is_motif_related", [False] * len(design_atom_array)
@@ -229,13 +241,15 @@ def packing_input_to_atom_array(
 
     protein_array = _build_polymer_atom_array(ccd_seqs)
     protein_array = add_reference_features(protein_array)
-    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0)
+    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0, entity_id=1)
     arrays.append(protein_array)
 
     # Build ligand arrays
     for i, ligand in enumerate(packing_input.ligands):
         ligand_array = build_ligand(ligand).atom_array
-        ligand_array = set_chain_and_seq_ids(ligand_array, chain_id=i + 1)
+        ligand_array = set_chain_and_seq_ids(
+            ligand_array, chain_id=i + 1, entity_id=i + 2
+        )
         arrays.append(ligand_array)
 
     combined = arrays[0]
@@ -374,7 +388,7 @@ def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
         )
 
 
-def build_motif_residue(motif_residue: MotifResidue) -> AtomArray:
+def build_motif_residue(motif_residue: MotifResidue, entity_id: int) -> AtomArray:
     """Expand partial sidechain to full residue AtomArray from CCD.
 
     Takes a MotifResidue dataclass and:
@@ -386,6 +400,7 @@ def build_motif_residue(motif_residue: MotifResidue) -> AtomArray:
     Args:
         motif_residue: MotifResidue dataclass with res_id, res_name,
             atom_names, and coords
+        entity_id: Entity identifier for this residue.
 
     Returns:
         AtomArray: Full residue with coordinates transferred where available,
@@ -432,13 +447,13 @@ def build_motif_residue(motif_residue: MotifResidue) -> AtomArray:
 
     # Set chain_id from the CIF
     full_residue = set_chain_and_seq_ids(
-        full_residue, chain_id=int(motif_residue.chain_id)
+        full_residue, chain_id=motif_residue.chain_id, entity_id=entity_id
     )
 
     return full_residue
 
 
-def build_motif_ligand(motif_ligand: MotifLigand) -> AtomArray:
+def build_motif_ligand(motif_ligand: MotifLigand, entity_id: int) -> AtomArray:
     """Expand motif ligand fragment to full ligand AtomArray.
 
     Takes a MotifLigand dataclass and:
@@ -453,6 +468,7 @@ def build_motif_ligand(motif_ligand: MotifLigand) -> AtomArray:
     Args:
         motif_ligand: MotifLigand dataclass with cif_res_name, atom_names,
             coords, elements, and full_ligand spec
+        entity_id: Entity identifier for this ligand.
 
     Returns:
         AtomArray: Full ligand with motif coordinates transferred,
@@ -533,22 +549,34 @@ def build_motif_ligand(motif_ligand: MotifLigand) -> AtomArray:
 
     # Set chain_id and res_id (ligands always use res_id=1)
     full_ligand_array = set_chain_and_seq_ids(
-        full_ligand_array, chain_id=int(motif_ligand.chain_id)
+        full_ligand_array, chain_id=motif_ligand.chain_id, entity_id=entity_id
     )
     full_ligand_array.res_id[:] = 1
 
     return full_ligand_array
 
 
-def build_motif(motif: Motif) -> AtomArray:
-    """Build a motif from a Motif object."""
+def build_motif(motif: Motif, start_entity_id: int = 2) -> AtomArray:
+    """Build a motif from a Motif object.
+
+    Args:
+        motif: Motif object containing residues and ligands.
+        start_entity_id: Starting entity_id for motif components (default 2,
+            since the design protein is entity 1).
+
+    Returns:
+        Combined AtomArray for all motif components.
+    """
     arrays = []
+    entity_id = start_entity_id
 
     for residue in motif.residues:
-        arrays.append(build_motif_residue(residue))
+        arrays.append(build_motif_residue(residue, entity_id=entity_id))
+        entity_id += 1
 
     for ligand in motif.ligands:
-        arrays.append(build_motif_ligand(ligand))
+        arrays.append(build_motif_ligand(ligand, entity_id=entity_id))
+        entity_id += 1
 
     if not arrays:
         raise ValueError("Motif has no residues or ligands")
@@ -910,13 +938,15 @@ def sequence_input_to_atom_array_v2(sequence_input: SequenceDesignInput) -> Atom
     # Build protein array from CCD
     protein_array = _build_polymer_atom_array(sequence)
     protein_array = add_reference_features(protein_array)
-    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0)
+    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0, entity_id=1)
 
     # Build ligand arrays from CCD/SMILES
     arrays = [protein_array]
     for i, ligand in enumerate(sequence_input.ligands):
         ligand_array = build_ligand(ligand).atom_array
-        ligand_array = set_chain_and_seq_ids(ligand_array, chain_id=i + 1)
+        ligand_array = set_chain_and_seq_ids(
+            ligand_array, chain_id=i + 1, entity_id=i + 2
+        )
         arrays.append(ligand_array)
 
     # Combine all arrays

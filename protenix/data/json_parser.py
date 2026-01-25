@@ -98,11 +98,11 @@ def parse_input_dict(
             )  # ty: ignore[invalid-argument-type]
 
         case TaskType.PACKING:
-            # Conveert string cif_file to CIFFile object format if needed
-            if "cif_file" in spec_with_name:
-                cif_file_value = spec_with_name["cif_file"]
-                if isinstance(cif_file_value, str):
-                    spec_with_name["cif_file"] = {"path": cif_file_value}
+            # Convert string npz_file to NPZFile object format if needed
+            if "npz_file" in spec_with_name:
+                npz_file_value = spec_with_name["npz_file"]
+                if isinstance(npz_file_value, str):
+                    spec_with_name["npz_file"] = {"path": npz_file_value}
 
             # Convert string fasta_file to FastaFile object format if needed
             if "fasta_file" in spec_with_name:
@@ -468,36 +468,33 @@ class SequenceDesignInput(BaseModel):
 class PackingInput(BaseModel):
     """Top-level input for sidechain packing inference.
 
-    Given a backbone structure and sequence, predict sidechain conformations.
+    Given a backbone structure (from motif scaffolding) and designed sequences
+    (from MPNN), predict sidechain conformations.
 
-    The CIF file should contain:
-    - Protein backbone (chain_id "0")
-    - Ligand(s) with full atomic coordinates (each with their own chain_id)
+    The NPZ file contains an AtomArrayStack saved with dump_atomarray_stack().
+    It includes:
+    - Protein backbone coordinates (poly-glycine from motif scaffolding)
+    - Ligand coordinates and annotations
+    - All necessary chain/entity annotations
 
-    Note: Protein chain must always be "0".
+    The FASTA file contains the designed sequences from MPNN, one per model
+    in the AtomArrayStack. The number of sequences must match the stack depth.
 
     Example:
         {
             "name": "pack_design",
-            "cif_file": "backbone.cif",
-            "fasta_file": "sequence.fasta",
-            "ligands": [
-                {
-                    "cif_res_name": "AL5",
-                    "chain_id": "3",
-                    "full_ligand": {"type": "ccd", "codes": ["AL5"]}
-                }
-            ]
+            "npz_file": "backbone_stack.npz",
+            "fasta_file": "designed_sequences.fasta"
         }
     """
 
     name: str | None = Field(default=None, description="Job identifier")
-    cif_file: CIFFile = Field(
-        ..., description="Poly-glycine backbone CIF with ligand(s)"
+    npz_file: NPZFile = Field(
+        ...,
+        description="NPZ file containing AtomArrayStack from motif scaffolding",
     )
-    fasta_file: FastaFile = Field(..., description="Fasta file with sequence")
-    ligands: list[LigandMapping] = Field(
-        ..., description="Ligand mappings from CIF residue names to full ligand specs."
+    fasta_file: FastaFile = Field(
+        ..., description="FASTA file with designed sequences (one per model in stack)"
     )
 
 
@@ -589,3 +586,59 @@ def parse_motif_json(
         data["motif"]["cif_file"] = {"path": str(cif_path)}
 
     return BackboneInput(**data)
+
+
+def parse_packing_json(
+    file_path: str | Path,
+    resolve_paths: bool = True,
+) -> PackingInput:
+    """Parse a packing input JSON file.
+
+    Args:
+        file_path: Path to the JSON file
+        resolve_paths: If True, resolve npz_file and fasta_file paths relative
+            to the JSON file's directory
+
+    Returns:
+        Validated PackingInput object
+
+    Raises:
+        FileNotFoundError: If the JSON file doesn't exist
+        json.JSONDecodeError: If the file is not valid JSON
+        pydantic.ValidationError: If the JSON doesn't match the schema
+    """
+    file_path = Path(file_path)
+
+    if not file_path.exists():
+        raise FileNotFoundError(f"JSON file not found: {file_path}")
+
+    with open(file_path) as f:
+        data = json.load(f)
+
+    # Convert npz_file string to NPZFile object format and resolve path
+    if "npz_file" in data:
+        npz_file_value = data["npz_file"]
+        if isinstance(npz_file_value, str):
+            npz_path = Path(npz_file_value)
+        else:
+            npz_path = Path(npz_file_value["path"])
+
+        if resolve_paths and not npz_path.is_absolute():
+            npz_path = file_path.parent / npz_path
+
+        data["npz_file"] = {"path": str(npz_path)}
+
+    # Convert fasta_file string to FastaFile object format and resolve path
+    if "fasta_file" in data:
+        fasta_file_value = data["fasta_file"]
+        if isinstance(fasta_file_value, str):
+            fasta_path = Path(fasta_file_value)
+        else:
+            fasta_path = Path(fasta_file_value["path"])
+
+        if resolve_paths and not fasta_path.is_absolute():
+            fasta_path = file_path.parent / fasta_path
+
+        data["fasta_file"] = {"path": str(fasta_path)}
+
+    return PackingInput(**data)

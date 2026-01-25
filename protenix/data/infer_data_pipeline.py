@@ -4,15 +4,16 @@
 
 import json
 import logging
-import traceback
 import warnings
 from pathlib import Path
 from typing import Any
 
+import biotite.sequence.io as seqio
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
 from protenix.data.array_builder import (
     backbone_input_to_atom_array,
+    packing_input_to_atom_array_v2,
     process_input_to_atom_array,
 )
 from protenix.data.data_collator import CollateContexts
@@ -20,9 +21,11 @@ from protenix.data.features import FullContext
 from protenix.data.featurizer import ContextGenerator
 from protenix.data.json_parser import (
     BackboneInput,
+    PackingInput,
     SequenceDesignInput,
     parse_input_dict,
     parse_motif_json,
+    parse_packing_json,
     parse_sequence_design_json,
 )
 from protenix.data.tokenizer import AtomArrayTokenizer
@@ -98,31 +101,20 @@ class InferenceDataset(Dataset):
         return len(self.inputs)
 
     def __getitem__(self, index: int) -> FullContext:
-        try:
-            input_dict = self.inputs[index]
+        input_dict = self.inputs[index]
+        sample_input = parse_input_dict(input_dict)
 
-            sample_input = parse_input_dict(input_dict)
+        logger.info(f"Featurizing {sample_input.name}...")
 
-            sample_name = sample_input.name
-            logger.info(f"Featurizing {sample_name}...")
-
-            atom_array, original_motif_mapping = process_input_to_atom_array(
-                sample_input
-            )
-            token_array = AtomArrayTokenizer(atom_array).get_token_array()
-            context = ContextGenerator(
-                token_array,
-                atom_array,
-                pdb_id=sample_input.name,
-                bioassembly_dict_fpath=sample_input.name,
-                original_motif_mapping=original_motif_mapping,
-            ).get_full_context()
-
-        except Exception as e:
-            error_message = f"{e}:\n{traceback.format_exc()}"
-            raise Exception(error_message)
-
-        return context
+        atom_array, original_motif_mapping = process_input_to_atom_array(sample_input)
+        token_array = AtomArrayTokenizer(atom_array).get_token_array()
+        return ContextGenerator(
+            token_array,
+            atom_array,
+            pdb_id=sample_input.name,
+            bioassembly_dict_fpath=sample_input.name,
+            original_motif_mapping=original_motif_mapping,
+        ).get_full_context()
 
 
 class MotifDataset(Dataset):
@@ -143,34 +135,29 @@ class MotifDataset(Dataset):
         return 1
 
     def __getitem__(self, index: int) -> FullContext:
-        try:
-            sample_name = self.backbone_input.name
-            logger.info(f"Featurizing {sample_name}...")
+        sample_name = self.backbone_input.name
+        logger.info(f"Featurizing {sample_name}...")
 
-            atom_array, original_motif_mapping = backbone_input_to_atom_array(
-                self.backbone_input
-            )
-            token_array = AtomArrayTokenizer(atom_array).get_token_array()
-            context = ContextGenerator(
-                token_array,
-                atom_array,
-                pdb_id=sample_name,
-                original_motif_mapping=original_motif_mapping,
-            ).get_full_context()
-
-        except Exception as e:
-            error_message = f"{e}:\n{traceback.format_exc()}"
-            raise Exception(error_message)
-
-        return context
+        atom_array, original_motif_mapping = backbone_input_to_atom_array(
+            self.backbone_input
+        )
+        token_array = AtomArrayTokenizer(atom_array).get_token_array()
+        return ContextGenerator(
+            token_array,
+            atom_array,
+            pdb_id=sample_name,
+            original_motif_mapping=original_motif_mapping,
+        ).get_full_context()
 
 
-class MPNNDataset(Dataset):
+class MPNNDataset(Dataset):  # TODO: need a different name
     """Dataset for MPNN sequence design inference.
 
     Loads a SequenceDesignInput JSON file pointing to an NPZ file containing an
     AtomArrayStack (multiple backbone models). Each item in the dataset corresponds
     to one model from the stack.
+
+    # TODO: the full-testing of MPNNDataset isn't done yet.
     """
 
     def __init__(
@@ -182,84 +169,73 @@ class MPNNDataset(Dataset):
             input_json_path
         )
         self.atom_stack = load_atomarray_stack(self.sequence_input.npz_file.path)
+        assert len(self.atom_stack.coord.shape) == 3  # (m, n_atoms, 3)
 
     def __len__(self) -> int:
         # Use coord shape directly as stack_depth() can be unreliable
         return self.atom_stack.coord.shape[0]
 
     def __getitem__(self, index: int) -> FullContext:
-        try:
-            sample_name = f"{self.sequence_input.name}_model_{index}"
-            logger.info(f"Featurizing {sample_name}...")
+        sample_name = f"{self.sequence_input.name}_model_{index}"
+        logger.info(f"Featurizing {sample_name}...")
 
-            # Index into the stack to get a single AtomArray
-            atom_array = self.atom_stack[index]
-
-            token_array = AtomArrayTokenizer(atom_array).get_token_array()
-            context = ContextGenerator(
-                token_array,
-                atom_array,
-                pdb_id=sample_name,
-            ).get_full_context()
-
-        except Exception as e:
-            error_message = f"{e}:\n{traceback.format_exc()}"
-            raise Exception(error_message)
-
-        return context
+        atom_array = self.atom_stack[index]
+        token_array = AtomArrayTokenizer(atom_array).get_token_array()
+        return ContextGenerator(
+            token_array,
+            atom_array,
+            pdb_id=sample_name,
+        ).get_full_context()
 
 
 class PackingDataset(Dataset):
+    """Dataset for sidechain packing inference.
+
+    Loads a PackingInput JSON file pointing to:
+    - An NPZ file containing an AtomArrayStack (multiple backbone models)
+    - A FASTA file containing designed sequences (one per model)
+
+    Each item in the dataset corresponds to one model from the stack paired
+    with its corresponding designed sequence.
+    """
+
     def __init__(
         self,
         input_json_path: str | Path,
     ) -> None:
         self.input_json_path = input_json_path
-        with open(self.input_json_path, "r") as f:
-            self.inputs = json.load(f)
+        self.packing_input: PackingInput = parse_packing_json(input_json_path)
 
-        # TODO: Read the input json
-        # TODO: Read the NPZ file to create the atom array stack
-        # TODO: Read the Fasta file to create some list of sequences
-        # TODO: checks for input properties
-        # - check that m of atom array stack match the number of sequences in the fasta file.
+        # Load the AtomArrayStack from NPZ
+        self.atom_stack = load_atomarray_stack(self.packing_input.npz_file.path)
+        assert len(self.atom_stack.coord.shape) == 3  # (m, n_atoms, 3)
 
-    def __len__(
-        self,
-    ) -> int:  # TODO: length will be the m dimension of the AtomArrayStack
-        return len(self.inputs)
+        # Load sequences from FASTA file
+        fasta_dict = seqio.load_sequences(self.packing_input.fasta_file.path)
+        self.sequences = list(fasta_dict.values())
 
-    def __getitem__(self, index: int) -> FullContext:
-        try:
-            # TODO: index into AtomArrayStack to get AtomArray
-            input_dict = self.inputs[index]
-
-            # TODO: index into the list of sequences
-
-            # TODO: will no longer be needed
-            sample_input = parse_input_dict(input_dict)
-
-            sample_name = sample_input.name
-            logger.info(f"Featurizing {sample_name}...")
-
-            # TODO: change to a packing specific function that can takes in the
-            # design atom array as well as the sequence and builds the appropiate
-            # array.
-            atom_array, original_motif_mapping = process_input_to_atom_array(
-                sample_input
+        # Validate that stack depth matches number of sequences
+        stack_depth = self.atom_stack.coord.shape[0]
+        if stack_depth != len(self.sequences):
+            raise ValueError(
+                f"AtomArrayStack has {stack_depth} models but FASTA has "
+                f"{len(self.sequences)} sequences. They must match."
             )
 
-            token_array = AtomArrayTokenizer(atom_array).get_token_array()
-            context = ContextGenerator(
-                token_array,
-                atom_array,
-                pdb_id=sample_input.name,
-                bioassembly_dict_fpath=sample_input.name,
-                original_motif_mapping=original_motif_mapping,
-            ).get_full_context()
+    def __len__(self) -> int:
+        return self.atom_stack.coord.shape[0]
 
-        except Exception as e:
-            error_message = f"{e}:\n{traceback.format_exc()}"
-            raise Exception(error_message)
+    def __getitem__(self, index: int) -> FullContext:
+        sample_name = f"{self.packing_input.name}_model_{index}"
+        logger.info(f"Featurizing {sample_name}...")
 
-        return context
+        input_array = self.atom_stack[index]
+        sequence = self.sequences[index]
+        atom_array = packing_input_to_atom_array_v2(input_array, sequence)
+
+        token_array = AtomArrayTokenizer(atom_array).get_token_array()
+        return ContextGenerator(
+            token_array,
+            atom_array,
+            pdb_id=sample_name,
+        ).get_full_context()

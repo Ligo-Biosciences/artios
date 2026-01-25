@@ -303,7 +303,7 @@ def packing_input_to_atom_array_v2(
     # Build new protein array from sequence
     protein_array = _build_polymer_atom_array(sequence)
     protein_array = add_reference_features(protein_array)
-    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0)
+    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0, entity_id=1)
 
     # Transfer C-alpha coordinates from input to new array
     input_ca_coords: dict[int, np.ndarray] = {}

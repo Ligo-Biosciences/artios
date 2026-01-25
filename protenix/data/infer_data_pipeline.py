@@ -6,6 +6,7 @@ import json
 import logging
 import traceback
 import warnings
+from pathlib import Path
 from typing import Any
 
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
@@ -17,9 +18,16 @@ from protenix.data.array_builder import (
 from protenix.data.data_collator import CollateContexts
 from protenix.data.features import FullContext
 from protenix.data.featurizer import ContextGenerator
-from protenix.data.json_parser import BackboneInput, parse_input_dict, parse_motif_json
+from protenix.data.json_parser import (
+    BackboneInput,
+    SequenceDesignInput,
+    parse_input_dict,
+    parse_motif_json,
+    parse_sequence_design_json,
+)
 from protenix.data.tokenizer import AtomArrayTokenizer
 from protenix.utils.distributed import DIST_WRAPPER
+from protenix.utils.file_io import load_atomarray_stack
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +86,7 @@ def get_inference_dataloader(
 class InferenceDataset(Dataset):
     def __init__(
         self,
-        input_json_path: str,
+        input_json_path: str | Path,
     ) -> None:
         self.input_json_path = input_json_path
         with open(self.input_json_path, "r") as f:
@@ -126,7 +134,7 @@ class MotifDataset(Dataset):
 
     def __init__(
         self,
-        input_json_path: str,
+        input_json_path: str | Path,
     ) -> None:
         self.input_json_path = input_json_path
         self.backbone_input: BackboneInput = parse_motif_json(input_json_path)
@@ -158,43 +166,40 @@ class MotifDataset(Dataset):
 
 
 class MPNNDataset(Dataset):
+    """Dataset for MPNN sequence design inference.
+
+    Loads a SequenceDesignInput JSON file pointing to an NPZ file containing an
+    AtomArrayStack (multiple backbone models). Each item in the dataset corresponds
+    to one model from the stack.
+    """
+
     def __init__(
         self,
-        input_json_path: str,
+        input_json_path: str | Path,
     ) -> None:
         self.input_json_path = input_json_path
-        with open(self.input_json_path, "r") as f:
-            self.inputs = json.load(f)
-
-        # Read the input json
-        # Read the NPZ file to create the atom array stack
-        # checks for input properties
+        self.sequence_input: SequenceDesignInput = parse_sequence_design_json(
+            input_json_path
+        )
+        self.atom_stack = load_atomarray_stack(self.sequence_input.npz_file.path)
 
     def __len__(self) -> int:
-        # TODO: length will be the m dimension of the AtomArrayStack
-        return len(self.inputs)
+        # Use coord shape directly as stack_depth() can be unreliable
+        return self.atom_stack.coord.shape[0]
 
     def __getitem__(self, index: int) -> FullContext:
         try:
-            # TODO: for each index, create a separate atom array from the atom array stack
-            input_dict = self.inputs[index]
-
-            # TODO: make the sequence design input object here
-            sample_input = parse_input_dict(input_dict)
-
-            sample_name = sample_input.name
+            sample_name = f"{self.sequence_input.name}_model_{index}"
             logger.info(f"Featurizing {sample_name}...")
 
-            atom_array, original_motif_mapping = process_input_to_atom_array(
-                sample_input
-            )  # TODO: we will not need this at all
+            # Index into the stack to get a single AtomArray
+            atom_array = self.atom_stack[index]
+
             token_array = AtomArrayTokenizer(atom_array).get_token_array()
             context = ContextGenerator(
                 token_array,
                 atom_array,
-                pdb_id=sample_input.name,
-                bioassembly_dict_fpath=sample_input.name,
-                original_motif_mapping=original_motif_mapping,
+                pdb_id=sample_name,
             ).get_full_context()
 
         except Exception as e:
@@ -207,7 +212,7 @@ class MPNNDataset(Dataset):
 class PackingDataset(Dataset):
     def __init__(
         self,
-        input_json_path: str,
+        input_json_path: str | Path,
     ) -> None:
         self.input_json_path = input_json_path
         with open(self.input_json_path, "r") as f:
@@ -217,6 +222,7 @@ class PackingDataset(Dataset):
         # TODO: Read the NPZ file to create the atom array stack
         # TODO: Read the Fasta file to create some list of sequences
         # TODO: checks for input properties
+        # - check that m of atom array stack match the number of sequences in the fasta file.
 
     def __len__(
         self,

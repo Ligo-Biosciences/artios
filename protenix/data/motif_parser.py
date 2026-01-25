@@ -1,7 +1,7 @@
 """
 Motif scaffolding inference parser.
 
-Parses MotifInput specifying:
+Parses MotifSpec specifying:
 - Motif CIF file (partial sidechains + ligand fragments with coordinates)
 - Ligand specification (CCD code or SMILES)
 

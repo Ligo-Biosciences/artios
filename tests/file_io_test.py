@@ -8,10 +8,8 @@ from biotite.structure.io import pdbx
 from protenix.utils.file_io import (
     dump_atomarray_stack,
     dump_atomarray_to_npz,
-    dump_multi_sample_atomarray,
     load_atomarray_from_npz,
     load_atomarray_stack,
-    load_multi_sample_atomarray,
 )
 
 TESTDATA_DIR = Path(__file__).parent / "testdata"
@@ -52,42 +50,6 @@ class TestAtomArrayNpz:
             original = atom_array.get_annotation(category)
             restored = loaded.get_annotation(category)
             np.testing.assert_array_equal(restored, original)
-
-
-class TestMultiSampleAtomArray:
-    """Tests for legacy multi-sample AtomArray functions."""
-
-    def test_roundtrip(self, atom_array: AtomArray, tmp_path: Path) -> None:
-        """Test that multi-sample data survives a dump/load roundtrip."""
-        n_samples = 5
-        n_atoms = len(atom_array)
-
-        # Create synthetic multi-sample coordinates
-        coords = np.stack(
-            [atom_array.coord + i * 0.1 for i in range(n_samples)],
-            axis=0,
-        )
-        assert coords.shape == (n_samples, n_atoms, 3)
-
-        npz_path = tmp_path / "multi_sample.npz"
-        dump_multi_sample_atomarray(atom_array, coords, npz_path)
-
-        loaded_array, loaded_coords = load_multi_sample_atomarray(npz_path)
-
-        assert len(loaded_array) == n_atoms
-        np.testing.assert_array_almost_equal(loaded_coords, coords)
-        # First sample should be default coords
-        np.testing.assert_array_almost_equal(loaded_array.coord, coords[0])
-
-    def test_mismatched_atoms_raises(
-        self, atom_array: AtomArray, tmp_path: Path
-    ) -> None:
-        """Test that mismatched atom count raises ValueError."""
-        wrong_coords = np.zeros((3, len(atom_array) + 10, 3))
-        npz_path = tmp_path / "bad.npz"
-
-        with pytest.raises(ValueError, match="Coordinate n_atom"):
-            dump_multi_sample_atomarray(atom_array, wrong_coords, npz_path)
 
 
 class TestAtomArrayStack:

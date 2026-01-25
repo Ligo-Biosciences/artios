@@ -22,6 +22,7 @@ import biotite.sequence.io as seqio
 import biotite.structure as struc
 import biotite.structure.io as strucio
 import numpy as np
+from biotite.sequence import ProteinSequence
 from biotite.structure import AtomArray
 from typing_extensions import assert_never
 
@@ -270,6 +271,65 @@ def packing_input_to_atom_array(
     )
 
     return combined, original_motif_mapping
+
+
+def packing_input_to_atom_array_v2(
+    input_array: AtomArray,
+    sequence: ProteinSequence,
+) -> AtomArray:
+    """Build packing input from stitched backbone + MPNN sequence.
+
+    Takes the stitched backbone output and the MPNN-designed sequence, builds
+    a full atom array with CCD reference sidechains, and transfers C-alpha
+    coordinates from the input. Ligands are preserved as-is.
+
+    Args:
+        input_array: Stitched backbone output. Chain "0" is the protein backbone
+            (with motif sidechains, which are ignored). Other chains are ligands.
+        sequence: 1-letter amino acid sequence from MPNN (e.g., "MKVLAFFAG...")
+
+    Returns:
+        AtomArray: Complete atom array with full sidechains from CCD,
+            C-alpha coords from input, and ligands preserved.
+    """
+    sequence = [PROTEIN_1to3[aa] for aa in sequence]
+
+    # Get input ligand and protein
+    ligand_mask = input_array.chain_id != "0"
+    ligand_input = input_array[ligand_mask].copy() if ligand_mask.any() else None
+
+    protein_input = input_array[input_array.chain_id == "0"]
+
+    # Build new protein array from sequence
+    protein_array = _build_polymer_atom_array(sequence)
+    protein_array = add_reference_features(protein_array)
+    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0)
+
+    # Transfer C-alpha coordinates from input to new array
+    input_ca_coords: dict[int, np.ndarray] = {}
+    for i in range(len(protein_input)):
+        if protein_input.atom_name[i] == "CA":
+            input_ca_coords[protein_input.res_id[i]] = protein_input.coord[i]
+
+    for i in range(len(protein_array)):
+        if protein_array.atom_name[i] == "CA":
+            res_id = protein_array.res_id[i]
+            if res_id in input_ca_coords:
+                protein_array.coord[i] = input_ca_coords[res_id]
+
+    protein_array.set_annotation("is_motif_related", [False] * len(protein_array))
+    protein_array.set_annotation("is_motif", [False] * len(protein_array))
+    protein_array.set_annotation(
+        "original_motif_res_id", np.full(len(protein_array), -1, dtype=int)
+    )
+    protein_array, _ = add_atom_array_attributes(protein_array, has_motif=False)
+
+    if ligand_input is not None:
+        combined = protein_array + ligand_input
+    else:
+        combined = protein_array
+
+    return combined
 
 
 def process_input_to_atom_array(

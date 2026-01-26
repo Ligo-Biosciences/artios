@@ -295,7 +295,7 @@ def packing_input_to_atom_array_v2(
     sequence = [PROTEIN_1to3[aa] for aa in sequence]
 
     # Get input ligand and protein
-    ligand_mask = input_array.chain_id != "0"
+    ligand_mask = input_array.chain_id != "0"  # TODO: make this work with unstitched
     ligand_input = input_array[ligand_mask].copy() if ligand_mask.any() else None
 
     protein_input = input_array[input_array.chain_id == "0"]

@@ -262,6 +262,7 @@ def infer_predict(
                     trajectory_step_stride=configs.get(
                         "sample_diffusion.trajectory_step_stride", 1
                     ),
+                    context=context,
                 )
 
                 saved_path = save_output(output, ctx)
@@ -274,7 +275,7 @@ def infer_predict(
                     )
                     if not os.path.exists(mapping_path):
                         with open(mapping_path, "w") as f:
-                            json.dump(context.basic.original_motif_mapping, f)
+                            json.dump(context.basic.original_motif_mapping[0], f)
 
                 logger.info(
                     f"[Rank {DIST_WRAPPER.rank}] {sample_name} succeeded.\n"

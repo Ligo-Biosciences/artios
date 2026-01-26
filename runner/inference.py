@@ -288,6 +288,8 @@ def infer_predict(
                 if hasattr(torch.cuda, "empty_cache"):
                     torch.cuda.empty_cache()
 
+    if isinstance(output, BackboneOutput):
+        return saved_path, mapping_path
     return saved_path
 
 

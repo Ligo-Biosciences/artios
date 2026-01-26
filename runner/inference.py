@@ -20,6 +20,7 @@ import traceback
 # from contextlib import nullcontext
 from dataclasses import dataclass
 from os.path import join as opjoin
+from pathlib import Path
 from typing import Any, Optional
 
 import torch
@@ -210,7 +211,7 @@ def infer_predict(
     runner: InferenceRunner,
     configs: Any,
     use_distributed_sampler: bool = False,
-) -> None:
+) -> Path | None:
     """Run inference on all samples in the dataloader.
 
     The output type (BackboneOutput, PackingOutput, SequenceOutput) determines
@@ -220,6 +221,9 @@ def infer_predict(
         runner: InferenceRunner with loaded model.
         configs: Configuration object.
         use_distributed_sampler: Whether to use distributed sampling.
+
+    Returns:
+        Path to the saved output file, or None if failed.
     """
     logger.info(f"Loading data from\n{configs.input_json_path}")
     try:
@@ -233,12 +237,11 @@ def infer_predict(
         logger.info(error_message)
         with open(opjoin(runner.error_dir, "error.txt"), "a") as f:
             f.write(error_message)
-        return
+        return None
 
+    saved_path = None
     for seed in configs.seeds:
         seed_everything(seed=seed, deterministic=configs.deterministic)
-        # TODO: this currently cannot handle batched outputs it seems like, will need to change that completely.
-        # The inference dataloader needs to be able to return batched inputs for model consumption (MPNN and packing mainly.)
         for context in dataloader:
             try:
                 sample_name = context.basic.pdb_id[0]
@@ -248,9 +251,6 @@ def infer_predict(
                 logger.info(f"Running inference for sample {sample_name}...")
                 output = runner.predict(context)
 
-                # Build save context - output type determines save behavior
-                # TODO: saving needs to be compatible with atom array stacks and npz files
-                # depending on the model
                 ctx = SaveContext(
                     output_dir=runner.dump_dir,
                     sample_dirs=runner.dump_dir_list,
@@ -258,15 +258,13 @@ def infer_predict(
                     atom_array=context.basic.atom_array[0],
                     n_atom=n_atom,
                     n_token=n_token,
-                    output_format=configs.get("output_format", "cif"),
+                    output_format=configs.get("output_format", "npz"),
                     trajectory_step_stride=configs.get(
                         "sample_diffusion.trajectory_step_stride", 1
                     ),
                 )
 
-                # Polymorphic save - output type drives behavior
-                saved_files = save_output(output, ctx)
-                logger.debug(f"Saved {len(saved_files)} files")
+                saved_path = save_output(output, ctx)
 
                 # Save motif mapping for backbone outputs (from context, not output)
                 if isinstance(output, BackboneOutput):
@@ -288,6 +286,8 @@ def infer_predict(
                 logger.info(error_message)
                 if hasattr(torch.cuda, "empty_cache"):
                     torch.cuda.empty_cache()
+
+    return saved_path
 
 
 def main(configs: Any, model_type: ModelType = ModelType.BACKBONE) -> None:

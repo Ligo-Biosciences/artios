@@ -8,7 +8,7 @@ import biotite.structure as struc
 import numpy as np
 import torch
 from biotite.sequence import ProteinSequence
-from biotite.structure import AtomArray, superimpose
+from biotite.structure import AtomArray, AtomArrayStack, superimpose
 from biotite.structure.io.pdb import PDBFile
 
 from protenix.common.constants import STD_RESIDUES_AND_GAP
@@ -19,7 +19,7 @@ from protenix.model.output import (
     PackingOutput,
     SequenceOutput,
 )
-from protenix.utils.file_io import dump_multi_sample_atomarray
+from protenix.utils.file_io import dump_atomarray_stack
 
 logger = logging.getLogger(__name__)
 
@@ -179,20 +179,29 @@ def _save_backbone_to_cif(output: BackboneOutput, ctx: SaveContext) -> list[Path
 
 
 def _save_backbone_to_npz(output: BackboneOutput, ctx: SaveContext) -> Path:
-    """Save all backbone samples to a single NPZ file."""
+    """Save all backbone samples to a single NPZ file as AtomArrayStack."""
     # [batch=1, n_sample, n_atom, 3] -> [n_sample, n_atom, 3]
     coords = output.coordinate[0, :, : ctx.n_atom].detach().cpu().numpy()
+    n_sample, n_atom, _ = coords.shape
 
-    assert coords.shape[1] == len(ctx.atom_array), (
-        f"Coordinate atoms ({coords.shape[1]}) must match "
+    assert n_atom == len(ctx.atom_array), (
+        f"Coordinate atoms ({n_atom}) must match "
         f"atom_array size ({len(ctx.atom_array)})"
     )
+
+    # Create AtomArrayStack from atom_array template and coordinates
+    atom_stack = AtomArrayStack(depth=n_sample, length=n_atom)
+    atom_stack.coord = coords
+    atom_stack.bonds = ctx.atom_array.bonds
+
+    for category in ctx.atom_array.get_annotation_categories():
+        atom_stack.set_annotation(category, ctx.atom_array.get_annotation(category))
 
     output_path = Path(ctx.output_dir) / f"{ctx.sample_name}_backbone.npz"
     os.makedirs(ctx.output_dir, exist_ok=True)
 
-    dump_multi_sample_atomarray(ctx.atom_array, coords, output_path)
-    logger.info(f"Saved {coords.shape[0]} samples to {output_path}")
+    dump_atomarray_stack(atom_stack, output_path)
+    logger.info(f"Saved {n_sample} samples to {output_path}")
 
     return output_path
 

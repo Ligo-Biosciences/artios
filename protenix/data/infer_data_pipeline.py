@@ -5,16 +5,15 @@
 import json
 import logging
 import warnings
-from pathlib import Path
 from typing import Any
 
 import biotite.sequence.io as seqio
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
+from typing_extensions import assert_never
 
 from protenix.data.array_builder import (
     backbone_input_to_atom_array,
     packing_input_to_atom_array_v2,
-    process_input_to_atom_array,
 )
 from protenix.data.data_collator import CollateContexts
 from protenix.data.features import FullContext
@@ -24,9 +23,6 @@ from protenix.data.json_parser import (
     PackingInput,
     SequenceDesignInput,
     parse_input_dict,
-    parse_motif_json,
-    parse_packing_json,
-    parse_sequence_design_json,
 )
 from protenix.data.tokenizer import AtomArrayTokenizer
 from protenix.utils.distributed import DIST_WRAPPER
@@ -42,24 +38,38 @@ def get_inference_dataloader(
     use_distributed_sampler: bool = True,
 ) -> DataLoader:
     """
-    Creates and returns a DataLoader for inference using the InferenceDataset.
+    Creates and returns a DataLoader for inference.
+
+    Parses the input JSON (single task) and creates the appropriate dataset.
 
     Args:
-        configs: A configuration object containing the necessary parameters for the DataLoader.
+        configs: Configuration object with input_json_path and data settings.
         use_distributed_sampler: Whether to use DistributedSampler to split data across ranks.
-            Set to False for training-time inference where only one rank runs inference
-            but should process all samples.
 
     Returns:
-        A DataLoader object configured for inference.
+        A DataLoader configured for the specified inference task.
     """
-    inference_dataset = InferenceDataset(
-        input_json_path=configs.input_json_path,
-    )
+    with open(configs.input_json_path) as f:
+        input_dict = json.load(f)
+
+    sample_input = parse_input_dict(input_dict)
+
+    match sample_input:
+        case BackboneInput():
+            dataset = MotifDataset(sample_input)
+            motif_training = True
+        case SequenceDesignInput():
+            dataset = MPNNDataset(sample_input)
+            motif_training = False
+        case PackingInput():
+            dataset = PackingDataset(sample_input)
+            motif_training = False
+        case _:
+            assert_never(sample_input)
 
     if use_distributed_sampler:
         sampler = DistributedSampler(
-            dataset=inference_dataset,
+            dataset=dataset,
             num_replicas=DIST_WRAPPER.world_size,
             rank=DIST_WRAPPER.rank,
             shuffle=False,
@@ -68,17 +78,15 @@ def get_inference_dataloader(
         sampler = None
 
     dataloader = DataLoader(
-        # TODO: batch size and crop size, max motif residues etc. need to come from configs or determined
-        # on the fly, not hardcoded.
-        dataset=inference_dataset,
-        batch_size=1,
+        dataset=dataset,
+        batch_size=len(dataset),
         sampler=sampler,
         shuffle=False,
         collate_fn=CollateContexts(
             atom_bin_ends=configs.data.padding.atom_bin_ends,
             token_bin_ends=configs.data.padding.token_bin_ends,
             crop_size=384,
-            motif_training=False,
+            motif_training=motif_training,
             max_motif_residues=10,
         ),
         num_workers=configs.num_workers,
@@ -86,50 +94,14 @@ def get_inference_dataloader(
     return dataloader
 
 
-class InferenceDataset(Dataset):
-    def __init__(
-        self,
-        input_json_path: str | Path,
-    ) -> None:
-        self.input_json_path = input_json_path
-        with open(self.input_json_path, "r") as f:
-            self.inputs = json.load(f)
-
-    def __len__(
-        self,
-    ) -> int:  # TODO: length will be the m dimension of the AtomArrayStack or 1 in the case of motif scaffolding.
-        return len(self.inputs)
-
-    def __getitem__(self, index: int) -> FullContext:
-        input_dict = self.inputs[index]
-        sample_input = parse_input_dict(input_dict)
-
-        logger.info(f"Featurizing {sample_input.name}...")
-
-        atom_array, original_motif_mapping = process_input_to_atom_array(sample_input)
-        token_array = AtomArrayTokenizer(atom_array).get_token_array()
-        return ContextGenerator(
-            token_array,
-            atom_array,
-            pdb_id=sample_input.name,
-            bioassembly_dict_fpath=sample_input.name,
-            original_motif_mapping=original_motif_mapping,
-        ).get_full_context()
-
-
 class MotifDataset(Dataset):
     """Dataset for motif scaffolding inference.
 
-    Loads a single motif JSON file and produces a FullContext for inference.
-    The JSON should contain a single BackboneInput specification (not a list).
+    Produces a single FullContext from a BackboneInput specification.
     """
 
-    def __init__(
-        self,
-        input_json_path: str | Path,
-    ) -> None:
-        self.input_json_path = input_json_path
-        self.backbone_input: BackboneInput = parse_motif_json(input_json_path)
+    def __init__(self, backbone_input: BackboneInput) -> None:
+        self.backbone_input = backbone_input
 
     def __len__(self) -> int:
         return 1
@@ -153,21 +125,11 @@ class MotifDataset(Dataset):
 class MPNNDataset(Dataset):  # TODO: need a different name
     """Dataset for MPNN sequence design inference.
 
-    Loads a SequenceDesignInput JSON file pointing to an NPZ file containing an
-    AtomArrayStack (multiple backbone models). Each item in the dataset corresponds
-    to one model from the stack.
-
-    # TODO: the full-testing of MPNNDataset isn't done yet.
+    Each item corresponds to one model from the AtomArrayStack.
     """
 
-    def __init__(
-        self,
-        input_json_path: str | Path,
-    ) -> None:
-        self.input_json_path = input_json_path
-        self.sequence_input: SequenceDesignInput = parse_sequence_design_json(
-            input_json_path
-        )
+    def __init__(self, sequence_input: SequenceDesignInput) -> None:
+        self.sequence_input = sequence_input
         self.atom_stack = load_atomarray_stack(self.sequence_input.npz_file.path)
         assert len(self.atom_stack.coord.shape) == 3  # (m, n_atoms, 3)
 
@@ -191,20 +153,12 @@ class MPNNDataset(Dataset):  # TODO: need a different name
 class PackingDataset(Dataset):
     """Dataset for sidechain packing inference.
 
-    Loads a PackingInput JSON file pointing to:
-    - An NPZ file containing an AtomArrayStack (multiple backbone models)
-    - A FASTA file containing designed sequences (one per model)
-
-    Each item in the dataset corresponds to one model from the stack paired
-    with its corresponding designed sequence.
+    Each item corresponds to one model from the AtomArrayStack paired
+    with its corresponding designed sequence from the FASTA file.
     """
 
-    def __init__(
-        self,
-        input_json_path: str | Path,
-    ) -> None:
-        self.input_json_path = input_json_path
-        self.packing_input: PackingInput = parse_packing_json(input_json_path)
+    def __init__(self, packing_input: PackingInput) -> None:
+        self.packing_input = packing_input
 
         # Load the AtomArrayStack from NPZ
         self.atom_stack = load_atomarray_stack(self.packing_input.npz_file.path)

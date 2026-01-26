@@ -274,7 +274,7 @@ def infer_predict(
                     )
                     if not os.path.exists(mapping_path):
                         with open(mapping_path, "w") as f:
-                            json.dump(context.basic.original_motif_mapping, f)
+                            json.dump(context.basic.original_motif_mapping[0], f)
 
                 logger.info(
                     f"[Rank {DIST_WRAPPER.rank}] {sample_name} succeeded.\n"
@@ -287,6 +287,8 @@ def infer_predict(
                 if hasattr(torch.cuda, "empty_cache"):
                     torch.cuda.empty_cache()
 
+    if isinstance(output, BackboneOutput):
+        return saved_path, mapping_path
     return saved_path
 
 

@@ -545,7 +545,7 @@ class MPNN(nn.Module):
             )
 
             next_pos_idx = decoding_order[:, timestep]
-            batch_idx = torch.arange(logits.shape[0])
+            batch_idx = torch.arange(logits.shape[0], device=logits.device)
 
             pred_vals = self._sample_from_logits(
                 logits, temperature=temperature, seed=seed

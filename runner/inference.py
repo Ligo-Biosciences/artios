@@ -239,7 +239,7 @@ def infer_predict(
             f.write(error_message)
         return None
 
-    saved_path = None
+    saved_paths = None
     for seed in configs.seeds:
         seed_everything(seed=seed, deterministic=configs.deterministic)
         for context in dataloader:
@@ -265,7 +265,7 @@ def infer_predict(
                     context=context,
                 )
 
-                saved_path = save_output(output, ctx)
+                saved_paths = save_output(output, ctx)
 
                 # Save motif mapping for backbone outputs (from context, not output)
                 if isinstance(output, BackboneOutput):
@@ -289,8 +289,8 @@ def infer_predict(
                     torch.cuda.empty_cache()
 
     if isinstance(output, BackboneOutput):
-        return saved_path, mapping_path
-    return saved_path
+        return saved_paths, mapping_path
+    return saved_paths
 
 
 def main(configs: Any, model_type: ModelType = ModelType.BACKBONE) -> None:

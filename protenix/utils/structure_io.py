@@ -60,6 +60,7 @@ class SaveContext:
     output_format: str = "cif"
     trajectory_step_stride: int = 1
     context: FullContext | None = None
+    uids: list[int] | None = None
 
 
 def save_output(output: ModelOutput, ctx: SaveContext) -> list[Path]:
@@ -88,11 +89,11 @@ def save_output(output: ModelOutput, ctx: SaveContext) -> list[Path]:
             # _assert_batch_one(output.coordinate, "BackboneOutput.coordinate")
             return _save_backbone(output, ctx)
 
-        case PackingOutput():
-            return _save_packing(output, ctx)
-
         case SequenceOutput():
             return _save_sequence(output, ctx)
+
+        case PackingOutput():
+            return _save_packing(output, ctx)
 
         case _:
             raise TypeError(
@@ -122,7 +123,9 @@ def _save_backbone(output: BackboneOutput, ctx: SaveContext) -> list[Path]:
 
 
 def _save_packing(output: PackingOutput, ctx: SaveContext) -> list[Path]:
-    """Save packing output to CIF format."""
+    """Save packing output to CIF or NPZ format."""
+    if ctx.output_format == "npz":
+        return _save_packing_to_npz(output, ctx)
     return _save_packing_to_cif(output, ctx)
 
 
@@ -310,6 +313,65 @@ def _save_packing_to_cif(output: PackingOutput, ctx: SaveContext) -> list[Path]:
             saved_files.append(output_path)
         except Exception as e:
             logger.error(f"Error saving packing sample {idx}: {e}")
+            continue
+
+    return saved_files
+
+
+def _save_packing_to_npz(output: PackingOutput, ctx: SaveContext) -> list[Path]:
+    """Save packing output as per-uid NPZ files.
+
+    For each batch item (uid), saves packing_n_sample structures as an
+    AtomArrayStack in a single NPZ file.
+
+    Requires ctx.context to be set (for per-batch atom_arrays) and ctx.uids
+    to be set (for file naming).
+
+    Args:
+        output: PackingOutput with coordinate [batch, n_sample, n_atom, 3].
+        ctx: SaveContext with context and uids.
+
+    Returns:
+        List of paths to saved NPZ files (one per uid).
+    """
+    if ctx.context is None:
+        raise ValueError("SaveContext.context is required for packing NPZ saving")
+    if ctx.uids is None:
+        raise ValueError("SaveContext.uids is required for packing NPZ saving")
+
+    all_coords = output.coordinate.detach().cpu().numpy()
+    batch_size, n_sample, _, _ = all_coords.shape
+
+    assert batch_size == len(ctx.uids), (
+        f"Batch size ({batch_size}) must match " f"number of uids ({len(ctx.uids)})"
+    )
+
+    saved_files = []
+    for batch_idx in range(batch_size):
+        uid = ctx.uids[batch_idx]
+        try:
+            atom_array = ctx.context.basic.atom_array[batch_idx]
+            n_atom_actual = len(atom_array)
+
+            # Slice this item's coords to its actual atom count
+            uid_coords = all_coords[
+                batch_idx, :, :n_atom_actual
+            ]  # [n_sample, n_atom_actual, 3]
+
+            atom_stack = AtomArrayStack(depth=n_sample, length=n_atom_actual)
+            atom_stack.coord = uid_coords
+            atom_stack.bonds = atom_array.bonds
+
+            for category in atom_array.get_annotation_categories():
+                atom_stack.set_annotation(category, atom_array.get_annotation(category))
+
+            output_path = Path(ctx.output_dir) / f"uid_{uid}_packed.npz"
+            os.makedirs(ctx.output_dir, exist_ok=True)
+
+            dump_atomarray_stack(atom_stack, output_path)
+            saved_files.append(output_path)
+        except Exception as e:
+            logger.error(f"Error saving packing NPZ for uid {uid}: {e}")
             continue
 
     return saved_files

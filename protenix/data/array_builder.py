@@ -611,24 +611,10 @@ def build_motif_ligand(motif_ligand: MotifLigand, entity_id: int) -> AtomArray:
 
         case SMILESLigand(atom_map=atom_map, smiles=smiles):
             if atom_map is not None:
-                # Use provided atom_map: CIF name -> map number -> full atom name
-                map_num_to_atom_name = ligand_info.atom_map_to_atom_name
-                cif_to_full_atom_name = {}
-                for cif_atom_name in motif_ligand.atom_names:
-                    if cif_atom_name not in atom_map:
-                        raise KeyError(
-                            f"CIF atom '{cif_atom_name}' not found in atom_map. "
-                            f"All motif atoms must be mapped. atom_map keys: "
-                            f"{list(atom_map.keys())}"
-                        )
-                    map_num = atom_map[cif_atom_name]
-                    if map_num not in map_num_to_atom_name:
-                        raise KeyError(
-                            f"Atom map number {map_num} (for '{cif_atom_name}') not found "
-                            f"in SMILES. Use [atom:{map_num}] notation in SMILES string. "
-                            f"Available map numbers: {list(map_num_to_atom_name.keys())}"
-                        )
-                    cif_to_full_atom_name[cif_atom_name] = map_num_to_atom_name[map_num]
+                # When atom_map is provided, build_ligand already renamed atoms to
+                # match CIF names via rename_atoms_to_match_cif_names. The mapping
+                # is now identity: CIF name -> same CIF name in the array.
+                cif_to_full_atom_name = {name: name for name in motif_ligand.atom_names}
             else:
                 # Infer mapping via substructure matching
                 cif_to_full_atom_name = infer_atom_map_from_substructure(

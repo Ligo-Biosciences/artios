@@ -29,11 +29,13 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from biotite import structure as struc
 from biotite.structure import AtomArray, AtomArrayStack
 from joblib import Parallel, delayed
 from scipy.spatial.transform import Rotation
 from tqdm import tqdm
 
+from protenix.data.ccd import res_names_to_sequence
 from protenix.utils.file_io import (
     dump_atomarray_stack,
     load_atomarray_from_npz,
@@ -41,6 +43,19 @@ from protenix.utils.file_io import (
 from protenix.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def extract_sequence(atom_array: AtomArray) -> str:
+    """Extract one-letter sequence from an AtomArray.
+
+    Args:
+        atom_array: AtomArray with res_name annotation.
+
+    Returns:
+        One-letter sequence string.
+    """
+    _, res_names = struc.get_residues(atom_array)
+    return res_names_to_sequence(list(res_names))
 
 
 def create_pseudo_batch(
@@ -193,6 +208,12 @@ def process_single_npz(
         }
         with open(batch_dir / f"batch_{batch_id}_stitching_map.json", "w") as f:
             json.dump(stitching_map, f, indent=2)
+
+        # Write FASTA file with the sequence
+        sequence = extract_sequence(atom_array)
+        fasta_path = batch_dir / f"batch_{batch_id}_sequence.fasta"
+        with open(fasta_path, "w") as f:
+            f.write(f">batch_{batch_id}\n{sequence}\n")
 
         # Create empty stitched_files directory
         (batch_dir / "stitched_files").mkdir(exist_ok=True)

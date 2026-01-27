@@ -393,6 +393,67 @@ def _build_polymer_atom_array(ccd_seqs: list[str]) -> AtomArray:
     return chain
 
 
+def rename_atoms_to_match_cif_names(
+    atom_array: AtomArray,
+    atom_map_to_atom_name: dict[int, str],
+    cif_atom_map: dict[str, int],
+) -> AtomArray:
+    """Rename atoms to preserve CIF names for motif atoms, avoiding collisions.
+
+    When building a ligand from SMILES, atom names are auto-generated (C1, C2, N1...).
+    If a motif CIF has specific atom names (e.g., N3, O1A), we need to rename the
+    corresponding atoms to match. This also handles collisions where an auto-generated
+    name might conflict with a CIF name.
+
+    Args:
+        atom_array: AtomArray with auto-generated names from SMILES
+        atom_map_to_atom_name: Maps SMILES atom map numbers to generated names
+            (e.g., {4: "N1", 2: "O1"})
+        cif_atom_map: Maps CIF atom names to SMILES atom map numbers
+            (e.g., {"N3": 4, "O1A": 2})
+
+    Returns:
+        AtomArray with renamed atoms: motif atoms have CIF names, non-motif atoms
+        have sequential names that don't collide.
+    """
+    # Build generated_name -> cif_name mapping for motif atoms
+    map_num_to_cif_name = {v: k for k, v in cif_atom_map.items()}
+    generated_to_cif: dict[str, str] = {}
+    for map_num, generated_name in atom_map_to_atom_name.items():
+        if map_num in map_num_to_cif_name:
+            generated_to_cif[generated_name] = map_num_to_cif_name[map_num]
+
+    # Reserved names = all CIF names we're renaming to
+    used_names: set[str] = set(cif_atom_map.keys())
+
+    # Track per-element counters for non-motif atom naming
+    element_counters: dict[str, int] = {}
+
+    # Build new names for all atoms
+    new_names = []
+    for i in range(len(atom_array)):
+        current_name = atom_array.atom_name[i]
+
+        if current_name in generated_to_cif:
+            # Motif atom: use its CIF name
+            final_name = generated_to_cif[current_name]
+        else:
+            # Non-motif atom: enumerate, skipping reserved/used names
+            element = atom_array.element[i].upper()
+            counter = element_counters.get(element, 1)
+            while f"{element}{counter}" in used_names:
+                counter += 1
+            final_name = f"{element}{counter}"
+            used_names.add(final_name)
+            element_counters[element] = counter + 1
+
+        new_names.append(final_name)
+
+    # Apply new names
+    atom_array.atom_name[:] = new_names
+    return atom_array
+
+
 def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
     """Build a ligand AtomArray from a typed ligand specification.
 
@@ -422,6 +483,15 @@ def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
     elif isinstance(ligand, SMILESLigand):
         atom_info = smiles_to_atom_info(ligand.smiles)
         atom_info.atom_array.res_id[:] = 1
+
+        # Rename atoms to match CIF names when atom_map is provided
+        if ligand.atom_map is not None:
+            rename_atoms_to_match_cif_names(
+                atom_info.atom_array,
+                atom_info.atom_map_to_atom_name,
+                cif_atom_map=ligand.atom_map,
+            )
+
         atom_array = add_reference_features(atom_info.atom_array)
         return AtomInfo(
             atom_array=atom_array,

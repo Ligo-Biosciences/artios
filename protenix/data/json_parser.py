@@ -430,34 +430,35 @@ class SequenceDesignInput(BaseModel):
         ...,
         description="NPZ file from backbone inference containing the full AtomArray",
     )
-    fixed_residues: list[FixedResidue] = Field(
-        default_factory=list,
-        description="Optional additional residue constraints. Motif residues (is_motif_residue=True) have sidechain coordinates.",
-    )
+    # fixed_residues: list[FixedResidue] = Field(
+    #     default_factory=list,
+    #     description="Optional additional residue constraints. Motif residues (is_motif_residue=True) have sidechain coordinates.",
+    # )
 
-    @model_validator(mode="after")
-    def validate_no_duplicate_fixed_residues(self) -> SequenceDesignInput:
-        """Ensure no residue is fixed twice."""
-        seen: set[tuple[str, int]] = set()
-        for fr in self.fixed_residues:
-            key = (fr.chain_id, fr.res_id)
-            if key in seen:
-                raise ValueError(
-                    f"Duplicate fixed residue: chain '{fr.chain_id}', res_id {fr.res_id}"
-                )
-            seen.add(key)
-        return self
+    # TODO: Re-enable validators if we end up using fixed residues again
+    # @model_validator(mode="after")
+    # def validate_no_duplicate_fixed_residues(self) -> SequenceDesignInput:
+    #     """Ensure no residue is fixed twice."""
+    #     seen: set[tuple[str, int]] = set()
+    #     for fr in self.fixed_residues:
+    #         key = (fr.chain_id, fr.res_id)
+    #         if key in seen:
+    #             raise ValueError(
+    #                 f"Duplicate fixed residue: chain '{fr.chain_id}', res_id {fr.res_id}"
+    #             )
+    #         seen.add(key)
+    #     return self
 
-    @model_validator(mode="after")
-    def validate_protein_chain_id(self) -> SequenceDesignInput:
-        """Ensure all fixed residues are on protein chain '0'."""
-        for fr in self.fixed_residues:
-            if fr.chain_id != "0":
-                raise ValueError(
-                    f"Fixed residue chain_id must be '0' (protein chain), "
-                    f"got '{fr.chain_id}' for res_id {fr.res_id}"
-                )
-        return self
+    # @model_validator(mode="after")
+    # def validate_protein_chain_id(self) -> SequenceDesignInput:
+    #     """Ensure all fixed residues are on protein chain '0'."""
+    #     for fr in self.fixed_residues:
+    #         if fr.chain_id != "0":
+    #             raise ValueError(
+    #                 f"Fixed residue chain_id must be '0' (protein chain), "
+    #                 f"got '{fr.chain_id}' for res_id {fr.res_id}"
+    #             )
+    #     return self
 
 
 # ---------------------------------------------------------------------------

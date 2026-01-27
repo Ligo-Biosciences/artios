@@ -149,6 +149,7 @@ def process_single_npz(
     batch_id: int,
     n_samples: int = 8,
     s_trans: float = 1.0,
+    source_name: Optional[str] = None,
 ) -> Optional[Path]:
     """Process a single NPZ file into a pseudo-batch folder.
 
@@ -158,6 +159,7 @@ def process_single_npz(
         batch_id: Batch ID for naming.
         n_samples: Number of samples in the pseudo-batch.
         s_trans: Scale factor for random translation.
+        source_name: Original source filename for stitching map. If None, uses input_path.name.
 
     Returns:
         Path to the created batch folder, or None on failure.
@@ -185,7 +187,10 @@ def process_single_npz(
             json.dump(motif_mapping, f, indent=2)
 
         # Create placeholder stitching map
-        stitching_map = {"source_file": input_path.name, "n_samples": n_samples}
+        stitching_map = {
+            "source_file": source_name or input_path.name,
+            "n_samples": n_samples,
+        }
         with open(batch_dir / f"batch_{batch_id}_stitching_map.json", "w") as f:
             json.dump(stitching_map, f, indent=2)
 
@@ -218,6 +223,9 @@ def process_npz_from_s3(
     Returns:
         S3 URI of the created batch folder, or None on failure.
     """
+    # Extract original filename from S3 URI
+    original_filename = s3_uri.split("/")[-1]
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
 
@@ -229,7 +237,12 @@ def process_npz_from_s3(
         output_dir = tmpdir / "output"
         output_dir.mkdir()
         batch_dir = process_single_npz(
-            input_path, output_dir, batch_id, n_samples, s_trans
+            input_path,
+            output_dir,
+            batch_id,
+            n_samples,
+            s_trans,
+            source_name=original_filename,
         )
 
         if batch_dir is None:

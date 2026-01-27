@@ -263,6 +263,7 @@ def infer_predict(
                         "sample_diffusion.trajectory_step_stride", 1
                     ),
                     context=context,
+                    uids=configs.get("uids", None),
                 )
 
                 saved_paths = save_output(output, ctx)

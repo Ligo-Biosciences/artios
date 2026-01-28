@@ -184,6 +184,8 @@ class PackingDataset(Dataset):
         logger.info(f"Featurizing {sample_name}...")
 
         input_array = self.atom_stack[index]
+        # TODO: temporary fix while working on distillation backbones
+        input_array.res_id = input_array.res_id - input_array.res_id.min() + 1
         sequence = self.sequences[index]
         atom_array = packing_input_to_atom_array_v2(input_array, sequence)
 

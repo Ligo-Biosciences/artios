@@ -12,6 +12,7 @@ from biotite.sequence import ProteinSequence
 from biotite.structure import AtomArray
 from typing_extensions import assert_never
 
+from evaluation.utils.constants import DESIGN_CHAIN_ID
 from protenix.common.constants import BACKBONE_DEFS
 from protenix.common.residue_names import PROTEIN_COMMON_ONE_TO_THREE as PROTEIN_1to3
 from protenix.data import ccd
@@ -150,7 +151,7 @@ def backbone_input_to_atom_array(
     design_atom_array = _build_polymer_atom_array(sequence)
     design_atom_array = add_reference_features(design_atom_array)
     design_atom_array = set_chain_and_seq_ids(
-        design_atom_array, chain_id=0, entity_id=1
+        design_atom_array, chain_id=DESIGN_CHAIN_ID, entity_id=1
     )
 
     design_atom_array.set_annotation(
@@ -207,6 +208,7 @@ def sequence_input_to_atom_array(
     return atom_array, []
 
 
+# TODO: DONT LOOK AT ME ! DELETE ME!
 def packing_input_to_atom_array(
     packing_input: PackingInput,
 ) -> tuple[AtomArray, list[dict]]:
@@ -298,7 +300,7 @@ def packing_input_to_atom_array_v2(
     ligand_mask = input_array.hetero  # Use hetero flag for ligands
     ligand_input = input_array[ligand_mask].copy() if ligand_mask.any() else None
 
-    protein_input = input_array[input_array.chain_id == "0"]
+    protein_input = input_array[input_array.chain_id == DESIGN_CHAIN_ID]
 
     # Build new protein array from sequence
     protein_array = _build_polymer_atom_array(sequence)

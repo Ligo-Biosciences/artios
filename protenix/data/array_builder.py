@@ -307,6 +307,12 @@ def packing_input_to_atom_array_v2(
     protein_array = add_reference_features(protein_array)
     protein_array = set_chain_and_seq_ids(protein_array, chain_id=0, entity_id=1)
 
+    # Remap contiguous res_ids to match input's (potentially non-contiguous) res_ids
+    # e.g., input has [24-200, 230-250], new array has [1-198]
+    # After remapping: new array has [24-200, 230-250]
+    unique_input_res_ids = np.unique(protein_input.res_id)
+    protein_array.res_id = unique_input_res_ids[protein_array.res_id - 1]
+
     # Transfer C-alpha coordinates from input to new array
     input_ca_coords: dict[int, np.ndarray] = {}
     for i in range(len(protein_input)):

@@ -250,7 +250,7 @@ class ArtiosBackboneTrainer(object):
 
         # Wrap train dataloader with async prefetcher for overlapping
         # data loading with GPU computation
-        prefetch_buffer_size = self.configs.get("prefetch_buffer_size", 3)
+        prefetch_buffer_size = self.configs.data.get("prefetch_buffer_size", 3)
         self.train_dl = AsyncPrefetcher(
             train_dl,
             device=self.device,

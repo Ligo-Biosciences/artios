@@ -335,8 +335,6 @@ class BaseSingleDataset(Dataset):
             A dictionary containing the processed data sample.
         """
 
-        # start_time = time.time()
-
         # Try at most 10 times
         for _ in range(10):
             try:

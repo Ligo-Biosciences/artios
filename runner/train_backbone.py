@@ -23,6 +23,7 @@ from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
+from protenix.data.async_prefetcher import AsyncPrefetcher
 from protenix.data.dataloader import get_dataloaders
 from protenix.data.features import FullContext
 from protenix.metrics.lddt_metrics import LDDTMetrics
@@ -240,13 +241,24 @@ class ArtiosBackboneTrainer(object):
 
     def init_data(self):
         self.print("beginning init_data...")
-        self.train_dl, self.test_dls = get_dataloaders(
+        train_dl, self.test_dls = get_dataloaders(
             self.configs,
             DIST_WRAPPER.world_size,
             seed=self.configs.seed,
             error_dir=self.error_dir,
         )
-        self.print("finished init_data")
+
+        # Wrap train dataloader with async prefetcher for overlapping
+        # data loading with GPU computation
+        prefetch_buffer_size = self.configs.get("prefetch_buffer_size", 3)
+        self.train_dl = AsyncPrefetcher(
+            train_dl,
+            device=self.device,
+            buffer_size=prefetch_buffer_size,
+        )
+        self.print(
+            f"finished init_data (async prefetch buffer_size={prefetch_buffer_size})"
+        )
 
     def save_checkpoint(self, ema_suffix="", save_model_only=False):
         if DIST_WRAPPER.rank == 0:
@@ -835,7 +847,7 @@ class ArtiosBackboneTrainer(object):
                     step_need_eval &= is_update_step
                     step_need_save &= is_update_step
 
-                    context = context.to(self.device, non_blocking=True)
+                    # Note: context is already on device via AsyncPrefetcher
 
                     if is_save_training_sample_step:
                         self.save_training_sample(context, motif_as_b_factor=True)

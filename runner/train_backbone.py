@@ -743,10 +743,15 @@ class ArtiosBackboneTrainer(object):
         Args:
             context: Full context containing atom arrays and pdb ids.
             motif_as_b_factor: If True, set b_factor to is_motif annotation.
+
+        Note: This method is a no-op if atom_array is None (disabled for performance).
         """
+        atom_arrays = context.basic.atom_array
+        if atom_arrays is None:
+            return
+
         from biotite.structure.io import save_structure
 
-        atom_arrays = context.basic.atom_array
         pdb_ids = context.basic.pdb_id
 
         for idx, atom_array in enumerate(atom_arrays):

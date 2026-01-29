@@ -340,22 +340,7 @@ class BaseSingleDataset(Dataset):
         # Try at most 10 times
         for _ in range(10):
             try:
-                data = self.process_one(
-                    idx,
-                    # TODO: this needs to be True for training time inference of the VAE
-                    return_atom_token_array=True,
-                )
-
-                # Log if data loading took too long
-                # total_time = time.time() - start_time
-                # if (
-                #     total_time > SLOW_STEP_THRESHOLD
-                # ):  # Log slow data loading (> 1 second)
-                #     sample_indice = self._get_sample_indice(idx=idx)
-                #     logger.warning(
-                #         f"SLOW __getitem__ for idx={idx}, pdb_id={sample_indice.pdb_id}: "
-                #         f"{total_time:.2f}s"
-                #     )
+                data = self.process_one(idx)
 
                 return data
             except Exception as e:
@@ -506,7 +491,8 @@ class BaseSingleDataset(Dataset):
 
     @profile_function("dataset.process_one")
     def process_one(
-        self, idx: int, return_atom_token_array: bool = False
+        self,
+        idx: int,
     ) -> FullContext:
         """
         Processes a single data sample by retrieving bioassembly data, applying various transformations, and cropping the data.
@@ -514,7 +500,6 @@ class BaseSingleDataset(Dataset):
 
         Args:
             idx: The index of the data sample to process.
-            return_atom_token_array: Whether to return the processed atom and token arrays.
 
         Returns:
             A dict containing the input features, labels, basic_info and optionally the processed atom and token arrays.

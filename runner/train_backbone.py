@@ -12,10 +12,10 @@ import numpy as np
 import rootutils
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 import torch.nn as nn
 from neptune_scale import Run
 from neptune_scale.api.run import SourceTrackingConfig
-from torch.multiprocessing import mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 

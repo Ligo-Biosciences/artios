@@ -277,7 +277,7 @@ class DistributedDataLoader(DataLoader):
             sampler=self.sampler,
             shuffle=False,
             collate_fn=collate_fn,
-            pin_memory=True,
+            pin_memory=False,
             # multiprocessing_context="forkserver",
             persistent_workers=True if num_workers > 0 else False,
             prefetch_factor=prefetch_factor,

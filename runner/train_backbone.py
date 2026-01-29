@@ -23,7 +23,6 @@ from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
 from protenix.config import parse_configs, parse_sys_args
 from protenix.config.config import save_config
-from protenix.data.async_prefetcher import AsyncPrefetcher
 from protenix.data.dataloader import get_dataloaders
 from protenix.data.features import FullContext
 from protenix.metrics.lddt_metrics import LDDTMetrics
@@ -250,15 +249,15 @@ class ArtiosBackboneTrainer(object):
 
         # Wrap train dataloader with async prefetcher for overlapping
         # data loading with GPU computation
-        prefetch_buffer_size = self.configs.data.get("prefetch_buffer_size", 3)
-        self.train_dl = AsyncPrefetcher(
-            train_dl,
-            device=self.device,
-            buffer_size=prefetch_buffer_size,
-        )
-        self.print(
-            f"finished init_data (async prefetch buffer_size={prefetch_buffer_size})"
-        )
+        # NOTE: Disabled to test raw DataLoader speed with worker_batching
+        # prefetch_buffer_size = self.configs.data.get("prefetch_buffer_size", 3)
+        # self.train_dl = AsyncPrefetcher(
+        #     train_dl,
+        #     device=self.device,
+        #     buffer_size=prefetch_buffer_size,
+        # )
+        self.train_dl = train_dl
+        self.print("finished init_data (AsyncPrefetcher disabled for testing)")
 
     def save_checkpoint(self, ema_suffix="", save_model_only=False):
         if DIST_WRAPPER.rank == 0:
@@ -825,6 +824,9 @@ class ArtiosBackboneTrainer(object):
         with profiler_context as p:
             while True:
                 for context in self.train_dl:
+                    # Move to device (when AsyncPrefetcher is disabled)
+                    context = context.to(self.device, non_blocking=True)
+
                     is_update_step = (
                         self.global_step + 1
                     ) % self.iters_to_accumulate == 0
@@ -847,7 +849,7 @@ class ArtiosBackboneTrainer(object):
                     step_need_eval &= is_update_step
                     step_need_save &= is_update_step
 
-                    # Note: context is already on device via AsyncPrefetcher
+                    # Note: context moved to device above
 
                     if is_save_training_sample_step:
                         self.save_training_sample(context, motif_as_b_factor=True)

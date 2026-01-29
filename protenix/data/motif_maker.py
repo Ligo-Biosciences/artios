@@ -162,7 +162,8 @@ class MotifMaker:
 
         # Validate motif size
         if is_motif_mask.sum() == 1:
-            logger.warning("Motif only has one atom. Setting all is_motif to 0.")
+            # TODO: we should tweak things to make this less frequent.
+            # logger.warning("Motif only has one atom. Setting all is_motif to 0.")
             is_motif_mask = np.zeros(len(atom_array), dtype=int)
         elif is_motif_mask.any():
             num_residues_in_motif = len(np.unique(atom_array[is_motif_mask > 0].res_id))

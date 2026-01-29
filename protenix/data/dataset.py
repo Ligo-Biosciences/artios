@@ -134,6 +134,10 @@ class BaseSingleDataset(Dataset):
         # Motif training configs
         self.motif_configs = kwargs.get("motif_training", {})
 
+        # Performance optimization: exclude atom_array/token_array from context
+        # These are expensive to serialize and only needed for debugging/visualization
+        self.include_arrays_in_context = kwargs.get("include_arrays_in_context", False)
+
         # Read data
         self.indices_list = self.read_indices_list(indices_fpath)
 
@@ -671,7 +675,7 @@ class BaseSingleDataset(Dataset):
             lig_atom_rename=self.lig_atom_rename,
             bioassembly_dict_fpath=bioassembly_dict_fpath,
             pdb_id=bioassembly_dict["pdb_id"],
-        ).get_full_context()
+        ).get_full_context(include_arrays=self.include_arrays_in_context)
 
         timings["get_feature_and_label"] = time.time() - t4
 
@@ -955,7 +959,7 @@ class BaseSingleDataset(Dataset):
             lig_atom_rename=self.lig_atom_rename,
             bioassembly_dict_fpath=bioassembly_dict_fpath,
             pdb_id=pdb_id,
-        ).get_full_context()
+        ).get_full_context(include_arrays=self.include_arrays_in_context)
 
         # labels_dict = feat.get_labels()
 

@@ -15,6 +15,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from neptune_scale import Run
 from neptune_scale.api.run import SourceTrackingConfig
+from torch.multiprocessing import mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
@@ -154,7 +155,7 @@ class ArtiosBackboneTrainer(object):
             f"Distributed environment: world size: {DIST_WRAPPER.world_size}, "
             + f"global rank: {DIST_WRAPPER.rank}, local rank: {DIST_WRAPPER.local_rank}"
         )
-        # mp.set_sharing_strategy("file_system")
+        mp.set_sharing_strategy("file_system")
         # mp.set_start_method("spawn", force=True)
 
         self.use_cuda = torch.cuda.device_count() > 0

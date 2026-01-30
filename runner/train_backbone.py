@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import logging
 import os
 import time
@@ -111,6 +112,7 @@ class ArtiosBackboneTrainer(object):
 
     def init_log(self):
         self.neptune_run = None
+        self.torchwatcher = None
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
             source_config = SourceTrackingConfig(  # source-code tracking
                 namespace="source_code",
@@ -133,19 +135,22 @@ class ArtiosBackboneTrainer(object):
                 if self.configs.neptune_fork_step
                 else None,
             )
-            self.torchwatcher = TorchWatcher(
-                model=self.backbone_model.module
-                if DIST_WRAPPER.world_size > 1
-                else self.backbone_model,
-                run=self.neptune_run,
-                track_layers=[
-                    DiffusionTransformer,
-                    DiTBlock,
-                ],  # optionally specify
-                track_layers_name_includes=["linear_q", "linear_k"],
-                tensor_stats=["channel_rms"],
-                base_namespace="model_metrics",
-            )  # torchwatcher for model internals
+            if self.configs.get("enable_torchwatcher", False):
+                self.torchwatcher = TorchWatcher(
+                    model=self.backbone_model.module
+                    if DIST_WRAPPER.world_size > 1
+                    else self.backbone_model,
+                    run=self.neptune_run,
+                    track_layers=[
+                        DiffusionTransformer,
+                        DiTBlock,
+                    ],  # optionally specify
+                    track_layers_name_includes=["linear_q", "linear_k"],
+                    tensor_stats=["channel_rms"],
+                    base_namespace="model_metrics",
+                )  # torchwatcher for model internals
+            else:
+                self.torchwatcher = None
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 
@@ -175,9 +180,15 @@ class ArtiosBackboneTrainer(object):
             dist.init_process_group(
                 backend="nccl", timeout=datetime.timedelta(seconds=timeout_seconds)
             )
-        # All ddp process got the same seed
+        # Use rank-specific seed for different augmentations across DDP processes
+        if not self.configs.deterministic_seed:
+            hash_string = f"({self.configs.seed},{DIST_WRAPPER.rank},init_seed)"
+            rank_seed = int(hashlib.sha256(hash_string.encode("utf8")).hexdigest(), 16)
+            rank_seed = rank_seed % (2**32)
+        else:
+            rank_seed = self.configs.seed
         seed_everything(
-            seed=self.configs.seed,
+            seed=rank_seed,
             deterministic=self.configs.deterministic,
         )
 
@@ -240,12 +251,14 @@ class ArtiosBackboneTrainer(object):
 
     def init_data(self):
         self.print("beginning init_data...")
-        self.train_dl, self.test_dls = get_dataloaders(
+        train_dl, self.test_dls = get_dataloaders(
             self.configs,
             DIST_WRAPPER.world_size,
             seed=self.configs.seed,
             error_dir=self.error_dir,
         )
+
+        self.train_dl = train_dl
         self.print("finished init_data")
 
     def save_checkpoint(self, ema_suffix="", save_model_only=False):
@@ -743,10 +756,15 @@ class ArtiosBackboneTrainer(object):
         Args:
             context: Full context containing atom arrays and pdb ids.
             motif_as_b_factor: If True, set b_factor to is_motif annotation.
+
+        Note: This method is a no-op if atom_array is None (disabled for performance).
         """
+        atom_arrays = context.basic.atom_array
+        if atom_arrays is None:
+            return
+
         from biotite.structure.io import save_structure
 
-        atom_arrays = context.basic.atom_array
         pdb_ids = context.basic.pdb_id
 
         for idx, atom_array in enumerate(atom_arrays):
@@ -808,6 +826,8 @@ class ArtiosBackboneTrainer(object):
         with profiler_context as p:
             while True:
                 for context in self.train_dl:
+                    context = context.to(self.device, non_blocking=True)
+
                     is_update_step = (
                         self.global_step + 1
                     ) % self.iters_to_accumulate == 0
@@ -830,7 +850,7 @@ class ArtiosBackboneTrainer(object):
                     step_need_eval &= is_update_step
                     step_need_save &= is_update_step
 
-                    context = context.to(self.device, non_blocking=True)
+                    # Note: context moved to device above
 
                     if is_save_training_sample_step:
                         self.save_training_sample(context, motif_as_b_factor=True)
@@ -852,13 +872,14 @@ class ArtiosBackboneTrainer(object):
                                     {"train/lr": last_lr},
                                     step=self.step,
                                 )
-                                self.torchwatcher.watch(
-                                    step=self.step,
-                                    track_gradients=False,
-                                    track_activations=True,
-                                    track_parameters=False,
-                                    prefix="train",
-                                )
+                                if self.torchwatcher is not None:
+                                    self.torchwatcher.watch(
+                                        step=self.step,
+                                        track_gradients=False,
+                                        track_activations=True,
+                                        track_parameters=False,
+                                        prefix="train",
+                                    )
                             self.print(f"Step {self.step}, lr: {last_lr}")
                         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                             self.neptune_run.log_metrics(metrics, step=self.step)

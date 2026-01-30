@@ -162,15 +162,16 @@ class MotifMaker:
 
         # Validate motif size
         if is_motif_mask.sum() == 1:
-            logger.warning("Motif only has one atom. Setting all is_motif to 0.")
+            # TODO: we should tweak things to make this less frequent.
+            # logger.warning("Motif only has one atom. Setting all is_motif to 0.")
             is_motif_mask = np.zeros(len(atom_array), dtype=int)
         elif is_motif_mask.any():
             num_residues_in_motif = len(np.unique(atom_array[is_motif_mask > 0].res_id))
             if num_residues_in_motif > self.max_motif_residues:
-                logger.warning(
-                    f"Motif has too many residues: {num_residues_in_motif}. "
-                    f"Setting all is_motif to 0."
-                )
+                # logger.warning(
+                #     f"Motif has too many residues: {num_residues_in_motif}. "
+                #     f"Setting all is_motif to 0."
+                # )
                 is_motif_mask = np.zeros(len(atom_array), dtype=int)
 
         atom_array.set_annotation("is_motif", is_motif_mask)
@@ -375,10 +376,10 @@ class MotifMaker:
             graph_nodes = list(ligand_graph.nodes())
 
             if len(graph_nodes) == 0:
-                logger.warning("No nodes in ligand graph. Returning empty motif mask.")
-                logger.warning(
-                    f"Number of ligand atoms involved in this empty graph: {len(ligand_array)}"
-                )
+                # logger.warning("No nodes in ligand graph. Returning empty motif mask.")
+                # logger.warning(
+                #     f"Number of ligand atoms involved in this empty graph: {len(ligand_array)}"
+                # )
                 return is_motif
 
             region_counts = [int(k) for k in self.ligand_region_count_probs.keys()]
@@ -481,9 +482,9 @@ class MotifMaker:
         polymer_mask = np.isin(atom_array.chain_mol_type, ["protein", "RNA", "DNA"])
 
         if not polymer_mask.any():
-            logger.warning(
-                "No polymer chains in the atom array. Setting all is_motif to 0."
-            )
+            # logger.warning(
+            #     "No polymer chains in the atom array. Setting all is_motif to 0."
+            # )
             return is_motif
 
         # Pick a random polymer chain
@@ -504,7 +505,7 @@ class MotifMaker:
         )[0]
 
         if len(pocket_atom_indices_in_chain) == 0:
-            logger.warning("No pocket atoms found. Setting all is_motif to 0.")
+            # logger.warning("No pocket atoms found. Setting all is_motif to 0.")
             return is_motif
 
         # Get seed point from pocket
@@ -563,9 +564,9 @@ class MotifMaker:
             atoms_in_sphere_mask = atoms_in_sphere_mask & optional_mask
 
         if not atoms_in_sphere_mask.any():
-            logger.warning(
-                "No polymer atoms close to seed point. Setting all is_motif to 0."
-            )
+            # logger.warning(
+            #     "No polymer atoms close to seed point. Setting all is_motif to 0."
+            # )
             return is_motif
 
         # Get unique residues in sphere
@@ -582,7 +583,7 @@ class MotifMaker:
         unique_ref_space_uids = np.unique(atoms_in_sphere.ref_space_uid)
 
         if len(unique_ref_space_uids) == 0:
-            logger.warning("No residues in sphere. Setting all is_motif to 0.")
+            # logger.warning("No residues in sphere. Setting all is_motif to 0.")
             return is_motif
 
         # Process each residue
@@ -636,7 +637,7 @@ class MotifMaker:
         graph_nodes = list(G_res.nodes())
 
         if len(graph_nodes) == 0:
-            logger.warning("No nodes in residue graph. Setting all is_motif to 0.")
+            # logger.warning("No nodes in residue graph. Setting all is_motif to 0.")
             return partial_motif_mask
 
         # Pick seed atom

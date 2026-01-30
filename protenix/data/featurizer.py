@@ -451,11 +451,17 @@ class ContextGenerator(object):
             resolution=float(self.cropped_atom_array.resolution[0]),
         )
 
-    def get_basic_context(self) -> BasicContext:
-        """Get basic context information."""
+    def get_basic_context(self, include_arrays: bool = True) -> BasicContext:
+        """Get basic context information.
+
+        Args:
+            include_arrays: If True, include atom_array and token_array in the context.
+                These are expensive to serialize and can be disabled for training
+                performance. Defaults to True for backward compatibility.
+        """
         return BasicContext(
-            atom_array=self.cropped_atom_array,
-            token_array=self.cropped_token_array,
+            atom_array=self.cropped_atom_array if include_arrays else None,
+            token_array=self.cropped_token_array if include_arrays else None,
             pdb_id=self.pdb_id,
             bioassembly_dict_fpath=self.bioassembly_dict_fpath,
             n_asym=len(np.unique(self.centre_atoms.asym_id_int)),
@@ -464,8 +470,14 @@ class ContextGenerator(object):
             original_motif_mapping=self.original_motif_mapping,
         )
 
-    def get_full_context(self) -> FullContext:
-        """Get all context required for design pipeline."""
+    def get_full_context(self, include_arrays: bool = True) -> FullContext:
+        """Get all context required for design pipeline.
+
+        Args:
+            include_arrays: If True, include atom_array and token_array in BasicContext.
+                These are expensive to serialize and can be disabled for training
+                performance. Defaults to True for backward compatibility.
+        """
         return FullContext(
             token=self.get_token_context(),
             reference=self.get_reference_conformer_context(),
@@ -477,7 +489,7 @@ class ContextGenerator(object):
             index=self.get_index_context(),
             entity=self.get_entity_context(),
             coordinate=self.get_coordinate_context(),
-            basic=self.get_basic_context(),
+            basic=self.get_basic_context(include_arrays=include_arrays),
         )
 
     def get_atom_permutation_list(

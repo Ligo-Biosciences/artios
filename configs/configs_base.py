@@ -46,6 +46,7 @@ basic_configs = {
     "skip_load_scheduler": False,
     "train_confidence_only": False,
     "use_wandb": True,
+    "enable_torchwatcher": False,  # Enable TorchWatcher for gradient/activation tracking
     "wandb_id": "",  # TODO: deprecated
     "neptune_run_id": "",
     "neptune_fork_run_id": "",

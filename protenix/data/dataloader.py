@@ -400,7 +400,7 @@ def get_dataloaders(
     """
     train_dataset, test_datasets = get_datasets(configs, error_dir)
 
-    # Collation config - used by both worker-batched and standard paths
+    # Collation config
     collate_fn = CollateContexts(
         atom_bin_ends=configs.data.padding.atom_bin_ends,
         token_bin_ends=configs.data.padding.token_bin_ends,
@@ -409,8 +409,7 @@ def get_dataloaders(
         max_motif_residues=configs.data.motif_training.max_motif_residues,
     )
 
-    # Worker-batched mode: collation happens in workers, reducing main process bottleneck
-    use_worker_batching = configs.data.get("worker_batching", False)
+    use_worker_side_batching = configs.data.get("worker_batching", False)
 
     if world_size > 1:
         # TODO: does the sampler need to be changed at all? I don't know!
@@ -422,7 +421,7 @@ def get_dataloaders(
             seed=seed,
         )
 
-        if use_worker_batching:
+        if use_worker_side_batching:
             # Wrap sampler and dataset for worker-side batching
             batched_sampler = BatchIndexSampler(
                 train_sampler, batch_size=configs.batch_size, drop_last=True
@@ -455,7 +454,7 @@ def get_dataloaders(
             seed=seed,
         )
 
-        if use_worker_batching:
+        if use_worker_side_batching:
             # Wrap sampler and dataset for worker-side batching
             batched_sampler = BatchIndexSampler(
                 train_sampler, batch_size=configs.batch_size, drop_last=True
@@ -508,6 +507,6 @@ def get_dataloaders(
         )
     logger.info(
         f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}, "
-        f"worker_batching: {use_worker_batching}"
+        f"worker_batching: {use_worker_side_batching}"
     )
     return train_dl, test_dls

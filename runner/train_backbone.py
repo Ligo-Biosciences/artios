@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import logging
 import os
 import time
@@ -111,6 +112,7 @@ class ArtiosBackboneTrainer(object):
 
     def init_log(self):
         self.neptune_run = None
+        self.torchwatcher = None
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
             source_config = SourceTrackingConfig(  # source-code tracking
                 namespace="source_code",
@@ -133,19 +135,22 @@ class ArtiosBackboneTrainer(object):
                 if self.configs.neptune_fork_step
                 else None,
             )
-            self.torchwatcher = TorchWatcher(
-                model=self.backbone_model.module
-                if DIST_WRAPPER.world_size > 1
-                else self.backbone_model,
-                run=self.neptune_run,
-                track_layers=[
-                    DiffusionTransformer,
-                    DiTBlock,
-                ],  # optionally specify
-                track_layers_name_includes=["linear_q", "linear_k"],
-                tensor_stats=["channel_rms"],
-                base_namespace="model_metrics",
-            )  # torchwatcher for model internals
+            if self.configs.get("enable_torchwatcher", False):
+                self.torchwatcher = TorchWatcher(
+                    model=self.backbone_model.module
+                    if DIST_WRAPPER.world_size > 1
+                    else self.backbone_model,
+                    run=self.neptune_run,
+                    track_layers=[
+                        DiffusionTransformer,
+                        DiTBlock,
+                    ],  # optionally specify
+                    track_layers_name_includes=["linear_q", "linear_k"],
+                    tensor_stats=["channel_rms"],
+                    base_namespace="model_metrics",
+                )  # torchwatcher for model internals
+            else:
+                self.torchwatcher = None
             self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 
@@ -175,9 +180,15 @@ class ArtiosBackboneTrainer(object):
             dist.init_process_group(
                 backend="nccl", timeout=datetime.timedelta(seconds=timeout_seconds)
             )
-        # All ddp process got the same seed
+        # Use rank-specific seed for different augmentations across DDP processes
+        if not self.configs.deterministic_seed:
+            hash_string = f"({self.configs.seed},{DIST_WRAPPER.rank},init_seed)"
+            rank_seed = int(hashlib.sha256(hash_string.encode("utf8")).hexdigest(), 16)
+            rank_seed = rank_seed % (2**32)
+        else:
+            rank_seed = self.configs.seed
         seed_everything(
-            seed=self.configs.seed,
+            seed=rank_seed,
             deterministic=self.configs.deterministic,
         )
 
@@ -871,13 +882,14 @@ class ArtiosBackboneTrainer(object):
                                     {"train/lr": last_lr},
                                     step=self.step,
                                 )
-                                self.torchwatcher.watch(
-                                    step=self.step,
-                                    track_gradients=False,
-                                    track_activations=True,
-                                    track_parameters=False,
-                                    prefix="train",
-                                )
+                                if self.torchwatcher is not None:
+                                    self.torchwatcher.watch(
+                                        step=self.step,
+                                        track_gradients=False,
+                                        track_activations=True,
+                                        track_parameters=False,
+                                        prefix="train",
+                                    )
                             self.print(f"Step {self.step}, lr: {last_lr}")
                         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                             self.neptune_run.log_metrics(metrics, step=self.step)

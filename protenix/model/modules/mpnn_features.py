@@ -256,8 +256,12 @@ class MPNNFeaturizer(nn.Module):
         dtype = context.reference.ref_pos.dtype
         n_token = context.mask.token_mask.shape[-1]
 
-        # Compute node features
-        is_ligand = context.entity.is_ligand.unsqueeze(-1)  # [..., n_atom, 1]
+        # Compute node features for atoms needing reference feature conditioning
+        is_ligand = context.entity.is_ligand  # [..., n_atom]
+        is_motif_related = context.motif.is_motif_related  # [..., n_atom]
+        is_atomic = (
+            (is_ligand | is_motif_related).unsqueeze(-1).to(dtype)
+        )  # [..., n_atom, 1]
 
         ligand_input = torch.cat(
             [
@@ -267,7 +271,7 @@ class MPNNFeaturizer(nn.Module):
             ],
             dim=-1,
         )
-        ligand_feats = self.ligand_condition_embed(ligand_input) * is_ligand
+        ligand_feats = self.ligand_condition_embed(ligand_input) * is_atomic
         # [..., n_atom, node_dim]
 
         ligand_feats = average_atom_to_token(

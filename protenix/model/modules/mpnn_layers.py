@@ -124,7 +124,7 @@ class MPNNEncoderLayer(BaseMPNNLayer):
         self.dropout1 = nn.Dropout(dropout)
         self.norm1 = LayerNorm(node_dim)
         self.node_message_mlp = SwiGLU_MLP(
-            num_in=2 * node_dim + edge_dim, num_hidden=node_dim, n=1
+            num_in=2 * node_dim + edge_dim, num_hidden=node_dim, n=2
         )
 
         # Node feedforward
@@ -140,7 +140,7 @@ class MPNNEncoderLayer(BaseMPNNLayer):
         # self.W12 = nn.Linear(edge_dim, edge_dim, bias=True)
         # self.W13 = nn.Linear(edge_dim, edge_dim, bias=True)
         self.edge_update_mlp = SwiGLU_MLP(
-            num_in=2 * node_dim + edge_dim, num_hidden=edge_dim, n=1
+            num_in=2 * node_dim + edge_dim, num_hidden=edge_dim, n=2
         )
         self.dropout3 = nn.Dropout(dropout)
         self.norm3 = LayerNorm(edge_dim)

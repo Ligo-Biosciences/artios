@@ -170,8 +170,7 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
 
 data_configs = {
     "num_dl_workers": 16,
-    "prefetch_factor": 16,
-    "prefetch_buffer_size": 3,  # Number of batches to keep ready on GPU via AsyncPrefetcher
+    "prefetch_factor": 2,
     "worker_batching": True,  # Collate batches in workers instead of main process
     "epoch_size": 10000,
     "train_ref_pos_augment": True,

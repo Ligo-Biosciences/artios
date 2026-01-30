@@ -6,6 +6,7 @@ from typing import Optional
 import torch
 from jaxtyping import Float, Int
 from torch import Tensor, nn
+from torch.nn import functional as F
 
 import protenix.model.modules.message_passing as mp
 from protenix.model.modules.primitives import LayerNorm, LinearNoBias
@@ -87,11 +88,10 @@ class SwiGLU_MLP(nn.Module):
         super().__init__()
         self.W_in = LinearNoBias(num_in, num_hidden * n * 2)
         self.W_out = LinearNoBias(num_hidden * n, num_hidden)
-        self.act = nn.SiLU()
 
     def forward(self, x):
         a, b = self.W_in(x).chunk(2, dim=-1)
-        return self.W_out(a * self.act(b))
+        return self.W_out(a * F.silu(b))
 
 
 class MPNNEncoderLayer(BaseMPNNLayer):
@@ -145,7 +145,7 @@ class MPNNEncoderLayer(BaseMPNNLayer):
         self.dropout3 = nn.Dropout(dropout)
         self.norm3 = LayerNorm(edge_dim)
 
-        self.act = nn.GELU()
+        # self.act = nn.GELU()
 
     # @torch.compile
     def forward(
@@ -238,7 +238,7 @@ class MPNNDecoderLayer(BaseMPNNLayer):
         # self.W2 = nn.Linear(node_dim, node_dim, bias=True)
         # self.W3 = nn.Linear(node_dim, node_dim, bias=True)
         self.node_message_mlp = SwiGLU_MLP(
-            num_in=node_dim + edge_input_dim, num_hidden=node_dim, n=1
+            num_in=node_dim + edge_input_dim, num_hidden=node_dim, n=2
         )
         self.dropout1 = nn.Dropout(dropout)
         self.norm1 = LayerNorm(node_dim)
@@ -251,7 +251,7 @@ class MPNNDecoderLayer(BaseMPNNLayer):
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = LayerNorm(node_dim)
 
-        self.act = nn.GELU()
+        # self.act = nn.GELU()
 
     # @torch.compile
     def forward(

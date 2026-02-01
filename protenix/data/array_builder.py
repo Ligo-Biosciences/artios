@@ -153,6 +153,9 @@ def backbone_input_to_atom_array(
     design_atom_array = set_chain_and_seq_ids(
         design_atom_array, chain_id=DESIGN_CHAIN_ID, entity_id=1
     )
+    # TODO: tidy this up !
+    # filter the array for OXT atoms
+    design_atom_array = design_atom_array[design_atom_array.atom_name != "OXT"]
 
     design_atom_array.set_annotation(
         "is_motif_related", [False] * len(design_atom_array)
@@ -160,6 +163,9 @@ def backbone_input_to_atom_array(
     design_atom_array.set_annotation("is_motif", [False] * len(design_atom_array))
     design_atom_array.set_annotation(
         "original_motif_res_id", np.full(len(design_atom_array), -1, dtype=int)
+    )
+    design_atom_array.set_annotation(
+        "original_motif_chain_id", np.array([""] * len(design_atom_array))
     )
 
     # Build motif (chain_ids already set from CIF in build_motif_residue/build_motif_ligand)
@@ -265,6 +271,7 @@ def packing_input_to_atom_array(
     combined.set_annotation(
         "original_motif_res_id", np.full(len(combined), -1, dtype=int)
     )
+    combined.set_annotation("original_motif_chain_id", np.array([""] * len(combined)))
 
     # Apply MSE->MET conversion and add annotations (no motif-specific handling)
     combined = mse_to_met(combined)
@@ -329,6 +336,9 @@ def packing_input_to_atom_array_v2(
     protein_array.set_annotation("is_motif", [False] * len(protein_array))
     protein_array.set_annotation(
         "original_motif_res_id", np.full(len(protein_array), -1, dtype=int)
+    )
+    protein_array.set_annotation(
+        "original_motif_chain_id", np.array([""] * len(protein_array))
     )
     protein_array, _ = add_atom_array_attributes(protein_array, has_motif=False)
 
@@ -560,11 +570,15 @@ def build_motif_residue(motif_residue: MotifResidue, entity_id: int) -> AtomArra
     full_residue.set_annotation("is_motif", is_motif)
     full_residue.set_annotation("is_motif_related", np.ones_like(is_motif, dtype=bool))
 
-    # Store original CIF res_id for downstream RMSD computation after stitching.
+    # Store original CIF res_id and chain_id for downstream RMSD computation after stitching.
     # This survives through set_chain_and_seq_ids and update_ids_to_unindex_motif_residues.
     full_residue.set_annotation(
         "original_motif_res_id",
         np.full(len(full_residue), motif_residue.res_id, dtype=int),
+    )
+    full_residue.set_annotation(
+        "original_motif_chain_id",
+        np.array([motif_residue.chain_id] * len(full_residue)),
     )
 
     full_residue = add_reference_features(full_residue)
@@ -651,10 +665,14 @@ def build_motif_ligand(motif_ligand: MotifLigand, entity_id: int) -> AtomArray:
         "is_motif_related", np.ones_like(is_motif, dtype=bool)
     )
 
-    # Store original CIF res_id for downstream RMSD computation after stitching.
+    # Store original CIF res_id and chain_id for downstream RMSD computation after stitching.
     full_ligand_array.set_annotation(
         "original_motif_res_id",
         np.full(len(full_ligand_array), motif_ligand.res_id, dtype=int),
+    )
+    full_ligand_array.set_annotation(
+        "original_motif_chain_id",
+        np.array([motif_ligand.chain_id] * len(full_ligand_array)),
     )
 
     # Set chain_id and res_id (ligands always use res_id=1)
@@ -1099,6 +1117,7 @@ def sequence_input_to_atom_array_v2(sequence_input: SequenceDesignInput) -> Atom
     combined.set_annotation(
         "original_motif_res_id", np.full(len(combined), -1, dtype=int)
     )
+    combined.set_annotation("original_motif_chain_id", np.array([""] * len(combined)))
 
     # Mark all fixed residues as is_motif_related (MPNN preserves their identity)
     for res_id in fixed_res_ids:

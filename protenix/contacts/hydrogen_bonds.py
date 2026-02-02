@@ -1,11 +1,19 @@
-"""Hydrogen bond donor and acceptor feature detection.
+"""Hydrogen bond detection.
 
 Identifies atoms that can participate in hydrogen bonds based on
-element type, charge, geometry, and local environment.
+element type, charge, geometry, and local environment. Detects
+hydrogen bonds using geometric criteria.
 
 Based on Mol* implementation.
 Reference: https://github.com/molstar/molstar
+
+Algorithm references:
+- HBPLUS: https://doi.org/10.1006/jmbi.1994.1334
+- Sulfur H-bonds: https://doi.org/10.1002/prot.22327
 """
+
+from dataclasses import dataclass
+from math import radians
 
 import numpy as np
 from biotite.structure import AtomArray
@@ -13,7 +21,13 @@ from numpy.typing import NDArray
 
 from protenix.common import residue_names as residues
 from protenix.common.elements import N, O, S
-from protenix.contacts.geometry import AtomGeometry
+from protenix.contacts.geometry import (
+    AtomGeometry,
+    calc_angles,
+    calc_plane_angle,
+    closest_hydrogen_index,
+    get_ideal_angle,
+)
 from protenix.contacts.valence import ValenceModel, compute_valence_model
 
 # Histidine ring nitrogen atom names
@@ -198,3 +212,283 @@ def add_hbond_feature_annotations(
     atoms.set_annotation("hbond_acceptor", acceptors)
 
     return atoms
+
+
+# ---------------------------------------------------------------------------
+# Hydrogen Bond Detection
+# ---------------------------------------------------------------------------
+
+# Default ideal angle when geometry is unknown (120° in radians)
+DEFAULT_IDEAL_ANGLE: float = radians(120.0)
+
+# Protein backbone atom names (for backbone H-bond filtering)
+BACKBONE_ATOMS: frozenset[str] = frozenset({"N", "CA", "C", "O", "H", "HA"})
+
+
+@dataclass
+class HBondParams:
+    """Parameters for hydrogen bond detection.
+
+    Attributes:
+        distance_max: Maximum donor-acceptor distance in Ångströms.
+        sulfur_distance_max: Maximum distance when sulfur is involved.
+        don_angle_dev_max: Maximum deviation from ideal donor angle (radians).
+        acc_angle_dev_max: Maximum deviation from ideal acceptor angle (radians).
+        don_out_of_plane_max: Maximum out-of-plane angle for trigonal donor (radians).
+        acc_out_of_plane_max: Maximum out-of-plane angle for trigonal acceptor (radians).
+        ignore_hydrogens: If True, use implicit hydrogen positions.
+        include_backbone: If True, include backbone-to-backbone H-bonds.
+        include_water: If True, include water-to-water H-bonds.
+    """
+
+    distance_max: float = 3.5
+    sulfur_distance_max: float = 4.1
+    don_angle_dev_max: float = radians(45.0)
+    acc_angle_dev_max: float = radians(45.0)
+    don_out_of_plane_max: float = radians(45.0)
+    acc_out_of_plane_max: float = radians(90.0)
+    ignore_hydrogens: bool = False
+    include_backbone: bool = True
+    include_water: bool = False
+
+    @property
+    def distance_max_sq(self) -> float:
+        """Maximum distance squared for non-sulfur H-bonds."""
+        return self.distance_max * self.distance_max
+
+    @property
+    def sulfur_distance_max_sq(self) -> float:
+        """Maximum distance squared for sulfur-containing H-bonds."""
+        return self.sulfur_distance_max * self.sulfur_distance_max
+
+
+@dataclass
+class HydrogenBond:
+    """A detected hydrogen bond.
+
+    Attributes:
+        donor_idx: Index of the donor heavy atom.
+        acceptor_idx: Index of the acceptor atom.
+        hydrogen_idx: Index of the hydrogen atom (may equal donor_idx if implicit).
+        distance: Donor-acceptor distance in Ångströms.
+    """
+
+    donor_idx: int
+    acceptor_idx: int
+    hydrogen_idx: int
+    distance: float
+
+
+def _is_backbone_atom(atom_names: NDArray[np.str_], idx: int) -> bool:
+    """Check if an atom is a protein backbone atom."""
+    return atom_names[idx] in BACKBONE_ATOMS
+
+
+def _is_water(res_names: NDArray[np.str_], idx: int) -> bool:
+    """Check if an atom belongs to a water molecule."""
+    return res_names[idx] in ("HOH", "WAT", "H2O", "DOD", "SOL")
+
+
+def _check_geometry(
+    atoms: AtomArray,
+    donor_idx: int,
+    acceptor_idx: int,
+    valence_model: ValenceModel,
+    params: HBondParams,
+) -> bool:
+    """Check if donor-acceptor pair satisfies geometric constraints.
+
+    Args:
+        atoms: AtomArray with coordinates and bonds.
+        donor_idx: Index of the donor atom.
+        acceptor_idx: Index of the acceptor atom.
+        valence_model: Pre-computed valence model.
+        params: H-bond detection parameters.
+
+    Returns:
+        True if geometry is valid for an H-bond, False otherwise.
+    """
+    atom_names = atoms.atom_name
+    ideal_geometry = valence_model.ideal_geometry
+
+    # 1. Backbone exclusion
+    if not params.include_backbone:
+        if _is_backbone_atom(atom_names, donor_idx) and _is_backbone_atom(
+            atom_names, acceptor_idx
+        ):
+            return False
+
+    # 2. Donor angle validation
+    don_angles, don_h_angles = calc_angles(
+        atoms, donor_idx, acceptor_idx, ignore_hydrogens=params.ignore_hydrogens
+    )
+
+    donor_geom = AtomGeometry(ideal_geometry[donor_idx])
+    ideal_don_angle = get_ideal_angle(donor_geom)
+
+    # Check heavy atom angles: ALL must be within tolerance (two-sided)
+    for don_angle in don_angles:
+        if abs(ideal_don_angle - don_angle) > params.don_angle_dev_max:
+            return False
+
+    # Check hydrogen angles: at least ONE must point toward acceptor
+    if don_h_angles and not any(
+        angle < params.don_angle_dev_max for angle in don_h_angles
+    ):
+        return False
+
+    # 3. Donor out-of-plane check (trigonal geometry only)
+    if donor_geom == AtomGeometry.Trigonal:
+        out_of_plane = calc_plane_angle(atoms, donor_idx, acceptor_idx)
+        if out_of_plane is not None and out_of_plane > params.don_out_of_plane_max:
+            return False
+
+    # 4. Find closest hydrogen for acceptor angle calculation
+    hydrogen_idx = donor_idx
+    if not params.ignore_hydrogens and don_h_angles:
+        hydrogen_idx = closest_hydrogen_index(atoms, donor_idx, acceptor_idx)
+
+    # 5. Acceptor angle validation
+    acc_angles, acc_h_angles = calc_angles(
+        atoms, acceptor_idx, hydrogen_idx, ignore_hydrogens=params.ignore_hydrogens
+    )
+
+    acceptor_geom = AtomGeometry(ideal_geometry[acceptor_idx])
+    ideal_acc_angle = get_ideal_angle(acceptor_geom)
+
+    # Check acceptor angles: ONE-SIDED (large angles OK, small angles bad)
+    # Reject if (ideal - measured) > max, i.e., measured is too small
+    for acc_angle in acc_angles:
+        if ideal_acc_angle - acc_angle > params.acc_angle_dev_max:
+            return False
+
+    for acc_h_angle in acc_h_angles:
+        if ideal_acc_angle - acc_h_angle > params.acc_angle_dev_max:
+            return False
+
+    # 6. Acceptor out-of-plane check (trigonal geometry only)
+    if acceptor_geom == AtomGeometry.Trigonal:
+        out_of_plane = calc_plane_angle(atoms, acceptor_idx, donor_idx)
+        if out_of_plane is not None and out_of_plane > params.acc_out_of_plane_max:
+            return False
+
+    return True
+
+
+def test_hydrogen_bond(
+    atoms: AtomArray,
+    donor_idx: int,
+    acceptor_idx: int,
+    valence_model: ValenceModel,
+    params: HBondParams,
+) -> HydrogenBond | None:
+    """Test if a donor-acceptor pair forms a valid hydrogen bond.
+
+    Args:
+        atoms: AtomArray with coordinates and bonds.
+        donor_idx: Index of the potential donor atom.
+        acceptor_idx: Index of the potential acceptor atom.
+        valence_model: Pre-computed valence model.
+        params: H-bond detection parameters.
+
+    Returns:
+        HydrogenBond if valid, None otherwise.
+    """
+    coords = atoms.coord
+    elements = atoms.element
+    res_names = atoms.res_name
+
+    # Calculate distance
+    pos_donor = coords[donor_idx]
+    pos_acceptor = coords[acceptor_idx]
+    dist_sq = float(np.sum((pos_donor - pos_acceptor) ** 2))
+
+    # Distance check (use sulfur distance if either atom is S)
+    if elements[donor_idx] == S or elements[acceptor_idx] == S:
+        max_dist_sq = params.sulfur_distance_max_sq
+    else:
+        max_dist_sq = params.distance_max_sq
+
+    if dist_sq > max_dist_sq:
+        return None
+
+    # Water exclusion
+    if not params.include_water:
+        if _is_water(res_names, donor_idx) and _is_water(res_names, acceptor_idx):
+            return None
+
+    # Geometry check
+    if not _check_geometry(atoms, donor_idx, acceptor_idx, valence_model, params):
+        return None
+
+    # Find the hydrogen involved
+    hydrogen_idx = donor_idx
+    if not params.ignore_hydrogens:
+        hydrogen_idx = closest_hydrogen_index(atoms, donor_idx, acceptor_idx)
+
+    return HydrogenBond(
+        donor_idx=donor_idx,
+        acceptor_idx=acceptor_idx,
+        hydrogen_idx=hydrogen_idx,
+        distance=float(np.sqrt(dist_sq)),
+    )
+
+
+def detect_hydrogen_bonds(
+    atoms: AtomArray,
+    params: HBondParams | None = None,
+    valence_model: ValenceModel | None = None,
+) -> list[HydrogenBond]:
+    """Detect all hydrogen bonds in a structure.
+
+    Args:
+        atoms: AtomArray with coordinates and bonds set.
+        params: H-bond detection parameters. If None, uses defaults.
+        valence_model: Pre-computed valence model. If None, will be computed.
+
+    Returns:
+        List of detected HydrogenBond objects.
+    """
+    if params is None:
+        params = HBondParams()
+
+    if valence_model is None:
+        valence_model = compute_valence_model(atoms)
+
+    # Detect donors and acceptors
+    donor_mask = detect_hydrogen_donors(atoms, valence_model)
+    acceptor_mask = detect_hydrogen_acceptors(atoms, valence_model)
+
+    donor_indices = np.where(donor_mask)[0]
+    acceptor_indices = np.where(acceptor_mask)[0]
+
+    # Use the larger of the two distance cutoffs for initial filtering
+    max_dist = max(params.distance_max, params.sulfur_distance_max)
+    max_dist_sq = max_dist * max_dist
+
+    coords = atoms.coord
+    hbonds: list[HydrogenBond] = []
+
+    # Test all donor-acceptor pairs within distance cutoff
+    for donor_idx in donor_indices:
+        pos_donor = coords[donor_idx]
+
+        for acceptor_idx in acceptor_indices:
+            # Skip if same atom (can happen if atom is both donor and acceptor)
+            if donor_idx == acceptor_idx:
+                continue
+
+            # Quick distance pre-filter
+            pos_acceptor = coords[acceptor_idx]
+            dist_sq = float(np.sum((pos_donor - pos_acceptor) ** 2))
+            if dist_sq > max_dist_sq:
+                continue
+
+            # Full H-bond test
+            hbond = test_hydrogen_bond(
+                atoms, donor_idx, acceptor_idx, valence_model, params
+            )
+            if hbond is not None:
+                hbonds.append(hbond)
+
+    return hbonds

@@ -226,40 +226,26 @@ BACKBONE_ATOMS: frozenset[str] = frozenset({"N", "CA", "C", "O", "H", "HA"})
 
 
 @dataclass
-class HBondParams:
-    """Parameters for hydrogen bond detection.
+class _HBondParams:
+    """Internal parameters for hydrogen bond detection."""
 
-    Attributes:
-        distance_max: Maximum donor-acceptor distance in Ångströms.
-        sulfur_distance_max: Maximum distance when sulfur is involved.
-        don_angle_dev_max: Maximum deviation from ideal donor angle (radians).
-        acc_angle_dev_max: Maximum deviation from ideal acceptor angle (radians).
-        don_out_of_plane_max: Maximum out-of-plane angle for trigonal donor (radians).
-        acc_out_of_plane_max: Maximum out-of-plane angle for trigonal acceptor (radians).
-        ignore_hydrogens: If True, use implicit hydrogen positions.
-        include_backbone: If True, include backbone-to-backbone H-bonds.
-        include_water: If True, include water-to-water H-bonds.
-    """
-
-    distance_max: float = 3.5
-    sulfur_distance_max: float = 4.1
-    don_angle_dev_max: float = radians(45.0)
-    acc_angle_dev_max: float = radians(45.0)
-    don_out_of_plane_max: float = radians(45.0)
-    acc_out_of_plane_max: float = radians(90.0)
-    ignore_hydrogens: bool = False
-    include_backbone: bool = True
-    include_water: bool = False
+    distance_max: float
+    sulfur_distance_max: float
+    don_angle_dev_max: float
+    acc_angle_dev_max: float
+    don_out_of_plane_max: float
+    acc_out_of_plane_max: float
+    ignore_hydrogens: bool
+    include_backbone: bool
+    include_water: bool
 
     @property
     def distance_max_sq(self) -> float:
-        """Maximum distance squared for non-sulfur H-bonds."""
-        return self.distance_max * self.distance_max
+        return self.distance_max**2
 
     @property
     def sulfur_distance_max_sq(self) -> float:
-        """Maximum distance squared for sulfur-containing H-bonds."""
-        return self.sulfur_distance_max * self.sulfur_distance_max
+        return self.sulfur_distance_max**2
 
 
 @dataclass
@@ -294,7 +280,7 @@ def _check_geometry(
     donor_idx: int,
     acceptor_idx: int,
     valence_model: ValenceModel,
-    params: HBondParams,
+    params: _HBondParams,
 ) -> bool:
     """Check if donor-acceptor pair satisfies geometric constraints.
 
@@ -380,7 +366,7 @@ def test_hydrogen_bond(
     donor_idx: int,
     acceptor_idx: int,
     valence_model: ValenceModel,
-    params: HBondParams,
+    params: _HBondParams,
 ) -> HydrogenBond | None:
     """Test if a donor-acceptor pair forms a valid hydrogen bond.
 
@@ -436,21 +422,46 @@ def test_hydrogen_bond(
 
 def detect_hydrogen_bonds(
     atoms: AtomArray,
-    params: HBondParams | None = None,
+    distance_max: float = 3.5,
+    sulfur_distance_max: float = 4.1,
+    don_angle_dev_max: float = 45.0,
+    acc_angle_dev_max: float = 45.0,
+    don_out_of_plane_max: float = 45.0,
+    acc_out_of_plane_max: float = 90.0,
+    ignore_hydrogens: bool = True,
+    include_backbone: bool = False,
+    include_water: bool = False,
     valence_model: ValenceModel | None = None,
 ) -> list[HydrogenBond]:
     """Detect all hydrogen bonds in a structure.
 
     Args:
         atoms: AtomArray with coordinates and bonds set.
-        params: H-bond detection parameters. If None, uses defaults.
+        distance_max: Maximum donor-acceptor distance (Å).
+        sulfur_distance_max: Maximum distance when sulfur is involved (Å).
+        don_angle_dev_max: Maximum deviation from ideal donor angle (degrees).
+        acc_angle_dev_max: Maximum deviation from ideal acceptor angle (degrees).
+        don_out_of_plane_max: Maximum out-of-plane angle for trigonal donor (degrees).
+        acc_out_of_plane_max: Maximum out-of-plane angle for trigonal acceptor (degrees).
+        ignore_hydrogens: If True, use implicit hydrogen positions.
+        include_backbone: If True, include backbone-to-backbone H-bonds.
+        include_water: If True, include water-to-water H-bonds.
         valence_model: Pre-computed valence model. If None, will be computed.
 
     Returns:
         List of detected HydrogenBond objects.
     """
-    if params is None:
-        params = HBondParams()
+    params = _HBondParams(
+        distance_max=distance_max,
+        sulfur_distance_max=sulfur_distance_max,
+        don_angle_dev_max=radians(don_angle_dev_max),
+        acc_angle_dev_max=radians(acc_angle_dev_max),
+        don_out_of_plane_max=radians(don_out_of_plane_max),
+        acc_out_of_plane_max=radians(acc_out_of_plane_max),
+        ignore_hydrogens=ignore_hydrogens,
+        include_backbone=include_backbone,
+        include_water=include_water,
+    )
 
     if valence_model is None:
         valence_model = compute_valence_model(atoms)
@@ -467,6 +478,8 @@ def detect_hydrogen_bonds(
     max_dist_sq = max_dist * max_dist
 
     coords = atoms.coord
+    chain_ids = atoms.chain_id
+    res_ids = atoms.res_id
     hbonds: list[HydrogenBond] = []
 
     # Test all donor-acceptor pairs within distance cutoff
@@ -476,6 +489,13 @@ def detect_hydrogen_bonds(
         for acceptor_idx in acceptor_indices:
             # Skip if same atom (can happen if atom is both donor and acceptor)
             if donor_idx == acceptor_idx:
+                continue
+
+            # Skip if same residue
+            if (
+                chain_ids[donor_idx] == chain_ids[acceptor_idx]
+                and res_ids[donor_idx] == res_ids[acceptor_idx]
+            ):
                 continue
 
             # Quick distance pre-filter

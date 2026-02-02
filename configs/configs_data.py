@@ -85,7 +85,7 @@ default_distillation_configs = {
     "filter_unique_domain_prob": 0.0,
 }
 
-DATA_ROOT_DIR = "af3-dev/release_data/"
+DATA_ROOT_DIR = "/dev/shm/af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -170,7 +170,8 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
 
 data_configs = {
     "num_dl_workers": 16,
-    "prefetch_factor": 16,
+    "prefetch_factor": 2,
+    "worker_batching": True,  # Collate batches in workers instead of main process
     "epoch_size": 10000,
     "train_ref_pos_augment": True,
     "test_ref_pos_augment": True,

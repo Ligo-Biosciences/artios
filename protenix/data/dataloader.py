@@ -1,16 +1,106 @@
 import math
-from typing import Iterator, Optional, Sequence
+from typing import Callable, Iterator, Optional, Sequence
 
 import torch
 import torch.distributed as dist
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import DataLoader, DistributedSampler, Sampler
+from torch.utils.data import Dataset as TorchDataset
 
 from protenix.data.data_collator import CollateContexts
 from protenix.data.dataset import Dataset, get_datasets
+from protenix.data.features import FullContext
 from protenix.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+# =============================================================================
+# Worker-side batching: moves collation from main process to worker processes
+# =============================================================================
+
+
+class BatchIndexSampler(Sampler):
+    """Wraps a sampler to yield batches of indices as single items.
+
+    This doesn't change the sampling logic at all - it just groups the output
+    of the underlying sampler into batches. The underlying sampler's set_epoch
+    is forwarded for distributed training compatibility.
+
+    Args:
+        sampler: The underlying sampler that yields individual indices.
+        batch_size: Number of indices per batch.
+        drop_last: Whether to drop the last incomplete batch.
+    """
+
+    def __init__(self, sampler: Sampler, batch_size: int, drop_last: bool = True):
+        self.sampler = sampler
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+
+    def __iter__(self) -> Iterator[list[int]]:
+        batch = []
+        for idx in self.sampler:
+            batch.append(idx)
+            if len(batch) == self.batch_size:
+                yield batch
+                batch = []
+        if batch and not self.drop_last:
+            yield batch
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return len(self.sampler) // self.batch_size
+        return (len(self.sampler) + self.batch_size - 1) // self.batch_size
+
+    def set_epoch(self, epoch: int) -> None:
+        """Forward set_epoch to underlying sampler if it supports it."""
+        if hasattr(self.sampler, "set_epoch"):
+            self.sampler.set_epoch(epoch)
+
+
+class WorkerBatchedDataset(TorchDataset):
+    """Dataset wrapper that fetches and collates batches in worker processes.
+
+    Instead of the main process collecting samples and calling collate_fn,
+    this wrapper accepts a list of indices in __getitem__, fetches all samples
+    in the worker, and collates them before sending to main process.
+
+    This moves padding and tensor stacking from main process to workers,
+    reducing the IPC serialization bottleneck.
+
+    Args:
+        dataset: The underlying dataset.
+        collate_fn: The collation function (e.g., CollateContexts).
+    """
+
+    def __init__(self, dataset: Dataset, collate_fn: Callable):
+        self.dataset = dataset
+        self.collate_fn = collate_fn
+
+    def __getitem__(self, indices: list[int]) -> FullContext:
+        # Worker fetches all samples in the batch
+        samples = [self.dataset[idx] for idx in indices]
+        # Worker collates them (padding + stacking happens here)
+        return self.collate_fn(samples)
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    # Forward attribute access to underlying dataset for sampler compatibility
+    @property
+    def merged_datapoint_weights(self):
+        return self.dataset.merged_datapoint_weights
+
+    @property
+    def indices_list(self):
+        return self.dataset.indices_list
+
+
+def _passthrough_collate(batch: list[FullContext]) -> FullContext:
+    """Pass-through collate for already-collated batches from WorkerBatchedDataset."""
+    assert len(batch) == 1, "WorkerBatchedDataset requires DataLoader batch_size=1"
+    return batch[0]
 
 
 class WeightedSampler(Sampler):
@@ -309,6 +399,18 @@ def get_dataloaders(
 
     """
     train_dataset, test_datasets = get_datasets(configs, error_dir)
+
+    # Collation config
+    collate_fn = CollateContexts(
+        atom_bin_ends=configs.data.padding.atom_bin_ends,
+        token_bin_ends=configs.data.padding.token_bin_ends,
+        crop_size=configs.train_crop_size,
+        motif_training=configs.data.motif_training.motif_train_rate > 0.0,
+        max_motif_residues=configs.data.motif_training.max_motif_residues,
+    )
+
+    use_worker_side_batching = configs.data.get("worker_batching", False)
+
     if world_size > 1:
         # TODO: does the sampler need to be changed at all? I don't know!
         train_sampler = DistributedWeightedSampler(
@@ -318,21 +420,32 @@ def get_dataloaders(
             replacement=True,
             seed=seed,
         )
-        train_dl = DistributedDataLoader(
-            dataset=train_dataset,
-            batch_size=configs.batch_size,
-            shuffle=False,
-            num_workers=configs.data.num_dl_workers,
-            collate_fn=CollateContexts(
-                atom_bin_ends=configs.data.padding.atom_bin_ends,
-                token_bin_ends=configs.data.padding.token_bin_ends,
-                crop_size=configs.train_crop_size,
-                motif_training=configs.data.motif_training.motif_train_rate > 0.0,
-                max_motif_residues=configs.data.motif_training.max_motif_residues,
-            ),
-            sampler=train_sampler,
-            prefetch_factor=configs.data.prefetch_factor,
-        )
+
+        if use_worker_side_batching:
+            # Wrap sampler and dataset for worker-side batching
+            batched_sampler = BatchIndexSampler(
+                train_sampler, batch_size=configs.batch_size, drop_last=True
+            )
+            batched_dataset = WorkerBatchedDataset(train_dataset, collate_fn)
+            train_dl = DistributedDataLoader(
+                dataset=batched_dataset,
+                batch_size=1,  # Each "sample" is already a full batch
+                shuffle=False,
+                num_workers=configs.data.num_dl_workers,
+                collate_fn=_passthrough_collate,
+                sampler=batched_sampler,
+                prefetch_factor=configs.data.prefetch_factor,
+            )
+        else:
+            train_dl = DistributedDataLoader(
+                dataset=train_dataset,
+                batch_size=configs.batch_size,
+                shuffle=False,
+                num_workers=configs.data.num_dl_workers,
+                collate_fn=collate_fn,
+                sampler=train_sampler,
+                prefetch_factor=configs.data.prefetch_factor,
+            )
     else:
         train_sampler = WeightedSampler(
             weights=train_dataset.merged_datapoint_weights,
@@ -340,23 +453,34 @@ def get_dataloaders(
             replacement=True,
             seed=seed,
         )
-        train_dl = IterDataLoader(
-            dataset=train_dataset,
-            batch_size=configs.batch_size,
-            shuffle=False,
-            num_workers=configs.data.num_dl_workers,
-            collate_fn=CollateContexts(
-                atom_bin_ends=configs.data.padding.atom_bin_ends,
-                token_bin_ends=configs.data.padding.token_bin_ends,
-                crop_size=configs.train_crop_size,
-                motif_training=configs.data.motif_training.motif_train_rate > 0.0,
-                max_motif_residues=configs.data.motif_training.max_motif_residues,
-            ),
-            sampler=train_sampler,
-            # persistent_workers=True,
-            pin_memory=True,
-            # prefetch_factor=configs.batch_size,
-        )
+
+        if use_worker_side_batching:
+            # Wrap sampler and dataset for worker-side batching
+            batched_sampler = BatchIndexSampler(
+                train_sampler, batch_size=configs.batch_size, drop_last=True
+            )
+            batched_dataset = WorkerBatchedDataset(train_dataset, collate_fn)
+            train_dl = IterDataLoader(
+                dataset=batched_dataset,
+                batch_size=1,  # Each "sample" is already a full batch
+                shuffle=False,
+                num_workers=configs.data.num_dl_workers,
+                collate_fn=_passthrough_collate,
+                sampler=batched_sampler,
+                pin_memory=True,
+            )
+        else:
+            train_dl = IterDataLoader(
+                dataset=train_dataset,
+                batch_size=configs.batch_size,
+                shuffle=False,
+                num_workers=configs.data.num_dl_workers,
+                collate_fn=collate_fn,
+                sampler=train_sampler,
+                # persistent_workers=True,
+                pin_memory=True,
+                # prefetch_factor=configs.batch_size,
+            )
 
     test_dls = {}
     test_dataset_sizes = {}
@@ -382,6 +506,7 @@ def get_dataloaders(
             ),
         )
     logger.info(
-        f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}"
+        f"train data size: {len(train_dataset)}, test size: {test_dataset_sizes}, "
+        f"worker_batching: {use_worker_side_batching}"
     )
     return train_dl, test_dls

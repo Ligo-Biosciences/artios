@@ -14,7 +14,9 @@ from biotite.structure import AtomArray, BondType, connect_via_distances
 from biotite.structure.rings import find_aromatic_rings
 from numpy.typing import NDArray
 
+from protenix.common.atom_types import PROTEIN_BACKBONE_ATOMS
 from protenix.common.elements import AROMATIC_ELEMENTS
+from protenix.common.residue_names import CATIONIC_RESIDUES
 from protenix.contacts.geometry import (
     minimum_angle,
     point_plane_offset,
@@ -267,13 +269,6 @@ def detect_pi_stacking(
     return interactions
 
 
-# Residues with cationic nitrogens at physiological pH
-CATIONIC_RESIDUES: frozenset[str] = frozenset({"ARG", "LYS", "HIS"})
-
-# Backbone atom names to exclude from cation detection
-BACKBONE_ATOMS: frozenset[str] = frozenset({"N", "CA", "C", "O", "H", "HA"})
-
-
 def _identify_cation_groups(
     atoms: AtomArray,
     valence_model: ValenceModel,
@@ -306,7 +301,7 @@ def _identify_cation_groups(
         if (
             atoms.res_name[i] in CATIONIC_RESIDUES
             and atoms.element[i] == "N"
-            and atoms.atom_name[i] not in BACKBONE_ATOMS
+            and atoms.atom_name[i] not in PROTEIN_BACKBONE_ATOMS
         ):
             cation_atoms.add(i)
 

@@ -225,6 +225,30 @@ def calc_plane_angle(
     return float(abs(np.pi / 2 - angle_to_normal))
 
 
+def triangle_normal(
+    coords: NDArray[np.floating],
+) -> NDArray[np.floating]:
+    """Compute unit normal vector from three or more points.
+
+    Uses the first three points to define a plane via cross product.
+    Useful for computing ring plane normals.
+
+    Args:
+        coords: Array of shape (N, 3) with N >= 3 points.
+
+    Returns:
+        Unit normal vector of shape (3,). Returns [0, 0, 1] if
+        points are collinear.
+    """
+    v1 = coords[1] - coords[0]
+    v2 = coords[2] - coords[0]
+    normal = np.cross(v1, v2)
+    norm = np.linalg.norm(normal)
+    if norm < 1e-8:
+        return np.array([0.0, 0.0, 1.0])
+    return normal / norm
+
+
 def closest_hydrogen_index(
     atoms: AtomArray,
     donor_idx: int,
@@ -270,3 +294,45 @@ def closest_hydrogen_index(
             closest_idx = idx_h
 
     return closest_idx
+
+
+def minimum_angle(
+    v1: NDArray[np.floating],
+    v2: NDArray[np.floating],
+) -> NDArray[np.floating]:
+    """Get minimum angle between vectors (range [0, pi/2]).
+
+    Useful for ring normal comparisons where direction is ambiguous.
+
+    Args:
+        v1: First vector(s), shape (..., 3).
+        v2: Second vector(s), shape (..., 3).
+
+    Returns:
+        Angle(s) in radians, range [0, pi/2].
+    """
+    dot = np.einsum("...i,...i->...", v1, v2)
+    return np.arccos(np.minimum(np.abs(dot), 1.0))
+
+
+def point_plane_offset(
+    point: NDArray[np.floating],
+    plane_origin: NDArray[np.floating],
+    plane_normal: NDArray[np.floating],
+) -> float:
+    """Compute lateral offset of a point from a plane origin.
+
+    Projects the point onto the plane and measures the distance
+    from the plane origin to that projection.
+
+    Args:
+        point: 3D position of the point.
+        plane_origin: 3D position of the reference point on the plane.
+        plane_normal: Unit normal vector of the plane.
+
+    Returns:
+        Distance from plane origin to the projected point.
+    """
+    v = point - plane_origin
+    v_projected = v - np.dot(v, plane_normal) * plane_normal
+    return float(np.linalg.norm(v_projected))

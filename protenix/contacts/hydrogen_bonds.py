@@ -20,6 +20,7 @@ from biotite.structure import AtomArray
 from numpy.typing import NDArray
 
 from protenix.common import residue_names as residues
+from protenix.common.atom_types import PROTEIN_BACKBONE_ATOMS
 from protenix.common.elements import N, O, S
 from protenix.contacts.geometry import (
     AtomGeometry,
@@ -221,9 +222,6 @@ def add_hbond_feature_annotations(
 # Default ideal angle when geometry is unknown (120° in radians)
 DEFAULT_IDEAL_ANGLE: float = radians(120.0)
 
-# Protein backbone atom names (for backbone H-bond filtering)
-BACKBONE_ATOMS: frozenset[str] = frozenset({"N", "CA", "C", "O", "H", "HA"})
-
 
 @dataclass
 class _HBondParams:
@@ -267,7 +265,7 @@ class HydrogenBond:
 
 def _is_backbone_atom(atom_names: NDArray[np.str_], idx: int) -> bool:
     """Check if an atom is a protein backbone atom."""
-    return atom_names[idx] in BACKBONE_ATOMS
+    return atom_names[idx] in PROTEIN_BACKBONE_ATOMS
 
 
 def _is_water(res_names: NDArray[np.str_], idx: int) -> bool:

@@ -191,3 +191,6 @@ POLYMER_TYPES_NUM_ORDER_WITH_ALL_UNKS_AND_GAP = len(
 WATER_TYPES: tuple[str, ...] = ("HOH", "DOD")
 
 UNKNOWN_TYPES: tuple[str, ...] = (UNK, UNK_RNA, UNK_DNA, UNL)
+
+# Residues with cationic nitrogens at physiological pH
+CATIONIC_RESIDUES: frozenset[str] = frozenset({ARG, LYS, HIS})

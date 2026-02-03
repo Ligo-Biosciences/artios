@@ -107,3 +107,11 @@ METALS: Final[frozenset[str]] = (
 
 # Common heteroatoms in biomolecules
 HETEROATOMS: Final[frozenset[str]] = frozenset({N, O, S, P})
+
+# Elements that can participate in aromatic π-systems
+# Common: C, N, O, S (benzene, pyridine, furan, thiophene)
+# Rare: P (phosphinine), B (borabenzene), Si (silabenzene)
+B: Final[str] = sys.intern("B")
+SI: Final[str] = sys.intern("SI")
+
+AROMATIC_ELEMENTS: Final[frozenset[str]] = frozenset({C, N, O, S, P, B, SI})

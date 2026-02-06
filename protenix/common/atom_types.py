@@ -105,8 +105,10 @@ RESIDUE_ATOMS: Mapping[str, tuple[str, ...]] = {
     residue_names.VAL: (C, CA, CB, CG1, CG2, N, O),
 }  # pyformat: disable
 
-# Used to identify backbone for alignment and distance calculation for sterics.
-PROTEIN_BACKBONE_ATOMS: tuple[str, ...] = (N, CA, C)
+# Backbone atom names (for alignment, sterics, and interaction filtering)
+H = sys.intern("H")
+HA = sys.intern("HA")
+PROTEIN_BACKBONE_ATOMS: frozenset[str] = frozenset({N, CA, C, O, H, HA})
 
 # Naming swaps for ambiguous atom names. Due to symmetries in the amino acids
 # the naming of atoms is ambiguous in 4 of the 20 amino acids. (The LDDT paper

@@ -112,6 +112,197 @@ class TestRearrangeToKeySubset:
 
         torch.testing.assert_close(actual, expected)
 
+    @pytest.mark.parametrize(
+        "n_atom,num_keys,num_queries",
+        [
+            (256, 128, 32),  # Standard config
+            (512, 128, 32),  # More atoms
+            (1024, 128, 32),  # Large atom count
+            (2048, 128, 32),  # Very large
+            (256, 64, 32),  # Smaller key window
+            (
+                512,
+                256,
+                32,
+            ),  # Larger key window (need n_atom > num_keys for interior blocks)
+            (512, 128, 64),  # Different query size
+            (1024, 256, 64),  # Large windows
+        ],
+    )
+    def test_all_interior_blocks_match_direct_slicing(
+        self, n_atom: int, num_keys: int, num_queries: int
+    ):
+        """All interior blocks should match direct slicing for various configurations.
+
+        An interior block is one where the key window [start, end) falls entirely
+        within the original tensor bounds [0, n_atom).
+
+        For block i:
+        - window_start_in_original = i * num_queries - pad_size
+        - window_end_in_original = window_start + num_keys
+
+        Block is interior if window_start >= 0 AND window_end <= n_atom.
+        """
+        c = 16
+        # Sequential values make verification straightforward
+        k_x = torch.arange(n_atom * c, dtype=torch.float32).reshape(n_atom, c)
+
+        result = rearrange_to_key_subset(
+            k_x,
+            rearrange_dim=-2,
+            num_keys=num_keys,
+            num_queries=num_queries,
+        )
+
+        n_blocks = n_atom // num_queries
+        pad_size = (num_keys - num_queries) // 2
+
+        interior_blocks_found = 0
+
+        for block_idx in range(n_blocks):
+            window_start = block_idx * num_queries - pad_size
+            window_end = window_start + num_keys
+
+            # Check if this block is interior (window fully within bounds)
+            if window_start >= 0 and window_end <= n_atom:
+                interior_blocks_found += 1
+                expected = k_x[window_start:window_end]
+                actual = result[block_idx]
+
+                torch.testing.assert_close(
+                    actual,
+                    expected,
+                    msg=f"Block {block_idx} mismatch for n_atom={n_atom}, "
+                    f"num_keys={num_keys}, num_queries={num_queries}. "
+                    f"Window [{window_start}, {window_end})",
+                )
+
+        # Verify we actually tested some interior blocks
+        assert interior_blocks_found > 0, (
+            f"No interior blocks found for n_atom={n_atom}, "
+            f"num_keys={num_keys}, num_queries={num_queries}"
+        )
+
+    def test_interior_blocks_with_batch_dims(self):
+        """Interior block slicing should work correctly with batch dimensions."""
+        batch = 4
+        n_atom = 512
+        c = 16
+        num_keys, num_queries = self.NUM_KEYS, self.NUM_QUERIES
+
+        # Create batched sequential tensor
+        k_x = torch.arange(batch * n_atom * c, dtype=torch.float32).reshape(
+            batch, n_atom, c
+        )
+
+        result = rearrange_to_key_subset(
+            k_x,
+            rearrange_dim=-2,
+            num_keys=num_keys,
+            num_queries=num_queries,
+        )
+
+        n_blocks = n_atom // num_queries
+        pad_size = (num_keys - num_queries) // 2
+
+        # Check all interior blocks for each batch element
+        for b in range(batch):
+            for block_idx in range(n_blocks):
+                window_start = block_idx * num_queries - pad_size
+                window_end = window_start + num_keys
+
+                if window_start >= 0 and window_end <= n_atom:
+                    expected = k_x[b, window_start:window_end]
+                    actual = result[b, block_idx]
+
+                    torch.testing.assert_close(
+                        actual,
+                        expected,
+                        msg=f"Batch {b}, Block {block_idx} mismatch",
+                    )
+
+    def test_interior_blocks_window_overlap_correctness(self):
+        """Verify overlapping windows correctly share elements.
+
+        Adjacent interior blocks should share (num_keys - num_queries) elements.
+        This tests that the overlap pattern is correct.
+        """
+        n_atom = 512
+        c = 8
+        num_keys, num_queries = self.NUM_KEYS, self.NUM_QUERIES
+
+        k_x = torch.arange(n_atom * c, dtype=torch.float32).reshape(n_atom, c)
+
+        result = rearrange_to_key_subset(
+            k_x,
+            rearrange_dim=-2,
+            num_keys=num_keys,
+            num_queries=num_queries,
+        )
+
+        n_blocks = n_atom // num_queries
+        pad_size = (num_keys - num_queries) // 2
+        overlap_size = num_keys - num_queries
+
+        for block_idx in range(n_blocks - 1):
+            # Check if both this block and next block are interior
+            window_start_curr = block_idx * num_queries - pad_size
+            window_end_curr = window_start_curr + num_keys
+            window_start_next = (block_idx + 1) * num_queries - pad_size
+            window_end_next = window_start_next + num_keys
+
+            if (
+                window_start_curr >= 0
+                and window_end_curr <= n_atom
+                and window_start_next >= 0
+                and window_end_next <= n_atom
+            ):
+                # The last overlap_size elements of block i should equal
+                # the first overlap_size elements of block i+1
+                curr_tail = result[block_idx, -overlap_size:]
+                next_head = result[block_idx + 1, :overlap_size]
+
+                torch.testing.assert_close(
+                    curr_tail,
+                    next_head,
+                    msg=f"Overlap mismatch between blocks {block_idx} and {block_idx + 1}",
+                )
+
+    def test_interior_blocks_element_by_element_verification(self):
+        """Element-by-element verification that each position maps correctly.
+
+        For large atom counts, verify that every element in every interior block
+        contains the expected value based on its position in the original tensor.
+        """
+        n_atom = 1024
+        num_keys, num_queries = 128, 32
+
+        # Use 1D tensor where value at position i is i (for easy verification)
+        k_x = torch.arange(n_atom, dtype=torch.float32)
+
+        result = rearrange_to_key_subset(
+            k_x,
+            rearrange_dim=0,
+            num_keys=num_keys,
+            num_queries=num_queries,
+        )
+
+        n_blocks = n_atom // num_queries
+        pad_size = (num_keys - num_queries) // 2
+
+        for block_idx in range(n_blocks):
+            window_start = block_idx * num_queries - pad_size
+            window_end = window_start + num_keys
+
+            if window_start >= 0 and window_end <= n_atom:
+                # Check every element in this interior block
+                for pos_in_window in range(num_keys):
+                    original_pos = window_start + pos_in_window
+                    assert result[block_idx, pos_in_window].item() == original_pos, (
+                        f"Block {block_idx}, window position {pos_in_window}: "
+                        f"expected {original_pos}, got {result[block_idx, pos_in_window].item()}"
+                    )
+
     def test_boundary_blocks_have_padding(self):
         """Boundary blocks should have zero-padded regions."""
         n_atom = 128

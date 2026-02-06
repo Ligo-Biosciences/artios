@@ -638,6 +638,7 @@ class DiffusionModule(nn.Module):
             predictor=predictor,
             x_init=x_init,
             n_steps=n_steps,
+            mask=context.mask.is_resolved,
             track_trajectory=track_trajectory,
         )
 

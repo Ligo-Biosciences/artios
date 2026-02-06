@@ -172,7 +172,7 @@ model_configs = {
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
-        "N_sample": 10,  # changed from 1, BATCH SIZE AT SAMPLING
+        "N_sample": 5,  # changed from 1, BATCH SIZE AT SAMPLING
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
         "stoch_type": "non_singular",
@@ -209,7 +209,7 @@ model_configs = {
             "c_s": GlobalConfigValue("c_s"),
             # "c_s_inputs": GlobalConfigValue("c_s_inputs"),
             "transformer": {
-                "num_blocks": 16,
+                "num_blocks": 24,
                 "num_heads": 16,
             },
             "dropout": 0.0,

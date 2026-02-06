@@ -16,9 +16,11 @@ import json
 import logging
 import os
 import traceback
-from contextlib import nullcontext
+
+# from contextlib import nullcontext
 from dataclasses import dataclass
 from os.path import join as opjoin
+from pathlib import Path
 from typing import Any, Optional
 
 import torch
@@ -36,6 +38,7 @@ from protenix.model.artios_mpnn import ArtiosMPNN
 from protenix.model.artios_packing import ArtiosPacking
 from protenix.model.output import BackboneOutput, ModelOutput
 from protenix.model.utils import Mode
+from protenix.utils.casting import disable_autocast
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.inference import ModelType
 from protenix.utils.seed import seed_everything
@@ -126,6 +129,10 @@ class InferenceRunner(object):
 
         n_sample = self.configs.get(self.model_config.n_sample_key, None)
 
+        # TODO: I'm not sure if we need n_sample different directories anymore
+        # If the model outputs are going to be NPZ files, we can shove all of the
+        # n_sample coordinates into the same file and save it as an atom array stack or so.
+
         if self.configs.dump_dir_list:
             self.dump_dir_list = self.configs.dump_dir_list
         else:
@@ -160,6 +167,8 @@ class InferenceRunner(object):
             self.print(
                 f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}"
             )
+            # TODO: this exact code is repeated and looks quite unsafe
+            # We should make this into a method that's safer and call it both during training.
             checkpoint = torch.load(checkpoint_path, self.device)
 
             sample_key = [k for k in checkpoint["model"].keys()][0]
@@ -184,20 +193,13 @@ class InferenceRunner(object):
         self.print("Finished loading checkpoint.")
 
     @torch.no_grad()
+    @disable_autocast
     def predict(self, context: FullContext) -> ModelOutput:
-        enable_amp = (
-            torch.autocast(device_type="cuda", dtype=torch.float32)
-            if torch.cuda.is_available()
-            else nullcontext()
-        )
         context = context.to(self.device)
-
-        with enable_amp:
-            output = self.model(
-                context=context,
-                mode=Mode.INFERENCE,
-            )
-
+        output = self.model(
+            context=context,
+            mode=Mode.INFERENCE,
+        )
         return output
 
     def print(self, msg: str):
@@ -208,8 +210,8 @@ class InferenceRunner(object):
 def infer_predict(
     runner: InferenceRunner,
     configs: Any,
-    use_distributed_sampler: bool = True,
-) -> None:
+    use_distributed_sampler: bool = False,
+) -> Path | None:
     """Run inference on all samples in the dataloader.
 
     The output type (BackboneOutput, PackingOutput, SequenceOutput) determines
@@ -219,6 +221,9 @@ def infer_predict(
         runner: InferenceRunner with loaded model.
         configs: Configuration object.
         use_distributed_sampler: Whether to use distributed sampling.
+
+    Returns:
+        Path to the saved output file, or None if failed.
     """
     logger.info(f"Loading data from\n{configs.input_json_path}")
     try:
@@ -232,12 +237,11 @@ def infer_predict(
         logger.info(error_message)
         with open(opjoin(runner.error_dir, "error.txt"), "a") as f:
             f.write(error_message)
-        return
+        return None
 
+    saved_paths = None
     for seed in configs.seeds:
         seed_everything(seed=seed, deterministic=configs.deterministic)
-        # TODO: this currently cannot handle batched outputs it seems like, will need to change that completely.
-        # The inference dataloader needs to be able to return batched inputs for model consumption (MPNN and packing mainly.)
         for context in dataloader:
             try:
                 sample_name = context.basic.pdb_id[0]
@@ -247,7 +251,6 @@ def infer_predict(
                 logger.info(f"Running inference for sample {sample_name}...")
                 output = runner.predict(context)
 
-                # Build save context - output type determines save behavior
                 ctx = SaveContext(
                     output_dir=runner.dump_dir,
                     sample_dirs=runner.dump_dir_list,
@@ -255,15 +258,15 @@ def infer_predict(
                     atom_array=context.basic.atom_array[0],
                     n_atom=n_atom,
                     n_token=n_token,
-                    output_format=configs.get("output_format", "cif"),
+                    output_format=configs.get("output_format", "npz"),
                     trajectory_step_stride=configs.get(
                         "sample_diffusion.trajectory_step_stride", 1
                     ),
+                    context=context,
+                    uids=configs.get("uids", None),
                 )
 
-                # Polymorphic save - output type drives behavior
-                saved_files = save_output(output, ctx)
-                logger.debug(f"Saved {len(saved_files)} files")
+                saved_paths = save_output(output, ctx)
 
                 # Save motif mapping for backbone outputs (from context, not output)
                 if isinstance(output, BackboneOutput):
@@ -273,7 +276,7 @@ def infer_predict(
                     )
                     if not os.path.exists(mapping_path):
                         with open(mapping_path, "w") as f:
-                            json.dump(context.basic.original_motif_mapping, f)
+                            json.dump(context.basic.original_motif_mapping[0], f)
 
                 logger.info(
                     f"[Rank {DIST_WRAPPER.rank}] {sample_name} succeeded.\n"
@@ -285,6 +288,10 @@ def infer_predict(
                 logger.info(error_message)
                 if hasattr(torch.cuda, "empty_cache"):
                     torch.cuda.empty_cache()
+
+    if isinstance(output, BackboneOutput):
+        return saved_paths, mapping_path
+    return saved_paths
 
 
 def main(configs: Any, model_type: ModelType = ModelType.BACKBONE) -> None:

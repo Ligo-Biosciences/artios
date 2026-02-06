@@ -775,7 +775,7 @@ class FlowMatchingSampler:
         predictor: VelocityScorePredictor,
         x_init: Float[Tensor, "... n_atom 3"],
         n_steps: int,
-        mask: Bool[Tensor, "... n_atom"] | None = None,
+        mask: Bool[Tensor, "... n_atom"],
         track_trajectory: bool = False,
     ) -> SamplingResult:
         """Sample from the flow matching SDE.

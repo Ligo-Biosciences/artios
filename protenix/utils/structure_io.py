@@ -1,17 +1,19 @@
+from __future__ import annotations
+
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
-import biotite.sequence.io as seqio
 import biotite.structure as struc
 import numpy as np
 import torch
 from biotite.sequence import ProteinSequence
-from biotite.structure import AtomArray, superimpose
+from biotite.structure import AtomArray, AtomArrayStack, superimpose
 from biotite.structure.io.pdb import PDBFile
 
 from protenix.common.constants import STD_RESIDUES_AND_GAP
+from protenix.data.features import FullContext
 from protenix.data.utils import save_structure_cif
 from protenix.model.output import (
     BackboneOutput,
@@ -19,7 +21,7 @@ from protenix.model.output import (
     PackingOutput,
     SequenceOutput,
 )
-from protenix.utils.file_io import dump_multi_sample_atomarray
+from protenix.utils.file_io import dump_atomarray_stack
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +33,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SaveContext:
-    """Context for saving model output for a single structure.
+    """Context for saving model output.
 
-    Assumes batch_size=1. Each batch item requires its own SaveContext
-    since atom_array differs per batch item. The n_samples dimension
-    shares the same atom_array (topology), only coordinates differ.
+    The n_samples dimension shares the same atom_array (topology), only
+    coordinates differ.
 
     Attributes:
         output_dir: Base output directory (e.g., dump_dir).
@@ -47,6 +48,7 @@ class SaveContext:
         n_token: Number of tokens (for sequence outputs).
         output_format: Output format for structure files ("cif" or "npz").
         trajectory_step_stride: Save every nth trajectory step.
+        context: Full context from the dataloader (for accessing masks, etc.).
     """
 
     output_dir: str
@@ -57,6 +59,8 @@ class SaveContext:
     n_token: int = 0
     output_format: str = "cif"
     trajectory_step_stride: int = 1
+    context: FullContext | None = None
+    uids: list[int] | None = None
 
 
 def save_output(output: ModelOutput, ctx: SaveContext) -> list[Path]:
@@ -82,16 +86,14 @@ def save_output(output: ModelOutput, ctx: SaveContext) -> list[Path]:
     """
     match output:
         case BackboneOutput():
-            _assert_batch_one(output.coordinate, "BackboneOutput.coordinate")
+            # _assert_batch_one(output.coordinate, "BackboneOutput.coordinate")
             return _save_backbone(output, ctx)
 
-        case PackingOutput():
-            _assert_batch_one(output.coordinate, "PackingOutput.coordinate")
-            return _save_packing(output, ctx)
-
         case SequenceOutput():
-            _assert_batch_one(output.seq_logits, "SequenceOutput.seq_logits")
             return _save_sequence(output, ctx)
+
+        case PackingOutput():
+            return _save_packing(output, ctx)
 
         case _:
             raise TypeError(
@@ -121,7 +123,9 @@ def _save_backbone(output: BackboneOutput, ctx: SaveContext) -> list[Path]:
 
 
 def _save_packing(output: PackingOutput, ctx: SaveContext) -> list[Path]:
-    """Save packing output to CIF format."""
+    """Save packing output to CIF or NPZ format."""
+    if ctx.output_format == "npz":
+        return _save_packing_to_npz(output, ctx)
     return _save_packing_to_cif(output, ctx)
 
 
@@ -179,26 +183,36 @@ def _save_backbone_to_cif(output: BackboneOutput, ctx: SaveContext) -> list[Path
 
 
 def _save_backbone_to_npz(output: BackboneOutput, ctx: SaveContext) -> Path:
-    """Save all backbone samples to a single NPZ file."""
+    """Save all backbone samples to a single NPZ file as AtomArrayStack."""
+    _assert_batch_one(output.coordinate, "BackboneOutput.coordinate")
+
     # [batch=1, n_sample, n_atom, 3] -> [n_sample, n_atom, 3]
     coords = output.coordinate[0, :, : ctx.n_atom].detach().cpu().numpy()
+    n_sample, n_atom, _ = coords.shape
 
-    assert coords.shape[1] == len(ctx.atom_array), (
-        f"Coordinate atoms ({coords.shape[1]}) must match "
+    assert n_atom == len(ctx.atom_array), (
+        f"Coordinate atoms ({n_atom}) must match "
         f"atom_array size ({len(ctx.atom_array)})"
     )
+
+    # Create AtomArrayStack from atom_array template and coordinates
+    atom_stack = AtomArrayStack(depth=n_sample, length=n_atom)
+    atom_stack.coord = coords
+    atom_stack.bonds = ctx.atom_array.bonds
+
+    for category in ctx.atom_array.get_annotation_categories():
+        atom_stack.set_annotation(category, ctx.atom_array.get_annotation(category))
 
     output_path = Path(ctx.output_dir) / f"{ctx.sample_name}_backbone.npz"
     os.makedirs(ctx.output_dir, exist_ok=True)
 
-    dump_multi_sample_atomarray(ctx.atom_array, coords, output_path)
-    logger.info(f"Saved {coords.shape[0]} samples to {output_path}")
-
+    dump_atomarray_stack(atom_stack, output_path)
     return output_path
 
 
 def _save_backbone_trajectory(output: BackboneOutput, ctx: SaveContext) -> list[Path]:
     """Save backbone diffusion trajectory to multi-model PDB files."""
+    # TODO: this method is untested.
     assert output.trajectory is not None
 
     # [batch=1, n_sample, n_steps+1, n_atom, 3] -> [n_sample, n_steps+1, n_atom, 3]
@@ -257,6 +271,7 @@ def _save_backbone_trajectory(output: BackboneOutput, ctx: SaveContext) -> list[
 
 def _save_packing_to_cif(output: PackingOutput, ctx: SaveContext) -> list[Path]:
     """Save packing coordinates to individual CIF files (one per sample)."""
+    # TODO: batch size =1 isn't guaranteed anymore.
     # [batch=1, n_sample, n_atom, 3] -> [n_sample, n_atom, 3]
     coords = output.coordinate[0, :, : ctx.n_atom].detach().cpu().numpy()
     n_sample = coords.shape[0]
@@ -303,10 +318,80 @@ def _save_packing_to_cif(output: PackingOutput, ctx: SaveContext) -> list[Path]:
     return saved_files
 
 
+def _save_packing_to_npz(output: PackingOutput, ctx: SaveContext) -> list[Path]:
+    """Save packing output as per-uid NPZ files.
+
+    For each batch item (uid), saves packing_n_sample structures as an
+    AtomArrayStack in a single NPZ file.
+
+    Requires ctx.context to be set (for per-batch atom_arrays) and ctx.uids
+    to be set (for file naming).
+
+    Args:
+        output: PackingOutput with coordinate [batch, n_sample, n_atom, 3].
+        ctx: SaveContext with context and uids.
+
+    Returns:
+        List of paths to saved NPZ files (one per uid).
+    """
+    if ctx.context is None:
+        raise ValueError("SaveContext.context is required for packing NPZ saving")
+    if ctx.uids is None:
+        raise ValueError("SaveContext.uids is required for packing NPZ saving")
+
+    all_coords = output.coordinate.detach().cpu().numpy()
+    batch_size, n_sample, _, _ = all_coords.shape
+
+    assert batch_size == len(ctx.uids), (
+        f"Batch size ({batch_size}) must match " f"number of uids ({len(ctx.uids)})"
+    )
+
+    saved_files = []
+    for batch_idx in range(batch_size):
+        uid = ctx.uids[batch_idx]
+        try:
+            atom_array = ctx.context.basic.atom_array[batch_idx]
+            n_atom_actual = len(atom_array)
+
+            # Slice this item's coords to its actual atom count
+            uid_coords = all_coords[
+                batch_idx, :, :n_atom_actual
+            ]  # [n_sample, n_atom_actual, 3]
+
+            atom_stack = AtomArrayStack(depth=n_sample, length=n_atom_actual)
+            atom_stack.coord = uid_coords
+            atom_stack.bonds = atom_array.bonds
+
+            for category in atom_array.get_annotation_categories():
+                atom_stack.set_annotation(category, atom_array.get_annotation(category))
+
+            output_path = Path(ctx.output_dir) / f"uid_{uid}_packed.npz"
+            os.makedirs(ctx.output_dir, exist_ok=True)
+
+            dump_atomarray_stack(atom_stack, output_path)
+            saved_files.append(output_path)
+        except Exception as e:
+            logger.error(f"Error saving packing NPZ for uid {uid}: {e}")
+            continue
+
+    return saved_files
+
+
 def _save_sequence_to_fasta(output: SequenceOutput, ctx: SaveContext) -> list[Path]:
-    """Save sequence output to FASTA file."""
-    # [batch=1, n_token, num_residue_types] -> [n_token, num_residue_types]
-    seq_logits = output.seq_logits[0, : ctx.n_token]
+    """Save sequence output to FASTA file.
+
+    Saves designed sequences for protein tokens that are not motif-related.
+    Supports batch_size > 1, writing all sequences to one FASTA file.
+
+    Args:
+        output: SequenceOutput with seq_logits [batch, n_token, num_residue_types].
+        ctx: SaveContext with context containing masks.
+
+    Returns:
+        List containing the path to the saved FASTA file.
+    """
+    if ctx.context is None:
+        raise ValueError("SaveContext.context is required for sequence saving")
 
     idx_to_restype = {v: k for k, v in STD_RESIDUES_AND_GAP.items()}
 
@@ -314,10 +399,48 @@ def _save_sequence_to_fasta(output: SequenceOutput, ctx: SaveContext) -> list[Pa
     os.makedirs(output_dir, exist_ok=True)
     output_path = output_dir / f"{ctx.sample_name}_sequence.fasta"
 
-    indices = seq_logits.argmax(dim=-1).cpu().numpy().astype(np.int32)
-    seq_list = [idx_to_restype.get(idx, "UNK") for idx in indices]
-    sequence = ProteinSequence(seq_list)
-    seqio.save_sequence(output_path, sequence)
+    # Get masks from context: protein tokens that are NOT motif-related
+    is_protein = ctx.context.entity.is_protein_token  # [batch, n_token]
+    is_motif_related = ctx.context.motif.is_motif_related_token  # [batch, n_token]
+    design_mask = is_protein & ~is_motif_related  # [batch, n_token]
 
-    logger.info(f"Saved FASTA sequence to {output_path}")
+    batch_size = output.seq_logits.shape[0]
+    n_tokens: list[int] = (
+        ctx.context.basic.n_token
+    )  # non-padding tokens for all in batch
+
+    sequences: list[tuple[str, ProteinSequence]] = []
+    for batch_idx in range(batch_size):
+        n_tok = n_tokens[batch_idx] if isinstance(n_tokens, list) else n_tokens
+        seq_logits = output.seq_logits[
+            batch_idx, :n_tok
+        ]  # [n_token, num_residue_types]
+        mask = design_mask[batch_idx, :n_tok]  # [n_token]
+
+        # Get predicted residue indices and filter by mask
+        indices = seq_logits.argmax(dim=-1).cpu().numpy().astype(np.int32)
+        mask_np = mask.cpu().numpy()
+
+        seq_list = []
+        for idx, m in zip(indices, mask_np):
+            if not m:
+                continue
+            restype = idx_to_restype.get(idx, "X")
+            # Skip gaps - they're not valid amino acids
+            if restype == "-":
+                continue
+            seq_list.append(restype)
+        sequence = ProteinSequence(seq_list)
+        sequences.append((f"model_{batch_idx}", sequence))
+
+    # Write all sequences to the FASTA file
+    with open(output_path, "w") as f:
+        for header, seq in sequences:
+            f.write(f">{header}\n")
+            # Write sequence in 80-character lines
+            seq_str = str(seq)
+            for i in range(0, len(seq_str), 80):
+                f.write(seq_str[i : i + 80] + "\n")
+
+    logger.info(f"Saved {len(sequences)} sequences to {output_path}")
     return [output_path]

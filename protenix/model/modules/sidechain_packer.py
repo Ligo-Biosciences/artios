@@ -182,10 +182,17 @@ class SidechainPacker(nn.Module):
         )
         predictor = self.as_predictor(context)
 
+        mask = repeat(
+            context.mask.is_resolved,
+            "... n_atom -> ... n_sample n_atom",
+            n_sample=n_sample,
+        )
+
         return sampler.sample(
             predictor=predictor,
             x_init=x_init,
             n_steps=n_steps,
+            mask=mask,
         )
 
     # @typecheck

@@ -562,7 +562,6 @@ class ArtiosPackingTrainer(object):
         infer_predict(
             inference_runner,
             self.configs,
-            ModelType.PACKING,
             use_distributed_sampler=False,
         )
 

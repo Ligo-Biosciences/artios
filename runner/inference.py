@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import logging
 import os
 import traceback
@@ -268,15 +267,10 @@ def infer_predict(
 
                 saved_paths = save_output(output, ctx)
 
-                # Save motif mapping for backbone outputs (from context, not output)
+                # Capture motif mapping for backbone outputs (from context, not output)
+                motif_mapping = None
                 if isinstance(output, BackboneOutput):
-                    parent_dir = os.path.dirname(runner.dump_dir)
-                    mapping_path = opjoin(
-                        parent_dir, f"{sample_name}_motif_mapping.json"
-                    )
-                    if not os.path.exists(mapping_path):
-                        with open(mapping_path, "w") as f:
-                            json.dump(context.basic.original_motif_mapping[0], f)
+                    motif_mapping = context.basic.original_motif_mapping[0]
 
                 logger.info(
                     f"[Rank {DIST_WRAPPER.rank}] {sample_name} succeeded.\n"
@@ -290,7 +284,7 @@ def infer_predict(
                     torch.cuda.empty_cache()
 
     if isinstance(output, BackboneOutput):
-        return saved_paths, mapping_path
+        return saved_paths, motif_mapping
     return saved_paths
 
 

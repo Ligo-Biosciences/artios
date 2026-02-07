@@ -16,3 +16,6 @@ uv.lock
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 ccd_files/
+
+# Keys
+artios.pem

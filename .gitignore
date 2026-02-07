@@ -19,3 +19,6 @@ ccd_files/
 
 # Keys
 artios.pem
+
+# Generated evaluation outputs
+evaluation/reference_distributions/

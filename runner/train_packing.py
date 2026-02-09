@@ -1,11 +1,10 @@
 import datetime
-import json
+import hashlib
 import logging
 import os
 import time
 import warnings
 from contextlib import nullcontext
-from glob import glob
 from pathlib import Path
 from typing import Optional
 
@@ -31,14 +30,14 @@ from protenix.config.config import save_config
 from protenix.data.dataloader import get_dataloaders
 from protenix.data.features import FullContext
 from protenix.metrics.lddt_metrics import LDDTMetrics
-from protenix.metrics.rmsd import compute_per_atom_rmsf
+
+# from protenix.metrics.rmsd import compute_per_atom_rmsf
 from protenix.model.artios_packing import ArtiosPacking
 from protenix.model.modules.sidechain_packer import SidechainPacker
 from protenix.model.modules.transformer import DiffusionTransformer, DiTBlock
 from protenix.model.output import ModelOutput
 from protenix.model.utils import Mode
 from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
-from protenix.utils.inference import ModelType
 from protenix.utils.lr_scheduler import get_lr_scheduler
 from protenix.utils.metrics import SimpleMetricAggregator
 from protenix.utils.monitoring import grad_norm
@@ -47,7 +46,6 @@ from protenix.utils.seed import seed_everything
 from protenix.utils.torchwatcher import TorchWatcher
 from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.ema import EMAWrapper
-from runner.inference import InferenceRunner, infer_predict
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -174,9 +172,15 @@ class ArtiosPackingTrainer(object):
             dist.init_process_group(
                 backend="nccl", timeout=datetime.timedelta(seconds=timeout_seconds)
             )
-        # All ddp process got the same seed
+        # Use rank-specific seed for different augmentations across DDP processes
+        if not self.configs.deterministic_seed:
+            hash_string = f"({self.configs.seed},{DIST_WRAPPER.rank},init_seed)"
+            rank_seed = int(hashlib.sha256(hash_string.encode("utf8")).hexdigest(), 16)
+            rank_seed = rank_seed % (2**32)
+        else:
+            rank_seed = self.configs.seed
         seed_everything(
-            seed=self.configs.seed,
+            seed=rank_seed,
             deterministic=self.configs.deterministic,
         )
 
@@ -458,38 +462,38 @@ class ArtiosPackingTrainer(object):
 
         return metrics
 
-    def _compute_rmsf_metrics(
-        self,
-        structure_paths: list[Path],
-    ) -> dict[str, float]:
-        """Compute overall and backbone RMSF metrics from a list of packed structures.
+    # def _compute_rmsf_metrics(
+    #     self,
+    #     structure_paths: list[Path],
+    # ) -> dict[str, float]:
+    #     """Compute overall and backbone RMSF metrics from a list of packed structures.
 
-        Args:
-            structure_paths: List of paths to CIF files (packed samples).
+    #     Args:
+    #         structure_paths: List of paths to CIF files (packed samples).
 
-        Returns:
-            Dict with 'rmsf_overall' and 'rmsf_backbone' keys.
-        """
-        structures = [load_structure(str(p)) for p in structure_paths]
+    #     Returns:
+    #         Dict with 'rmsf_overall' and 'rmsf_backbone' keys.
+    #     """
+    #     structures = [load_structure(str(p)) for p in structure_paths]
 
-        if len(structures) < 2:
-            return {"rmsf_overall": 0.0, "rmsf_backbone": 0.0}
+    #     if len(structures) < 2:
+    #         return {"rmsf_overall": 0.0, "rmsf_backbone": 0.0}
 
-        reference = structures[0]
-        aligned_structures = [reference]
-        for structure in structures[1:]:
-            superimposed, _ = bs.superimpose(reference, structure)
-            aligned_structures.append(superimposed)
+    #     reference = structures[0]
+    #     aligned_structures = [reference]
+    #     for structure in structures[1:]:
+    #         superimposed, _ = bs.superimpose(reference, structure)
+    #         aligned_structures.append(superimposed)
 
-        per_atom_rmsf = compute_per_atom_rmsf(aligned_structures)
+    #     per_atom_rmsf = compute_per_atom_rmsf(aligned_structures)
 
-        rmsf_overall = float(np.mean(per_atom_rmsf))
+    #     rmsf_overall = float(np.mean(per_atom_rmsf))
 
-        backbone_mask = np.isin(reference.atom_name, BACKBONE_DEFS["protein"])
-        backbone_rmsf = per_atom_rmsf[backbone_mask]
-        rmsf_backbone = float(np.mean(backbone_rmsf)) if len(backbone_rmsf) > 0 else 0.0
+    #     backbone_mask = np.isin(reference.atom_name, BACKBONE_DEFS["protein"])
+    #     backbone_rmsf = per_atom_rmsf[backbone_mask]
+    #     rmsf_backbone = float(np.mean(backbone_rmsf)) if len(backbone_rmsf) > 0 else 0.0
 
-        return {"rmsf_overall": rmsf_overall, "rmsf_backbone": rmsf_backbone}
+    #     return {"rmsf_overall": rmsf_overall, "rmsf_backbone": rmsf_backbone}
 
     def _compute_rmsd_to_ground_truth(
         self,
@@ -541,78 +545,78 @@ class ArtiosPackingTrainer(object):
 
         return {"rmsd_overall": avg_rmsd_overall, "rmsd_backbone": avg_rmsd_backbone}
 
-    @torch.no_grad()
-    def _run_full_inference_and_log(self, log_outputs_to_neptune: bool = True) -> None:
-        """Run inference on a batch and log structures to Neptune.
+    # @torch.no_grad()
+    # def _run_full_inference_and_log(self, log_outputs_to_neptune: bool = True) -> None:
+    #     """Run inference on a batch and log structures to Neptune.
 
-        Args:
-            log_outputs_to_neptune: Whether to log outputs to Neptune.
-        """
-        step_dir = os.path.join(self.prediction_dir, f"step_{self.step}")
-        self.configs.dump_dir = step_dir
+    #     Args:
+    #         log_outputs_to_neptune: Whether to log outputs to Neptune.
+    #     """
+    #     step_dir = os.path.join(self.prediction_dir, f"step_{self.step}")
+    #     self.configs.dump_dir = step_dir
 
-        ### Run inference
-        inference_runner = InferenceRunner(
-            self.configs,
-            ModelType.PACKING,
-            model=self.packing_model,
-        )
+    #     ### Run inference
+    #     inference_runner = InferenceRunner(
+    #         self.configs,
+    #         ModelType.PACKING,
+    #         model=self.packing_model,
+    #     )
 
-        self.print(f"Running inference for step {self.step}...")
-        infer_predict(
-            inference_runner,
-            self.configs,
-            use_distributed_sampler=False,
-        )
+    #     self.print(f"Running inference for step {self.step}...")
+    #     infer_predict(
+    #         inference_runner,
+    #         self.configs,
+    #         use_distributed_sampler=False,
+    #     )
 
-        if not (log_outputs_to_neptune and self.configs.use_wandb):
-            return
+    #     if not (log_outputs_to_neptune and self.configs.use_wandb):
+    #         return
 
-        filepaths = glob(os.path.join(step_dir, "**/*.cif"), recursive=True)
-        self.print(f"Found {len(filepaths)} files to log to Neptune")
-        files_dict = {f"structures/{Path(fp).name}": fp for fp in filepaths}
-        self.neptune_run.log_files(files=files_dict, step=self.step)
+    #     filepaths = glob(os.path.join(step_dir, "**/*.cif"), recursive=True)
+    #     self.print(f"Found {len(filepaths)} files to log to Neptune")
+    #     files_dict = {f"structures/{Path(fp).name}": fp for fp in filepaths}
+    #     self.neptune_run.log_files(files=files_dict, step=self.step)
 
-        ### Compute RMSF metrics
-        with open(self.configs.input_json_path, "r") as f:
-            inference_samples = json.load(f)
-        sample_names = [sample["name"] for sample in inference_samples]
+    #     ### Compute RMSF metrics
+    #     with open(self.configs.input_json_path, "r") as f:
+    #         inference_samples = json.load(f)
+    #     sample_names = [sample["name"] for sample in inference_samples]
 
-        n_sample = self.configs.artios_packing.sample_diffusion.N_sample
+    #     n_sample = self.configs.artios_packing.sample_diffusion.N_sample
 
-        all_rmsf_metrics = {}
-        for sample_name in sample_names:
-            structure_paths = []
-            for sample_idx in range(n_sample):
-                sample_dir = os.path.join(step_dir, str(sample_idx))
-                cif_pattern = os.path.join(sample_dir, f"{sample_name}*.cif")
-                matching_files = glob(cif_pattern)
-                structure_paths.extend([Path(f) for f in matching_files])
+    #     all_rmsf_metrics = {}
+    #     for sample_name in sample_names:
+    #         structure_paths = []
+    #         for sample_idx in range(n_sample):
+    #             sample_dir = os.path.join(step_dir, str(sample_idx))
+    #             cif_pattern = os.path.join(sample_dir, f"{sample_name}*.cif")
+    #             matching_files = glob(cif_pattern)
+    #             structure_paths.extend([Path(f) for f in matching_files])
 
-            if len(structure_paths) < 2:
-                self.print(
-                    f"Skipping RMSF for {sample_name}: found {len(structure_paths)} structures"
-                )
-                continue
+    #         if len(structure_paths) < 2:
+    #             self.print(
+    #                 f"Skipping RMSF for {sample_name}: found {len(structure_paths)} structures"
+    #             )
+    #             continue
 
-            try:
-                rmsf_metrics = self._compute_rmsf_metrics(structure_paths)
-                all_rmsf_metrics[f"inference/{sample_name}/rmsf_overall"] = (
-                    rmsf_metrics["rmsf_overall"]
-                )
-                all_rmsf_metrics[f"inference/{sample_name}/rmsf_backbone"] = (
-                    rmsf_metrics["rmsf_backbone"]
-                )
-                self.print(
-                    f"  {sample_name}: overall={rmsf_metrics['rmsf_overall']:.4f}, "
-                    f"backbone={rmsf_metrics['rmsf_backbone']:.4f}"
-                )
-            except Exception as e:
-                self.print(f"Error computing RMSF for {sample_name}: {e}")
+    #         try:
+    #             rmsf_metrics = self._compute_rmsf_metrics(structure_paths)
+    #             all_rmsf_metrics[f"inference/{sample_name}/rmsf_overall"] = (
+    #                 rmsf_metrics["rmsf_overall"]
+    #             )
+    #             all_rmsf_metrics[f"inference/{sample_name}/rmsf_backbone"] = (
+    #                 rmsf_metrics["rmsf_backbone"]
+    #             )
+    #             self.print(
+    #                 f"  {sample_name}: overall={rmsf_metrics['rmsf_overall']:.4f}, "
+    #                 f"backbone={rmsf_metrics['rmsf_backbone']:.4f}"
+    #             )
+    #         except Exception as e:
+    #             self.print(f"Error computing RMSF for {sample_name}: {e}")
 
-        if all_rmsf_metrics:
-            self.neptune_run.log_metrics(all_rmsf_metrics, step=self.step)
-            self.print(f"Logged RMSF metrics for {len(sample_names)} samples")
+    #     if all_rmsf_metrics:
+    #         self.neptune_run.log_metrics(all_rmsf_metrics, step=self.step)
+    #         self.print(f"Logged RMSF metrics for {len(sample_names)} samples")
 
     @torch.no_grad()
     def _run_eval_set_inference_and_log(
@@ -830,7 +834,8 @@ class ArtiosPackingTrainer(object):
             return
 
         if self.configs.run_training_time_inference and DIST_WRAPPER.rank == 0:
-            self._run_full_inference_and_log(log_outputs_to_neptune=True)
+            # self._run_full_inference_and_log(log_outputs_to_neptune=True)
+            pass
 
         weight_norms = {}
         for name, param in self.packing_model.named_parameters():
@@ -868,10 +873,15 @@ class ArtiosPackingTrainer(object):
         Args:
             context: Full context containing atom arrays and pdb ids.
             motif_as_b_factor: If True, set b_factor to is_motif annotation.
+
+        Note: This method is a no-op if atom_array is None (disabled for performance).
         """
+        atom_arrays = context.basic.atom_array
+        if atom_arrays is None:
+            return
+
         from biotite.structure.io import save_structure
 
-        atom_arrays = context.basic.atom_array
         pdb_ids = context.basic.pdb_id
 
         for idx, atom_array in enumerate(atom_arrays):

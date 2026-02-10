@@ -8,8 +8,7 @@ from logging import getLogger
 import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
-from scipy.sparse import csr_matrix, diags
-from scipy.sparse.linalg import eigsh
+from scipy.sparse import csr_matrix
 from scipy.spatial import KDTree
 
 logger = getLogger(__name__)
@@ -149,20 +148,21 @@ class FragmentMaker:
                 return
 
             idx = np.array(sorted(node_indices))
-            sub_W = W[idx][:, idx]
+            sub_W = W[idx][:, idx].toarray()
 
-            # Compute D^{-1/2} W D^{-1/2} (= I - L_sym) as sparse
-            d = np.asarray(sub_W.sum(axis=1)).ravel()
+            # Compute normalized Laplacian L_sym = I - D^{-1/2} W D^{-1/2}
+            d = sub_W.sum(axis=1)
             d_inv_sqrt = np.zeros_like(d)
             nonzero = d > 0
             d_inv_sqrt[nonzero] = 1.0 / np.sqrt(d[nonzero])
 
-            L_norm = diags(d_inv_sqrt) @ sub_W @ diags(d_inv_sqrt)
+            D_inv_sqrt = np.diag(d_inv_sqrt)
+            L_sym = np.eye(len(idx)) - D_inv_sqrt @ sub_W @ D_inv_sqrt
 
-            # Find 2 largest eigenvalues of L_norm; fiedler_value = 1 - λ₂(L_norm)
-            evals, evecs = eigsh(L_norm, k=2, which="LM")
-            fiedler_value = 1.0 - evals[0]
-            fiedler_vector = evecs[:, 0]
+            # Full eigendecomposition; Fiedler value is 2nd smallest eigenvalue
+            evals, evecs = np.linalg.eigh(L_sym)
+            fiedler_value = evals[1]
+            fiedler_vector = evecs[:, 1]
 
             if fiedler_value > self.spectral_connectivity_threshold:
                 return

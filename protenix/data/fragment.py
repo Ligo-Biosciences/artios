@@ -2,6 +2,7 @@
 Houses all the logic for generating fragments from protein structures.
 """
 
+from dataclasses import dataclass
 from logging import getLogger
 
 import biotite.structure as struc
@@ -12,36 +13,23 @@ from scipy.spatial import KDTree
 logger = getLogger(__name__)
 
 
-class FragmentMaker:
-    """
-    Main class for generating fragments when prepping the dataset in parser.py.
-    The AtomArray of a .cif file is handed to the `FragmentMaker`, which will then
-    remove disordered residues (according to pLDDT). The remaining 'fragmented'
-    structure undergoes fragment specfic processing, filtering fragments that do
-    not favour the training-relevant criteria (i.e for motif scaffolding, fragments
-    with a high `Rg` are filtered out). The exact workflow is as follows:
+@dataclass(frozen=True)
+class Fragment:
+    fragment_id: int
+    avg_plddt: float
+    length: int
+    rg: float
+    sasa: float
+    boundaries: str
 
-    - filter_low_plddt_residues
-        Filters the residues of the input AtomArray according to residue-level
-        pLDDT (from the .b_factor annotation). Returns a (modified) AtomArray.
-        The pLDDT threshold is class attribute.
-    - assign_fragment_ids
-        Detects fragments in the AtomArray left by the filtering. This detects the contiguous
-        windows of residues. Each window gets a unique fragment ID. Fragment ID is assigned
-        using an AtomArray annotation (starting from 0).
-    - spatially_cluster_fragments
-        This identifies which fragments are
-        Fragments that are 'in contact' are assigned the same fragment cluster ID.
-    - calculate_fragment_metrics
-        This calculates the avg pLDDT, length and Rg of each fragment. This is stored in a dictionary
-        of fragment_id -> metric.
-    - filter_fragments
-        This filters the fragments based on the calculated metrics as well as whether or not the fragment
-        contains a pocket (using a .pocket annotation the AtomArray has). Filter values are class attributes.
-        Fragments that do not meet the criteria are filtered out.
-    - correct_fragment_ids
-        This corrects the remaining fragment cluster ID's to ensure that they start from 0 and are contiguous.
-        This is required as filtering fragments will result in gaps in the fragment ID's.
+
+class FragmentMaker:
+    """Extracts compact, well-folded fragments from full-length predicted structures.
+
+    Pipeline: filter_low_plddt_residues -> spectral_split -> assign_fragment_ids
+    -> spatially_cluster_fragments -> filter_fragments
+
+    See docs/fragment_detection.md for algorithm details.
     """
 
     def __init__(
@@ -51,6 +39,11 @@ class FragmentMaker:
         min_contact_residues: int = 4,
         min_fragment_length: int = 150,
         min_fragment_plddt: float = 70,
+        spectral_k: int = 15,
+        spectral_sigma: float = 8.0,
+        spectral_connectivity_threshold: float = 0.05,
+        spectral_boundary_size: int = 4,
+        spectral_min_partition_size: int = 50,
     ):
         """
         Initialize FragmentMaker with filtering and clustering thresholds.
@@ -61,12 +54,22 @@ class FragmentMaker:
             min_contact_residues (int): Minimum number of residues with contacts to merge fragments. Defaults to 4.
             min_fragment_length (int): Minimum length of a fragment. Defaults to 150.
             min_fragment_plddt (float): Minimum pLDDT of a fragment. Defaults to 70.
+            spectral_k (int): Number of nearest neighbors for kNN graph in spectral bisection. Defaults to 15.
+            spectral_sigma (float): Gaussian kernel bandwidth for edge weights. Defaults to 8.0.
+            spectral_connectivity_threshold (float): Fiedler value (lambda_2) above which a partition is considered well-connected. Defaults to 0.05.
+            spectral_boundary_size (int): Number of residues to remove at each bisection boundary. Defaults to 4.
+            spectral_min_partition_size (int): Minimum partition size to attempt further bisection. Defaults to 50.
         """
         self.plddt_residue_threshold = plddt_disorder_threshold
         self.contact_distance_threshold = contact_distance_threshold
         self.min_contact_residues = min_contact_residues
         self.min_fragment_length = min_fragment_length
         self.min_fragment_plddt = min_fragment_plddt
+        self.spectral_k = spectral_k
+        self.spectral_sigma = spectral_sigma
+        self.spectral_connectivity_threshold = spectral_connectivity_threshold
+        self.spectral_boundary_size = spectral_boundary_size
+        self.spectral_min_partition_size = spectral_min_partition_size
 
         # Create length-dependent Rg upper bound
         self.rg_upper_bound_line = (
@@ -95,6 +98,106 @@ class FragmentMaker:
         fragment_ids[low_plddt_mask] = -1
 
         atom_array.set_annotation("fragment_id", fragment_ids)
+        return atom_array
+
+    def spectral_split(self, atom_array: AtomArray) -> AtomArray:
+        """
+        Recursive spectral bisection to detect linker residues between domains.
+
+        Builds a Gaussian-weighted kNN graph over CA atoms (excluding those
+        already filtered by pLDDT), computes the normalized Laplacian, and
+        recursively bisects using the Fiedler vector. Residues at the sign
+        change boundary of each bisection are marked as linkers (fragment_id = -1).
+
+        Args:
+            atom_array (AtomArray): AtomArray with fragment_id annotation initialized
+                (fragment_id = -1 for filtered residues, 0 for valid ones).
+
+        Returns:
+            AtomArray: AtomArray with linker residues additionally marked as -1.
+        """
+        ca_mask = atom_array.atom_name == "CA"
+        valid_mask = ca_mask & (atom_array.fragment_id != -1)
+        ca_indices = np.where(valid_mask)[0]
+
+        if len(ca_indices) < self.spectral_min_partition_size:
+            return atom_array
+
+        coords = atom_array.coord[ca_indices]
+        n = len(coords)
+
+        # Build Gaussian-weighted kNN adjacency matrix
+        tree = KDTree(coords)
+        k = min(self.spectral_k, n - 1)
+        distances, indices = tree.query(coords, k=k + 1)
+
+        W = np.zeros((n, n))
+        for i in range(n):
+            for j_idx in range(1, k + 1):
+                j = indices[i, j_idx]
+                d = distances[i, j_idx]
+                w = np.exp(-(d**2) / (2 * self.spectral_sigma**2))
+                W[i, j] = max(W[i, j], w)
+                W[j, i] = max(W[j, i], w)
+
+        linker_local_indices: set[int] = set()
+
+        def _split(node_indices: list[int], depth: int = 0) -> None:
+            if len(node_indices) < self.spectral_min_partition_size:
+                return
+
+            idx = np.array(sorted(node_indices))
+            sub_W = W[np.ix_(idx, idx)]
+
+            # Normalized Laplacian: L_sym = I - D^{-1/2} W D^{-1/2}
+            d = sub_W.sum(axis=1)
+            d_inv_sqrt = np.zeros_like(d)
+            nonzero = d > 0
+            d_inv_sqrt[nonzero] = 1.0 / np.sqrt(d[nonzero])
+            D_inv_sqrt = np.diag(d_inv_sqrt)
+
+            L_sym = np.eye(len(idx)) - D_inv_sqrt @ sub_W @ D_inv_sqrt
+
+            eigenvalues, eigenvectors = np.linalg.eigh(L_sym)
+            fiedler_value = eigenvalues[1]
+            fiedler_vector = eigenvectors[:, 1]
+
+            if fiedler_value > self.spectral_connectivity_threshold:
+                return
+
+            # Remove boundary_size residues closest to sign change
+            fiedler_abs = np.abs(fiedler_vector)
+            boundary_order = np.argsort(fiedler_abs)[: self.spectral_boundary_size]
+            boundary_set = set(boundary_order.tolist())
+
+            for bi in boundary_order:
+                linker_local_indices.add(idx[bi])
+
+            # Partition remaining nodes by Fiedler sign
+            partition_a = [
+                idx[i]
+                for i in range(len(idx))
+                if i not in boundary_set and fiedler_vector[i] < 0
+            ]
+            partition_b = [
+                idx[i]
+                for i in range(len(idx))
+                if i not in boundary_set and fiedler_vector[i] >= 0
+            ]
+
+            _split(partition_a, depth + 1)
+            _split(partition_b, depth + 1)
+
+        _split(list(range(n)))
+
+        if linker_local_indices:
+            fragment_ids = atom_array.fragment_id.copy()
+            linker_atom_indices = ca_indices[np.array(sorted(linker_local_indices))]
+            linker_res_ids = set(atom_array.res_id[linker_atom_indices].tolist())
+            mask = np.isin(atom_array.res_id, list(linker_res_ids))
+            fragment_ids[mask] = -1
+            atom_array.set_annotation("fragment_id", fragment_ids)
+
         return atom_array
 
     def assign_fragment_ids(self, atom_array: AtomArray) -> AtomArray:
@@ -246,7 +349,7 @@ class FragmentMaker:
         atom_array.set_annotation("fragment_id", fragment_cluster_id)
         return atom_array
 
-    def calculate_fragment_metrics(self, atom_array: AtomArray) -> dict:
+    def calculate_fragment_metrics(self, atom_array: AtomArray) -> list[Fragment]:
         """
         Calculate metrics for each fragment: average pLDDT, length, and radius of gyration.
 
@@ -254,12 +357,9 @@ class FragmentMaker:
             atom_array (AtomArray): AtomArray with fragment_id annotation.
 
         Returns:
-            dict: Dictionary mapping fragment_id to metrics dict with keys:
-                - avg_plddt (float): Average pLDDT of fragment
-                - length (int): Number of unique residues in fragment
-                - rg (float): Radius of gyration in Angstroms
+            list[Fragment]: List of Fragment objects sorted by fragment_id.
         """
-        metrics = {}
+        fragments: list[Fragment] = []
 
         # Get unique fragment IDs (excluding -1)
         unique_frag_ids = np.unique(atom_array.fragment_id)
@@ -301,15 +401,18 @@ class FragmentMaker:
             segments.append(f"{segment_start}-{prev_res_id}")
             boundaries = "_".join(segments)
 
-            metrics[frag_id] = {
-                "avg_plddt": float(avg_plddt),
-                "length": length,
-                "rg": float(rg),
-                "sasa": float(sasa),
-                "boundaries": boundaries,
-            }
+            fragments.append(
+                Fragment(
+                    fragment_id=int(frag_id),
+                    avg_plddt=float(avg_plddt),
+                    length=length,
+                    rg=float(rg),
+                    sasa=float(sasa),
+                    boundaries=boundaries,
+                )
+            )
 
-        return metrics
+        return sorted(fragments, key=lambda f: f.fragment_id)
 
     def filter_fragments(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -328,21 +431,19 @@ class FragmentMaker:
             AtomArray: AtomArray with filtered fragments marked as -1.
         """
         fragment_ids = atom_array.fragment_id.copy()
-        metrics = self.calculate_fragment_metrics(atom_array)
+        fragments = self.calculate_fragment_metrics(atom_array)
 
-        for frag_id, frag_metrics in metrics.items():
-            # Check if fragment meets all criteria
-            passes_length = frag_metrics["length"] >= self.min_fragment_length
-            passes_plddt = frag_metrics["avg_plddt"] >= self.min_fragment_plddt
+        for frag in fragments:
+            passes_length = frag.length >= self.min_fragment_length
+            passes_plddt = frag.avg_plddt >= self.min_fragment_plddt
 
             # Calculate length-dependent Rg upper bound using linear equation
             slope, y_intercept = self.rg_upper_bound_line
-            max_rg = slope * frag_metrics["length"] + y_intercept
-            passes_rg = frag_metrics["rg"] <= max_rg
+            max_rg = slope * frag.length + y_intercept
+            passes_rg = frag.rg <= max_rg
 
             if not (passes_length and passes_plddt and passes_rg):
-                # Mark this fragment as filtered
-                mask = atom_array.fragment_id == frag_id
+                mask = atom_array.fragment_id == frag.fragment_id
                 fragment_ids[mask] = -1
 
         atom_array.set_annotation("fragment_id", fragment_ids)
@@ -368,6 +469,7 @@ class FragmentMaker:
                 fragment_id = -1 for filtered atoms, otherwise 0, 1, 2, ...
         """
         atom_array = self.filter_low_plddt_residues(atom_array)
+        atom_array = self.spectral_split(atom_array)
         atom_array = self.assign_fragment_ids(atom_array)
         atom_array = self.spatially_cluster_fragments(atom_array)
         atom_array = self.filter_fragments(atom_array)
@@ -386,23 +488,18 @@ class FragmentMaker:
             a dictionary with per-fragment metrics and pocket data.
         """
         atom_array = self.filter_low_plddt_residues(atom_array)
+        atom_array = self.spectral_split(atom_array)
         atom_array = self.assign_fragment_ids(atom_array)
         atom_array = self.spatially_cluster_fragments(atom_array)
 
-        metrics = self.calculate_fragment_metrics(atom_array)
-
-        fragment_ids = sorted(metrics.keys())
+        fragments = self.calculate_fragment_metrics(atom_array)
 
         metrics_by_name = {
-            "fragment_avg_plddt": [
-                metrics[frag_id]["avg_plddt"] for frag_id in fragment_ids
-            ],
-            "fragment_length": [metrics[frag_id]["length"] for frag_id in fragment_ids],
-            "fragment_rg": [metrics[frag_id]["rg"] for frag_id in fragment_ids],
-            "fragment_sasa": [metrics[frag_id]["sasa"] for frag_id in fragment_ids],
-            "fragment_boundaries": [
-                metrics[frag_id]["boundaries"] for frag_id in fragment_ids
-            ],
+            "fragment_avg_plddt": [f.avg_plddt for f in fragments],
+            "fragment_length": [f.length for f in fragments],
+            "fragment_rg": [f.rg for f in fragments],
+            "fragment_sasa": [f.sasa for f in fragments],
+            "fragment_boundaries": [f.boundaries for f in fragments],
         }
 
         return metrics_by_name

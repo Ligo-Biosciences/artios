@@ -349,6 +349,68 @@ class FragmentMaker:
         atom_array.set_annotation("fragment_id", fragment_cluster_id)
         return atom_array
 
+    def fill_spectral_gaps(self, atom_array: AtomArray) -> AtomArray:
+        """
+        Reclaim boundary residues that create internal gaps within fragments.
+
+        After spatial clustering re-merges fragments that were split by spectral
+        bisection, the removed boundary residues leave small internal gaps. This
+        method fills those gaps by reclaiming residues that:
+        1. Sit inside a gap of at most 2 * spectral_boundary_size residues
+        2. Have pLDDT above the disorder threshold (confirming they were removed
+           by spectral_split, not by pLDDT filtering)
+
+        Args:
+            atom_array (AtomArray): AtomArray with fragment_id annotation after
+                spatial clustering.
+
+        Returns:
+            AtomArray: AtomArray with small internal gaps filled.
+        """
+        fragment_ids = atom_array.fragment_id.copy()
+        max_gap_size = 2 * self.spectral_boundary_size
+
+        unique_frag_ids = np.unique(fragment_ids)
+        unique_frag_ids = unique_frag_ids[unique_frag_ids != -1]
+
+        for frag_id in unique_frag_ids:
+            frag_res_ids = np.unique(atom_array.res_id[fragment_ids == frag_id])
+            sorted_res = np.sort(frag_res_ids)
+
+            # Find internal gaps
+            diffs = np.diff(sorted_res)
+            gap_indices = np.where(diffs > 1)[0]
+
+            for gi in gap_indices:
+                gap_start = sorted_res[gi] + 1
+                gap_end = sorted_res[gi + 1]
+                gap_size = gap_end - gap_start
+
+                if gap_size > max_gap_size:
+                    continue
+
+                # Check that all gap residues have good pLDDT
+                all_reclaimable = True
+                for res_id in range(gap_start, gap_end):
+                    res_mask = atom_array.res_id == res_id
+                    if not np.any(res_mask):
+                        all_reclaimable = False
+                        break
+                    if (
+                        np.mean(atom_array.b_factor[res_mask])
+                        < self.plddt_residue_threshold
+                    ):
+                        all_reclaimable = False
+                        break
+
+                if all_reclaimable:
+                    for res_id in range(gap_start, gap_end):
+                        res_mask = atom_array.res_id == res_id
+                        fragment_ids[res_mask] = frag_id
+
+        atom_array.set_annotation("fragment_id", fragment_ids)
+        return atom_array
+
     def calculate_fragment_metrics(self, atom_array: AtomArray) -> list[Fragment]:
         """
         Calculate metrics for each fragment: average pLDDT, length, and radius of gyration.
@@ -472,6 +534,7 @@ class FragmentMaker:
         atom_array = self.spectral_split(atom_array)
         atom_array = self.assign_fragment_ids(atom_array)
         atom_array = self.spatially_cluster_fragments(atom_array)
+        atom_array = self.fill_spectral_gaps(atom_array)
         atom_array = self.filter_fragments(atom_array)
         return atom_array
 
@@ -491,6 +554,7 @@ class FragmentMaker:
         atom_array = self.spectral_split(atom_array)
         atom_array = self.assign_fragment_ids(atom_array)
         atom_array = self.spatially_cluster_fragments(atom_array)
+        atom_array = self.fill_spectral_gaps(atom_array)
 
         fragments = self.calculate_fragment_metrics(atom_array)
 

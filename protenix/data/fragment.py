@@ -8,6 +8,8 @@ from logging import getLogger
 import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
+from scipy.sparse import csr_matrix, diags
+from scipy.sparse.linalg import eigsh
 from scipy.spatial import KDTree
 
 logger = getLogger(__name__)
@@ -126,19 +128,19 @@ class FragmentMaker:
         coords = atom_array.coord[ca_indices]
         n = len(coords)
 
-        # Build Gaussian-weighted kNN adjacency matrix
+        # Build Gaussian-weighted kNN adjacency matrix (sparse + vectorized)
         tree = KDTree(coords)
         k = min(self.spectral_k, n - 1)
-        distances, indices = tree.query(coords, k=k + 1)
+        distances, neighbors = tree.query(coords, k=k + 1)
 
-        W = np.zeros((n, n))
-        for i in range(n):
-            for j_idx in range(1, k + 1):
-                j = indices[i, j_idx]
-                d = distances[i, j_idx]
-                w = np.exp(-(d**2) / (2 * self.spectral_sigma**2))
-                W[i, j] = max(W[i, j], w)
-                W[j, i] = max(W[j, i], w)
+        # Skip self-loops (column 0), vectorize weight computation
+        row = np.repeat(np.arange(n), k)
+        col = neighbors[:, 1:].ravel()
+        weights = np.exp(
+            -(distances[:, 1:] ** 2).ravel() / (2 * self.spectral_sigma**2)
+        )
+        W = csr_matrix((weights, (row, col)), shape=(n, n))
+        W = W.maximum(W.T)  # symmetrize with element-wise max
 
         linker_local_indices: set[int] = set()
 
@@ -147,20 +149,20 @@ class FragmentMaker:
                 return
 
             idx = np.array(sorted(node_indices))
-            sub_W = W[np.ix_(idx, idx)]
+            sub_W = W[idx][:, idx]
 
-            # Normalized Laplacian: L_sym = I - D^{-1/2} W D^{-1/2}
-            d = sub_W.sum(axis=1)
+            # Compute D^{-1/2} W D^{-1/2} (= I - L_sym) as sparse
+            d = np.asarray(sub_W.sum(axis=1)).ravel()
             d_inv_sqrt = np.zeros_like(d)
             nonzero = d > 0
             d_inv_sqrt[nonzero] = 1.0 / np.sqrt(d[nonzero])
-            D_inv_sqrt = np.diag(d_inv_sqrt)
 
-            L_sym = np.eye(len(idx)) - D_inv_sqrt @ sub_W @ D_inv_sqrt
+            L_norm = diags(d_inv_sqrt) @ sub_W @ diags(d_inv_sqrt)
 
-            eigenvalues, eigenvectors = np.linalg.eigh(L_sym)
-            fiedler_value = eigenvalues[1]
-            fiedler_vector = eigenvectors[:, 1]
+            # Find 2 largest eigenvalues of L_norm; fiedler_value = 1 - λ₂(L_norm)
+            evals, evecs = eigsh(L_norm, k=2, which="LM")
+            fiedler_value = 1.0 - evals[0]
+            fiedler_vector = evecs[:, 0]
 
             if fiedler_value > self.spectral_connectivity_threshold:
                 return
@@ -411,19 +413,21 @@ class FragmentMaker:
         atom_array.set_annotation("fragment_id", fragment_ids)
         return atom_array
 
-    def calculate_fragment_metrics(self, atom_array: AtomArray) -> list[Fragment]:
+    def _calculate_fragment_metrics_fast(self, atom_array: AtomArray) -> list[Fragment]:
         """
-        Calculate metrics for each fragment: average pLDDT, length, and radius of gyration.
+        Calculate cheap per-fragment metrics (pLDDT, length, Rg, boundaries).
+
+        Skips SASA computation (expensive). Used internally by filter_fragments
+        where SASA is not needed for filtering decisions.
 
         Args:
             atom_array (AtomArray): AtomArray with fragment_id annotation.
 
         Returns:
-            list[Fragment]: List of Fragment objects sorted by fragment_id.
+            list[Fragment]: List of Fragment objects with sasa=0.0, sorted by fragment_id.
         """
         fragments: list[Fragment] = []
 
-        # Get unique fragment IDs (excluding -1)
         unique_frag_ids = np.unique(atom_array.fragment_id)
         unique_frag_ids = unique_frag_ids[unique_frag_ids != -1]
 
@@ -431,23 +435,15 @@ class FragmentMaker:
             mask = atom_array.fragment_id == frag_id
             frag_atoms = atom_array[mask]
 
-            # Calculate average pLDDT
             avg_plddt = np.mean(frag_atoms.b_factor)
 
-            # Calculate length (number of unique residues)
             unique_res_ids = np.unique(frag_atoms.res_id)
             length = len(unique_res_ids)
 
-            # Calculate radius of gyration
             centroid = np.mean(frag_atoms.coord, axis=0)
             squared_distances = np.sum((frag_atoms.coord - centroid) ** 2, axis=1)
             rg = np.sqrt(np.mean(squared_distances))
 
-            # Calculate mean atom SASA
-            atom_sasa = struc.sasa(frag_atoms, vdw_radii="Single")
-            sasa = np.nanmean(atom_sasa)
-
-            # Calculate fragment boundaries in res_id space
             sorted_res_ids = np.sort(unique_res_ids)
             segments = []
             segment_start = sorted_res_ids[0]
@@ -455,7 +451,6 @@ class FragmentMaker:
 
             for res_id in sorted_res_ids[1:]:
                 if res_id - prev_res_id != 1:
-                    # End of current segment, start new one
                     segments.append(f"{segment_start}-{prev_res_id}")
                     segment_start = res_id
                 prev_res_id = res_id
@@ -469,12 +464,45 @@ class FragmentMaker:
                     avg_plddt=float(avg_plddt),
                     length=length,
                     rg=float(rg),
-                    sasa=float(sasa),
+                    sasa=0.0,
                     boundaries=boundaries,
                 )
             )
 
         return sorted(fragments, key=lambda f: f.fragment_id)
+
+    def calculate_fragment_metrics(self, atom_array: AtomArray) -> list[Fragment]:
+        """
+        Calculate all per-fragment metrics including SASA.
+
+        Args:
+            atom_array (AtomArray): AtomArray with fragment_id annotation.
+
+        Returns:
+            list[Fragment]: List of Fragment objects sorted by fragment_id.
+        """
+        fragments = self._calculate_fragment_metrics_fast(atom_array)
+
+        # Add SASA (expensive) to each fragment
+        full_fragments = []
+        for frag in fragments:
+            mask = atom_array.fragment_id == frag.fragment_id
+            frag_atoms = atom_array[mask]
+            atom_sasa = struc.sasa(frag_atoms, vdw_radii="Single")
+            sasa = float(np.nanmean(atom_sasa))
+
+            full_fragments.append(
+                Fragment(
+                    fragment_id=frag.fragment_id,
+                    avg_plddt=frag.avg_plddt,
+                    length=frag.length,
+                    rg=frag.rg,
+                    sasa=sasa,
+                    boundaries=frag.boundaries,
+                )
+            )
+
+        return full_fragments
 
     def filter_fragments(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -493,7 +521,7 @@ class FragmentMaker:
             AtomArray: AtomArray with filtered fragments marked as -1.
         """
         fragment_ids = atom_array.fragment_id.copy()
-        fragments = self.calculate_fragment_metrics(atom_array)
+        fragments = self._calculate_fragment_metrics_fast(atom_array)
 
         for frag in fragments:
             passes_length = frag.length >= self.min_fragment_length

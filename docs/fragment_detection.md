@@ -63,7 +63,7 @@ GIVEN: a protein AtomArray from an AlphaFold CIF file
 1. filter_low_plddt_residues
    Mark residues with pLDDT < 65 as fragment_id = -1
 
-2. spectral_split                          ← NEW
+2. spectral_split
    Detect and remove linker residues between domains
 
 3. assign_fragment_ids
@@ -72,11 +72,12 @@ GIVEN: a protein AtomArray from an AlphaFold CIF file
 4. spatially_cluster_fragments
    Re-merge fragments that are in spatial contact (Union-Find)
 
+4.5. fill_spectral_gaps
+     Reclaim boundary residues that create internal gaps after re-merging
+
 5. filter_fragments
    Remove fragments that fail quality criteria (length, pLDDT, Rg)
 ```
-
-Steps 1 and 3-5 existed before. Step 2 is the spectral bisection addition that solves the linker problem.
 
 ---
 
@@ -131,6 +132,37 @@ FUNCTION split(node_subset):
 **Boundary size (4 residues).** We remove exactly 4 residues at each cut point. This is enough to cleanly sever a linker (typically 2-4 residues at the actual junction) without losing too much of the flanking domains. The removed residues are the ones with the smallest absolute Fiedler vector values — they sit right at the sign change, which is the topological boundary.
 
 **Minimum partition size (50 residues).** We don't attempt to bisect small groups. Below ~50 residues, the spectral decomposition becomes noisy and the resulting fragments would be too small for training anyway.
+
+### Implementation: sparse graph + partial eigendecomposition
+
+The spectral bisection is implemented with two performance tricks that give a ~4x speedup over a naive dense approach:
+
+**Sparse adjacency matrix.** The kNN graph is naturally sparse — each of the n nodes has at most k=15 neighbors, so only ~15n of the n² possible entries are nonzero. We store W as a `scipy.sparse.csr_matrix` built directly from the KDTree output in vectorized numpy (no Python loops):
+
+```python
+row = np.repeat(np.arange(n), k)
+col = neighbors[:, 1:].ravel()
+weights = np.exp(-(distances[:, 1:] ** 2).ravel() / (2 * sigma**2))
+W = csr_matrix((weights, (row, col)), shape=(n, n))
+W = W.maximum(W.T)  # symmetrize
+```
+
+**Partial eigendecomposition.** We only need 2 eigenvalues (the trivial one and the Fiedler value), not all n. Instead of `np.linalg.eigh(L_sym)` which computes all n eigenvalues in O(n³), we use `scipy.sparse.linalg.eigsh` with k=2 on the sparse matrix, which uses Lanczos iteration in roughly O(n·k_neighbors) time.
+
+The mathematical trick: finding the 2 *smallest* eigenvalues of L_sym is numerically hard for iterative solvers, but finding the 2 *largest* eigenvalues of L_norm = D^{-1/2} W D^{-1/2} = I - L_sym is easy (standard Lanczos). The Fiedler value is `1 - λ₂(L_norm)` and the eigenvectors are identical:
+
+```python
+L_norm = diags(d_inv_sqrt) @ sub_W @ diags(d_inv_sqrt)
+evals, evecs = eigsh(L_norm, k=2, which="LM")
+fiedler_value = 1.0 - evals[0]
+fiedler_vector = evecs[:, 0]
+```
+
+### Gap filling after spatial re-clustering
+
+Spectral bisection removes `boundary_size` residues at each cut point (marks them as fragment_id = -1). When spatial re-clustering later merges two fragments that were on either side of a cut, the removed boundary residues leave a small internal gap.
+
+`fill_spectral_gaps` (step 4.5) patches this by scanning each fragment for internal gaps of at most `2 * spectral_boundary_size` residues where all gap residues have pLDDT above the disorder threshold. These are residues that were only removed because they sat at a spectral sign change, not because they were disordered — so they are reclaimed into the surrounding fragment.
 
 ### The safety net: spatial re-clustering
 

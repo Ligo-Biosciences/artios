@@ -17,7 +17,7 @@
 # pylint: disable=C0114
 import os
 
-from protenix.config.extend_types import (
+from artios.config.extend_types import (
     GlobalConfigValue,
     ListValue,
     ValueMaybeNone,

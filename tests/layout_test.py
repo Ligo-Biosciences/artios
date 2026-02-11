@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from protenix.model.modules.layout import (
+from artios.model.modules.layout import (
     broadcast_token_to_local_atom_pair,
     gather_trunk_pair_embedding,
     gather_trunk_pair_embedding_legacy,

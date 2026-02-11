@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from protenix.model.modules.transformer import (
+from artios.model.modules.transformer import (
     DiffusionTransformer,
     DiTBlock,
     LocalAttnTransformer,
@@ -9,7 +9,7 @@ from protenix.model.modules.transformer import (
     Transformer,
     TransformerBlock,
 )
-from protenix.utils.typing import TypeCheckError
+from artios.utils.typing import TypeCheckError
 
 
 class TestDiTBlock:

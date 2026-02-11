@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from protenix.model.utils import masked_mean
+from artios.model.utils import masked_mean
 
 
 class TestMaskedMean:

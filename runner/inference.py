@@ -26,22 +26,22 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 
+from artios.config import parse_configs, parse_sys_args
+from artios.data.features import FullContext
+from artios.data.infer_data_pipeline import get_inference_dataloader
+from artios.model.artios_backbone import ArtiosBackbone
+from artios.model.artios_mpnn import ArtiosMPNN
+from artios.model.artios_packing import ArtiosPacking
+from artios.model.output import BackboneOutput, ModelOutput
+from artios.model.utils import Mode
+from artios.utils.casting import disable_autocast
+from artios.utils.distributed import DIST_WRAPPER
+from artios.utils.inference import ModelType
+from artios.utils.seed import seed_everything
+from artios.utils.structure_io import SaveContext, save_output
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
 from configs.configs_inference import inference_configs
-from protenix.config import parse_configs, parse_sys_args
-from protenix.data.features import FullContext
-from protenix.data.infer_data_pipeline import get_inference_dataloader
-from protenix.model.artios_backbone import ArtiosBackbone
-from protenix.model.artios_mpnn import ArtiosMPNN
-from protenix.model.artios_packing import ArtiosPacking
-from protenix.model.output import BackboneOutput, ModelOutput
-from protenix.model.utils import Mode
-from protenix.utils.casting import disable_autocast
-from protenix.utils.distributed import DIST_WRAPPER
-from protenix.utils.inference import ModelType
-from protenix.utils.seed import seed_everything
-from protenix.utils.structure_io import SaveContext, save_output
 
 logger = logging.getLogger(__name__)
 

@@ -20,9 +20,9 @@ import numpy as np
 import torch
 from biotite.structure import AtomArray
 
-from protenix.data.utils import save_structure_cif
-from protenix.utils.file_io import save_json
-from protenix.utils.torch_utils import round_values
+from artios.data.utils import save_structure_cif
+from artios.utils.file_io import save_json
+from artios.utils.torch_utils import round_values
 
 
 def get_clean_full_confidence(full_confidence_dict: dict) -> dict:

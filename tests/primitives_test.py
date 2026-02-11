@@ -7,8 +7,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from protenix.model.modules.layout import gather_trunk_pair_embedding
-from protenix.model.modules.primitives import (
+from artios.model.modules.layout import gather_trunk_pair_embedding
+from artios.model.modules.primitives import (
     Linear,
     attention,
 )

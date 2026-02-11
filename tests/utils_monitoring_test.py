@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from protenix.utils.monitoring import (
+from artios.utils.monitoring import (
     analyse_evaluation_latents,
     analyse_inference_latents,
     plot_accuracy_vs_timestep,

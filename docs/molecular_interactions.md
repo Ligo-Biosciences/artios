@@ -1,6 +1,6 @@
 # Molecular Interaction Detection
 
-This document describes the `protenix.contacts` module for detecting non-covalent molecular interactions in protein-ligand structures. The implementation follows Molstar's algorithms as ground truth.
+This document describes the `artios.contacts` module for detecting non-covalent molecular interactions in protein-ligand structures. The implementation follows Molstar's algorithms as ground truth.
 
 ## Overview
 
@@ -17,7 +17,7 @@ All detection functions accept parameters directly (no config objects) with angl
 ## Module Structure
 
 ```
-protenix/contacts/
+artios/contacts/
 ├── hydrogen_bonds.py   # H-bond donor/acceptor detection
 ├── aromatic.py         # Pi-stacking and cation-pi detection
 ├── geometry.py         # Geometric helper functions
@@ -41,7 +41,7 @@ Hydrogen bonds are detected between donor-acceptor pairs satisfying:
 
 ```python
 from biotite.structure.io import load_structure
-from protenix.contacts.hydrogen_bonds import detect_hydrogen_bonds
+from artios.contacts.hydrogen_bonds import detect_hydrogen_bonds
 
 atoms = load_structure("complex.cif", include_bonds=True)
 hbonds = detect_hydrogen_bonds(
@@ -100,7 +100,7 @@ The offset criterion projects one ring centroid onto the other ring's plane and 
 ### Usage
 
 ```python
-from protenix.contacts.aromatic import detect_pi_stacking, StackingType
+from artios.contacts.aromatic import detect_pi_stacking, StackingType
 
 interactions = detect_pi_stacking(
     atoms,
@@ -160,7 +160,7 @@ Cations are **grouped by residue** to avoid duplicate interactions. For example,
 ### Usage
 
 ```python
-from protenix.contacts.aromatic import detect_cation_pi
+from artios.contacts.aromatic import detect_cation_pi
 
 interactions = detect_cation_pi(
     atoms,
@@ -191,7 +191,7 @@ for cp in interactions:
 The valence model computes per-atom properties needed for interaction detection:
 
 ```python
-from protenix.contacts.valence import compute_valence_model
+from artios.contacts.valence import compute_valence_model
 
 model = compute_valence_model(atoms)
 # model.charge      - formal charge (int8)
@@ -249,9 +249,9 @@ Measures the out-of-plane angle from B to the plane at A. Used for trigonal geom
 from biotite.structure.io.pdbx import CIFFile, get_structure
 from biotite.structure import connect_via_residue_names
 
-from protenix.contacts.valence import compute_valence_model
-from protenix.contacts.hydrogen_bonds import detect_hydrogen_bonds
-from protenix.contacts.aromatic import detect_pi_stacking, detect_cation_pi
+from artios.contacts.valence import compute_valence_model
+from artios.contacts.hydrogen_bonds import detect_hydrogen_bonds
+from artios.contacts.aromatic import detect_pi_stacking, detect_cation_pi
 
 # Load structure with bonds
 cif = CIFFile.read("complex.cif")

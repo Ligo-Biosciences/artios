@@ -90,7 +90,7 @@ Repository = "https://github.com/Ligo-Biosciences/artios-ligand"
 exclude = ["assets*", "benchmark*", "*.egg-info*", "tests*"]
 
 [tool.setuptools.package-data]
-"protenix" = ["model/layer_norm/kernel/*"]
+"artios" = ["model/layer_norm/kernel/*"]
 
 [tool.black]
 line-length = 88
@@ -114,7 +114,7 @@ extend-exclude = '''
 profile = "black"
 multi_line_output = 3
 line_length = 88
-known_first_party = ["protenix"]
+known_first_party = ["artios"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -159,7 +159,7 @@ module = [
 ignore_missing_imports = true
 
 [tool.ty.src]
-exclude = ["tests/", "protenix/openfold_local/"]
+exclude = ["tests/", "artios/openfold_local/"]
 
 [tool.ty.environment]
 python = ".venv"
@@ -171,7 +171,7 @@ unresolved-attribute = "ignore"
 [[tool.ty.overrides]]
 # features.py uses Feature(), Label(), etc. as type constructors that return Annotated types.
 # This pattern works at runtime but violates static typing rules.
-include = ["protenix/data/features.py"]
+include = ["artios/data/features.py"]
 
 [tool.ty.overrides.rules]
 invalid-type-form = "ignore"

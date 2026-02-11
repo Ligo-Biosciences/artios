@@ -16,7 +16,7 @@
 import os
 from copy import deepcopy
 
-from protenix.config.extend_types import GlobalConfigValue, ListValue
+from artios.config.extend_types import GlobalConfigValue, ListValue
 
 default_test_configs = {
     "sampler_configs": {
@@ -85,7 +85,7 @@ default_distillation_configs = {
     "filter_unique_domain_prob": 0.0,
 }
 
-DATA_ROOT_DIR = "/dev/shm/af3-dev/release_data/"
+DATA_ROOT_DIR = "/af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md

@@ -2,7 +2,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from protenix.model.modules.components import (
+from artios.model.modules.components import (
     AdaptiveLayerNorm,
     Attention,
     SwiGLU,

@@ -22,29 +22,29 @@ from neptune_scale.api.run import SourceTrackingConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
+from artios.common.constants import BACKBONE_DEFS
+from artios.config import parse_configs, parse_sys_args
+from artios.config.config import save_config
+from artios.data.dataloader import get_dataloaders
+from artios.data.features import FullContext
+from artios.metrics.lddt_metrics import LDDTMetrics
+
+# from artios.metrics.rmsd import compute_per_atom_rmsf
+from artios.model.artios_packing import ArtiosPacking
+from artios.model.modules.sidechain_packer import SidechainPacker
+from artios.model.modules.transformer import DiffusionTransformer, DiTBlock
+from artios.model.output import ModelOutput
+from artios.model.utils import Mode
+from artios.utils.distributed import DIST_WRAPPER, wait_for_all_processes
+from artios.utils.lr_scheduler import get_lr_scheduler
+from artios.utils.metrics import SimpleMetricAggregator
+from artios.utils.monitoring import grad_norm
+from artios.utils.profiler import profile_function
+from artios.utils.seed import seed_everything
+from artios.utils.torchwatcher import TorchWatcher
+from artios.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
-from protenix.common.constants import BACKBONE_DEFS
-from protenix.config import parse_configs, parse_sys_args
-from protenix.config.config import save_config
-from protenix.data.dataloader import get_dataloaders
-from protenix.data.features import FullContext
-from protenix.metrics.lddt_metrics import LDDTMetrics
-
-# from protenix.metrics.rmsd import compute_per_atom_rmsf
-from protenix.model.artios_packing import ArtiosPacking
-from protenix.model.modules.sidechain_packer import SidechainPacker
-from protenix.model.modules.transformer import DiffusionTransformer, DiTBlock
-from protenix.model.output import ModelOutput
-from protenix.model.utils import Mode
-from protenix.utils.distributed import DIST_WRAPPER, wait_for_all_processes
-from protenix.utils.lr_scheduler import get_lr_scheduler
-from protenix.utils.metrics import SimpleMetricAggregator
-from protenix.utils.monitoring import grad_norm
-from protenix.utils.profiler import profile_function
-from protenix.utils.seed import seed_everything
-from protenix.utils.torchwatcher import TorchWatcher
-from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.ema import EMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)

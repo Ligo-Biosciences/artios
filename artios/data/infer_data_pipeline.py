@@ -8,7 +8,6 @@ import warnings
 from typing import Any
 
 import biotite.sequence.io as seqio
-import numpy as np
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from typing_extensions import assert_never
 
@@ -114,11 +113,6 @@ class MotifDataset(Dataset):
         atom_array, original_motif_mapping = backbone_input_to_atom_array(
             self.backbone_input
         )
-        # TODO: tidy me !!
-        if np.any(atom_array.atom_name == "OXT"):
-            logger.warning(
-                "OXT atom present after running backbone_input_to_atom_array."
-            )
 
         token_array = AtomArrayTokenizer(atom_array).get_token_array()
         return ContextGenerator(

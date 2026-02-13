@@ -151,7 +151,7 @@ def backbone_input_to_atom_array(
     design_atom_array = _build_polymer_atom_array(sequence)
     design_atom_array = add_reference_features(design_atom_array)
     design_atom_array = set_chain_and_seq_ids(
-        design_atom_array, chain_id=DESIGN_CHAIN_ID, entity_id=1
+        design_atom_array, chain_id=backbone_input.design[0].chain_id, entity_id=1
     )
     # TODO: tidy this up !
     # filter the array for OXT atoms

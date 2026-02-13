@@ -185,6 +185,9 @@ class NPZFile(BaseModel):
 class Backbone(BaseModel):
     """A protein chain to be designed."""
 
+    chain_id: str = Field(
+        default="0", description="Chain identifier for the design protein"
+    )
     length: int = Field(..., description="Number of residues")
 
     @field_validator("length")
@@ -327,7 +330,7 @@ class BackboneInput(BaseModel):
     Example:
         {
             "name": "my_design",
-            "design": [{"length": 260}],
+            "design": [{"length": 260, "chain_id": "0"}],
             "motif": {
                 "cif_file": "motif.cif",
                 "ligands": [...]

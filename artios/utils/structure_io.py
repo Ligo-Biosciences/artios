@@ -411,6 +411,7 @@ def _save_sequence_to_fasta(output: SequenceOutput, ctx: SaveContext) -> list[Pa
 
     sequences: list[tuple[str, ProteinSequence]] = []
     for batch_idx in range(batch_size):
+        uid = ctx.uids[batch_idx]
         n_tok = n_tokens[batch_idx] if isinstance(n_tokens, list) else n_tokens
         seq_logits = output.seq_logits[
             batch_idx, :n_tok
@@ -431,7 +432,7 @@ def _save_sequence_to_fasta(output: SequenceOutput, ctx: SaveContext) -> list[Pa
                 continue
             seq_list.append(restype)
         sequence = ProteinSequence(seq_list)
-        sequences.append((f"model_{batch_idx}", sequence))
+        sequences.append((f"uid_{uid}", sequence))
 
     # Write all sequences to the FASTA file
     with open(output_path, "w") as f:

@@ -19,3 +19,7 @@ ccd_files/
 
 # Keys
 artios.pem
+
+# Generated PDB/CIF outputs
+notebooks/PDBs/
+notebooks/PDBs_noise_*/

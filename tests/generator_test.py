@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from protenix.model.generator import (
+from artios.model.generator import (
     BetaSchedule,
     BetaWithUniform,
     CFGPredictor,

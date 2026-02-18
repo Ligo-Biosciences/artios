@@ -1,13 +1,13 @@
 import pytest
 import torch
 
-from protenix.data.features import FullContext
-from protenix.model.modules.atom_attention import (
+from artios.data.features import FullContext
+from artios.model.modules.atom_attention import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
     AtomAttentionSkipConnections,
 )
-from protenix.model.modules.layout import (
+from artios.model.modules.layout import (
     rearrange_to_key_subset,
     rearrange_to_query_subset,
 )

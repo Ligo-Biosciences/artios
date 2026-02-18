@@ -4,7 +4,7 @@ import torch
 from biotite.structure import AtomArray
 from torch import Tensor
 
-from protenix.data.features import (
+from artios.data.features import (
     AtomPermContext,
     BasicContext,
     ChainPermContext,
@@ -17,7 +17,7 @@ from protenix.data.features import (
     ReferenceConformerContext,
     TokenContext,
 )
-from protenix.data.tokenizer import TokenArray
+from artios.data.tokenizer import TokenArray
 
 
 def load_sample_context(device: torch.device | None = None) -> FullContext:

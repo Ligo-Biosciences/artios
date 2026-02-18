@@ -42,8 +42,8 @@ import psutil
 import ray
 from tqdm import tqdm
 
-from protenix.data.data_pipeline import DataPipeline
-from protenix.utils.file_io import dump_atomarray_to_npz, dump_gzip_pickle
+from artios.data.data_pipeline import DataPipeline
+from artios.utils.file_io import dump_atomarray_to_npz, dump_gzip_pickle
 
 
 def gen_a_bioassembly_data(

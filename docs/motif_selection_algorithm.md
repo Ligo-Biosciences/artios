@@ -318,7 +318,7 @@ The theme is **sparsity**: partial ligands, partial sidechains, tip atoms only, 
 
 ## File Reference
 
-The implementation lives in `protenix/data/motif_maker.py`:
+The implementation lives in `artios/data/motif_maker.py`:
 
 | Function | Purpose |
 |----------|---------|

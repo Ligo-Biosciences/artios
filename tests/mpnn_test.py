@@ -11,7 +11,7 @@ This module tests the core functionality of the MPNN class, including:
 import pytest
 import torch
 
-from protenix.model.modules.mpnn import MPNN, DecodingMasks
+from artios.model.modules.mpnn import MPNN, DecodingMasks
 from tests.context_utils import FullContext, create_test_context
 
 

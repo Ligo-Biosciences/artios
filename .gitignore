@@ -22,3 +22,7 @@ artios.pem
 
 # Generated evaluation outputs
 evaluation/reference_distributions/
+
+# CCD / CIF files
+*.cif
+pdb-samples/**/*.cif

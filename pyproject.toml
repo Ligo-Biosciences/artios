@@ -67,6 +67,7 @@ dependencies = [
     "einops>=0.8.1",
     "streamlit",
     "trambio>=1.0.3",
+    "pymol-remote>=1.1.0",
 ]
 
 [project.optional-dependencies]

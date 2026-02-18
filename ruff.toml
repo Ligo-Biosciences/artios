@@ -10,4 +10,4 @@ ignore = ["F821", "F722", "E741"]
 
 [lint.per-file-ignores]
 # Disable E731 (lambda assignment) for ema_utils.py
-"protenix/utils/ema_utils.py" = ["E731"]
+"artios/utils/ema_utils.py" = ["E731"]

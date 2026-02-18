@@ -36,13 +36,13 @@ from tqdm import tqdm
 # Add paths for config imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "configs"))
 
-from protenix.data.ccd import res_names_to_sequence
-from protenix.utils.file_io import (
+from artios.data.ccd import res_names_to_sequence
+from artios.utils.file_io import (
     dump_atomarray_stack,
     dump_atomarray_to_npz,
     load_atomarray_from_npz,
 )
-from protenix.utils.logger import get_logger
+from artios.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -189,10 +189,10 @@ def run_from_dataset(
         save_raw_npz: If True, also save raw single-sample NPZ files.
     """
     # Import here to avoid loading torch/configs if not needed
+    from artios.config.config import parse_configs, parse_sys_args
+    from artios.data.dataset import get_datasets
     from configs.configs_base import configs as base_configs
     from configs.configs_data import data_configs
-    from protenix.config.config import parse_configs, parse_sys_args
-    from protenix.data.dataset import get_datasets
 
     # Setup configurations - parse remaining args as config overrides
     logger.info("Loading configurations...")

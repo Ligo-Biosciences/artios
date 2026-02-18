@@ -7,9 +7,9 @@ Uses context_utils to create proper FullContext test data.
 import pytest
 import torch
 
-from protenix.data.features import FullContext
-from protenix.model.generator import Deterministic, LaProteinaCoordScheduler
-from protenix.model.modules.diffusion_backbone import (
+from artios.data.features import FullContext
+from artios.model.generator import Deterministic, LaProteinaCoordScheduler
+from artios.model.modules.diffusion_backbone import (
     DiffusionConditioning,
     DiffusionModule,
 )

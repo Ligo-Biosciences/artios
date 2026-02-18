@@ -7,13 +7,13 @@ Uses context_utils to create proper FullContext test data.
 import pytest
 import torch
 
-from protenix.model.generator import (
+from artios.model.generator import (
     Deterministic,
     LaProteinaCoordScheduler,
     NonSingular,
     SamplingResult,
 )
-from protenix.model.modules.sidechain_packer import SidechainPacker
+from artios.model.modules.sidechain_packer import SidechainPacker
 from tests.context_utils import create_test_context
 
 

@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from protenix.data.features import (
+from artios.data.features import (
     AtomPermContext,
     BasicContext,
     CoordinateContext,

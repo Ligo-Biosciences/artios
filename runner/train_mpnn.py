@@ -30,21 +30,21 @@ from neptune_scale.api.run import SourceTrackingConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
+from artios.config import parse_configs, parse_sys_args
+from artios.config.config import save_config
+from artios.data.dataloader import get_dataloaders
+from artios.data.features import FullContext
+from artios.model.artios_mpnn import ArtiosMPNN
+from artios.model.output import ModelOutput
+from artios.model.utils import Mode
+from artios.utils.distributed import DIST_WRAPPER
+from artios.utils.lr_scheduler import get_lr_scheduler
+from artios.utils.metrics import SimpleMetricAggregator
+from artios.utils.monitoring import grad_norm
+from artios.utils.seed import seed_everything
+from artios.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
-from protenix.config import parse_configs, parse_sys_args
-from protenix.config.config import save_config
-from protenix.data.dataloader import get_dataloaders
-from protenix.data.features import FullContext
-from protenix.model.artios_mpnn import ArtiosMPNN
-from protenix.model.output import ModelOutput
-from protenix.model.utils import Mode
-from protenix.utils.distributed import DIST_WRAPPER
-from protenix.utils.lr_scheduler import get_lr_scheduler
-from protenix.utils.metrics import SimpleMetricAggregator
-from protenix.utils.monitoring import grad_norm
-from protenix.utils.seed import seed_everything
-from protenix.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 from runner.dumper import DataDumper
 from runner.ema import EMAWrapper
 

@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 from biotite.structure import AtomArray
 
-from artios.electrostatics.elements import get_parse_radius
+from artios.common.elements import get_parse_radius
 
 logger = logging.getLogger(__name__)
 

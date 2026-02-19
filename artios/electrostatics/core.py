@@ -24,6 +24,7 @@ from biotite.structure import AtomArray
 from scipy.spatial import cKDTree
 from scipy.stats import pearsonr
 
+from artios.common.elements import get_parse_radius
 from artios.electrostatics.apbs import (
     ECConfig,
     focused_grid_dims,
@@ -32,7 +33,6 @@ from artios.electrostatics.apbs import (
     run_apbs,
     sample_potential_at_points,
 )
-from artios.electrostatics.elements import get_parse_radius
 from artios.electrostatics.pqr import (
     generate_ligand_pqr,
     generate_protein_pqr,

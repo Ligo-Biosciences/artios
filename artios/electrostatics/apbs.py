@@ -6,6 +6,7 @@ potentials at arbitrary 3D points via trilinear interpolation.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -146,8 +147,15 @@ def run_apbs(input_path: Path, work_dir: Path, dx_prefix: str) -> Path:
     Returns:
         Path to the output .dx potential grid file.
     """
+    apbs_bin = shutil.which("apbs")
+    if apbs_bin is None:
+        raise FileNotFoundError(
+            "APBS binary not found on PATH. "
+            "Install with: brew install apbs (macOS) or conda install -c conda-forge apbs"
+        )
+
     subprocess.run(
-        ["apbs", str(input_path)],
+        [apbs_bin, str(input_path)],
         capture_output=True,
         text=True,
         cwd=str(work_dir),

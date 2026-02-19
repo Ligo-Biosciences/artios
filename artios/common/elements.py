@@ -1,4 +1,4 @@
-"""Element symbols and element groups for chemical analysis."""
+"""Element symbols, element groups, and VdW radii for chemical analysis."""
 
 import sys
 from typing import Final
@@ -108,6 +108,9 @@ METALS: Final[frozenset[str]] = (
 # Common heteroatoms in biomolecules
 HETEROATOMS: Final[frozenset[str]] = frozenset({N, O, S, P})
 
+# Chalcogens / metalloids
+SE: Final[str] = sys.intern("SE")
+
 # Elements that can participate in aromatic π-systems
 # Common: C, N, O, S (benzene, pyridine, furan, thiophene)
 # Rare: P (phosphinine), B (borabenzene), Si (silabenzene)
@@ -115,3 +118,46 @@ B: Final[str] = sys.intern("B")
 SI: Final[str] = sys.intern("SI")
 
 AROMATIC_ELEMENTS: Final[frozenset[str]] = frozenset({C, N, O, S, P, B, SI})
+
+# ---------------------------------------------------------------------------
+# PARSE force field VdW radii
+# Sitkoff, Sharp, Honig (1994) J. Phys. Chem. 98, 1978-1988.
+# ---------------------------------------------------------------------------
+
+PARSE_RADII: dict[str, float] = {
+    C: 1.7,
+    N: 1.55,
+    O: 1.52,
+    S: 1.8,
+    H: 1.0,
+    P: 2.0,
+    F: 1.47,
+    CL: 1.75,
+    BR: 1.85,
+    I: 1.98,
+    ZN: 1.39,
+    FE: 1.25,
+    MG: 1.18,
+    CA: 1.37,
+    MN: 1.39,
+    CU: 1.28,
+    CO: 1.25,
+    NI: 1.24,
+    SE: 1.9,
+    NA: 1.36,
+    K: 1.76,
+}
+
+DEFAULT_RADIUS: float = 1.5
+
+
+def get_parse_radius(element: str) -> float:
+    """Look up PARSE VdW radius for an element.
+
+    Args:
+        element: Element symbol (e.g., "C", "N", "O").
+
+    Returns:
+        VdW radius in Angstroms. Falls back to DEFAULT_RADIUS for unknown elements.
+    """
+    return PARSE_RADII.get(element.upper().strip(), DEFAULT_RADIUS)

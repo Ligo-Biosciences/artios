@@ -68,6 +68,8 @@ dependencies = [
     "streamlit",
     "trambio>=1.0.3",
     "pymol-remote>=1.1.0",
+    "pdb2pqr",
+    "GridDataFormats",
 ]
 
 [project.optional-dependencies]

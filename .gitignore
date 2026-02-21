@@ -27,3 +27,4 @@ evaluation/reference_distributions/
 pdb-samples/**/*.cif
 pdb-samples/**/*.pdb
 pdb-samples/**/*.fasta
+notebooks/sample-proteins/

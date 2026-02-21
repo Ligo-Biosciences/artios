@@ -982,6 +982,9 @@ PBV2_COMMON_NATURAL_LIGANDS = {'UPG', 'CDP', 'DSG', 'APC', 'GSP', 'FAD', 'IPE', 
 ### Evaluation constants
 # AA's (3 letter codes) that are hydrophobic
 HYDROPHOBIC_RESIDUES = {"ALA", "VAL", "LEU", "ILE", "MET", "PHE", "TRP", "PRO"}
+ANIONIC_RESIDUES = {"ASP", "GLU"}
+AROMATIC_RESIDUES = {"PHE", "TYR", "TRP", "HIS"}
+
 # Each AA's max ASA
 MAX_ASA = {
     "ALA": 121.0,

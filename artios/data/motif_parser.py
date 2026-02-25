@@ -86,6 +86,7 @@ class Motif:
 
         residues: list[MotifResidue] = []
         ligands: list[MotifLigand] = []
+        matched_keys: set[tuple[str, str]] = set()
 
         # Group atoms by residue
         res_starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
@@ -116,6 +117,7 @@ class Motif:
             else:
                 key = (res_name, cif_chain_id)
                 if key in ligand_mappings:
+                    matched_keys.add(key)
                     ligands.append(
                         MotifLigand(
                             res_id=res_id,
@@ -132,5 +134,32 @@ class Motif:
                         f"HETATM residue '{res_name}' (chain_id={cif_chain_id}, res_id={res_id}) "
                         f"has no ligand mapping in input. Skipping."
                     )
+
+        # Ensure every ligand mapping in the JSON matched something in the CIF
+        unmatched = set(ligand_mappings.keys()) - matched_keys
+        if unmatched:
+            # Collect CIF HETATM chain IDs to suggest the correct values
+            cif_hetero_info = []
+            for start, stop in zip(res_starts[:-1], res_starts[1:]):
+                res_atoms = atoms[start:stop]
+                if res_atoms.hetero[0]:
+                    cif_hetero_info.append(
+                        f"  {res_atoms.res_name[0]} chain_id={res_atoms.chain_id[0]}"
+                    )
+            cif_summary = "\n".join(cif_hetero_info) if cif_hetero_info else "  (none)"
+
+            unmatched_strs = [
+                f"  cif_res_name='{name}', chain_id='{chain}'"
+                for name, chain in sorted(unmatched)
+            ]
+            raise ValueError(
+                f"Ligand mapping(s) in JSON did not match any HETATM in the CIF file "
+                f"'{motif_spec.cif_file.path}'.\n"
+                f"Unmatched JSON mappings:\n"
+                f"{chr(10).join(unmatched_strs)}\n"
+                f"HETATM records found in CIF:\n"
+                f"{cif_summary}\n"
+                f"Ensure each ligand's chain_id matches the label_asym_id in the CIF."
+            )
 
         return cls(residues=residues, ligands=ligands)

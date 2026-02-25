@@ -61,22 +61,43 @@ The motif CIF file contains partial structural information extracted from a refe
 - **Partial protein sidechains**: Key residues (e.g., catalytic residues, binding site residues) with only the functionally important atoms
 - **Ligand fragments**: Metal ions, cofactors, or small molecule fragments that define the binding geometry
 
-Example content from a carbonic anhydrase motif:
+### CIF Formatting Rules
+
+The motif CIF must follow these exact rules for the parser to work correctly:
+
+1. **Protein residues use chain ID `0`.** All ATOM records must have `label_asym_id` and `auth_asym_id` set to `0`.
+2. **Protein residue IDs are sequential from 1.** Each unique residue gets a sequential integer in `label_seq_id`, starting at 1. Atoms belonging to the same residue share the same ID.
+3. **Each ligand gets its own chain ID.** Distinct ligands (HETATM) use chain IDs `1`, `2`, `3`, etc. in `label_asym_id` and `auth_asym_id`. For example, a peptide ligand gets chain `1` and a Zn ion gets chain `2`.
+4. **Residue IDs start from 1 and increase.** Across protein residues, IDs go 1, 2, 3, ...
+5. **All atoms in the same ligand share residue ID 1.** Every HETATM atom within a single ligand chain has `label_seq_id = 1`.
+6. **Entity IDs:** Protein = `1`, first ligand = `2`, second ligand = `3`, etc.
+
+A conversion script is provided at `evaluation/scripts/convert_motif_cif.py` to automatically apply these rules to a raw PyMOL-exported CIF:
+
+```bash
+python evaluation/scripts/convert_motif_cif.py input.cif output.cif --name my_motif
 ```
-# Partial HIS sidechain (imidazole ring only)
-ATOM   883 C CG  . HIS A 1 94 ? -8.390 -0.591 11.905 ...
-ATOM   885 C CD2 . HIS A 1 94 ? -7.724 -1.319 12.926 ...
-ATOM   884 N ND1 . HIS A 1 94 ? -8.599  0.626 12.402 ...
-ATOM   886 C CE1 . HIS A 1 94 ? -8.111  0.729 13.670 ...
-ATOM   887 N NE2 . HIS A 1 94 ? -7.571 -0.471 13.996 ...
 
-# Zinc ion
-HETATM 2492 ZN ZN  . ZN  C 3 262 ? -6.844 -1.668 15.437 ...
+### Example
 
-# Partial ligand (sulfonamide group)
-HETATM 2505 S S1  . AL5 D 4 555 ? -5.923  0.680 16.887 ...
-HETATM 2503 O O1A . AL5 D 4 555 ? -5.452  0.890 18.209 ...
+Correctly formatted motif CIF (metal-binding active site with substrate and zinc):
+```
+# Protein residues: chain 0, sequential res IDs, entity 1
+ATOM    1  N NE2 . HIS 0 1 1 ? 16.441 26.723 21.566 1.00 10.96 0 0 1
+ATOM    2  O OE1 . GLU 0 1 2 ? 16.328 24.143 25.631 1.00 14.08 0 0 1
+ATOM    3  O OE2 . GLU 0 1 2 ? 16.926 26.229 25.835 1.00 16.27 0 0 1
+ATOM    4  N NE2 . HIS 0 1 3 ? 16.052 23.563 21.233 1.00 10.57 0 0 1
+ATOM    5  O OE1 . GLU 0 1 4 ? 18.048 25.099 19.464 1.00 12.38 0 0 1
+ATOM    6  O OE2 . GLU 0 1 4 ? 18.864 23.112 19.911 1.00 12.37 0 0 1
+ATOM    7  O  OH . TYR 0 1 5 ? 21.654 25.375 20.285 1.00 15.02 0 0 1
+
+# Ligand PKF: chain 1, entity 2, all res_id = 1
+HETATM  8  N  N4 . PKF 1 2 1 ? 20.281 21.666 22.784 0.51  5.98 0 1 1
+HETATM  9  O  O7 . PKF 1 2 1 ? 22.056 27.785 25.373 0.51 12.54 0 1 1
 ...
+
+# Ligand ZN: chain 2, entity 3, res_id = 1
+HETATM 14 ZN  ZN .  ZN 2 3 1 ? 17.610 24.943 21.326 0.47  9.96 0 2 1
 ```
 
 The parser automatically:

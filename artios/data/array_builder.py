@@ -502,7 +502,7 @@ def build_ligand(ligand: CCDLigand | SMILESLigand) -> AtomInfo:
         atom_info = smiles_to_atom_info(ligand.smiles)
         atom_info.atom_array.res_id[:] = 1
 
-        # Rename atoms to match CIF names when atom_map is provided
+        # # Rename atoms to match CIF names when atom_map is provided
         if ligand.atom_map is not None:
             rename_atoms_to_match_cif_names(
                 atom_info.atom_array,

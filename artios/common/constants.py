@@ -1019,7 +1019,7 @@ BACKBONE_DEFS = {
 
 
 ### Standard bond lengths
-m = 2
+m = 4
 # copied from Biotite:
 # https://github.com/biotite-dev/biotite/blob/v1.6.0/src/biotite/structure/bonds.pyx#L1499-L1646
 # standard num of sd's is 2, increased to 4 to be more permissive

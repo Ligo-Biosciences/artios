@@ -273,7 +273,7 @@ def smiles_to_atom_info(smiles: str, sanitize: bool = True) -> AtomInfo:
     return rdkit_mol_to_atom_info(mol)
 
 
-def motif_to_rdkit_mol(
+def atoms_to_rdkit_mol(
     elements: tuple[str, ...],
     coords: np.ndarray,
 ) -> Chem.Mol:
@@ -335,10 +335,10 @@ def infer_atom_map_from_substructure(
     Raises:
         ValueError: If substructure match fails
     """
-    motif_mol = motif_to_rdkit_mol(motif_elements, motif_coords)
+    motif_mol = atoms_to_rdkit_mol(motif_elements, motif_coords)
 
     # Convert to query mol with flexible bond matching (ignore bond orders)
-    # This is necessary because motif_to_rdkit_mol only infers connectivity (single bonds)
+    # This is necessary because atoms_to_rdkit_mol only infers connectivity (single bonds)
     # while the full mol from SMILES has proper bond orders (aromatic/double)
     params = AdjustQueryParameters()
     params.makeBondsGeneric = True  # Match any bond type

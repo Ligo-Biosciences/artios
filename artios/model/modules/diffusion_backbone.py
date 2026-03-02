@@ -2,7 +2,6 @@
 TODO: this filename should eventually just be called diffusion.py I think.
 """
 
-import logging
 from dataclasses import dataclass
 from typing import Optional
 
@@ -31,8 +30,6 @@ from artios.model.modules.transformer import DiffusionTransformer
 from artios.model.utils import average_atom_to_token, broadcast_token_to_atom, one_hot
 from artios.utils.geometry import centre_random_augmentation
 from artios.utils.typing import typecheck
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -409,9 +406,6 @@ class DiffusionConditioning(nn.Module):
             Tuple of single (s) and pair (z) embeddings
         """
         if cache is None:
-            logger.warning(
-                "DiffusionConditioning.forward called without cache — recomputing"
-            )
             cache = self.compute_cache(context)
 
         n_token = context.token.residue_index.shape[-1]
@@ -558,15 +552,7 @@ class DiffusionModule(nn.Module):
 
         def make_predictor(ctx: FullContext) -> VelocityScorePredictor:
             """Create a predictor bound to a specific context."""
-            import time as _time
-
-            t0 = _time.perf_counter()
             conditioning_cache = self.diffusion_conditioning.compute_cache(ctx)
-            elapsed = _time.perf_counter() - t0
-            logger.info(
-                f"DiffusionConditioning cache computed once in {elapsed*1000:.1f}ms "
-                f"(s_base={list(conditioning_cache.s_base.shape)}, z={list(conditioning_cache.z.shape)})"
-            )
 
             def predictor(
                 x_noisy: Float[Tensor, "... n_atom 3"],

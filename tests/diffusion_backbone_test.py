@@ -10,6 +10,7 @@ import torch
 from artios.data.features import FullContext
 from artios.model.generator import Deterministic, LaProteinaCoordScheduler
 from artios.model.modules.diffusion_backbone import (
+    CachedConditioning,
     DiffusionConditioning,
     DiffusionModule,
 )
@@ -149,6 +150,65 @@ class TestDiffusionConditioning:
         assert z_combined.shape == (batch_size, n_tokens, n_tokens, 128)
         assert not torch.isnan(s_combined).any()
         assert not torch.isnan(z_combined).any()
+
+    def test_compute_cache(self, device, context):
+        """Test that compute_cache returns correct shapes and dtypes."""
+        diff_cond = DiffusionConditioning(sigma_coord=12.0).to(device)
+
+        n_tokens = context.token.residue_index.shape[-1]
+        batch_size = context.token.residue_index.shape[0]
+
+        cache = diff_cond.compute_cache(context)
+
+        assert isinstance(cache, CachedConditioning)
+        assert cache.s_base.shape == (batch_size, n_tokens, 384)
+        assert cache.z.shape == (batch_size, n_tokens, n_tokens, 128)
+        assert cache.s_base.dtype == context.reference.ref_pos.dtype
+        assert cache.z.dtype == context.reference.ref_pos.dtype
+        assert not torch.isnan(cache.s_base).any()
+        assert not torch.isnan(cache.z).any()
+
+    def test_cache_equivalence(self, device, context):
+        """Test that forward(cache=None) produces identical output to forward(cache=compute_cache(...))."""
+        diff_cond = DiffusionConditioning(sigma_coord=12.0).to(device)
+        diff_cond.eval()
+
+        n_atoms = context.reference.ref_pos.shape[-2]
+        batch_size = context.token.residue_index.shape[0]
+        n_samples = 2
+
+        r_noisy = torch.randn(batch_size, n_samples, n_atoms, 3).to(device)
+        timestep = torch.ones(batch_size, n_samples).to(device) * 0.5
+
+        # Disable random augmentation for deterministic comparison
+        torch.manual_seed(42)
+        s_no_cache, z_no_cache = diff_cond(
+            r_noisy=r_noisy, timestep=timestep, context=context, cache=None
+        )
+
+        torch.manual_seed(42)
+        cache = diff_cond.compute_cache(context)
+        s_cached, z_cached = diff_cond(
+            r_noisy=r_noisy, timestep=timestep, context=context, cache=cache
+        )
+
+        torch.testing.assert_close(s_cached, s_no_cache)
+        torch.testing.assert_close(z_cached, z_no_cache)
+
+    def test_cache_timestep_invariance(self, device, context):
+        """Test that compute_cache output is identical regardless of what timestep is later used."""
+        diff_cond = DiffusionConditioning(sigma_coord=12.0).to(device)
+        diff_cond.eval()
+
+        # compute_cache does not depend on timestep at all
+        torch.manual_seed(42)
+        cache1 = diff_cond.compute_cache(context)
+
+        torch.manual_seed(42)
+        cache2 = diff_cond.compute_cache(context)
+
+        torch.testing.assert_close(cache1.s_base, cache2.s_base)
+        torch.testing.assert_close(cache1.z, cache2.z)
 
 
 class TestDiffusionModule:

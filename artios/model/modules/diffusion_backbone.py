@@ -2,6 +2,7 @@
 TODO: this filename should eventually just be called diffusion.py I think.
 """
 
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
@@ -29,6 +30,14 @@ from artios.model.modules.transformer import DiffusionTransformer
 from artios.model.utils import average_atom_to_token, broadcast_token_to_atom, one_hot
 from artios.utils.geometry import centre_random_augmentation
 from artios.utils.typing import typecheck
+
+
+@dataclass
+class CachedConditioning:
+    """Timestep-independent conditioning, reusable across sampling steps."""
+
+    s_base: Float[Tensor, "... n_token c_s"]
+    z: Float[Tensor, "... n_token n_token c_z"]
 
 
 class DiffusionConditioning(nn.Module):
@@ -315,6 +324,63 @@ class DiffusionConditioning(nn.Module):
 
         return s_motif, z_motif
 
+    @typecheck
+    def compute_cache(self, context: FullContext) -> CachedConditioning:
+        """Compute timestep-independent conditioning that can be reused across sampling steps.
+
+        Args:
+            context: Full context containing all features and labels.
+
+        Returns:
+            CachedConditioning with precomputed s_base and z.
+        """
+        dtype = context.reference.ref_pos.dtype
+
+        # Initialize pair embedding with atom level (motif + ligand) conformer features
+        s_atom, z_atom = self.get_atom_condition(context)
+
+        # Motif features
+        s_motif, z_motif = self.get_motif_condition(context)
+
+        # Pair: combine atom + motif, add relpos, layernorm + linear, transition
+        z = z_atom + z_motif
+
+        relpos_embed = self.relpos(
+            asym_id=context.token.asym_id,
+            residue_index=context.token.residue_index,
+            entity_id=context.token.entity_id,
+            sym_id=context.token.sym_id,
+            token_index=context.token.token_index,
+        )
+        z = torch.cat(tensors=[z, relpos_embed], dim=-1)
+        z = self.linear_no_bias_z(self.layernorm_z(z))
+        z = z + self.transition_z(z)
+
+        # Single base: atom + motif + entity types
+        s_base = s_atom + s_motif
+
+        s_entity_type = self.entity_type_embed(
+            torch.stack(
+                [
+                    getattr(context.entity, name).to(dtype)
+                    for name in self.entity_features
+                ],
+                dim=-1,
+            )
+        )
+        s_entity_type = s_entity_type + self.motif_entity_type_embed(
+            torch.stack(
+                [
+                    getattr(context.motif, name).to(dtype)
+                    for name in self.motif_entity_features
+                ],
+                dim=-1,
+            )
+        )
+        s_base = s_base + s_entity_type
+
+        return CachedConditioning(s_base=s_base, z=z)
+
     # @torch.compile
     @typecheck
     def forward(
@@ -322,6 +388,7 @@ class DiffusionConditioning(nn.Module):
         r_noisy: Float[Tensor, "... n_sample n_atom 3"],
         timestep: Float[Tensor, "... n_sample"],
         context: FullContext,
+        cache: Optional[CachedConditioning] = None,
         inplace_safe: bool = False,
     ) -> tuple[
         Float[Tensor, "... n_sample n_token c_s"],
@@ -332,95 +399,33 @@ class DiffusionConditioning(nn.Module):
             r_noisy: Noisy coordinates
             timestep: Noising timestep
             context: Full context containing all features and labels.
+            cache: Precomputed timestep-independent conditioning. If None, computed internally.
             inplace_safe: Whether it is safe to use inplace operations.
 
         Returns:
             Tuple of single (s) and pair (z) embeddings
         """
-        dtype = r_noisy.dtype
+        if cache is None:
+            cache = self.compute_cache(context)
 
-        # Grab data on inputs
         n_token = context.token.residue_index.shape[-1]
 
-        # Initialize pair embedding with atom level (motif + ligand) conformer features
-        s_atom, z_atom = self.get_atom_condition(context)
-
-        # Motif features
-        s_motif, z_motif = self.get_motif_condition(context)
-
-        # Add single and pair embeddings
-        s = s_atom + s_motif
-        z = z_atom + z_motif
-
-        # Add token bonds to pair embedding
-        # z = z + self.token_bonds_embed(
-        #     input_feature_dict["token_bonds"].unsqueeze(-1)
-        # )  # [..., N_token, N_token, c_z]
-
-        ### Relative position encodings
-        # Concatenate z_init with relative position encoding and embed (Line 1)
-        relpos_embed = self.relpos(
-            asym_id=context.token.asym_id,
-            residue_index=context.token.residue_index,
-            entity_id=context.token.entity_id,
-            sym_id=context.token.sym_id,
-            token_index=context.token.token_index,
+        # Timestep-dependent single conditioning
+        timestep_embed = self.fourier_embedding(t_hat_timestep=(2 * timestep - 1)).to(
+            cache.z.dtype
         )
-        z = torch.cat(
-            tensors=[z, relpos_embed],
-            dim=-1,
-        )  # [..., N_tokens, N_tokens, 2*c_z]
 
-        # Normalise and embed pair embedding (Line 2)
-        z = self.linear_no_bias_z(self.layernorm_z(z))
-
-        ### Initialize single embedding
-        # 1. Fourier embed the timestep
-        timestep_embed = self.fourier_embedding(
-            t_hat_timestep=(
-                2 * timestep - 1
-            )  # Rescale to [-1, 1] for smoother embedding
-        ).to(z.dtype)  # [..., N_sample, c_noise_embedding]
-
-        # 2. Normalise and embed both timesteps
-        s = rearrange(s, "... n c -> ... 1 n c")
+        s = rearrange(cache.s_base, "... n c -> ... 1 n c")
         s = s + repeat(
             self.linear_t(self.layernorm_t(timestep_embed)),
             "... s c -> ... s n c",
             n=n_token,
         )
 
-        # Embed entity type
-        s_entity_type = self.entity_type_embed(
-            torch.stack(
-                [
-                    getattr(context.entity, name).to(dtype)
-                    for name in self.entity_features
-                ],
-                dim=-1,
-            )
-        )  # [..., N_token, c_s]
-
-        # Embed motif entity type
-        s_entity_type = s_entity_type + self.motif_entity_type_embed(
-            torch.stack(
-                [
-                    getattr(context.motif, name).to(dtype)
-                    for name in self.motif_entity_features
-                ],
-                dim=-1,
-            )
-        )  # [..., N_token, c_s]
-
-        s = s + rearrange(s_entity_type, "... n c -> ... 1 n c")
-
-        ### Transition for both single and pair embeddings
         s = s + self.transition_s1(s)
         s = s + self.transition_s2(s)
 
-        z = z + self.transition_z(z)
-
-        return s, z
+        return s, cache.z
 
 
 class DiffusionModule(nn.Module):
@@ -544,10 +549,10 @@ class DiffusionModule(nn.Module):
             A callable satisfying VelocityScorePredictor protocol.
             If cfg_schedule is not NoCFG, returns a CFGPredictor.
         """
-        # TODO: we can separate the diffusion conditioning from the main network for efficiency.
 
         def make_predictor(ctx: FullContext) -> VelocityScorePredictor:
             """Create a predictor bound to a specific context."""
+            conditioning_cache = self.diffusion_conditioning.compute_cache(ctx)
 
             def predictor(
                 x_noisy: Float[Tensor, "... n_atom 3"],
@@ -557,6 +562,7 @@ class DiffusionModule(nn.Module):
                     r_noisy=x_noisy,
                     timestep=timestep,
                     context=ctx,
+                    cache=conditioning_cache,
                     inplace_safe=inplace_safe,
                 )
 
@@ -649,6 +655,7 @@ class DiffusionModule(nn.Module):
         r_noisy: Float[Tensor, "... n_sample n_atom 3"],
         timestep: Float[Tensor, "... n_sample"],
         context: FullContext,
+        cache: Optional[CachedConditioning] = None,
         inplace_safe: bool = False,
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
         """The raw network to be trained. This is v_theta(x_t, t).
@@ -658,23 +665,24 @@ class DiffusionModule(nn.Module):
             r_noisy: Scaled noisy coordinates (i.e., c_in * x)
             timestep: Noising timestep
             context: Full context containing all features and labels.
+            cache: Precomputed timestep-independent conditioning from DiffusionConditioning.
             inplace_safe: Whether it is safe to use inplace operations.
 
         Returns:
             Network output (velocity prediction or denoising coord prediction,
             depending on network parameterisation)
         """
-        N_sample = r_noisy.shape[-3]
+        n_sample = r_noisy.shape[-3]
 
         atom_mask = repeat(
             context.mask.atom_mask,
             "... a -> ... s a",
-            s=N_sample,
+            s=n_sample,
         )
         atom_to_token_idx = repeat(
             context.index.atom_to_token_idx,
             "... a -> ... s a",
-            s=N_sample,
+            s=n_sample,
         )
 
         n_token = context.token.residue_index.shape[-1]
@@ -701,6 +709,7 @@ class DiffusionModule(nn.Module):
             r_noisy=r_noisy,
             timestep=timestep,
             context=context,
+            cache=cache,
             inplace_safe=inplace_safe,
         )  # [..., N_sample, N_token, c_s], [..., N_token, N_token, c_z]
 
@@ -735,7 +744,7 @@ class DiffusionModule(nn.Module):
                 dim=-1,
             )
         )
-        q_atom = q_atom + repeat(atom_features, "... a c -> ... s a c", s=N_sample)
+        q_atom = q_atom + repeat(atom_features, "... a c -> ... s a c", s=n_sample)
 
         return self.readout(q_atom)
 
@@ -757,6 +766,7 @@ class DiffusionModule(nn.Module):
         r_noisy: Float[Tensor, "... n_sample n_atom 3"],
         timestep: Float[Tensor, "... n_sample"],
         context: FullContext,
+        cache: Optional[CachedConditioning] = None,
         inplace_safe: bool = False,
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
         """Performs a forward pass of the diffusion module.
@@ -765,6 +775,7 @@ class DiffusionModule(nn.Module):
             r_noisy: Noisy coordinates
             timestep: Noising timestep
             context: Full context containing all features and labels.
+            cache: Precomputed timestep-independent conditioning from DiffusionConditioning.
             inplace_safe: Whether it is safe to use inplace operations.
 
         Returns:
@@ -781,6 +792,7 @@ class DiffusionModule(nn.Module):
             r_noisy=r_noisy_unit,
             timestep=timestep,
             context=context,
+            cache=cache,
             inplace_safe=inplace_safe,
         )
 

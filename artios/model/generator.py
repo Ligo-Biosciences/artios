@@ -1,5 +1,3 @@
-import logging
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -10,8 +8,6 @@ from torch import Tensor
 from artios.model.utils import beta_function
 from artios.utils.geometry import centre_random_augmentation
 from artios.utils.typing import Bool, Float, typecheck
-
-logger = logging.getLogger(__name__)
 
 
 class TrainingTimestepSampler(ABC):
@@ -814,14 +810,6 @@ class FlowMatchingSampler:
             trajectory = None
 
         x = x_init
-        use_cuda = device.type == "cuda"
-
-        # Profiling accumulators
-        total_centre = 0.0
-        total_predictor = 0.0
-        total_integrate = 0.0
-
-        t_loop_start = time.perf_counter()
 
         for i, (t_cur, t_next) in enumerate(zip(timesteps[:-1], timesteps[1:])):
             dt = (t_next - t_cur).item()
@@ -831,33 +819,20 @@ class FlowMatchingSampler:
             noise = None if is_deterministic else torch.randn_like(x)
 
             # Centre coordinates if requested
-            if use_cuda:
-                torch.cuda.synchronize()
-            t0 = time.perf_counter()
             if self.centre_coords:
                 x = (
                     centre_random_augmentation(x_input_coords=x, n_sample=1, mask=mask)
                     .squeeze(dim=-3)
                     .to(dtype)
                 )
-            if use_cuda:
-                torch.cuda.synchronize()
-            total_centre += time.perf_counter() - t0
 
             # Expand timestep to match batch dimensions
             # TODO: I don't like the .item() calls
             t_expanded = x.new_full(x.shape[:-2], t_cur.item())
 
             # Get velocity and score predictions
-            if use_cuda:
-                torch.cuda.synchronize()
-            t0 = time.perf_counter()
             velocity, score = predictor(x, t_expanded)
-            if use_cuda:
-                torch.cuda.synchronize()
-            total_predictor += time.perf_counter() - t0
 
-            t0 = time.perf_counter()
             if not self.second_order:
                 x = euler_maruyama_step(
                     x=x,
@@ -892,21 +867,9 @@ class FlowMatchingSampler:
                     gamma=self.gamma,
                     noise=noise,
                 )
-            if use_cuda:
-                torch.cuda.synchronize()
-            total_integrate += time.perf_counter() - t0
 
             # Store trajectory if requested
             if track_trajectory:
                 trajectory[..., i + 1, :, :] = x.detach()
-
-        total_loop = time.perf_counter() - t_loop_start
-        logger.info(
-            f"Sampling complete: {n_steps} steps in {total_loop:.1f}s "
-            f"({total_loop/n_steps*1000:.1f}ms/step) | "
-            f"predictor: {total_predictor:.1f}s ({total_predictor/total_loop*100:.0f}%) | "
-            f"centre: {total_centre:.1f}s ({total_centre/total_loop*100:.0f}%) | "
-            f"integrate: {total_integrate:.1f}s ({total_integrate/total_loop*100:.0f}%)"
-        )
 
         return SamplingResult(final=x, trajectory=trajectory)

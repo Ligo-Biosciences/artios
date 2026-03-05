@@ -58,21 +58,21 @@ class InferenceTimestepScheduler(ABC):
         ...
 
 
-class MaskingScheduler(ABC):
+class MaskingTimestepSampler(TrainingTimestepSampler):
     """Abstract base class for the masking scheduler used in discrete diffusion."""
 
     @abstractmethod
     @typecheck
-    def get_schedule(
+    def get_mask_rates(
         self,
         t: Float[Tensor, "..."],
     ) -> Float[Tensor, "..."]:
-        """Generate timesteps alpha(t) for masking."""
+        """Generate mask rates alpha(t) for masking."""
         ...
 
     @abstractmethod
     @typecheck
-    def get_derivative_schedule(
+    def get_derivative_mask_rates(
         self,
         t: Float[Tensor, "..."],
     ) -> Float[Tensor, "..."]:
@@ -80,12 +80,16 @@ class MaskingScheduler(ABC):
         ...
 
     @typecheck
-    def get_loss_weight(
+    def get_loss_weights(
         self,
         t: Float[Tensor, "..."],
     ) -> Float[Tensor, "..."]:
         """Generate the loss weighting."""
-        return -(self.get_derivative_schedule(t) / (self.get_schedule(t) - 1))
+        t_clamped = t.clamp(max=0.95)
+        return -(
+            self.get_derivative_mask_rates(t_clamped)
+            / (self.get_mask_rates(t_clamped) - 1)
+        )
 
 
 @dataclass(frozen=True)
@@ -278,23 +282,32 @@ class CosineScheduler(InferenceTimestepScheduler):
 
 
 @dataclass(frozen=True)
-class LinearMaskingScheduler(MaskingScheduler):
+class LinearMaskingTimestepSampler(MaskingTimestepSampler):
     """Linear masking scheduler."""
 
+    def sample(
+        self,
+        size: tuple[int, ...],
+        device: torch.device,
+        generator: torch.Generator | None = None,
+    ) -> Float[Tensor, "..."]:
+        """Sample timesteps uniformly between 0 and 1."""
+        return torch.rand(size, device=device, generator=generator)
+
     @typecheck
-    def get_schedule(
+    def get_mask_rates(
         self,
         t: Float[Tensor, "..."],
     ) -> Float[Tensor, "..."]:
-        """Generate the timesteps using the linear schedule."""
+        """Generate the mask rates using the linear schedule."""
         return t
 
     @typecheck
-    def get_derivative_schedule(
+    def get_derivative_mask_rates(
         self,
         t: Float[Tensor, "..."],
     ) -> Float[Tensor, "..."]:
-        """Generate the derivative of the linear schedule."""
+        """Generate the derivative of the mask rates."""
         return torch.ones_like(t)
 
 
@@ -986,7 +999,7 @@ class FlowMatchingSampler:
 #     """Temperature parameter for the stochastic term."""
 
 #     @typecheck
-#     def sample(self, predictor: SequencePredictor, n_steps: int):
+#     def sample(self, predictor: SequencePredictor, n_steps: int), generato:
 #         """Sample from the discrete diffusion model."""
 #         device = predictor.device
 #         dtype = predictor.dtype
@@ -1003,8 +1016,16 @@ class FlowMatchingSampler:
 #         for timestep in t:
 #             print(f"Timestep: {timestep}")
 #             # TODO: get the logits from the predictor
+#             logits = predictor(restype)
 
 #             # TODO: sample from the logits with temperature
+#             probs = F.softmax(logits / self.temperature, dim=-1)
+#             batch_size, seq_len, num_classes = probs.shape
+#             probs_2d = probs.view(-1, num_classes)
+#             samples = torch.multinomial(
+#                 probs_2d, num_samples=1, generator=generator
+#             ).squeeze(-1)
+#             samples = samples.view(batch_size, seq_len)
 
 #             # TODO: establish which tokens are going to be updated
 

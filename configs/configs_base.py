@@ -229,7 +229,7 @@ model_configs = {
             "positional_encoding_max_relative_feats": 32,
             "num_rbf_kernels": 16,
             "dropout": 0.0,
-            "coord_noise": 0.1,
+            "coord_noise": 0.3,
         },
         "sampling": {
             "temperature": 0.1,

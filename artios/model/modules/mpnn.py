@@ -173,6 +173,8 @@ class MPNN(nn.Module):
             smoothing_factor: Interpolation factor (0=random, 1=spatial). If None, sampled.
             seed_token_index: Fixed seed token index. If None, randomly selected.
 
+        # TODO: instead of a decoding order, it should be a spatially smoothed
+
         Returns:
             Decoding order
         """
@@ -290,6 +292,8 @@ class MPNN(nn.Module):
 
         Returns:
             DecodingMasks with forward and backward attention masks.
+
+        TODO: will be completely deleted (thankfully).
         """
         mask_size = edge_index.shape[-2]
         permutation_matrix_reverse = F.one_hot(
@@ -370,7 +374,7 @@ class MPNN(nn.Module):
         self,
         encoder_output: EncoderOutput,
         restype: Num[Tensor, "batch n_token num_residue_types"],
-        masks: DecodingMasks,
+        masks: DecodingMasks,  # TODO: there will be no need for this.
         node_mask: Bool[Tensor, "batch n_token"],
         zero_shot: bool = False,
     ) -> Float[Tensor, "batch n_token num_residue_types"]:
@@ -393,11 +397,13 @@ class MPNN(nn.Module):
 
         sequence_embeds = self.embed_restype(restype.to(dtype))
 
+        # TODO: instead, we have a simple concat
         encoder_edge_feats, sequence_edge_feats = self._prepare_decoder_edge_features(
             encoder_output=encoder_output,
             sequence_embeds=sequence_embeds,
         )
 
+        # TODO: simplify all of this, simple forward pass through the decoder layers
         # Run decoder layers
         for layer in self.decoder:
             if zero_shot:
@@ -451,6 +457,9 @@ class MPNN(nn.Module):
 
         Returns:
             One-hot encoded sampled residue types
+
+        # TODO: potentially simplify, top-p sampling etc.
+        Add masking logic
         """
         generator = None
         if seed is not None:
@@ -502,6 +511,8 @@ class MPNN(nn.Module):
             Tuple of (sampled_sequence, node_feats)
                 - sampled_sequence: One-hot encoded
                 - node_feats: Final node features
+
+        # TODO: sampling will simply become a diffusion sampling
         """
         assert temperature >= 0, "Temperature must be non-negative"
 
@@ -541,7 +552,7 @@ class MPNN(nn.Module):
         if show_progress:
             timestep_range = tqdm(timestep_range, desc="Sampling")
 
-        for timestep in timestep_range:
+        for timestep in timestep_range:  # TODO: iterate through cosine scheduler.
             logits = self.decode(
                 encoder_output=encoder_output,
                 restype=restype,
@@ -556,6 +567,7 @@ class MPNN(nn.Module):
             pred_vals = self._sample_from_logits(
                 logits, temperature=temperature, seed=seed
             )
+            # TODO: stuff below is ugly. TIdy it up.
             # Only update positions that are not fixed
             update_mask = ~is_fixed[batch_idx, next_pos_idx]
             restype[batch_idx[update_mask], next_pos_idx[update_mask]] = pred_vals[
@@ -608,7 +620,7 @@ class MPNN(nn.Module):
             decoding_order=decoding_order,
             edge_index=encoder_output.edge_index,
             node_mask=centre_atom_mask,
-        )
+        )  # TODO: no need
 
         logits = self.decode(
             encoder_output=encoder_output,

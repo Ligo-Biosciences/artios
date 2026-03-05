@@ -142,6 +142,8 @@ class ArtiosMPNN(nn.Module):
         labels = context.token.restype.float()  # [batch, n_token, num_residue_types]
         mask = context.mask.centre_atom_is_resolved  # [batch, n_token]
 
+        # TODO: weighted cross entropy
+
         # Compute NLL loss
         loss = nll_loss(
             logits=logits,

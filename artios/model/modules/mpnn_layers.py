@@ -12,6 +12,8 @@ import artios.model.modules.message_passing as mp
 from artios.model.modules.primitives import LayerNorm, LinearNoBias
 from artios.utils.tensor_utils import expand_at_dim
 
+# TODO: the core logic of the classes here should be improved / written clearly.
+
 
 class BaseMPNNLayer(nn.Module, ABC):
     """Base class for message passing neural net layers that process node and edge features in graph neural networks."""

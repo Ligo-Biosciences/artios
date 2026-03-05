@@ -311,6 +311,8 @@ GAP = {"-": 31}
 STD_RESIDUES = PRO_STD_RESIDUES | RNA_STD_RESIDUES | DNA_STD_RESIDUES
 STD_RESIDUES_AND_GAP = STD_RESIDUES | GAP  # used in restype encoding
 
+MASK_TOKEN = {"<mask>": len(STD_RESIDUES_AND_GAP)}  # index 32, for masked diffusion
+
 
 rna_order_with_x = {
     "A": 0,

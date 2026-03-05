@@ -90,12 +90,12 @@ def mse_per_atom(
 
 @typecheck
 def nll_loss(
-    logits: Float[Tensor, "*batch n_class"],
-    labels: Float[Tensor, "*batch n_class"],
-    mask: Bool[Tensor, "*batch"],
+    logits: Float[Tensor, "*batch n n_class"],
+    labels: Float[Tensor, "*batch n n_class"],
+    mask: Bool[Tensor, "*batch n"],
     label_smoothing: float = 0.0,
     eps: float = 1e-6,
-) -> Float[Tensor, ""]:
+) -> Float[Tensor, "*batch"]:
     """Compute masked negative log-likelihood loss with optional label smoothing.
 
     Args:
@@ -121,7 +121,7 @@ def nll_loss(
     per_position_loss = -torch.sum(
         labels_smoothed * F.log_softmax(logits, dim=-1), dim=-1
     )
-    return masked_mean(per_position_loss, mask, axes=-1, eps=eps).mean()
+    return masked_mean(per_position_loss, mask, axes=-1, eps=eps)
 
 
 # =============================================================================

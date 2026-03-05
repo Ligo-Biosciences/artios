@@ -98,7 +98,6 @@ class GaussianRBF(nn.Module):
         # Gamma controls the width of the Gaussians
         # Use spacing between centers to determine width
         spacing = (max_distance - min_distance) / (num_kernels - 1)
-        # gamma_ =
         self.register_buffer("gamma", torch.tensor(1.0 / (spacing**2)))
 
     def forward(
@@ -180,13 +179,13 @@ class MPNNFeaturizer(nn.Module):
         self.non_protein_restype_embed = LinearNoBias(32, node_dim)
 
         # Ligand input features
-        self.ligand_input_feature = {
+        _ligand_input_feature = {
             "ref_charge": 1,
             "ref_mask": 1,
             "ref_element": 128,
         }
         self.ligand_condition_embed = LinearNoBias(
-            sum(self.ligand_input_feature.values()), node_dim
+            sum(_ligand_input_feature.values()), node_dim
         )
 
         self.positional_encoder = EdgeRelativePositionalEncoding(
@@ -267,7 +266,7 @@ class MPNNFeaturizer(nn.Module):
             [
                 rearrange(context.reference.ref_charge, "... n -> ... n 1").to(dtype),
                 rearrange(context.reference.ref_mask, "... n -> ... n 1").to(dtype),
-                context.reference.ref_element.to(dtype),  # TODO: is this correct?
+                context.reference.ref_element.to(dtype),
             ],
             dim=-1,
         )
@@ -412,7 +411,6 @@ class MPNNFeaturizer(nn.Module):
         backbone_coords = context.coordinate.backbone_coordinate
         backbone_mask = context.mask.backbone_mask
 
-        # TODO: centre-random augment the backbone coordinates
         # Add coordinate noise during training
         if self.training:
             backbone_coords = (

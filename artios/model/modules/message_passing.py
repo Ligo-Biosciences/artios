@@ -1,4 +1,5 @@
 """Message-passing utilities."""
+# TODO: fully switch to einops, use repeat etc.
 
 import torch
 from einops import rearrange

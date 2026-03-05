@@ -58,6 +58,28 @@ class InferenceTimestepScheduler(ABC):
         ...
 
 
+class MaskingScheduler(ABC):
+    """Abstract base class for the masking scheduler used in discrete diffusion."""
+
+    @abstractmethod
+    @typecheck
+    def get_schedule(
+        self,
+        t: Float[Tensor, "..."],
+    ) -> Float[Tensor, "..."]:
+        """Generate timesteps alpha(t) for masking."""
+        ...
+
+    @abstractmethod
+    @typecheck
+    def get_derivative_schedule(
+        self,
+        t: Float[Tensor, "..."],
+    ) -> Float[Tensor, "..."]:
+        """Generate the derivative alpha'(t)."""
+        ...
+
+
 @dataclass(frozen=True)
 class BetaWithUniform(TrainingTimestepSampler):
     """Sample timesteps using a mixture of Beta(alpha,beta) and Uniform(0,1) distributions."""
@@ -219,6 +241,53 @@ class LaProteinaCoordScheduler(InferenceTimestepScheduler):
         steps = torch.arange(n_steps + 1, dtype=dtype, device=device) / n_steps
         t = (1 - torch.pow(self.scale, -2 * steps)) / (1 - self.scale ** (-2))
         return t
+
+
+@dataclass(frozen=True)
+class CosineScheduler(InferenceTimestepScheduler):
+    """Cosine scheduler.
+    NOTE: be careful with ordering of timesteps."""
+
+    @typecheck
+    def get_schedule(
+        self,
+        n_steps: int,
+        device: torch.device,
+        dtype: torch.dtype = torch.float32,
+    ) -> Float[Tensor, "n_steps_plus_one"]:
+        """Generate timesteps using cosine schedule.
+
+        Args:
+            n_steps: Number of timesteps.
+            device: Device to place tensor on.
+            dtype: Data type of tensor.
+        """
+        import math
+
+        steps = torch.arange(n_steps + 1, dtype=dtype, device=device) / n_steps
+        t = torch.cos(math.pi / 2 * (1 - steps))
+        return t
+
+
+@dataclass(frozen=True)
+class LinearMaskingScheduler(MaskingScheduler):
+    """Linear masking scheduler."""
+
+    @typecheck
+    def get_schedule(
+        self,
+        t: Float[Tensor, "..."],
+    ) -> Float[Tensor, "..."]:
+        """Generate the timesteps using the linear schedule."""
+        return 1 - t
+
+    @typecheck
+    def get_derivative_schedule(
+        self,
+        t: Float[Tensor, "..."],
+    ) -> Float[Tensor, "..."]:
+        """Generate the derivative of the linear schedule."""
+        return -torch.ones_like(t)
 
 
 # =============================================================================

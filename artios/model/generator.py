@@ -79,6 +79,14 @@ class MaskingScheduler(ABC):
         """Generate the derivative alpha'(t)."""
         ...
 
+    @typecheck
+    def get_loss_weight(
+        self,
+        t: Float[Tensor, "..."],
+    ) -> Float[Tensor, "..."]:
+        """Generate the loss weighting."""
+        return -(self.get_derivative_schedule(t) / (self.get_schedule(t) - 1))
+
 
 @dataclass(frozen=True)
 class BetaWithUniform(TrainingTimestepSampler):
@@ -279,7 +287,7 @@ class LinearMaskingScheduler(MaskingScheduler):
         t: Float[Tensor, "..."],
     ) -> Float[Tensor, "..."]:
         """Generate the timesteps using the linear schedule."""
-        return 1 - t
+        return t
 
     @typecheck
     def get_derivative_schedule(
@@ -287,7 +295,7 @@ class LinearMaskingScheduler(MaskingScheduler):
         t: Float[Tensor, "..."],
     ) -> Float[Tensor, "..."]:
         """Generate the derivative of the linear schedule."""
-        return -torch.ones_like(t)
+        return torch.ones_like(t)
 
 
 # =============================================================================
@@ -742,6 +750,26 @@ class VelocityScorePredictor(Protocol):
         ...
 
 
+@runtime_checkable
+class SequencePredictor(Protocol):
+    @typecheck
+    def __call__(
+        self,
+        restype: Float[Tensor, "*batch num_residue_types"],
+        timestep: Float[Tensor, "*batch"],
+    ) -> Float[Tensor, "*batch num_residue_types"]:
+        """Predict logits at given restype and timestep.
+
+        Args:
+            restype: Restype tensor.
+            timestep: Current diffusion timestep (0 = data, 1 = noise).
+
+        Returns:
+            Logits tensor with same shape as restype.
+        """
+        ...
+
+
 @dataclass(frozen=True)
 class CFGPredictor:
     """Classifier-Free Guidance predictor combining conditional and unconditional.
@@ -942,3 +970,44 @@ class FlowMatchingSampler:
                 trajectory[..., i + 1, :, :] = x.detach()
 
         return SamplingResult(final=x, trajectory=trajectory)
+
+
+# @dataclass(frozen=True)
+# class DiscreteDiffusionSampler:
+#     """Discrete diffusion sampler."""
+
+#     timestep_scheduler: InferenceTimestepScheduler
+#     """Scheduler for generating timestep sequence."""
+
+#     masking_scheduler: MaskingScheduler
+#     """Scheduler for generating mask sequence."""
+
+#     temperature: float
+#     """Temperature parameter for the stochastic term."""
+
+#     @typecheck
+#     def sample(self, predictor: SequencePredictor, n_steps: int):
+#         """Sample from the discrete diffusion model."""
+#         device = predictor.device
+#         dtype = predictor.dtype
+
+#         # TODO: get the timestep schedule
+#         t = self.timestep_scheduler.get_schedule(n_steps, device, dtype)
+
+#         # TODO: get the mask schedule from the timesteps
+#         alpha_t = self.masking_scheduler.get_schedule(t)
+
+#         # TODO intialise restpye to be all masked
+#         restype = torch.zeros(1, 1, self.num_residue_types, device=device, dtype=dtype)
+
+#         for timestep in t:
+#             print(f"Timestep: {timestep}")
+#             # TODO: get the logits from the predictor
+
+#             # TODO: sample from the logits with temperature
+
+#             # TODO: establish which tokens are going to be updated
+
+#             # TODO: update the restype with the tokens that need to be updated
+
+#         return restype

@@ -20,7 +20,7 @@ import logging
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum, auto
 from functools import partial
-from typing import Annotated, Any, Callable, get_args, get_type_hints
+from typing import Annotated, Any, Callable, Optional, get_args, get_type_hints
 
 import torch
 from biotite.structure import AtomArray
@@ -191,7 +191,7 @@ class Context:
         for f in fields(self):
             value = getattr(self, f.name)
 
-            if not torch.is_tensor(value):
+            if value is None or not torch.is_tensor(value):
                 padded_fields[f.name] = value
                 continue
 
@@ -222,12 +222,14 @@ class TokenContext(Context):
     )
 
     # NOTE: Temporarily optional - expensive to compute, only needed for MPNN
-    token_bonds: Feature(
-        Int[Tensor, "*batch n_token n_token"],
-        type=FeatureType.TOKEN_PAIR,
-        encoding=EncodingType.IDENTITY,
-        description="Indicator for ligand-ligand and non-polymer bonds",
-    ) = None
+    token_bonds: Optional[
+        Feature(
+            Int[Tensor, "*batch n_token n_token"],
+            type=FeatureType.TOKEN_PAIR,
+            encoding=EncodingType.IDENTITY,
+            description="Indicator for ligand-ligand and non-polymer bonds",
+        )
+    ] = None
 
 
 @typecheck

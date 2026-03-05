@@ -124,7 +124,12 @@ class MPNN(nn.Module):
         # Encoder layers
         self.encoder = nn.ModuleList(
             [
-                MPNNEncoderLayer(node_dim=node_dim, edge_dim=edge_dim, dropout=dropout)
+                MPNNEncoderLayer(
+                    node_dim=node_dim,
+                    edge_dim=edge_dim,
+                    scale=num_neighbours,
+                    dropout=dropout,
+                )
                 for _ in range(num_encoder_layers)
             ]
         )
@@ -137,6 +142,7 @@ class MPNN(nn.Module):
                     edge_dim=edge_dim,
                     edge_input_dim=2 * node_dim + edge_dim,
                     dropout=dropout,
+                    scale=num_neighbours,
                 )
                 for _ in range(num_decoder_layers)
             ]

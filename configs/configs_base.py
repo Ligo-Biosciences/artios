@@ -236,6 +236,7 @@ model_configs = {
             "zero_shot": False,
             "smoothing_factor": 0.5,
             "N_sample": 5,
+            "n_steps": 100,
         },
     },
     "artios_packing": {

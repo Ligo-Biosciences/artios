@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from typing_extensions import assert_never
 
 from artios.data.features import FullContext
-from artios.model.generator import LinearMaskingTimestepSampler
+from artios.model.generator import CosineScheduler, LinearMaskingTimestepSampler
 from artios.model.loss import nll_loss
 from artios.model.modules.mpnn import MPNN
 from artios.model.output import ModelOutput, SequenceOutput
@@ -37,6 +37,7 @@ class ArtiosMPNN(nn.Module):
         self.sample_zero_shot = configs.artios_mpnn.sampling.zero_shot
         self.temp = configs.artios_mpnn.sampling.temperature
         self.smoothing_factor = configs.artios_mpnn.sampling.smoothing_factor
+        self.n_steps = configs.artios_mpnn.sampling.n_steps
 
         mpnn_loss_cfg = configs.loss.mpnn
         self.loss_config = MPNNLossConfig(
@@ -48,6 +49,7 @@ class ArtiosMPNN(nn.Module):
         )
 
         self.masking_sampler = LinearMaskingTimestepSampler()
+        self.inference_scheduler = CosineScheduler()
 
         self.mpnn = MPNN(**configs.artios_mpnn.model)
 
@@ -56,11 +58,12 @@ class ArtiosMPNN(nn.Module):
         context: FullContext,
         seed: Optional[int] = None,
     ) -> SequenceOutput:
-        seq_logits, _ = self.mpnn.sample(
+        seq_logits = self.mpnn.sample(
             context=context,
+            timestep_scheduler=self.inference_scheduler,
+            masking_timestep_sampler=self.masking_sampler,
+            n_steps=self.n_steps,
             temperature=self.temp,
-            zero_shot=self.sample_zero_shot,
-            smoothing_factor=self.smoothing_factor,
             seed=seed,
         )
 

@@ -230,6 +230,7 @@ model_configs = {
             "num_rbf_kernels": 16,
             "dropout": 0.0,
             "coord_noise": 0.3,
+            "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
         },
         "sampling": {
             "temperature": 0.1,

@@ -91,6 +91,7 @@ class MPNN(nn.Module):
         num_rbf_kernels: int = 16,
         dropout: float = 0.0,
         coord_noise: float = 0.1,
+        checkpoint_grads: bool = True,
     ):
         super().__init__()
 
@@ -105,6 +106,7 @@ class MPNN(nn.Module):
         self.coord_noise = coord_noise
         self.num_encoder_layers = num_encoder_layers
         self.num_decoder_layers = num_decoder_layers
+        self.checkpoint_grads = checkpoint_grads
 
         # Featurizer
         self.featurizer = MPNNFeaturizer(
@@ -166,15 +168,20 @@ class MPNN(nn.Module):
         edge_mask = centre_atom_mask[..., None] * edge_mask
 
         for layer in self.encoder:
-            node_feats, edge_feats = checkpoint(
-                layer,
-                node_feats,
-                edge_feats,
-                edge_index,
-                centre_atom_mask,
-                edge_mask,
-                use_reentrant=False,
-            )
+            if self.checkpoint_grads:
+                node_feats, edge_feats = checkpoint(
+                    layer,
+                    node_feats,
+                    edge_feats,
+                    edge_index,
+                    centre_atom_mask,
+                    edge_mask,
+                    use_reentrant=False,
+                )
+            else:
+                node_feats, edge_feats = layer(
+                    node_feats, edge_feats, edge_index, centre_atom_mask, edge_mask
+                )
 
         return EncoderOutput(
             node_feats=node_feats,
@@ -270,14 +277,17 @@ class MPNN(nn.Module):
                 edge_feats=sequence_edge_feats, features=node_feats, edge_idx=edge_index
             )  # [B, N, K, edge_dim + 2*node_dim]
 
-            node_feats = checkpoint(
-                layer,
-                node_feats,
-                decoder_edge_feats,
-                node_mask,
-                edge_mask,
-                use_reentrant=False,
-            )
+            if self.checkpoint_grads:
+                node_feats = checkpoint(
+                    layer,
+                    node_feats,
+                    decoder_edge_feats,
+                    node_mask,
+                    edge_mask,
+                    use_reentrant=False,
+                )
+            else:
+                node_feats = layer(node_feats, decoder_edge_feats, node_mask, edge_mask)
 
         logits = self.linear_out(node_feats)
         return logits

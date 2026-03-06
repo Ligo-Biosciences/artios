@@ -460,3 +460,173 @@ class TestGradients:
         for name, param in mpnn_model.decoder.named_parameters():
             if param.requires_grad:
                 assert param.grad is not None, f"No gradient for decoder.{name}"
+
+
+class TestAsPredictor:
+    """Tests for the as_predictor() method."""
+
+    def test_returns_callable(self, mpnn_model, single_context):
+        """Test that as_predictor returns a callable."""
+        predictor = mpnn_model.as_predictor(single_context)
+        assert callable(predictor)
+
+    def test_predictor_output_shape(self, mpnn_model, single_context):
+        """Test that predictor returns logits with correct shape."""
+        predictor = mpnn_model.as_predictor(single_context)
+
+        batch_size = 1
+        n_tokens = single_context.token.token_index.shape[-1]
+        num_rt = mpnn_model.num_residue_types
+
+        # All-masked input
+        restype = torch.zeros(batch_size, n_tokens, num_rt + 1, dtype=torch.long)
+        restype[..., -1] = 1
+
+        logits = predictor(restype)
+
+        assert logits.shape == (batch_size, n_tokens, num_rt)
+
+    def test_predictor_finite_values(self, mpnn_model, single_context):
+        """Test that predictor returns finite values."""
+        predictor = mpnn_model.as_predictor(single_context)
+
+        batch_size = 1
+        n_tokens = single_context.token.token_index.shape[-1]
+        num_rt = mpnn_model.num_residue_types
+
+        restype = torch.zeros(batch_size, n_tokens, num_rt + 1, dtype=torch.long)
+        restype[..., -1] = 1
+
+        logits = predictor(restype)
+
+        assert torch.isfinite(logits).all(), "Predictor returned non-finite values"
+
+    def test_predictor_different_inputs_different_outputs(
+        self, mpnn_model, single_context
+    ):
+        """Test that different restype inputs produce different outputs."""
+        predictor = mpnn_model.as_predictor(single_context)
+
+        batch_size = 1
+        n_tokens = single_context.token.token_index.shape[-1]
+        num_rt = mpnn_model.num_residue_types
+
+        # All masked
+        masked = torch.zeros(batch_size, n_tokens, num_rt + 1, dtype=torch.long)
+        masked[..., -1] = 1
+
+        # All type 0 (unmasked)
+        unmasked = torch.zeros(batch_size, n_tokens, num_rt + 1, dtype=torch.long)
+        unmasked[..., 0] = 1
+
+        logits_masked = predictor(masked)
+        logits_unmasked = predictor(unmasked)
+
+        assert not torch.allclose(logits_masked, logits_unmasked, atol=1e-3)
+
+    def test_predictor_batched(self, mpnn_model, full_context):
+        """Test that predictor works with batched inputs."""
+        predictor = mpnn_model.as_predictor(full_context)
+
+        batch_size = full_context.token.token_index.shape[0]
+        n_tokens = full_context.token.token_index.shape[-1]
+        num_rt = mpnn_model.num_residue_types
+
+        restype = torch.zeros(batch_size, n_tokens, num_rt + 1, dtype=torch.long)
+        restype[..., -1] = 1
+
+        logits = predictor(restype)
+
+        assert logits.shape == (batch_size, n_tokens, num_rt)
+
+
+class TestSample:
+    """Tests for the sample() method (discrete diffusion inference)."""
+
+    def test_output_shape(self, mpnn_model, single_context):
+        """Test that sample returns logits with correct shape."""
+        from artios.model.generator import CosineScheduler, LinearMaskingTimestepSampler
+
+        mpnn_model.eval()
+        with torch.no_grad():
+            logits = mpnn_model.sample(
+                context=single_context,
+                timestep_scheduler=CosineScheduler(),
+                masking_timestep_sampler=LinearMaskingTimestepSampler(),
+                n_steps=5,
+                seed=42,
+            )
+
+        n_tokens = single_context.token.token_index.shape[-1]
+        assert logits.shape == (1, n_tokens, mpnn_model.num_residue_types)
+
+    def test_finite_values(self, mpnn_model, single_context):
+        """Test that sample returns finite values."""
+        from artios.model.generator import CosineScheduler, LinearMaskingTimestepSampler
+
+        mpnn_model.eval()
+        with torch.no_grad():
+            logits = mpnn_model.sample(
+                context=single_context,
+                timestep_scheduler=CosineScheduler(),
+                masking_timestep_sampler=LinearMaskingTimestepSampler(),
+                n_steps=5,
+                seed=42,
+            )
+
+        assert torch.isfinite(logits).all(), "sample returned non-finite values"
+
+    def test_batched(self, mpnn_model, full_context):
+        """Test that sample works with batched inputs."""
+        from artios.model.generator import CosineScheduler, LinearMaskingTimestepSampler
+
+        mpnn_model.eval()
+        batch_size = full_context.token.token_index.shape[0]
+        n_tokens = full_context.token.token_index.shape[-1]
+
+        with torch.no_grad():
+            logits = mpnn_model.sample(
+                context=full_context,
+                timestep_scheduler=CosineScheduler(),
+                masking_timestep_sampler=LinearMaskingTimestepSampler(),
+                n_steps=5,
+                seed=42,
+            )
+
+        assert logits.shape == (batch_size, n_tokens, mpnn_model.num_residue_types)
+
+    def test_reproducibility(self, mpnn_model, single_context):
+        """Test that same seed produces identical results."""
+        from artios.model.generator import CosineScheduler, LinearMaskingTimestepSampler
+
+        mpnn_model.eval()
+        kwargs = dict(
+            context=single_context,
+            timestep_scheduler=CosineScheduler(),
+            masking_timestep_sampler=LinearMaskingTimestepSampler(),
+            n_steps=5,
+        )
+
+        with torch.no_grad():
+            result1 = mpnn_model.sample(**kwargs, seed=42)
+            result2 = mpnn_model.sample(**kwargs, seed=42)
+
+        assert torch.allclose(result1, result2), "Same seed should give same results"
+
+    def test_different_seeds_differ(self, mpnn_model, single_context):
+        """Test that different seeds produce different results."""
+        from artios.model.generator import CosineScheduler, LinearMaskingTimestepSampler
+
+        mpnn_model.eval()
+        kwargs = dict(
+            context=single_context,
+            timestep_scheduler=CosineScheduler(),
+            masking_timestep_sampler=LinearMaskingTimestepSampler(),
+            n_steps=5,
+        )
+
+        with torch.no_grad():
+            result1 = mpnn_model.sample(**kwargs, seed=42)
+            result2 = mpnn_model.sample(**kwargs, seed=123)
+
+        assert not torch.allclose(result1, result2), "Different seeds should differ"

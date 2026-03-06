@@ -3,11 +3,12 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from artios.model.utils import beta_function
 from artios.utils.geometry import centre_random_augmentation
-from artios.utils.typing import Bool, Float, typecheck
+from artios.utils.typing import Bool, Float, Int, typecheck
 
 
 class TrainingTimestepSampler(ABC):
@@ -769,16 +770,14 @@ class SequencePredictor(Protocol):
     def __call__(
         self,
         restype: Float[Tensor, "*batch num_residue_types"],
-        timestep: Float[Tensor, "*batch"],
     ) -> Float[Tensor, "*batch num_residue_types"]:
-        """Predict logits at given restype and timestep.
+        """Predict logits from (possibly masked) restype.
 
         Args:
-            restype: Restype tensor.
-            timestep: Current diffusion timestep (0 = data, 1 = noise).
+            restype: Restype tensor (may include mask token dimension).
 
         Returns:
-            Logits tensor with same shape as restype.
+            Logits tensor over residue types.
         """
         ...
 
@@ -985,50 +984,76 @@ class FlowMatchingSampler:
         return SamplingResult(final=x, trajectory=trajectory)
 
 
-# @dataclass(frozen=True)
-# class DiscreteDiffusionSampler:
-#     """Discrete diffusion sampler."""
+@dataclass(frozen=True)
+class DiscreteDiffusionSampler:
+    """Discrete diffusion sampler."""
 
-#     timestep_scheduler: InferenceTimestepScheduler
-#     """Scheduler for generating timestep sequence."""
+    timestep_scheduler: InferenceTimestepScheduler
+    """Scheduler for generating timestep sequence."""
 
-#     masking_scheduler: MaskingScheduler
-#     """Scheduler for generating mask sequence."""
+    masking_timestep_sampler: MaskingTimestepSampler
+    """Scheduler for generating mask sequence."""
 
-#     temperature: float
-#     """Temperature parameter for the stochastic term."""
+    temperature: float = 0.1
+    """Temperature for sampling from logits."""
 
-#     @typecheck
-#     def sample(self, predictor: SequencePredictor, n_steps: int), generato:
-#         """Sample from the discrete diffusion model."""
-#         device = predictor.device
-#         dtype = predictor.dtype
+    @typecheck
+    def sample(
+        self,
+        predictor: SequencePredictor,
+        restype_init: Int[Tensor, "batch n_token vocab_with_mask"],
+        n_steps: int,
+        token_mask: Bool[Tensor, "batch n_token"] | None = None,
+        generator: torch.Generator | None = None,
+    ) -> Float[Tensor, "batch n_token num_residue_types"]:
+        """Sample from the discrete diffusion model.
 
-#         # TODO: get the timestep schedule
-#         t = self.timestep_scheduler.get_schedule(n_steps, device, dtype)
+        Progressively unmasks tokens from an all-masked initial state,
+        using the masking schedule to determine unmasking probabilities.
 
-#         # TODO: get the mask schedule from the timesteps
-#         alpha_t = self.masking_scheduler.get_schedule(t)
+        Args:
+            predictor: Callable returning logits given (restype, timestep).
+            restype_init: Initial all-masked restype [B, N, vocab+1].
+            n_steps: Number of denoising steps.
+            token_mask: Valid token mask. Invalid positions are never unmasked.
+            generator: Generator for reproducibility.
 
-#         # TODO intialise restpye to be all masked
-#         restype = torch.zeros(1, 1, self.num_residue_types, device=device, dtype=dtype)
+        Returns:
+            Final logits from the last denoising step [B, N, num_residue_types].
+        """
+        device = restype_init.device
+        dtype = restype_init.dtype
+        batch_size, seq_len, vocab_with_mask = restype_init.shape
+        num_classes = vocab_with_mask - 1
 
-#         for timestep in t:
-#             print(f"Timestep: {timestep}")
-#             # TODO: get the logits from the predictor
-#             logits = predictor(restype)
+        t = self.timestep_scheduler.get_schedule(n_steps, device, dtype)
+        rates = self.masking_timestep_sampler.get_mask_rates(t)
 
-#             # TODO: sample from the logits with temperature
-#             probs = F.softmax(logits / self.temperature, dim=-1)
-#             batch_size, seq_len, num_classes = probs.shape
-#             probs_2d = probs.view(-1, num_classes)
-#             samples = torch.multinomial(
-#                 probs_2d, num_samples=1, generator=generator
-#             ).squeeze(-1)
-#             samples = samples.view(batch_size, seq_len)
+        restype = restype_init
 
-#             # TODO: establish which tokens are going to be updated
+        for alpha_t, alpha_s in zip(rates[:-1], rates[1:]):
+            logits = predictor(restype)
 
-#             # TODO: update the restype with the tokens that need to be updated
+            # sample from logits
+            probs = F.softmax(logits / self.temperature, dim=-1)
+            probs_2d = probs.reshape(-1, num_classes)
+            samples = torch.multinomial(
+                probs_2d, num_samples=1, generator=generator
+            ).squeeze(-1)
+            samples = samples.view(batch_size, seq_len)  # [B, N]
 
-#         return restype
+            samples_onehot = F.one_hot(samples, num_classes=vocab_with_mask).to(dtype)
+
+            # determine what to unmask
+            is_masked = restype[..., -1] > 0.5
+            unmask_prob = (alpha_s - alpha_t) / (1 - alpha_t + 1e-8)
+            rand = torch.rand(batch_size, seq_len, device=device, generator=generator)
+            should_unmask = (rand < unmask_prob) & is_masked
+
+            if token_mask is not None:
+                should_unmask = should_unmask & token_mask
+
+            # update restypes
+            restype = torch.where(should_unmask[..., None], samples_onehot, restype)
+
+        return logits

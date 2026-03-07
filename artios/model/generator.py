@@ -261,6 +261,8 @@ class CosineScheduler(InferenceTimestepScheduler):
     """Cosine scheduler.
     NOTE: be careful with ordering of timesteps."""
 
+    scale: float = 1.0
+
     @typecheck
     def get_schedule(
         self,
@@ -278,7 +280,7 @@ class CosineScheduler(InferenceTimestepScheduler):
         import math
 
         steps = torch.arange(n_steps + 1, dtype=dtype, device=device) / n_steps
-        t = torch.cos(math.pi / 2 * (1 - steps))
+        t = torch.cos(math.pi / 2 * (1 - steps**self.scale))
         return t
 
 

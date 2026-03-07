@@ -10,7 +10,7 @@ This module tests the core functionality of the MPNN class, including:
 import pytest
 import torch
 
-from artios.model.modules.mpnn import MPNN
+from artios.model.modules.mpnn import MPNN, DecoderOutput, MPNNOutput
 from tests.context_utils import FullContext, create_test_context
 
 
@@ -280,14 +280,15 @@ class TestDecode:
         )
         masked_restypes[..., -1] = 1
 
-        logits = mpnn_model.decode(
+        decoder_output = mpnn_model.decode(
             encoder_output=encoder_output,
             restypes=masked_restypes,
             node_mask=single_context.mask.token_mask,
         )
 
+        assert isinstance(decoder_output, DecoderOutput)
         expected_shape = (batch_size, n_tokens, num_residue_types)
-        assert logits.shape == expected_shape
+        assert decoder_output.logits.shape == expected_shape
 
     def test_masked_vs_unmasked_differ(self, mpnn_model, single_context):
         """Test that fully masked and unmasked inputs produce different logits."""
@@ -306,11 +307,11 @@ class TestDecode:
         unmasked_input = torch.zeros(batch_size, n_tokens, num_rt + 1, dtype=torch.long)
         unmasked_input[..., 0] = 1
 
-        logits_masked = mpnn_model.decode(encoder_output, masked_input, node_mask)
-        logits_unmasked = mpnn_model.decode(encoder_output, unmasked_input, node_mask)
+        dec_masked = mpnn_model.decode(encoder_output, masked_input, node_mask)
+        dec_unmasked = mpnn_model.decode(encoder_output, unmasked_input, node_mask)
 
         assert not torch.allclose(
-            logits_masked, logits_unmasked, atol=1e-3
+            dec_masked.logits, dec_unmasked.logits, atol=1e-3
         ), "Masked and unmasked inputs should produce different logits"
 
     def test_output_no_nan_or_inf(self, mpnn_model, single_context):
@@ -326,32 +327,31 @@ class TestDecode:
         )
         masked_restypes[..., -1] = 1
 
-        logits = mpnn_model.decode(
+        decoder_output = mpnn_model.decode(
             encoder_output=encoder_output,
             restypes=masked_restypes,
             node_mask=single_context.mask.token_mask,
         )
 
-        assert not torch.isnan(logits).any(), "Logits contain NaN values"
-        assert not torch.isinf(logits).any(), "Logits contain Inf values"
+        assert not torch.isnan(decoder_output.logits).any(), "Logits contain NaN values"
+        assert not torch.isinf(decoder_output.logits).any(), "Logits contain Inf values"
 
 
 class TestForward:
     """Tests for the forward() method (training pass)."""
 
     def test_output_structure(self, mpnn_model, single_context):
-        """Test that forward returns correct output structure."""
+        """Test that forward returns an MPNNOutput dataclass."""
         mask_rate = torch.tensor([0.5])
         result = mpnn_model.forward(single_context, mask_rate)
 
-        assert isinstance(result, tuple), "Forward should return a tuple"
-        assert len(result) == 4, "Forward should return 4 values"
-
-        logits, is_masked, node_feats, edge_feats = result
-        assert isinstance(logits, torch.Tensor)
-        assert isinstance(is_masked, torch.Tensor)
-        assert isinstance(node_feats, torch.Tensor)
-        assert isinstance(edge_feats, torch.Tensor)
+        assert isinstance(result, MPNNOutput), "Forward should return an MPNNOutput"
+        assert isinstance(result.logits, torch.Tensor)
+        assert isinstance(result.is_masked, torch.Tensor)
+        assert isinstance(result.node_feats, torch.Tensor)
+        assert isinstance(result.edge_feats, torch.Tensor)
+        assert isinstance(result.edge_index, torch.Tensor)
+        assert isinstance(result.edge_mask, torch.Tensor)
 
     def test_logits_shape(self, mpnn_model, single_context):
         """Test that forward produces logits with correct shape."""
@@ -360,10 +360,10 @@ class TestForward:
         batch_size = 1
 
         mask_rate = torch.tensor([0.5])
-        logits, _, _, _ = mpnn_model.forward(single_context, mask_rate)
+        mpnn_output = mpnn_model.forward(single_context, mask_rate)
 
         expected_shape = (batch_size, n_tokens, num_residue_types)
-        assert logits.shape == expected_shape
+        assert mpnn_output.logits.shape == expected_shape
 
     def test_is_masked_shape(self, mpnn_model, single_context):
         """Test that is_masked has correct shape."""
@@ -371,24 +371,22 @@ class TestForward:
         batch_size = 1
 
         mask_rate = torch.tensor([0.5])
-        _, is_masked, _, _ = mpnn_model.forward(single_context, mask_rate)
+        mpnn_output = mpnn_model.forward(single_context, mask_rate)
 
-        assert is_masked.shape == (batch_size, n_tokens)
-        assert is_masked.dtype == torch.bool
+        assert mpnn_output.is_masked.shape == (batch_size, n_tokens)
+        assert mpnn_output.is_masked.dtype == torch.bool
 
     def test_no_nan_or_inf(self, mpnn_model, single_context):
         """Test that forward doesn't produce NaN or Inf values."""
         mask_rate = torch.tensor([0.5])
-        logits, _, node_feats, edge_feats = mpnn_model.forward(
-            single_context, mask_rate
-        )
+        mpnn_output = mpnn_model.forward(single_context, mask_rate)
 
-        assert not torch.isnan(logits).any(), "Forward logits contain NaN"
-        assert not torch.isinf(logits).any(), "Forward logits contain Inf"
-        assert not torch.isnan(node_feats).any(), "node_feats contain NaN"
-        assert not torch.isinf(node_feats).any(), "node_feats contain Inf"
-        assert not torch.isnan(edge_feats).any(), "edge_feats contain NaN"
-        assert not torch.isinf(edge_feats).any(), "edge_feats contain Inf"
+        assert not torch.isnan(mpnn_output.logits).any(), "Forward logits contain NaN"
+        assert not torch.isinf(mpnn_output.logits).any(), "Forward logits contain Inf"
+        assert not torch.isnan(mpnn_output.node_feats).any(), "node_feats contain NaN"
+        assert not torch.isinf(mpnn_output.node_feats).any(), "node_feats contain Inf"
+        assert not torch.isnan(mpnn_output.edge_feats).any(), "edge_feats contain NaN"
+        assert not torch.isinf(mpnn_output.edge_feats).any(), "edge_feats contain Inf"
 
 
 class TestBatchProcessing:
@@ -410,12 +408,12 @@ class TestBatchProcessing:
         n_tokens = full_context.token.token_index.shape[-1]
 
         mask_rate = torch.full((batch_size,), 0.5)
-        logits, is_masked, _, _ = mpnn_model.forward(full_context, mask_rate)
+        mpnn_output = mpnn_model.forward(full_context, mask_rate)
 
-        assert logits.shape[0] == batch_size
-        assert logits.shape[1] == n_tokens
-        assert logits.shape[2] == mpnn_model.num_residue_types
-        assert is_masked.shape == (batch_size, n_tokens)
+        assert mpnn_output.logits.shape[0] == batch_size
+        assert mpnn_output.logits.shape[1] == n_tokens
+        assert mpnn_output.logits.shape[2] == mpnn_model.num_residue_types
+        assert mpnn_output.is_masked.shape == (batch_size, n_tokens)
 
 
 class TestGradients:
@@ -426,9 +424,9 @@ class TestGradients:
         mpnn_model.train()
 
         mask_rate = torch.tensor([0.5])
-        logits, _, _, _ = mpnn_model.forward(single_context, mask_rate)
+        mpnn_output = mpnn_model.forward(single_context, mask_rate)
 
-        loss = logits.sum()
+        loss = mpnn_output.logits.sum()
         loss.backward()
 
         for name, param in mpnn_model.named_parameters():
@@ -448,13 +446,13 @@ class TestGradients:
         masked_restypes = torch.zeros(1, n_tokens, num_rt + 1, dtype=torch.long)
         masked_restypes[..., -1] = 1
 
-        logits = mpnn_model.decode(
+        decoder_output = mpnn_model.decode(
             encoder_output=encoder_output,
             restypes=masked_restypes,
             node_mask=single_context.mask.token_mask,
         )
 
-        loss = logits.sum()
+        loss = decoder_output.logits.sum()
         loss.backward()
 
         for name, param in mpnn_model.decoder.named_parameters():

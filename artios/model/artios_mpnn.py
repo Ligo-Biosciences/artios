@@ -101,12 +101,16 @@ class ArtiosMPNN(nn.Module):
         )
         mask_rate = self.masking_sampler.get_mask_rates(timestep)
 
-        logits, is_masked, _, _ = self.mpnn(
+        mpnn_output = self.mpnn(
             context=context,
             mask_rate=mask_rate,
         )
 
-        return SequenceOutput(seq_logits=logits, is_masked=is_masked, timestep=timestep)
+        return SequenceOutput(
+            seq_logits=mpnn_output.logits,
+            is_masked=mpnn_output.is_masked,
+            timestep=timestep,
+        )
 
     def forward(
         self,

@@ -52,6 +52,44 @@ class EncoderOutput:
     edge_mask: Bool[Tensor, "... n_token neighbours"]
 
 
+@typecheck
+@dataclass
+class DecoderOutput:
+    """Output from the MPNN decoder.
+
+    Attributes:
+        logits: Predicted logits over residue types
+        node_feats: Decoded node features
+        edge_feats: Decoded edge features
+    """
+
+    logits: Float[Tensor, "... n_token num_residue_types"]
+    node_feats: Float[Tensor, "... n_token node_dim"]
+    edge_feats: Float[Tensor, "... n_token neighbours edge_dim"]
+
+
+@typecheck
+@dataclass
+class MPNNOutput:
+    """Output from the MPNN forward pass.
+
+    Attributes:
+        logits: Predicted logits over residue types
+        is_masked: Boolean mask indicating which positions were masked
+        dec_node_feats: Decoder node features
+        dec_edge_feats: Decoder edge features
+        edge_index: Graph connectivity
+        edge_mask: Valid edge mask
+    """
+
+    logits: Float[Tensor, "... n_token num_residue_types"]
+    is_masked: Bool[Tensor, "... n_token"]
+    node_feats: Float[Tensor, "... n_token node_dim"]
+    edge_feats: Float[Tensor, "... n_token neighbours edge_dim"]
+    edge_index: Int[Tensor, "... n_token neighbours"]
+    edge_mask: Bool[Tensor, "... n_token neighbours"]
+
+
 class MPNN(nn.Module):
     """Message passing neural network with masked diffusion for sequence design.
 
@@ -242,7 +280,7 @@ class MPNN(nn.Module):
         encoder_output: EncoderOutput,
         restypes: Num[Tensor, "batch n_token vocab_with_mask"],
         node_mask: Bool[Tensor, "batch n_token"],
-    ) -> Float[Tensor, "batch n_token num_residue_types"]:
+    ) -> DecoderOutput:
         """Decode masked sequence to predict original residue types.
 
         Takes masked restypes (where some positions contain the mask token) and
@@ -256,7 +294,7 @@ class MPNN(nn.Module):
             node_mask: Mask for valid positions
 
         Returns:
-            Logits over residue types [B, N, num_residue_types]
+            DecoderOutput containing logits, node features, and edge features.
         """
         node_feats = encoder_output.node_feats
         edge_feats = encoder_output.edge_feats
@@ -290,7 +328,12 @@ class MPNN(nn.Module):
                 node_feats = layer(node_feats, decoder_edge_feats, node_mask, edge_mask)
 
         logits = self.linear_out(node_feats)
-        return logits
+
+        return DecoderOutput(
+            logits=logits,
+            node_feats=node_feats,
+            edge_feats=decoder_edge_feats,
+        )
 
     def as_predictor(self, context: FullContext) -> SequencePredictor:
         """Creates a predictor bound to this context.
@@ -305,11 +348,12 @@ class MPNN(nn.Module):
         def predictor(
             restype: Float[Tensor, "batch n_token vocab_with_mask"],
         ) -> Float[Tensor, "batch n_token num_residue_types"]:
-            return self.decode(
+            decoder_output = self.decode(
                 encoder_output=encoder_output,
                 restypes=restype,
                 node_mask=node_mask,
             )
+            return decoder_output.logits
 
         return predictor
 
@@ -361,12 +405,7 @@ class MPNN(nn.Module):
         self,
         context: FullContext,
         mask_rate: Float[Tensor, "batch"],
-    ) -> tuple[
-        Float[Tensor, "batch n_token num_residue_types"],
-        Bool[Tensor, "batch n_token"],
-        Float[Tensor, "batch n_token node_dim"],
-        Float[Tensor, "batch n_token neighbours edge_dim"],
-    ]:
+    ) -> MPNNOutput:
         """Training forward pass with random masking.
 
         Encodes structure, masks input sequence at the given rate, and decodes
@@ -377,7 +416,7 @@ class MPNN(nn.Module):
             mask_rate: Per-batch fraction of positions to mask.
 
         Returns:
-            Tuple of (logits, is_masked, node_feats, edge_feats)
+            MPNNOutput containing logits, masking info, and encoder/decoder features.
         """
         token_mask = context.mask.token_mask
 
@@ -387,10 +426,17 @@ class MPNN(nn.Module):
             context.token.restype, mask_rate, token_mask
         )
 
-        logits = self.decode(
+        decoder_output = self.decode(
             encoder_output=encoder_output,
             restypes=masked_restypes,
             node_mask=token_mask,
         )
 
-        return logits, is_masked, encoder_output.node_feats, encoder_output.edge_feats
+        return MPNNOutput(
+            logits=decoder_output.logits,
+            is_masked=is_masked,
+            node_feats=decoder_output.node_feats,
+            edge_feats=decoder_output.edge_feats,
+            edge_index=encoder_output.edge_index,
+            edge_mask=encoder_output.edge_mask,
+        )

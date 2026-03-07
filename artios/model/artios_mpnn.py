@@ -49,7 +49,9 @@ class ArtiosMPNN(nn.Module):
         )
 
         self.masking_sampler = LinearMaskingTimestepSampler()
-        self.inference_scheduler = CosineScheduler()
+        self.inference_scheduler = CosineScheduler(
+            configs.artios_mpnn.sampling.cosine_scale
+        )
 
         self.mpnn = MPNN(**configs.artios_mpnn.model)
 

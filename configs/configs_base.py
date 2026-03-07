@@ -238,6 +238,7 @@ model_configs = {
             "smoothing_factor": 0.5,
             "N_sample": 5,
             "n_steps": 100,
+            "cosine_scale": 1.0,
         },
     },
     "artios_packing": {

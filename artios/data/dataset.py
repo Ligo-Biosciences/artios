@@ -1221,8 +1221,176 @@ def get_weighted_pdb_weight(
     return weight
 
 
+def filter_artifact_ligands(indices_df: pd.DataFrame) -> pd.DataFrame:
+    """Filter out rows involving artifact ligands (crystallization buffer, solvents, etc.).
+
+    Removes rows where any ligand side is categorized as 'artifact' based on
+    PLINDER annotations. Requires 'ligand_1_category' and/or 'ligand_2_category'
+    columns to be present (added by enrich_indices_with_plinder.py).
+
+    If the columns are not present, returns the dataframe unchanged.
+    """
+    has_col_1 = "ligand_1_category" in indices_df.columns
+    has_col_2 = "ligand_2_category" in indices_df.columns
+
+    if not has_col_1 and not has_col_2:
+        logger.info("No ligand category columns found, skipping artifact filtering")
+        return indices_df
+
+    n_before = len(indices_df)
+    mask = pd.Series(True, index=indices_df.index)
+
+    if has_col_1:
+        mask &= indices_df["ligand_1_category"] != "artifact"
+    if has_col_2:
+        mask &= indices_df["ligand_2_category"] != "artifact"
+
+    indices_df = indices_df[mask].reset_index(drop=True)
+    n_removed = n_before - len(indices_df)
+    logger.info(
+        f"[filter_artifact_ligands] Removed {n_removed}/{n_before} rows "
+        f"({100 * n_removed / n_before:.1f}%) containing artifact ligands"
+    )
+    return indices_df
+
+
+def apply_protein_cluster_balancing(
+    indices_df: pd.DataFrame,
+    percentile: float = 0.9,
+    balanced_mol_type_groups: Optional[list[str]] = None,
+) -> pd.DataFrame:
+    """Apply protein-cluster-balanced sampling weights.
+
+    Caps the total interface weight per protein cluster at tau = percentile(W_k),
+    scales down over-budget interface weights, and sets monomer (intra_prot)
+    weights to fill the gap so each protein cluster's total weight ≈ tau.
+
+    Only applies to interfaces with exactly one protein side (e.g., ligand_prot,
+    ions_prot, nuc_prot). prot_prot interfaces keep their original weights.
+
+    Args:
+        indices_df: DataFrame with 'weights' column already computed.
+        percentile: Percentile of W_k to use as cap (default 0.9 = p90).
+        balanced_mol_type_groups: Interface mol_type_groups to include in
+            balancing. Defaults to ["ligand_prot", "ions_prot", "nuc_prot"].
+
+    Returns:
+        DataFrame with rebalanced weights.
+    """
+    if balanced_mol_type_groups is None:
+        balanced_mol_type_groups = ["ligand_prot", "ions_prot", "nuc_prot"]
+
+    # Extract protein cluster ID for relevant rows
+    prot_cluster = pd.Series(None, index=indices_df.index, dtype=object)
+
+    # For intra_prot chains: the protein cluster is cluster_1_id
+    is_intra_prot = indices_df["mol_type_group"] == "intra_prot"
+    prot_cluster[is_intra_prot] = indices_df.loc[is_intra_prot, "cluster_1_id"]
+
+    # For interfaces with exactly one protein side
+    is_interface = indices_df["type"] == "interface"
+    prot_side_1 = (
+        is_interface
+        & (indices_df["mol_1_type"] == "prot")
+        & (indices_df["mol_2_type"] != "prot")
+    )
+    prot_side_2 = (
+        is_interface
+        & (indices_df["mol_2_type"] == "prot")
+        & (indices_df["mol_1_type"] != "prot")
+    )
+    prot_cluster[prot_side_1] = indices_df.loc[prot_side_1, "cluster_1_id"]
+    prot_cluster[prot_side_2] = indices_df.loc[prot_side_2, "cluster_2_id"]
+
+    # Balanced interface rows: one-protein-side interfaces in the target groups
+    is_balanced_interface = (
+        is_interface
+        & indices_df["mol_type_group"].isin(balanced_mol_type_groups)
+        & prot_cluster.notna()
+    )
+    is_monomer = is_intra_prot & prot_cluster.notna()
+
+    # W_k: total interface weight per protein cluster
+    interface_prot_clusters = prot_cluster[is_balanced_interface]
+    W_k = (
+        indices_df.loc[is_balanced_interface]
+        .groupby(interface_prot_clusters)["weights"]
+        .sum()
+    )
+
+    if len(W_k) == 0:
+        logger.info(
+            "[protein_cluster_balancing] No balanced interfaces found, skipping"
+        )
+        return indices_df
+
+    tau = float(W_k.quantile(percentile))
+    n_capped = int((W_k > tau).sum())
+    total_weight_before = W_k.sum()
+
+    logger.info(
+        f"[protein_cluster_balancing] {len(W_k)} protein clusters, "
+        f"tau={tau:.1f} (p{int(percentile * 100)}), "
+        f"{n_capped} clusters capped ({100 * n_capped / len(W_k):.1f}%), "
+        f"total interface weight: {total_weight_before:.0f}"
+    )
+
+    # Scale factor per protein cluster: min(1, tau / W_k)
+    scale_k = (tau / W_k).clip(upper=1.0)
+
+    # Apply scaling to balanced interface weights
+    interface_scales = interface_prot_clusters.map(scale_k)
+    indices_df.loc[is_balanced_interface, "weights"] *= interface_scales.values
+
+    total_weight_after = indices_df.loc[is_balanced_interface, "weights"].sum()
+    logger.info(
+        f"[protein_cluster_balancing] Interface weight: "
+        f"{total_weight_before:.0f} -> {total_weight_after:.0f} "
+        f"({100 * (1 - total_weight_after / total_weight_before):.1f}% reduction)"
+    )
+
+    # Capped W_k
+    W_k_capped = W_k.clip(upper=tau)
+
+    # Monomer weights: (tau - W_k_capped) / |M_k|
+    # Only for clusters that have interfaces — interface-free clusters keep original weights
+    monomer_prot_clusters = prot_cluster[is_monomer]
+    has_interfaces = monomer_prot_clusters.isin(W_k.index)
+    is_rebalanced_monomer = is_monomer & prot_cluster.isin(W_k.index)
+
+    rebal_prot_clusters = prot_cluster[is_rebalanced_monomer]
+    M_k_size = rebal_prot_clusters.value_counts()
+
+    monomer_W_capped = rebal_prot_clusters.map(W_k_capped)
+    monomer_M_size = rebal_prot_clusters.map(M_k_size)
+
+    new_monomer_weights = ((tau - monomer_W_capped) / monomer_M_size).clip(lower=0.0)
+
+    old_monomer_weight = indices_df.loc[is_monomer, "weights"].sum()
+    indices_df.loc[is_rebalanced_monomer, "weights"] = new_monomer_weights.values
+    new_monomer_weight = indices_df.loc[is_monomer, "weights"].sum()
+
+    n_skipped = (~has_interfaces).sum()
+    logger.info(
+        f"[protein_cluster_balancing] {n_skipped} monomer rows from "
+        f"interface-free clusters kept original weights"
+    )
+
+    logger.info(
+        f"[protein_cluster_balancing] Monomer weight: "
+        f"{old_monomer_weight:.0f} -> {new_monomer_weight:.0f}"
+    )
+
+    return indices_df
+
+
 def calc_weights_for_df(
-    indices_df: pd.DataFrame, beta_dict: dict[str, Any], alpha_dict: dict[str, Any]
+    indices_df: pd.DataFrame,
+    beta_dict: dict[str, Any],
+    alpha_dict: dict[str, Any],
+    balance_protein_clusters: bool = False,
+    balance_percentile: float = 0.9,
+    balance_mol_type_groups: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     """
     Calculate weights for each example in the dataframe.
@@ -1231,10 +1399,15 @@ def calc_weights_for_df(
         indices_df: A pandas DataFrame containing the indices.
         beta_dict: A dictionary containing beta values for different data types.
         alpha_dict: A dictionary containing alpha values for different data types.
+        balance_protein_clusters: Whether to apply protein-cluster-balanced sampling.
+        balance_percentile: Percentile for the protein cluster weight cap (default 0.9).
+        balance_mol_type_groups: Interface mol_type_groups to include in balancing.
 
     Returns:
         A pandas DataFrame with an column 'weights' containing the calculated weights.
     """
+    indices_df = filter_artifact_ligands(indices_df)
+
     # Specific to assembly, and entities (chain or interface)
     indices_df["pdb_sorted_entity_id"] = indices_df.apply(
         lambda x: f"{x['pdb_id']}_{x['assembly_id']}_{'_'.join(sorted([str(x['entity_1_id']), str(x['entity_2_id'])]))}",
@@ -1272,6 +1445,14 @@ def calc_weights_for_df(
         )
         weights.append(weight)
     indices_df["weights"] = weights / indices_df["pdb_sorted_entity_id_member_num"]
+
+    if balance_protein_clusters:
+        indices_df = apply_protein_cluster_balancing(
+            indices_df,
+            percentile=balance_percentile,
+            balanced_mol_type_groups=balance_mol_type_groups,
+        )
+
     return indices_df
 
 
@@ -1288,6 +1469,9 @@ def get_sample_weights(
         "ligand": 1,
     },
     force_recompute_weight: bool = False,
+    balance_protein_clusters: bool = False,
+    balance_percentile: float = 0.9,
+    balance_mol_type_groups: Optional[list[str]] = None,
 ) -> Union[pd.Series, list[float]]:
     """
     Computes sample weights based on the specified sampler type.
@@ -1298,6 +1482,9 @@ def get_sample_weights(
         beta_dict: A dictionary containing beta values for different data types.
         alpha_dict: A dictionary containing alpha values for different data types.
         force_recompute_weight: Whether to force recomputation of weights even if they already exist.
+        balance_protein_clusters: Whether to apply protein-cluster-balanced sampling.
+        balance_percentile: Percentile for the protein cluster weight cap (default 0.9).
+        balance_mol_type_groups: Interface mol_type_groups to include in balancing.
 
     Returns:
         A list of sample weights.
@@ -1312,6 +1499,9 @@ def get_sample_weights(
                 indices_df=indices_df,
                 beta_dict=beta_dict,
                 alpha_dict=alpha_dict,
+                balance_protein_clusters=balance_protein_clusters,
+                balance_percentile=balance_percentile,
+                balance_mol_type_groups=balance_mol_type_groups,
             )
         return indices_df["weights"].astype("float32")
     elif sampler_type == "uniform":

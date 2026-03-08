@@ -46,9 +46,12 @@ default_weighted_pdb_configs = {
         "alpha_dict": {
             "prot": 3,
             "nuc": 3,
-            "ligand": 1,
+            "ligand": 5,
         },
         "force_recompute_weight": True,
+        "balance_protein_clusters": True,
+        "balance_percentile": 0.9,
+        "balance_mol_type_groups": ["ligand_prot", "ions_prot", "nuc_prot"],
     },
     "cropping_configs": {
         "method_weights": ListValue(

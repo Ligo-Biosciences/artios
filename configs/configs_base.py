@@ -232,6 +232,9 @@ model_configs = {
             "coord_noise": 0.3,
             "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
         },
+        "potts": {
+            "symmetric_J": True,
+        },
         "sampling": {
             "temperature": 0.1,
             "zero_shot": False,
@@ -408,6 +411,10 @@ loss_configs = {
             "weight_dna": 1.0,
             "weight_rna": 1.0,
             "weight_ligand": 1.0,
+        },
+        "potts": {
+            "loss_type": "pseudo",
+            "label_smoothing": 0.0,
         },
         "packing": {
             "mse": {

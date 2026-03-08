@@ -7,12 +7,14 @@ Models should call these functions and compose their own `compute_loss` methods.
 from dataclasses import dataclass
 
 import torch
+from einops import rearrange, repeat
 from torch import Tensor
 from torch.nn import functional as F
 
 from artios.metrics.rmsd import weighted_rigid_align
+from artios.model.modules.message_passing import gather_nodes
 from artios.model.utils import masked_mean
-from artios.utils.typing import Bool, Float, typecheck
+from artios.utils.typing import Bool, Float, Int, typecheck
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,67 @@ def nll_loss(
         labels_smoothed * F.log_softmax(logits, dim=-1), dim=-1
     )
     return masked_mean(per_position_loss, mask, axes=-1, eps=eps)
+
+
+def composite_nll_loss(
+    joint_logits: Float[
+        Tensor, "batch n_token neighbours num_residue_types num_residue_types"
+    ],
+    seq: Int[Tensor, "batch n_token"],
+    edge_index: Int[Tensor, "batch n_token neighbours"],
+    edge_mask: Bool[Tensor, "batch n_token neighbours"],
+    node_mask: Bool[Tensor, "batch n_token"],
+    eps: float = 1e-6,
+) -> tuple[Float[Tensor, "batch"], Float[Tensor, "batch n_token"]]:
+    """Compute composite NLL loss from joint Potts logits.
+
+    Computes log P(s_i, s_j | s_{-i,-j}) for each edge, then averages
+    over valid edges per node (with /2 for undirected double-counting)
+    and masked-means over positions.
+
+    Args:
+        joint_logits: Joint logits (negative energy) for state pairs [B, N, K, R, R].
+        seq: Ground truth sequence indices [B, N].
+        edge_index: Neighbour indices [B, N, K].
+        edge_mask: Valid edge mask [B, N, K].
+        node_masl: Valid node mask [B, N].
+        eps: Epsilon for numerical stability.
+
+    Returns:
+        Tuple of (nll, per_position_nll):
+            nll: Per-batch composite NLL [B].
+            per_position_nll: Per-position composite NLL [B, N].
+    """
+    R = joint_logits.shape[-1]
+    K = joint_logits.shape[2]
+
+    # Log-softmax over R x R joint states
+    logits_flat = rearrange(joint_logits, "b n k r1 r2 -> b n k (r1 r2)")
+    log_probs_flat = F.log_softmax(logits_flat, dim=-1)
+    log_probs = rearrange(log_probs_flat, "b n k (r1 r2) -> b n k r1 r2", r1=R)
+
+    # Gather neighbour GT states
+    S_j = gather_nodes(seq.unsqueeze(-1).float(), edge_index).long()
+    S_j = repeat(S_j, "... n k 1 -> ... n k r 1", r=R)
+
+    ### Extract probs corresponding to GT states of the nodes and GT states of
+    ### each of their neighbours.
+    # Index using GT neighbour indices
+    logp_at_sj = torch.gather(log_probs, -1, S_j).squeeze(-1)  # [B, N, K, R]
+    # Index using GT node indices
+    S_i = repeat(seq.long(), "b n -> b n k 1", k=K)
+    logp_ij = torch.gather(logp_at_sj, -1, S_i).squeeze(-1)  # [B, N, K]
+
+    # Per-position NLL: average over valid edges, /2 since we double counted
+    edge_count = edge_mask.float().sum(dim=-1).clamp(min=eps)  # [B, N]
+    per_position_nll = -(edge_mask.float() * logp_ij).sum(dim=-1) / (
+        2 * edge_count
+    )  # [B, N]
+
+    # Masked mean over positions
+    nll = masked_mean(per_position_nll, node_mask, axes=-1, eps=eps)  # [B]
+
+    return nll, per_position_nll
 
 
 # =============================================================================

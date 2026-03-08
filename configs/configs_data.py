@@ -51,7 +51,7 @@ default_weighted_pdb_configs = {
         "force_recompute_weight": True,
         "balance_protein_clusters": True,
         "balance_percentile": 0.9,
-        "balance_mol_type_groups": ["ligand_prot", "ions_prot", "nuc_prot"],
+        "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -251,10 +251,10 @@ data_configs = {
             "random_sample_if_failed": True,
             "max_n_token": -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,
-            "exclusion": {  # do not sample the data based on ions.
-                "mol_1_type": ListValue(["ions"]),
-                "mol_2_type": ListValue(["ions"]),
-            },
+            # "exclusion": {  # do not sample the data based on ions.
+            #     "mol_1_type": ListValue(["ions"]),
+            #     "mol_2_type": ListValue(["ions"]),
+            # },
         },
         **deepcopy(default_weighted_pdb_configs),
     },

@@ -1,0 +1,320 @@
+"""Tests for the Potts model module.
+
+Tests GraphPotts parameterization and J symmetrization.
+"""
+
+import pytest
+import torch
+
+from artios.model.modules.potts import GraphPotts, PottsOutput, symmetrize_J
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def device():
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+@pytest.fixture(params=[False, True], ids=["asymmetric", "symmetric"])
+def graph_potts(request, device):
+    """Create a GraphPotts model, parametrized over symmetric_J."""
+    return GraphPotts(
+        node_dim=64,
+        edge_dim=128,
+        num_residue_types=8,
+        symmetric_J=request.param,
+    ).to(device)
+
+
+@pytest.fixture
+def graph_inputs(device):
+    """Create synthetic inputs for GraphPotts.forward."""
+    B, N, K = 2, 16, 6
+    node_dim, edge_dim = 64, 128
+
+    node_feats = torch.randn(B, N, node_dim, device=device)
+    edge_feats = torch.randn(B, N, K, edge_dim, device=device)
+
+    # Build a valid edge_index: for each node, pick K random neighbors
+    edge_index = torch.stack([torch.randint(0, N, (B, N, K), device=device)]).squeeze(0)
+    # Ensure at least one self-edge per node for realism
+    edge_index[:, :, 0] = torch.arange(N, device=device).unsqueeze(0)
+
+    edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
+    token_mask = torch.ones(B, N, dtype=torch.bool, device=device)
+
+    return node_feats, edge_feats, edge_index, edge_mask, token_mask
+
+
+@pytest.fixture
+def reciprocal_edge_index(device):
+    """Create edge_index where every edge (i,j) has a reverse edge (j,i).
+
+    Uses a simple chain graph: each node connects to its two neighbors.
+    This guarantees all reverse edges exist, which is needed for
+    symmetrize_J to produce fully symmetric results.
+    """
+    B, N, K = 2, 8, 3
+    edge_index = torch.zeros(B, N, K, dtype=torch.long, device=device)
+
+    for i in range(N):
+        # neighbors: self, left, right (wrapping)
+        edge_index[:, i, 0] = i
+        edge_index[:, i, 1] = (i - 1) % N
+        edge_index[:, i, 2] = (i + 1) % N
+
+    edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
+    return edge_index, edge_mask, B, N, K
+
+
+# ---------------------------------------------------------------------------
+# GraphPotts tests
+# ---------------------------------------------------------------------------
+
+
+class TestGraphPottsOutput:
+    """Tests for GraphPotts output shapes and values."""
+
+    def test_output_shapes(self, graph_potts, graph_inputs):
+        """Test that h and J have correct shapes."""
+        node_feats, edge_feats, edge_index, edge_mask, token_mask = graph_inputs
+        B, N, K = edge_index.shape
+        R = graph_potts.num_residue_types
+
+        h, J = graph_potts(node_feats, edge_feats, edge_index, edge_mask, token_mask)
+
+        assert h.shape == (B, N, R)
+        assert J.shape == (B, N, K, R, R)
+
+    def test_output_no_nan_or_inf(self, graph_potts, graph_inputs):
+        """Test that outputs don't contain NaN or Inf."""
+        h, J = graph_potts(*graph_inputs)
+
+        assert torch.isfinite(h).all(), "h contains non-finite values"
+        assert torch.isfinite(J).all(), "J contains non-finite values"
+
+    def test_token_mask_zeros_h(self, graph_potts, graph_inputs):
+        """Test that masked tokens have zero h."""
+        node_feats, edge_feats, edge_index, edge_mask, token_mask = graph_inputs
+        token_mask = token_mask.clone()
+        token_mask[:, 5:10] = False
+
+        h, _ = graph_potts(node_feats, edge_feats, edge_index, edge_mask, token_mask)
+
+        assert (h[:, 5:10] == 0).all(), "Masked token h should be zero"
+        assert not (h[:, :5] == 0).all(), "Unmasked token h should be non-zero"
+
+    def test_edge_mask_zeros_J(self, graph_potts, graph_inputs):
+        """Test that masked edges have zero J."""
+        node_feats, edge_feats, edge_index, edge_mask, token_mask = graph_inputs
+        edge_mask = edge_mask.clone()
+        edge_mask[:, :, 3:] = False
+
+        _, J = graph_potts(node_feats, edge_feats, edge_index, edge_mask, token_mask)
+
+        assert (J[:, :, 3:] == 0).all(), "Masked edge J should be zero"
+
+
+class TestGraphPottsGradients:
+    """Tests for gradient flow through GraphPotts."""
+
+    def test_gradients_flow(self, graph_potts, graph_inputs):
+        """Test that gradients flow through h and J."""
+        h, J = graph_potts(*graph_inputs)
+
+        loss = h.sum() + J.sum()
+        loss.backward()
+
+        for name, param in graph_potts.named_parameters():
+            if param.requires_grad:
+                assert param.grad is not None, f"No gradient for {name}"
+                assert torch.isfinite(
+                    param.grad
+                ).all(), f"Non-finite gradient for {name}"
+
+
+# ---------------------------------------------------------------------------
+# symmetrize_J tests
+# ---------------------------------------------------------------------------
+
+
+class TestSymmetrizeJ:
+    """Tests for the symmetrize_J function."""
+
+    def test_output_shape(self, device):
+        """Test that symmetrized J has the same shape as input."""
+        B, N, K, R = 2, 8, 4, 6
+        J = torch.randn(B, N, K, R, R, device=device)
+        edge_index = torch.randint(0, N, (B, N, K), device=device)
+        edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
+
+        J_symm = symmetrize_J(J, edge_index, edge_mask)
+
+        assert J_symm.shape == J.shape
+
+    def test_output_finite(self, device):
+        """Test that symmetrized J contains no NaN or Inf."""
+        B, N, K, R = 2, 8, 4, 6
+        J = torch.randn(B, N, K, R, R, device=device)
+        edge_index = torch.randint(0, N, (B, N, K), device=device)
+        edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
+
+        J_symm = symmetrize_J(J, edge_index, edge_mask)
+
+        assert torch.isfinite(J_symm).all()
+
+    def test_symmetry_with_reciprocal_edges(self, reciprocal_edge_index, device):
+        """Test that J_ij(a,b) == J_ji(b,a) after symmetrization.
+
+        Uses a graph where every edge (i,j) has a reverse edge (j,i),
+        so symmetrization should produce perfect symmetry.
+        """
+        edge_index, edge_mask, B, N, K = reciprocal_edge_index
+        R = 4
+        J = torch.randn(B, N, K, R, R, device=device)
+
+        J_symm = symmetrize_J(J, edge_index, edge_mask)
+
+        # For each non-self edge (i, k) -> j, find the reverse edge at j
+        # and verify J_ij(a,b) == J_ji(b,a)
+        for b in range(B):
+            for i in range(N):
+                for k in range(K):
+                    j = edge_index[b, i, k].item()
+                    if i == j:
+                        continue  # skip self-edges
+
+                    # Find reverse: which slot k' at j points to i?
+                    j_neighbors = edge_index[b, j]  # [K]
+                    reverse_slots = (j_neighbors == i).nonzero(as_tuple=False)
+                    if len(reverse_slots) == 0:
+                        continue
+                    k_rev = reverse_slots[0].item()
+
+                    J_ij = J_symm[b, i, k]  # [R, R]
+                    J_ji = J_symm[b, j, k_rev]  # [R, R]
+
+                    assert torch.allclose(
+                        J_ij, J_ji.T, atol=1e-5
+                    ), f"Symmetry violated: J[{b},{i},{k}] != J[{b},{j},{k_rev}].T"
+
+    def test_already_symmetric_unchanged(self, reciprocal_edge_index, device):
+        """Test that symmetrizing already-symmetric J is a fixpoint."""
+        edge_index, edge_mask, B, N, K = reciprocal_edge_index
+        R = 4
+        J = torch.randn(B, N, K, R, R, device=device)
+
+        J_symm1 = symmetrize_J(J, edge_index, edge_mask)
+        J_symm2 = symmetrize_J(J_symm1, edge_index, edge_mask)
+
+        assert torch.allclose(
+            J_symm1, J_symm2, atol=1e-5
+        ), "Symmetrizing twice should give the same result"
+
+    def test_masked_edges_stay_zero(self, device):
+        """Test that masked edges remain zero after symmetrization."""
+        B, N, K, R = 1, 6, 3, 4
+        J = torch.randn(B, N, K, R, R, device=device)
+
+        # Chain graph
+        edge_index = torch.zeros(B, N, K, dtype=torch.long, device=device)
+        for i in range(N):
+            edge_index[:, i, 0] = i
+            edge_index[:, i, 1] = (i - 1) % N
+            edge_index[:, i, 2] = (i + 1) % N
+
+        edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
+        # Mask out the last edge slot for all nodes
+        edge_mask[:, :, 2] = False
+
+        J_symm = symmetrize_J(J, edge_index, edge_mask)
+
+        assert (J_symm[:, :, 2] == 0).all(), "Masked edges should remain zero"
+
+    def test_self_edges_handled(self, reciprocal_edge_index, device):
+        """Test that self-edges don't cause issues."""
+        edge_index, edge_mask, B, N, K = reciprocal_edge_index
+        R = 4
+        J = torch.randn(B, N, K, R, R, device=device)
+
+        # Slot 0 is self-edge in our fixture
+        J_symm = symmetrize_J(J, edge_index, edge_mask)
+
+        # Self-edges should be symmetric with themselves (J_ii = J_ii^T averaged)
+        for b in range(B):
+            for i in range(N):
+                J_self = J_symm[b, i, 0]  # self-edge slot
+                assert torch.allclose(
+                    J_self, J_self.T, atol=1e-5
+                ), f"Self-edge J[{b},{i},0] should be symmetric"
+
+    def test_gradient_flows(self, reciprocal_edge_index, device):
+        """Test that gradients flow through symmetrize_J."""
+        edge_index, edge_mask, B, N, K = reciprocal_edge_index
+        R = 4
+        J = torch.randn(B, N, K, R, R, device=device, requires_grad=True)
+
+        J_symm = symmetrize_J(J, edge_index, edge_mask)
+        loss = J_symm.sum()
+        loss.backward()
+
+        assert J.grad is not None, "No gradient for J"
+        assert torch.isfinite(J.grad).all(), "Non-finite gradient for J"
+
+
+class TestGraphPottsSymmetric:
+    """Tests specific to GraphPotts with symmetric_J=True."""
+
+    def test_symmetric_flag_stored(self):
+        """Test that symmetric_J flag is stored."""
+        model = GraphPotts(32, 64, 8, symmetric_J=True)
+        assert model.symmetric_J is True
+
+        model = GraphPotts(32, 64, 8, symmetric_J=False)
+        assert model.symmetric_J is False
+
+    def test_symmetric_differs_from_asymmetric(self, graph_inputs, device):
+        """Test that symmetric and asymmetric produce different J."""
+        model_asym = GraphPotts(64, 128, 8, symmetric_J=False).to(device)
+        model_sym = GraphPotts(64, 128, 8, symmetric_J=True).to(device)
+
+        # Share weights
+        model_sym.load_state_dict(model_asym.state_dict())
+
+        _, J_asym = model_asym(*graph_inputs)
+        _, J_sym = model_sym(*graph_inputs)
+
+        assert not torch.allclose(
+            J_asym, J_sym, atol=1e-5
+        ), "Symmetric and asymmetric J should differ"
+
+
+# ---------------------------------------------------------------------------
+# PottsOutput tests
+# ---------------------------------------------------------------------------
+
+
+class TestPottsOutput:
+    """Tests for the PottsOutput dataclass."""
+
+    def test_construction(self, device):
+        """Test that PottsOutput can be constructed with correct types."""
+        B, N, K, R = 2, 16, 6, 8
+        output = PottsOutput(
+            h=torch.randn(B, N, R, device=device),
+            J=torch.randn(B, N, K, R, R, device=device),
+            edge_index=torch.randint(0, N, (B, N, K), device=device),
+            edge_mask=torch.ones(B, N, K, dtype=torch.bool, device=device),
+            is_masked=torch.ones(B, N, dtype=torch.bool, device=device),
+            timestep=torch.rand(B, device=device),
+        )
+
+        assert output.h.shape == (B, N, R)
+        assert output.J.shape == (B, N, K, R, R)
+        assert output.edge_index.shape == (B, N, K)
+        assert output.edge_mask.shape == (B, N, K)
+        assert output.is_masked.shape == (B, N)
+        assert output.timestep.shape == (B,)

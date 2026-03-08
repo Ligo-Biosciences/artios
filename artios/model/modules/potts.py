@@ -5,11 +5,12 @@ Parameterizes fields h and couplings J from MPNN decoder features.
 
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 from einops import rearrange, repeat
 from torch import Tensor, nn
 
-from artios.model.modules.primitives import LinearNoBias
+from artios.model.modules.primitives import Linear
 from artios.utils.typing import Bool, Float, Int, typecheck
 
 
@@ -96,12 +97,15 @@ class GraphPotts(nn.Module):
         edge_dim: int,
         num_residue_types: int,
         symmetric_J: bool = True,
+        init_scale: float = 0.1,
     ):
         super().__init__()
         self.num_residue_types = num_residue_types
         self.symmetric_J = symmetric_J
-        self.W_h = LinearNoBias(node_dim, num_residue_types)
-        self.W_J = LinearNoBias(edge_dim, num_residue_types**2)
+        self.W_h = Linear(node_dim, num_residue_types)
+        self.W_J = Linear(edge_dim, num_residue_types**2)
+
+        self.log_scale = nn.Parameter(np.log(init_scale) * torch.ones(1))
 
     @typecheck
     def forward(
@@ -127,8 +131,10 @@ class GraphPotts(nn.Module):
         Returns:
             Tuple of (h, J) Potts parameters.
         """
-        h = self.W_h(node_feats) * token_mask[..., None]
-        J_flat = self.W_J(edge_feats) * edge_mask[..., None]
+        scale = torch.exp(self.log_scale)
+
+        h = scale * self.W_h(node_feats) * token_mask[..., None]
+        J_flat = scale * self.W_J(edge_feats) * edge_mask[..., None]
         J = rearrange(
             J_flat,
             "b n k (r1 r2) -> b n k r1 r2",

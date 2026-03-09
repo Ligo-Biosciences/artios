@@ -6,7 +6,12 @@ Tests GraphPotts parameterization and J symmetrization.
 import pytest
 import torch
 
-from artios.model.modules.potts import GraphPotts, PottsOutput, symmetrize_J
+from artios.model.modules.potts import (
+    GraphPotts,
+    GraphPottsParameterisation,
+    PottsOutput,
+    symmetrize_J,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -18,14 +23,36 @@ def device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-@pytest.fixture(params=[False, True], ids=["asymmetric", "symmetric"])
+@pytest.fixture(
+    params=[
+        (False, GraphPottsParameterisation.LINEAR),
+        (True, GraphPottsParameterisation.LINEAR),
+        (False, GraphPottsParameterisation.FACTOR),
+        (True, GraphPottsParameterisation.FACTOR),
+        (False, GraphPottsParameterisation.SCORE),
+        (True, GraphPottsParameterisation.SCORE),
+    ],
+    ids=[
+        "asymmetric-linear",
+        "symmetric-linear",
+        "asymmetric-factor",
+        "symmetric-factor",
+        "asymmetric-score",
+        "symmetric-score",
+    ],
+)
 def graph_potts(request, device):
-    """Create a GraphPotts model, parametrized over symmetric_J."""
+    """Create a GraphPotts model, parametrized over symmetric_J and parameterisation."""
+    symmetric_J, parameterisation = request.param
     return GraphPotts(
         node_dim=64,
         edge_dim=128,
         num_residue_types=8,
-        symmetric_J=request.param,
+        parameterisation=parameterisation,
+        symmetric_J=symmetric_J,
+        num_factors=16
+        if parameterisation == GraphPottsParameterisation.SCORE
+        else None,
     ).to(device)
 
 
@@ -290,6 +317,112 @@ class TestGraphPottsSymmetric:
         assert not torch.allclose(
             J_asym, J_sym, atol=1e-5
         ), "Symmetric and asymmetric J should differ"
+
+
+# ---------------------------------------------------------------------------
+# Parameterisation-specific tests
+# ---------------------------------------------------------------------------
+
+
+class TestZeroSumGauge:
+    """Tests that the factor parameterisation applies zero-sum gauge.
+
+    Note: Score also applies zero-sum gauge internally but then adds
+    background components that break the zero-sum property on the output.
+    """
+
+    @pytest.fixture
+    def gauge_model(self, device):
+        return GraphPotts(
+            node_dim=64,
+            edge_dim=128,
+            num_residue_types=8,
+            parameterisation=GraphPottsParameterisation.FACTOR,
+            symmetric_J=False,
+        ).to(device)
+
+    def test_h_zero_mean(self, gauge_model, graph_inputs):
+        """h should have approximately zero mean across residue types."""
+        node_feats, edge_feats, edge_index, edge_mask, token_mask = graph_inputs
+        h, _ = gauge_model(node_feats, edge_feats, edge_index, edge_mask, token_mask)
+
+        # Only check unmasked positions
+        h_mean = h[token_mask].mean(dim=-1)
+        assert torch.allclose(
+            h_mean, torch.zeros_like(h_mean), atol=1e-5
+        ), "h should have zero mean across residue types after zero-sum gauge"
+
+    def test_J_zero_sum(self, gauge_model, graph_inputs):
+        """J should have zero row and column means after zero-sum gauge."""
+        node_feats, edge_feats, edge_index, edge_mask, token_mask = graph_inputs
+        _, J = gauge_model(node_feats, edge_feats, edge_index, edge_mask, token_mask)
+
+        # Check a few valid edges
+        valid = edge_mask.nonzero(as_tuple=False)[:10]
+        for idx in valid:
+            b, n, k = idx[0], idx[1], idx[2]
+            J_ij = J[b, n, k]  # [R, R]
+            row_mean = J_ij.mean(dim=-1)
+            col_mean = J_ij.mean(dim=-2)
+            assert torch.allclose(
+                row_mean, torch.zeros_like(row_mean), atol=1e-5
+            ), "J row means should be zero after zero-sum gauge"
+            assert torch.allclose(
+                col_mean, torch.zeros_like(col_mean), atol=1e-5
+            ), "J column means should be zero after zero-sum gauge"
+
+
+class TestScoreBackground:
+    """Tests for background components in the score parameterisation."""
+
+    def test_background_adds_uniform_shift_to_h(self, device):
+        """The background h component adds a state-independent offset."""
+        model = GraphPotts(
+            node_dim=64,
+            edge_dim=128,
+            num_residue_types=8,
+            parameterisation=GraphPottsParameterisation.SCORE,
+            symmetric_J=False,
+            num_factors=16,
+        ).to(device)
+
+        B, N, K = 2, 16, 6
+        node_feats = torch.randn(B, N, 64, device=device)
+        edge_feats = torch.randn(B, N, K, 128, device=device)
+        edge_index = torch.randint(0, N, (B, N, K), device=device)
+        edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
+        token_mask = torch.ones(B, N, dtype=torch.bool, device=device)
+
+        h, _ = model(node_feats, edge_feats, edge_index, edge_mask, token_mask)
+
+        # h mean across residue types should NOT be zero (background breaks zero-sum)
+        h_mean = h.mean(dim=-1)
+        assert not torch.allclose(
+            h_mean, torch.zeros_like(h_mean), atol=1e-5
+        ), "Score h should have non-zero mean due to background"
+
+
+class TestParameterisationEnum:
+    """Tests for GraphPottsParameterisation enum."""
+
+    def test_enum_values(self):
+        assert GraphPottsParameterisation.LINEAR.value == "linear"
+        assert GraphPottsParameterisation.FACTOR.value == "factor"
+        assert GraphPottsParameterisation.SCORE.value == "score"
+
+    def test_construct_from_string(self):
+        assert GraphPottsParameterisation("linear") == GraphPottsParameterisation.LINEAR
+        assert GraphPottsParameterisation("factor") == GraphPottsParameterisation.FACTOR
+        assert GraphPottsParameterisation("score") == GraphPottsParameterisation.SCORE
+
+    def test_invalid_string_raises(self):
+        with pytest.raises(ValueError):
+            GraphPottsParameterisation("invalid")
+
+    def test_invalid_parameterisation_raises(self):
+        """GraphPotts should reject invalid parameterisation values."""
+        with pytest.raises(ValueError):
+            GraphPotts(32, 64, 8, parameterisation="not_a_param")
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,8 @@ def _make_configs(
     loss_type: str = "pseudo",
     label_smoothing: float = 0.0,
     symmetric_J: bool = False,
+    parameterisation: str = "linear",
+    num_factors: int | None = None,
 ) -> ConfigDict:
     """Create test configs for ArtiosPotts."""
     return ConfigDict(
@@ -49,6 +51,8 @@ def _make_configs(
                 },
                 "potts": {
                     "symmetric_J": symmetric_J,
+                    "parameterisation": parameterisation,
+                    "num_factors": num_factors,
                 },
             },
         }
@@ -509,6 +513,118 @@ class TestComputeLossSymmetric:
         assert torch.isfinite(loss)
 
     def test_gradient_flow(self, model, context):
+        model.train()
+        output = model.main_train_loop(context=context, seed=42)
+        loss, _ = model.compute_loss(output, context)
+        loss.backward()
+
+        has_grad = False
+        for name, param in model.named_parameters():
+            if param.requires_grad and param.grad is not None:
+                has_grad = True
+                assert torch.isfinite(
+                    param.grad
+                ).all(), f"Non-finite gradient for {name}"
+
+        assert has_grad, "No gradients computed"
+
+
+# ---------------------------------------------------------------------------
+# Parameterisation variants
+# ---------------------------------------------------------------------------
+
+
+class TestParameterisationVariants:
+    """Tests for factor and score parameterisations through ArtiosPotts."""
+
+    @pytest.fixture(
+        params=[
+            ("linear", None),
+            ("factor", None),
+            ("score", 16),
+        ],
+        ids=["linear", "factor", "score"],
+    )
+    def model(self, request, device):
+        parameterisation, num_factors = request.param
+        configs = _make_configs(
+            loss_type="pseudo",
+            parameterisation=parameterisation,
+            num_factors=num_factors,
+        )
+        return ArtiosPotts(configs).to(device)
+
+    def test_train_loop_output_shapes(self, model, context):
+        model.train()
+        output = model.main_train_loop(context=context, seed=42)
+
+        B, N, R = 2, 32, 32
+        K = output.edge_index.shape[-1]
+
+        assert output.h.shape == (B, N, R)
+        assert output.J.shape == (B, N, K, R, R)
+
+    def test_train_loop_finite_values(self, model, context):
+        model.train()
+        output = model.main_train_loop(context=context, seed=42)
+
+        assert torch.isfinite(output.h).all()
+        assert torch.isfinite(output.J).all()
+
+    def test_loss_is_finite(self, model, context):
+        model.train()
+        output = model.main_train_loop(context=context, seed=42)
+        loss, _ = model.compute_loss(output, context)
+
+        assert loss.ndim == 0
+        assert torch.isfinite(loss)
+
+    def test_gradient_flow(self, model, context):
+        model.train()
+        output = model.main_train_loop(context=context, seed=42)
+        loss, _ = model.compute_loss(output, context)
+        loss.backward()
+
+        has_grad = False
+        for name, param in model.named_parameters():
+            if param.requires_grad and param.grad is not None:
+                has_grad = True
+                assert torch.isfinite(
+                    param.grad
+                ).all(), f"Non-finite gradient for {name}"
+
+        assert has_grad, "No gradients computed"
+
+
+class TestParameterisationWithCompositeLoss:
+    """Tests that all parameterisations work with composite likelihood loss."""
+
+    @pytest.fixture(
+        params=[
+            ("linear", None),
+            ("factor", None),
+            ("score", 16),
+        ],
+        ids=["linear", "factor", "score"],
+    )
+    def model(self, request, device):
+        parameterisation, num_factors = request.param
+        configs = _make_configs(
+            loss_type="composite",
+            parameterisation=parameterisation,
+            num_factors=num_factors,
+        )
+        return ArtiosPotts(configs).to(device)
+
+    def test_composite_loss_is_finite(self, model, context):
+        model.train()
+        output = model.main_train_loop(context=context, seed=42)
+        loss, _ = model.compute_loss(output, context)
+
+        assert loss.ndim == 0
+        assert torch.isfinite(loss)
+
+    def test_composite_gradient_flow(self, model, context):
         model.train()
         output = model.main_train_loop(context=context, seed=42)
         loss, _ = model.compute_loss(output, context)

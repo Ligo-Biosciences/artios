@@ -14,7 +14,11 @@ from artios.model.generator import LinearMaskingTimestepSampler
 from artios.model.loss import composite_nll_loss, nll_loss
 from artios.model.modules.message_passing import gather_nodes
 from artios.model.modules.mpnn import MPNN
-from artios.model.modules.potts import GraphPotts, PottsOutput
+from artios.model.modules.potts import (
+    GraphPotts,
+    GraphPottsParameterisation,
+    PottsOutput,
+)
 from artios.model.output import ModelOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
@@ -49,7 +53,11 @@ class ArtiosPotts(nn.Module):
             node_dim,
             dec_edge_dim,
             num_residue_types,
+            parameterisation=GraphPottsParameterisation(
+                configs.artios_mpnn.potts.parameterisation
+            ),
             symmetric_J=configs.artios_mpnn.potts.symmetric_J,
+            num_factors=configs.artios_mpnn.potts.num_factors,
         )
 
         potts_loss_cfg = configs.loss.potts

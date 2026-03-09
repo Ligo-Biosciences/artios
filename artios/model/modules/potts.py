@@ -5,7 +5,6 @@ Parameterizes fields h and couplings J from MPNN decoder features.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 import numpy as np
 import torch
@@ -132,7 +131,6 @@ class GraphPotts(nn.Module):
         parameterisation: GraphPottsParameterisation,
         symmetric_J: bool = True,
         init_scale: float = 0.1,
-        num_factors: Optional[int] = None,
     ):
         super().__init__()
         self.num_residue_types = num_residue_types
@@ -152,8 +150,7 @@ class GraphPotts(nn.Module):
             self.W_J_right = Linear(edge_dim, R**2)
 
         elif parameterisation == GraphPottsParameterisation.SCORE:
-            if num_factors is None:
-                num_factors = edge_dim
+            num_factors = edge_dim  # TODO: make configurable
             self.num_factors = num_factors
             self.W_h = Linear(node_dim, R)
             self.W_h_bg = Linear(node_dim, 1)

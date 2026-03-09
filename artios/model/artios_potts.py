@@ -57,7 +57,6 @@ class ArtiosPotts(nn.Module):
                 configs.artios_mpnn.potts.parameterisation
             ),
             symmetric_J=configs.artios_mpnn.potts.symmetric_J,
-            num_factors=configs.artios_mpnn.potts.num_factors,
         )
 
         potts_loss_cfg = configs.loss.potts

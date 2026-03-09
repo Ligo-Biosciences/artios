@@ -235,7 +235,6 @@ model_configs = {
         "potts": {
             "symmetric_J": True,
             "parameterisation": "linear",
-            "num_factors": ValueMaybeNone(None),
         },
         "sampling": {
             "temperature": 0.1,

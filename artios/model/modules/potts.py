@@ -150,13 +150,12 @@ class GraphPotts(nn.Module):
             self.W_J_right = Linear(edge_dim, R**2)
 
         elif parameterisation == GraphPottsParameterisation.SCORE:
-            num_factors = edge_dim  # TODO: make configurable
-            self.num_factors = num_factors
+            self.num_factors = num_residue_types
             self.W_h = Linear(node_dim, R)
             self.W_h_bg = Linear(node_dim, 1)
             self.W_J_bg = Linear(edge_dim, 1)
-            self.W_J_left = Linear(edge_dim, R * num_factors)
-            self.W_J_right = Linear(edge_dim, R * num_factors)
+            self.W_J_left = Linear(edge_dim, R * self.num_factors)
+            self.W_J_right = Linear(edge_dim, R * self.num_factors)
 
         else:
             raise ValueError(f"Unknown parameterisation: {parameterisation}")

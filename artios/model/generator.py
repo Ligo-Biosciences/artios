@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from enum import Enum
+from typing import Callable, Protocol, runtime_checkable
 
 import torch
 import torch.nn.functional as F
@@ -771,7 +772,7 @@ class SequencePredictor(Protocol):
     @typecheck
     def __call__(
         self,
-        restype: Float[Tensor, "*batch num_residue_types"],
+        restype: Float[Tensor, "*batch n_token num_residue_types"],
     ) -> Float[Tensor, "*batch num_residue_types"]:
         """Predict logits from (possibly masked) restype.
 
@@ -1059,3 +1060,299 @@ class DiscreteDiffusionSampler:
             restype = torch.where(should_unmask[..., None], samples_onehot, restype)
 
         return logits
+
+
+class PottsProposal(Enum):
+    """Proposal method for Potts sampling."""
+
+    GIBBS = "gibbs"
+    DLMC = "dlmc"
+
+
+@dataclass
+class PottsSamplingResult:
+    """Result of Potts MCMC sampling."""
+
+    sequence: Float[Tensor, "batch n_token num_residue_types"]
+    energy: Float[Tensor, "batch"]
+
+
+def _color_graph(
+    edge_index: Int[Tensor, "batch n_token neighbours"],
+    edge_mask: Bool[Tensor, "batch n_token neighbours"],
+) -> list[Bool[Tensor, "batch n_token"]]:
+    """Greedy graph colouring for parallel Gibbs updates.
+
+    Assigns each node a colour such that no two adjacent nodes share a colour.
+    Uses first batch element (graph topology is shared across batch).
+
+    Returns:
+        List of boolean masks, one per colour, each selecting an independent set.
+    """
+    N, K = edge_index.shape[1], edge_index.shape[2]
+    ei = edge_index[0]  # [N, K]
+    em = edge_mask[0]  # [N, K]
+
+    colors = [-1] * N
+    num_colors = 0
+
+    for i in range(N):
+        neighbor_colors: set[int] = set()
+        for k in range(K):
+            if em[i, k]:
+                j = ei[i, k].item()
+                if j != i and colors[j] >= 0:
+                    neighbor_colors.add(colors[j])
+        c = 0
+        while c in neighbor_colors:
+            c += 1
+        colors[i] = c
+        num_colors = max(num_colors, c + 1)
+
+    colors_tensor = torch.tensor(colors, device=edge_index.device)
+    B = edge_index.shape[0]
+    masks = []
+    for c in range(num_colors):
+        mask = (colors_tensor == c).unsqueeze(0).expand(B, -1)
+        masks.append(mask)
+
+    return masks
+
+
+def _potts_proposal_gibbs(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    h: Float[Tensor, "batch n_token num_residue_types"],
+    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
+    edge_index: Int[Tensor, "batch n_token neighbours"],
+    edge_mask: Bool[Tensor, "batch n_token neighbours"],
+    token_mask: Bool[Tensor, "batch n_token"] | None,
+    temperature: float,
+    color_masks: list[Bool[Tensor, "batch n_token"]],
+    generator: torch.Generator | None = None,
+    penalty_func: Callable[[Tensor], Tensor] | None = None,
+) -> Float[Tensor, "batch n_token num_residue_types"]:
+    """Gibbs proposal with parallel colour sweeps.
+
+    For each colour group (independent set), computes conditional logits,
+    samples new states, and updates S at those positions.
+
+    If penalty_func is provided, its gradient w.r.t. S is computed via
+    autograd and added to the conditional energy (following Chroma).
+    """
+    from artios.model.modules.potts import compute_potts_conditionals
+
+    R = S.shape[-1]
+
+    for color_mask in color_masks:
+        S_idx = S.argmax(-1)  # [B, N]
+
+        # Potts conditional energy: U_i(a) = h_i(a) + sum_j J_ij(a, s_j)
+        logits = compute_potts_conditionals(S_idx, h, J, edge_index, edge_mask)
+        U_i = -logits  # [B, N, R]
+
+        # Add penalty gradient if provided
+        if penalty_func is not None:
+            with torch.enable_grad():
+                S_grad = S.detach().requires_grad_(True)
+                U_penalty = penalty_func(S_grad)
+                U_i_adjustment = torch.autograd.grad(U_penalty.sum(), S_grad)[
+                    0
+                ].detach()
+            U_i = U_i + 0.5 * U_i_adjustment
+
+        probs = F.softmax(-U_i / temperature, dim=-1)  # [B, N, R]
+
+        B, N, _ = probs.shape
+        flat_probs = probs.reshape(B * N, R)
+        samples = torch.multinomial(flat_probs, 1, generator=generator).reshape(B, N)
+        S_new = F.one_hot(samples, R).float()
+
+        update_mask = color_mask
+        if token_mask is not None:
+            update_mask = update_mask & token_mask
+        S = torch.where(update_mask.unsqueeze(-1), S_new, S)
+
+    return S
+
+
+def _potts_proposal_dlmc(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    h: Float[Tensor, "batch n_token num_residue_types"],
+    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
+    edge_index: Int[Tensor, "batch n_token neighbours"],
+    edge_mask: Bool[Tensor, "batch n_token neighbours"],
+    token_mask: Bool[Tensor, "batch n_token"] | None,
+    temperature: float,
+    dt: float = 0.5,
+    generator: torch.Generator | None = None,
+    penalty_func: Callable[[Tensor], Tensor] | None = None,
+) -> Float[Tensor, "batch n_token num_residue_types"]:
+    """Discrete Langevin Monte Carlo (DLMC) proposal.
+
+    All positions are updated simultaneously using a balancing function
+    to compute transition rates, then sampling from a Poisson process.
+
+    If penalty_func is provided, its gradient w.r.t. S is computed via
+    autograd and added to the conditional energy (following Chroma).
+    """
+    from artios.model.modules.potts import compute_potts_conditionals
+
+    B, N, R = S.shape
+    S_idx = S.argmax(-1)  # [B, N]
+
+    # Conditional energy for all candidate states
+    logits = compute_potts_conditionals(S_idx, h, J, edge_index, edge_mask)
+    E_all = -logits  # [B, N, R]
+
+    # Add penalty gradient if provided
+    if penalty_func is not None:
+        with torch.enable_grad():
+            S_grad = S.detach().requires_grad_(True)
+            U_penalty = penalty_func(S_grad)
+            U_i_adjustment = torch.autograd.grad(U_penalty.sum(), S_grad)[0].detach()
+        E_all = E_all + U_i_adjustment
+
+    # Energy of current state
+    E_current = torch.gather(E_all, -1, S_idx.unsqueeze(-1))  # [B, N, 1]
+
+    # Forward rate via balancing function
+    rate = torch.sigmoid((E_current - E_all) / temperature)  # [B, N, R]
+
+    # Zero out self-transition rate
+    rate = rate * (1.0 - S)
+
+    # Transition probability from Poisson process
+    P = 1.0 - torch.exp(-rate * dt)  # [B, N, R]
+
+    # Self-transition: remaining probability mass
+    P_self = (1.0 - P.sum(-1, keepdim=True)).clamp(min=0)
+    P = P + P_self * S
+
+    # Sample
+    flat_P = P.reshape(B * N, R)
+    samples = torch.multinomial(flat_P, 1, generator=generator).reshape(B, N)
+    S_new = F.one_hot(samples, R).float()
+
+    if token_mask is not None:
+        S_new = torch.where(token_mask.unsqueeze(-1), S_new, S)
+
+    return S_new
+
+
+@dataclass(frozen=True)
+class PottsSampler:
+    """MCMC sampler for Potts energy landscapes.
+
+    Supports Gibbs sampling (with graph colouring for parallel updates)
+    and Discrete Langevin Monte Carlo (DLMC). Uses simulated annealing
+    to move from exploration to exploitation.
+    """
+
+    proposal: PottsProposal = PottsProposal.GIBBS
+    """Proposal method: Gibbs or DLMC."""
+
+    n_sweeps: int = 100
+    """Number of MCMC sweeps."""
+
+    temperature: float = 0.1
+    """Final sampling temperature."""
+
+    temperature_init: float = 1.0
+    """Initial temperature for annealing."""
+
+    annealing_fraction: float = 0.5
+    """Fraction of sweeps spent annealing from temperature_init to temperature."""
+
+    dt: float = 0.5
+    """DLMC step size (only used when proposal is DLMC)."""
+
+    @typecheck
+    def sample(
+        self,
+        h: Float[Tensor, "batch n_token num_residue_types"],
+        J: Float[
+            Tensor, "batch n_token neighbours num_residue_types num_residue_types"
+        ],
+        edge_index: Int[Tensor, "batch n_token neighbours"],
+        edge_mask: Bool[Tensor, "batch n_token neighbours"],
+        token_mask: Bool[Tensor, "batch n_token"] | None = None,
+        S_init: Float[Tensor, "batch n_token num_residue_types"] | None = None,
+        generator: torch.Generator | None = None,
+        penalty_func: Callable[[Tensor], Tensor] | None = None,
+    ) -> PottsSamplingResult:
+        """Sample sequences from the Potts energy landscape.
+
+        Args:
+            h: Potts fields [B, N, R].
+            J: Potts couplings [B, N, K, R, R].
+            edge_index: Neighbor indices [B, N, K].
+            edge_mask: Valid edge mask [B, N, K].
+            token_mask: Valid token mask [B, N]. Invalid positions are not updated.
+            S_init: Initial one-hot sequence [B, N, R]. If None, initialized uniformly.
+            generator: Generator for reproducibility.
+            penalty_func: Optional penalty function mapping S [B, N, R] to energy [B].
+                Its gradient w.r.t. S is added to conditional energies during proposals.
+
+        Returns:
+            PottsSamplingResult with final sequence (one-hot) and energy.
+        """
+        from artios.model.modules.potts import compute_potts_energy
+
+        B, N, R = h.shape
+        device = h.device
+
+        # Initialize sequence
+        if S_init is None:
+            indices = torch.randint(R, (B, N), device=device, generator=generator)
+            S = F.one_hot(indices, R).float()
+        else:
+            S = S_init
+
+        # Pre-compute graph colouring for Gibbs
+        color_masks = None
+        if self.proposal == PottsProposal.GIBBS:
+            color_masks = _color_graph(edge_index, edge_mask)
+
+        anneal_steps = int(self.annealing_fraction * self.n_sweeps)
+
+        for t in range(self.n_sweeps):
+            # Anneal temperature
+            if anneal_steps > 0 and t < anneal_steps:
+                frac = t / anneal_steps
+                T = self.temperature_init + frac * (
+                    self.temperature - self.temperature_init
+                )
+            else:
+                T = self.temperature
+
+            if self.proposal == PottsProposal.GIBBS:
+                S = _potts_proposal_gibbs(
+                    S,
+                    h,
+                    J,
+                    edge_index,
+                    edge_mask,
+                    token_mask,
+                    T,
+                    color_masks,
+                    generator,
+                    penalty_func,
+                )
+            elif self.proposal == PottsProposal.DLMC:
+                S = _potts_proposal_dlmc(
+                    S,
+                    h,
+                    J,
+                    edge_index,
+                    edge_mask,
+                    token_mask,
+                    T,
+                    self.dt,
+                    generator,
+                    penalty_func,
+                )
+
+        # Compute final energy
+        energy = compute_potts_energy(S.argmax(-1), h, J, edge_index, edge_mask)
+
+        return PottsSamplingResult(sequence=S, energy=energy)

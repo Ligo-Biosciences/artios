@@ -19,6 +19,7 @@ from artios.model.output import (
     BackboneOutput,
     ModelOutput,
     PackingOutput,
+    PottsOutput,
     SequenceOutput,
 )
 from artios.utils.file_io import dump_atomarray_stack
@@ -95,10 +96,13 @@ def save_output(output: ModelOutput, ctx: SaveContext) -> list[Path]:
         case PackingOutput():
             return _save_packing(output, ctx)
 
+        case PottsOutput():
+            return _save_potts(output, ctx)
+
         case _:
             raise TypeError(
                 f"Cannot save output of type {type(output).__name__}. "
-                f"Expected BackboneOutput, PackingOutput, or SequenceOutput."
+                f"Expected BackboneOutput, PackingOutput, SequenceOutput, or PottsOutput."
             )
 
 
@@ -439,6 +443,73 @@ def _save_sequence_to_fasta(output: SequenceOutput, ctx: SaveContext) -> list[Pa
         for header, seq in sequences:
             f.write(f">{header}\n")
             # Write sequence in 80-character lines
+            seq_str = str(seq)
+            for i in range(0, len(seq_str), 80):
+                f.write(seq_str[i : i + 80] + "\n")
+
+    logger.info(f"Saved {len(sequences)} sequences to {output_path}")
+    return [output_path]
+
+
+def _save_potts(output: PottsOutput, ctx: SaveContext) -> list[Path]:
+    """Save Potts output to FASTA format."""
+    return _save_potts_to_fasta(output, ctx)
+
+
+def _save_potts_to_fasta(output: PottsOutput, ctx: SaveContext) -> list[Path]:
+    """Save Potts sampled sequence to FASTA file.
+
+    Nearly identical to _save_sequence_to_fasta but uses output.sampled_sequence
+    (one-hot) instead of output.seq_logits. argmax works the same on both.
+
+    Args:
+        output: PottsOutput with sampled_sequence [batch, n_token, num_residue_types].
+        ctx: SaveContext with context containing masks.
+
+    Returns:
+        List containing the path to the saved FASTA file.
+    """
+    if ctx.context is None:
+        raise ValueError("SaveContext.context is required for sequence saving")
+
+    idx_to_restype = {v: k for k, v in STD_RESIDUES_AND_GAP.items()}
+
+    output_dir = Path(ctx.sample_dirs[0])
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = output_dir / f"{ctx.sample_name}_sequence.fasta"
+
+    is_protein = ctx.context.entity.is_protein_token
+    is_motif_related = ctx.context.motif.is_motif_related_token
+    design_mask = is_protein & ~is_motif_related
+
+    sequence = output.sampled_sequence
+    batch_size = sequence.shape[0]
+    n_tokens: list[int] = ctx.context.basic.n_token
+
+    sequences: list[tuple[str, ProteinSequence]] = []
+    for batch_idx in range(batch_size):
+        uid = ctx.uids[batch_idx]
+        n_tok = n_tokens[batch_idx] if isinstance(n_tokens, list) else n_tokens
+        seq_onehot = sequence[batch_idx, :n_tok]
+        mask = design_mask[batch_idx, :n_tok]
+
+        indices = seq_onehot.argmax(dim=-1).cpu().numpy().astype(np.int32)
+        mask_np = mask.cpu().numpy()
+
+        seq_list = []
+        for idx, m in zip(indices, mask_np):
+            if not m:
+                continue
+            restype = idx_to_restype.get(idx, "X")
+            if restype == "-":
+                continue
+            seq_list.append(restype)
+        sequence_obj = ProteinSequence(seq_list)
+        sequences.append((f"uid_{uid}", sequence_obj))
+
+    with open(output_path, "w") as f:
+        for header, seq in sequences:
+            f.write(f">{header}\n")
             seq_str = str(seq)
             for i in range(0, len(seq_str), 80):
                 f.write(seq_str[i : i + 80] + "\n")

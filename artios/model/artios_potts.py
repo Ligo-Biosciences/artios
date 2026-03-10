@@ -10,16 +10,21 @@ from torch.nn import functional as F
 from typing_extensions import assert_never
 
 from artios.data.features import FullContext
-from artios.model.generator import LinearMaskingTimestepSampler
+from artios.model.generator import (
+    LinearMaskingTimestepSampler,
+    PottsProposal,
+    PottsSampler,
+)
 from artios.model.loss import composite_nll_loss, nll_loss
+from artios.model.modules.complexity import complexity_lcp
 from artios.model.modules.message_passing import gather_nodes
 from artios.model.modules.mpnn import MPNN
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
-    PottsOutput,
+    compute_potts_conditionals,
 )
-from artios.model.output import ModelOutput
+from artios.model.output import PottsOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
 
@@ -65,12 +70,80 @@ class ArtiosPotts(nn.Module):
             label_smoothing=potts_loss_cfg.label_smoothing,
         )
 
+        sampling_cfg = configs.artios_mpnn.sampling
+        self.potts_sampler = PottsSampler(
+            proposal=PottsProposal(sampling_cfg.proposal),
+            n_sweeps=sampling_cfg.n_sweeps,
+            temperature=sampling_cfg.temperature,
+            temperature_init=sampling_cfg.temperature_init,
+            annealing_fraction=sampling_cfg.annealing_fraction,
+            dt=sampling_cfg.dt,
+        )
+        self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
+        self.complexity_window_size = sampling_cfg.complexity_window_size
+        self.complexity_entropy_min = sampling_cfg.complexity_entropy_min
+
     def main_inference_loop(
         self,
         context: FullContext,
         seed: Optional[int] = None,
     ) -> PottsOutput:
-        raise NotImplementedError("Inference loop not implemented for Potts model")
+        batch_size = context.token.restype.shape[0]
+        device = context.token.restype.device
+
+        generator = (
+            torch.Generator(device).manual_seed(seed) if seed is not None else None
+        )
+
+        mask_rate = torch.ones(batch_size, device=device)
+
+        mpnn_output = self.mpnn(context=context, mask_rate=mask_rate)
+
+        h, J = self.potts(
+            mpnn_output.node_feats,
+            mpnn_output.edge_feats,
+            mpnn_output.edge_index,
+            mpnn_output.edge_mask,
+            context.mask.token_mask,
+        )
+
+        # Build penalty function if configured
+        penalty_func = None
+        if self.complexity_penalty_weight > 0:
+            chain_id = context.token.asym_id
+            token_mask = context.mask.token_mask
+            weight = self.complexity_penalty_weight
+            window_size = self.complexity_window_size
+            entropy_min = self.complexity_entropy_min
+
+            def penalty_func(S: torch.Tensor) -> torch.Tensor:
+                return weight * complexity_lcp(
+                    S,
+                    chain_id,
+                    token_mask,
+                    window_size=window_size,
+                    entropy_min=entropy_min,
+                )
+
+        result = self.potts_sampler.sample(
+            h=h,
+            J=J,
+            edge_index=mpnn_output.edge_index,
+            edge_mask=mpnn_output.edge_mask,
+            token_mask=context.mask.token_mask,
+            generator=generator,
+            penalty_func=penalty_func,
+        )
+
+        return PottsOutput(
+            h=h,
+            J=J,
+            edge_index=mpnn_output.edge_index,
+            edge_mask=mpnn_output.edge_mask,
+            is_masked=mpnn_output.is_masked,
+            sampled_sequence=result.sequence,
+            energy=result.energy,
+        )
 
     def main_train_loop(
         self,
@@ -116,7 +189,7 @@ class ArtiosPotts(nn.Module):
         mode: Mode,
         *,
         seed: Optional[int] = None,
-    ) -> ModelOutput | PottsOutput:
+    ) -> PottsOutput:
         match mode:
             case Mode.TRAIN | Mode.EVAL:
                 output = self.main_train_loop(context=context, seed=seed)
@@ -149,26 +222,13 @@ class ArtiosPotts(nn.Module):
         Returns:
             Logits for each position and state [B, N, R].
         """
-        R = output.h.shape[-1]
-
-        # Mask out self-edges (i->i) so node i's own state doesn't leak into its conditional
-        ii = torch.arange(output.edge_index.shape[1], device=output.edge_index.device)
-        not_self = output.edge_index != ii[None, :, None]  # [B, N, K]
-
-        # Get neighbour GT states [B, N, K, 1]
-        S_neighbours = gather_nodes(seq.unsqueeze(-1).float(), output.edge_index).long()
-
-        # Index into J with GT neighbour states J[..., s_j]
-        S_neighbours = repeat(S_neighbours, "... n k 1 -> ... n k r 1", r=R)
-        J_at_S = torch.gather(output.J, -1, S_neighbours).squeeze(-1)  # [B, N, K, R]
-
-        # Zero out self-edge contributions before summing
-        J_at_S = J_at_S * not_self.unsqueeze(-1)
-
-        # For each node, sum coupling contributions over neighbours
-        J_node = J_at_S.sum(dim=-2)  # [B, N, R]
-
-        return -(output.h + J_node)
+        return compute_potts_conditionals(
+            seq,
+            output.h,
+            output.J,
+            output.edge_index,
+            output.edge_mask,
+        )
 
     def get_joint_logits(
         self,

@@ -32,6 +32,7 @@ from artios.data.infer_data_pipeline import get_inference_dataloader
 from artios.model.artios_backbone import ArtiosBackbone
 from artios.model.artios_mpnn import ArtiosMPNN
 from artios.model.artios_packing import ArtiosPacking
+from artios.model.artios_potts import ArtiosPotts
 from artios.model.output import BackboneOutput, ModelOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
@@ -69,6 +70,10 @@ MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
         model_class=ArtiosPacking,
         checkpoint_path_key="load_packing_checkpoint_path",
         n_sample_key="artios_packing.sample_diffusion.N_sample",
+    ),
+    ModelType.POTTS: ModelConfig(
+        model_class=ArtiosPotts,
+        checkpoint_path_key="load_potts_checkpoint_path",
     ),
 }
 
@@ -118,6 +123,7 @@ class InferenceRunner(object):
         Sets up a list of dump directories for each sample, and ensures the error directory exists.
 
         Creates N_sample dump subdirectories inside dump_dir: dump_dir/0, dump_dir/1, ... etc if not
+
         given by a dump_dir_list.
 
         Raises:

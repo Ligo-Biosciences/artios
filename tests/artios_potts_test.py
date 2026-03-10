@@ -9,7 +9,7 @@ import torch
 from ml_collections import ConfigDict
 
 from artios.model.artios_potts import ArtiosPotts, PottsLossConfig
-from artios.model.modules.potts import PottsOutput
+from artios.model.output import PottsOutput
 from artios.model.utils import Mode
 from tests.context_utils import create_test_context
 
@@ -53,6 +53,17 @@ def _make_configs(
                     "symmetric_J": symmetric_J,
                     "parameterisation": parameterisation,
                     "num_factors": num_factors,
+                },
+                "sampling": {
+                    "proposal": "gibbs",
+                    "n_sweeps": 5,
+                    "temperature": 0.1,
+                    "temperature_init": 10.0,
+                    "annealing_fraction": 0.5,
+                    "dt": 0.5,
+                    "complexity_penalty_weight": 0.0,
+                    "complexity_window_size": 30,
+                    "complexity_entropy_min": 2.32,
                 },
             },
         }
@@ -187,10 +198,13 @@ class TestArtiosPottsForward:
 
         assert isinstance(output, PottsOutput)
 
-    def test_forward_inference_raises(self, model, context):
+    def test_forward_inference(self, model, context):
         model.eval()
-        with pytest.raises(NotImplementedError):
-            model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+        with torch.no_grad():
+            output = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+        assert isinstance(output, PottsOutput)
+        assert output.sampled_sequence is not None
+        assert output.energy is not None
 
     def test_train_eval_modes_equivalent(self, model, context):
         """Both Mode.TRAIN and Mode.EVAL route to main_train_loop."""

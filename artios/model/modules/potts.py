@@ -3,7 +3,6 @@
 Parameterizes fields h and couplings J from MPNN decoder features.
 """
 
-from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
@@ -28,17 +27,6 @@ class GraphPottsParameterisation(Enum):
     SCORE = "score"
 
 
-@typecheck
-@dataclass
-class PottsOutput:
-    h: Float[Tensor, "batch n_token num_residue_types"]
-    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"]
-    edge_index: Int[Tensor, "batch n_token neighbours"]
-    edge_mask: Bool[Tensor, "batch n_token neighbours"]
-    is_masked: Bool[Tensor, "batch n_token"]
-    timestep: Float[Tensor, "batch"]
-
-
 def _zero_sum_gauge(
     h: Float[Tensor, "batch n_token num_residue_types"],
     J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
@@ -55,6 +43,109 @@ def _zero_sum_gauge(
         + J.mean(dim=[-1, -2], keepdim=True)
     )
     return h, J
+
+
+@typecheck
+def compute_potts_conditionals(
+    S_idx: Int[Tensor, "batch n_token"],
+    h: Float[Tensor, "batch n_token num_residue_types"],
+    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
+    edge_index: Int[Tensor, "batch n_token neighbours"],
+    edge_mask: Bool[Tensor, "batch n_token neighbours"],
+) -> Float[Tensor, "batch n_token num_residue_types"]:
+    """Compute conditional logits for the Potts model.
+
+    For each node i and candidate state a, computes:
+        logit_i(a) = -(h_i(a) + sum_j J_ij(a, s_j))
+    where s_j is the current state of neighbor j.
+
+    Args:
+        S_idx: Current sequence indices [B, N].
+        h: Potts fields [B, N, R].
+        J: Potts couplings [B, N, K, R, R].
+        edge_index: Neighbor indices [B, N, K].
+        edge_mask: Valid edge mask [B, N, K].
+
+    Returns:
+        Conditional logits [B, N, R].
+    """
+    from artios.model.modules.message_passing import gather_nodes
+
+    R = h.shape[-1]
+
+    # Mask out self-edges
+    ii = torch.arange(edge_index.shape[1], device=edge_index.device)
+    not_self = edge_index != ii[None, :, None]  # [B, N, K]
+
+    # Get neighbour states [B, N, K, 1]
+    S_neighbours = gather_nodes(S_idx.unsqueeze(-1).float(), edge_index).long()
+
+    # Index into J with neighbour states: J[..., s_j] -> [B, N, K, R]
+    S_neighbours = repeat(S_neighbours, "... n k 1 -> ... n k r 1", r=R)
+    J_at_S = torch.gather(J, -1, S_neighbours).squeeze(-1)  # [B, N, K, R]
+
+    # Zero out self-edge and invalid-edge contributions
+    J_at_S = J_at_S * (not_self & edge_mask).unsqueeze(-1)
+
+    # Sum coupling contributions over neighbours
+    J_node = J_at_S.sum(dim=-2)  # [B, N, R]
+
+    return -(h + J_node)
+
+
+@typecheck
+def compute_potts_energy(
+    S: Int[Tensor, "batch n_token"],
+    h: Float[Tensor, "batch n_token num_residue_types"],
+    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
+    edge_index: Int[Tensor, "batch n_token neighbours"],
+    edge_mask: Bool[Tensor, "batch n_token neighbours"],
+) -> Float[Tensor, "batch"]:
+    """Compute per-sample Potts energy.
+
+    E = sum_i h_i(s_i) + 0.5 * sum_{i,j} J_ij(s_i, s_j)
+
+    The 0.5 factor accounts for each edge being counted twice in the
+    sparse neighbour representation.
+
+    Args:
+        S: Sequence indices [B, N].
+        h: Potts fields [B, N, R].
+        J: Potts couplings [B, N, K, R, R].
+        edge_index: Neighbor indices [B, N, K].
+        edge_mask: Valid edge mask [B, N, K].
+
+    Returns:
+        Per-sample energy [B].
+    """
+    from artios.model.modules.message_passing import gather_nodes
+
+    B, N, K, R, _ = J.shape
+
+    # Field energy: sum_i h_i(s_i)
+    h_s = torch.gather(h, -1, S.unsqueeze(-1)).squeeze(-1)  # [B, N]
+    field_energy = h_s.sum(-1)  # [B]
+
+    # Coupling energy: sum_{i,j} J_ij(s_i, s_j)
+    S_j = (
+        gather_nodes(S.unsqueeze(-1).float(), edge_index).long().squeeze(-1)
+    )  # [B, N, K]
+
+    # Index J with s_i on dim -2
+    S_i_idx = S[:, :, None, None, None].expand(B, N, K, 1, R)
+    J_si = torch.gather(J, -2, S_i_idx).squeeze(-2)  # [B, N, K, R]
+
+    # Index with s_j on last dim
+    J_si_sj = torch.gather(J_si, -1, S_j.unsqueeze(-1)).squeeze(-1)  # [B, N, K]
+
+    # Mask self-edges and invalid edges
+    ii = torch.arange(N, device=edge_index.device)
+    not_self = edge_index != ii[None, :, None]
+    J_si_sj = J_si_sj * (not_self & edge_mask)
+
+    coupling_energy = 0.5 * J_si_sj.sum(dim=(-1, -2))  # [B]
+
+    return field_energy + coupling_energy
 
 
 def symmetrize_J(

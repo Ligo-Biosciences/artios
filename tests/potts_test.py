@@ -9,9 +9,9 @@ import torch
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
-    PottsOutput,
     symmetrize_J,
 )
+from artios.model.output import PottsOutput
 
 # ---------------------------------------------------------------------------
 # Fixtures

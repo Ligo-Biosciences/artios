@@ -279,17 +279,17 @@ class ArtiosPottsTrainer(object):
             self.print(f"Finish loading checkpoint, current step: {self.step}")
 
         # Load EMA model parameters
-        if self.configs.load_ema_mpnn_checkpoint_path:
+        if self.configs.load_ema_potts_checkpoint_path:
             _load_checkpoint(
-                self.configs.load_ema_mpnn_checkpoint_path,
+                self.configs.load_ema_potts_checkpoint_path,
                 load_params_only=True,
             )
             self.ema_wrapper.register()
 
         # Load model parameters from checkpoint
-        if self.configs.load_mpnn_checkpoint_path:
+        if self.configs.load_potts_checkpoint_path:
             _load_checkpoint(
-                self.configs.load_mpnn_checkpoint_path,
+                self.configs.load_potts_checkpoint_path,
                 self.configs.load_params_only,
                 skip_load_optimizer=self.configs.skip_load_optimizer,
                 skip_load_scheduler=self.configs.skip_load_scheduler,

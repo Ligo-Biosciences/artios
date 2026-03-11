@@ -401,7 +401,7 @@ def _save_sequence_to_fasta(output: SequenceOutput, ctx: SaveContext) -> list[Pa
 
     output_dir = Path(ctx.sample_dirs[0])
     os.makedirs(output_dir, exist_ok=True)
-    output_path = output_dir / f"{ctx.sample_name}_sequence.fasta"
+    output_path = output_dir / f"{ctx.sample_name}_artios_mpnn_sequence.fasta"
 
     # Get masks from context: protein tokens that are NOT motif-related
     is_protein = ctx.context.entity.is_protein_token  # [batch, n_token]
@@ -476,7 +476,7 @@ def _save_potts_to_fasta(output: PottsOutput, ctx: SaveContext) -> list[Path]:
 
     output_dir = Path(ctx.sample_dirs[0])
     os.makedirs(output_dir, exist_ok=True)
-    output_path = output_dir / f"{ctx.sample_name}_sequence.fasta"
+    output_path = output_dir / f"{ctx.sample_name}_artios_potts_sequence.fasta"
 
     is_protein = ctx.context.entity.is_protein_token
     is_motif_related = ctx.context.motif.is_motif_related_token

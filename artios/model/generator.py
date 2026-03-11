@@ -1175,34 +1175,45 @@ def _potts_proposal_gibbs(
     return S
 
 
-def _potts_proposal_dlmc(
-    S: Float[Tensor, "batch n_token num_residue_types"],
-    h: Float[Tensor, "batch n_token num_residue_types"],
-    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
-    edge_index: Int[Tensor, "batch n_token neighbours"],
-    edge_mask: Bool[Tensor, "batch n_token neighbours"],
-    token_mask: Bool[Tensor, "batch n_token"] | None,
-    temperature: float,
-    dt: float = 0.5,
-    generator: torch.Generator | None = None,
-    penalty_func: Callable[[Tensor], Tensor] | None = None,
-) -> Float[Tensor, "batch n_token num_residue_types"]:
-    """Discrete Langevin Monte Carlo (DLMC) proposal.
+@dataclass
+class DLMCProposalResult:
+    """Result of a DLMC proposal step."""
 
-    All positions are updated simultaneously using a balancing function
-    to compute transition rates, then sampling from a Poisson process.
+    S_new: Float[Tensor, "batch n_token num_residue_types"]
+    energy: Float[Tensor, "batch"]
+    log_probs: Float[Tensor, "batch n_token num_residue_types"]
 
-    If penalty_func is provided, its gradient w.r.t. S is computed via
-    autograd and added to the conditional energy (following Chroma).
+
+def _dlmc_energy_and_log_probs(
+    S,
+    h,
+    J,
+    edge_index,
+    edge_mask,
+    token_mask,
+    temperature,
+    dt=0.1,
+    penalty_func=None,
+):
+    """Compute DLMC energy and transition log-probabilities for a given state.
+
+    Returns (energy, log_probs) where log_probs includes both off-diagonal
+    transition probabilities and the self-transition (remaining mass).
     """
-    from artios.model.modules.potts import compute_potts_conditionals
+    from artios.model.modules.potts import (
+        compute_potts_conditionals,
+        compute_potts_energy,
+    )
 
     B, N, R = S.shape
-    S_idx = S.argmax(-1)  # [B, N]
+    S_idx = S.argmax(-1)
 
     # Conditional energy for all candidate states
     logits = compute_potts_conditionals(S_idx, h, J, edge_index, edge_mask)
     E_all = -logits  # [B, N, R]
+
+    # Compute total energy
+    energy = compute_potts_energy(S_idx, h, J, edge_index, edge_mask)
 
     # Add penalty gradient if provided
     if penalty_func is not None:
@@ -1210,33 +1221,130 @@ def _potts_proposal_dlmc(
             S_grad = S.detach().requires_grad_(True)
             U_penalty = penalty_func(S_grad)
             U_i_adjustment = torch.autograd.grad(U_penalty.sum(), S_grad)[0].detach()
+            U_i_adjustment = U_i_adjustment - torch.gather(
+                U_i_adjustment, -1, S_idx.unsqueeze(-1)
+            )
         E_all = E_all + U_i_adjustment
+        energy = energy + U_penalty.detach()
 
-    # Energy of current state
-    E_current = torch.gather(E_all, -1, S_idx.unsqueeze(-1))  # [B, N, 1]
+    # Local equilibrium distribution
+    logP_j = F.log_softmax(-E_all / temperature, dim=-1)  # [B, N, R]
 
-    # Forward rate via balancing function
-    rate = torch.sigmoid((E_current - E_all) / temperature)  # [B, N, R]
+    # Current state log-probability
+    logP_i = torch.gather(logP_j, -1, S_idx.unsqueeze(-1))  # [B, N, 1]
 
-    # Zero out self-transition rate
-    rate = rate * (1.0 - S)
+    # Balancing function (sigmoid)
+    log_Q_ij = F.logsigmoid(logP_j - logP_i)  # [B, N, R]
 
-    # Transition probability from Poisson process
-    P = 1.0 - torch.exp(-rate * dt)  # [B, N, R]
+    # Rate = Q_ij / P_j
+    rate = torch.exp(log_Q_ij - logP_j)  # [B, N, R]
+
+    # Transition probability = P_j * (1 - exp(-dt * rate))
+    logP_ij = logP_j + (-(-dt * rate).expm1()).log()  # [B, N, R]
+
+    # Zero out self-transition in log space
+    logP_ij = logP_ij + (1.0 - S).clamp(min=1e-30).log()
 
     # Self-transition: remaining probability mass
-    P_self = (1.0 - P.sum(-1, keepdim=True)).clamp(min=0)
-    P = P + P_self * S
+    p_flip = ((1.0 - S) * logP_ij.exp()).sum(-1, keepdim=True)
+    logP_ii = (1.0 - p_flip).clamp(min=1e-5).log()
+    log_probs = torch.where(S.bool(), logP_ii, logP_ij)
+
+    return energy, log_probs
+
+
+def _potts_proposal_dlmc(
+    S,
+    h,
+    J,
+    edge_index,
+    edge_mask,
+    token_mask,
+    temperature,
+    dt=0.1,
+    generator=None,
+    penalty_func=None,
+):
+    B, N, R = S.shape
+
+    energy, log_probs = _dlmc_energy_and_log_probs(
+        S,
+        h,
+        J,
+        edge_index,
+        edge_mask,
+        token_mask,
+        temperature,
+        dt,
+        penalty_func,
+    )
 
     # Sample
-    flat_P = P.reshape(B * N, R)
-    samples = torch.multinomial(flat_P, 1, generator=generator).reshape(B, N)
+    flat_probs = log_probs.exp().reshape(B * N, R)
+    flat_probs = flat_probs / flat_probs.sum(-1, keepdim=True)  # renormalize
+    samples = torch.multinomial(flat_probs, 1, generator=generator).reshape(B, N)
     S_new = F.one_hot(samples, R).float()
 
     if token_mask is not None:
         S_new = torch.where(token_mask.unsqueeze(-1), S_new, S)
 
-    return S_new
+    return DLMCProposalResult(S_new=S_new, energy=energy, log_probs=log_probs)
+
+
+def _mh_rejection_step(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    forward_result: DLMCProposalResult,
+    h,
+    J,
+    edge_index,
+    edge_mask,
+    token_mask,
+    temperature: float,
+    dt: float,
+    penalty_func: Callable[[Tensor], Tensor] | None,
+    generator: torch.Generator | None,
+) -> Float[Tensor, "batch n_token num_residue_types"]:
+    """Metropolis-Hastings correction for DLMC proposals.
+
+    Computes the acceptance ratio by comparing the forward flux
+    (S -> S_new) with the reverse flux (S_new -> S), and accepts
+    the proposal with probability min(1, exp(flux_reverse - flux_forward)).
+    """
+    S_new = forward_result.S_new
+    U_forward = forward_result.energy
+    logp_forward = forward_result.log_probs
+
+    # Compute reverse: energy and log-probs at the proposed state
+    U_reverse, logp_reverse = _dlmc_energy_and_log_probs(
+        S_new,
+        h,
+        J,
+        edge_index,
+        edge_mask,
+        token_mask,
+        temperature,
+        dt,
+        penalty_func,
+    )
+
+    # Flux = -U/T + sum_i log P(transition to target)
+    # Forward flux: log-prob of transitioning S -> S_new under forward proposal
+    logp_s_to_snew = torch.gather(
+        logp_forward, -1, S_new.argmax(-1).unsqueeze(-1)
+    ).squeeze(-1)  # [B, N]
+    flux_forward = -U_forward / temperature + logp_s_to_snew.sum(-1)  # [B]
+
+    # Reverse flux: log-prob of transitioning S_new -> S under reverse proposal
+    logp_snew_to_s = torch.gather(logp_reverse, -1, S.argmax(-1).unsqueeze(-1)).squeeze(
+        -1
+    )  # [B, N]
+    flux_reverse = -U_reverse / temperature + logp_snew_to_s.sum(-1)  # [B]
+
+    # Acceptance ratio
+    acc_ratio = torch.exp(flux_reverse - flux_forward).clamp(max=1.0)  # [B]
+    accept = torch.bernoulli(acc_ratio, generator=generator)  # [B]
+
+    return torch.where(accept[:, None, None].bool(), S_new, S)
 
 
 @dataclass(frozen=True)
@@ -1260,11 +1368,14 @@ class PottsSampler:
     temperature_init: float = 1.0
     """Initial temperature for annealing."""
 
-    annealing_fraction: float = 0.5
+    annealing_fraction: float = 0.8
     """Fraction of sweeps spent annealing from temperature_init to temperature."""
 
-    dt: float = 0.5
+    dt: float = 0.1
     """DLMC step size (only used when proposal is DLMC)."""
+
+    rejection_step: bool = False
+    """If True, apply Metropolis-Hastings correction to DLMC proposals."""
 
     @typecheck
     def sample(
@@ -1299,11 +1410,15 @@ class PottsSampler:
         from artios.model.modules.potts import compute_potts_energy
 
         B, N, R = h.shape
-        device = h.device
 
         # Initialize sequence
         if S_init is None:
-            indices = torch.randint(R, (B, N), device=device, generator=generator)
+            # Initialize from field-biased distribution (matches Chroma)
+            logits = F.log_softmax(-h / self.temperature_init, dim=-1)
+            flat_logits = logits.reshape(B * N, R)
+            indices = torch.multinomial(
+                flat_logits.exp(), 1, generator=generator
+            ).reshape(B, N)
             S = F.one_hot(indices, R).float()
         else:
             S = S_init
@@ -1339,7 +1454,7 @@ class PottsSampler:
                     penalty_func,
                 )
             elif self.proposal == PottsProposal.DLMC:
-                S = _potts_proposal_dlmc(
+                result = _potts_proposal_dlmc(
                     S,
                     h,
                     J,
@@ -1351,6 +1466,23 @@ class PottsSampler:
                     generator,
                     penalty_func,
                 )
+
+                if self.rejection_step:
+                    S = _mh_rejection_step(
+                        S,
+                        result,
+                        h,
+                        J,
+                        edge_index,
+                        edge_mask,
+                        token_mask,
+                        T,
+                        self.dt,
+                        penalty_func,
+                        generator,
+                    )
+                else:
+                    S = result.S_new
 
         # Compute final energy
         energy = compute_potts_energy(S.argmax(-1), h, J, edge_index, edge_mask)

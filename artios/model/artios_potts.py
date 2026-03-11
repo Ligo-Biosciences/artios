@@ -70,7 +70,7 @@ class ArtiosPotts(nn.Module):
             label_smoothing=potts_loss_cfg.label_smoothing,
         )
 
-        sampling_cfg = configs.artios_mpnn.sampling
+        sampling_cfg = configs.artios_mpnn.potts.sampling
         self.potts_sampler = PottsSampler(
             proposal=PottsProposal(sampling_cfg.proposal),
             n_sweeps=sampling_cfg.n_sweeps,
@@ -78,6 +78,7 @@ class ArtiosPotts(nn.Module):
             temperature_init=sampling_cfg.temperature_init,
             annealing_fraction=sampling_cfg.annealing_fraction,
             dt=sampling_cfg.dt,
+            rejection_step=sampling_cfg.rejection_step,
         )
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size

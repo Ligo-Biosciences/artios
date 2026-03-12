@@ -1241,6 +1241,9 @@ def get_datasets(
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
         dataset_param["motif_training"] = data_config.get("motif_training", {})
+        dataset_param["include_arrays_in_context"] = data_config.get(
+            "include_arrays_in_context", False
+        )
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
         # Training datasets don't use group_by_pdb_id, so indices_list is a DataFrame
@@ -1272,6 +1275,9 @@ def get_datasets(
         dataset_param["motif_training"] = data_config.get("motif_training", {})
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
+        dataset_param["include_arrays_in_context"] = data_config.get(
+            "include_arrays_in_context", False
+        )
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

@@ -9,7 +9,9 @@ import numpy as np
 import torch
 from einops import rearrange, repeat
 from torch import Tensor, nn
+from typing_extensions import assert_never
 
+from artios.model.modules.message_passing import gather_nodes
 from artios.model.modules.primitives import Linear
 from artios.utils.typing import Bool, Float, Int, typecheck
 
@@ -46,54 +48,6 @@ def _zero_sum_gauge(
 
 
 @typecheck
-def compute_potts_conditionals(
-    S_idx: Int[Tensor, "batch n_token"],
-    h: Float[Tensor, "batch n_token num_residue_types"],
-    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
-    edge_index: Int[Tensor, "batch n_token neighbours"],
-    edge_mask: Bool[Tensor, "batch n_token neighbours"],
-) -> Float[Tensor, "batch n_token num_residue_types"]:
-    """Compute conditional logits for the Potts model.
-
-    For each node i and candidate state a, computes:
-        logit_i(a) = -(h_i(a) + sum_j J_ij(a, s_j))
-    where s_j is the current state of neighbor j.
-
-    Args:
-        S_idx: Current sequence indices [B, N].
-        h: Potts fields [B, N, R].
-        J: Potts couplings [B, N, K, R, R].
-        edge_index: Neighbor indices [B, N, K].
-        edge_mask: Valid edge mask [B, N, K].
-
-    Returns:
-        Conditional logits [B, N, R].
-    """
-    from artios.model.modules.message_passing import gather_nodes
-
-    R = h.shape[-1]
-
-    # Mask out self-edges
-    ii = torch.arange(edge_index.shape[1], device=edge_index.device)
-    not_self = edge_index != ii[None, :, None]  # [B, N, K]
-
-    # Get neighbour states [B, N, K, 1]
-    S_neighbours = gather_nodes(S_idx.unsqueeze(-1).float(), edge_index).long()
-
-    # Index into J with neighbour states: J[..., s_j] -> [B, N, K, R]
-    S_neighbours = repeat(S_neighbours, "... n k 1 -> ... n k r 1", r=R)
-    J_at_S = torch.gather(J, -1, S_neighbours).squeeze(-1)  # [B, N, K, R]
-
-    # Zero out self-edge and invalid-edge contributions
-    J_at_S = J_at_S * (not_self & edge_mask).unsqueeze(-1)
-
-    # Sum coupling contributions over neighbours
-    J_node = J_at_S.sum(dim=-2)  # [B, N, R]
-
-    return -(h + J_node)
-
-
-@typecheck
 def compute_potts_energy(
     S: Int[Tensor, "batch n_token"],
     h: Float[Tensor, "batch n_token num_residue_types"],
@@ -101,12 +55,11 @@ def compute_potts_energy(
     edge_index: Int[Tensor, "batch n_token neighbours"],
     edge_mask: Bool[Tensor, "batch n_token neighbours"],
 ) -> Float[Tensor, "batch"]:
-    """Compute per-sample Potts energy.
+    """Compute total Potts energy for every sequence in a batch.
 
     E = sum_i h_i(s_i) + 0.5 * sum_{i,j} J_ij(s_i, s_j)
 
-    The 0.5 factor accounts for each edge being counted twice in the
-    sparse neighbour representation.
+    The 0.5 factor accounts for edge double counting..
 
     Args:
         S: Sequence indices [B, N].
@@ -118,8 +71,6 @@ def compute_potts_energy(
     Returns:
         Per-sample energy [B].
     """
-    from artios.model.modules.message_passing import gather_nodes
-
     B, N, K, R, _ = J.shape
 
     # Field energy: sum_i h_i(s_i)
@@ -207,6 +158,123 @@ def symmetrize_J(
     return J_symm
 
 
+@typecheck
+def compute_potts_single_logits(
+    seq: Int[Tensor, "batch n_token"],
+    h: Float[Tensor, "batch n_token num_residue_types"],
+    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
+    edge_index: Int[Tensor, "batch n_token neighbours"],
+    edge_mask: Bool[Tensor, "batch n_token neighbours"],
+) -> Float[Tensor, "batch n_token num_residue_types"]:
+    """Compute conditional logits for the Potts model.
+    This is the logits for the conditional probability:
+    p(state of i | state of neighbours of i ; h, J).
+
+    For each node i and candidate state a, computes:
+        logit_i(a) = -(h_i(a) + sum_j J_ij(a, s_j))
+    where s_j is the current state of neighbor j.
+
+    Args:
+        S_idx: Current sequence indices [B, N].
+        h: Potts fields [B, N, R].
+        J: Potts couplings [B, N, K, R, R].
+        edge_index: Neighbor indices [B, N, K].
+        edge_mask: Valid edge mask [B, N, K].
+
+    Returns:
+        Conditional logits [B, N, R].
+    """
+    R = h.shape[-1]
+
+    # Mask out self-edges
+    ii = torch.arange(edge_index.shape[1], device=edge_index.device)
+    not_self = edge_index != ii[None, :, None]  # [B, N, K]
+
+    # Get neighbour states [B, N, K, 1]
+    S_neighbours = gather_nodes(seq.unsqueeze(-1).float(), edge_index).long()
+
+    # Index into J with neighbour states: J[..., s_j] -> [B, N, K, R]
+    S_neighbours = repeat(S_neighbours, "... n k 1 -> ... n k r 1", r=R)
+    J_at_S = torch.gather(J, -1, S_neighbours).squeeze(-1)  # [B, N, K, R]
+
+    # Apply mask and remove self-edges
+    J_at_S = J_at_S * (not_self & edge_mask).unsqueeze(-1)
+
+    # Sum coupling contributions over neighbours
+    J_node = J_at_S.sum(dim=-2)  # [B, N, R]
+
+    return -(h + J_node)
+
+
+@typecheck
+def compute_potts_joint_logits(
+    seq: Int[Tensor, "batch n_token"],
+    h: Float[Tensor, "batch n_token num_residue_types"],
+    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
+    edge_index: Int[Tensor, "batch n_token neighbours"],
+    edge_mask: Bool[Tensor, "batch n_token neighbours"],
+) -> tuple[
+    Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
+    Bool[Tensor, "batch n_token neighbours"],
+]:
+    """Compute joint Potts logits for composite likelihood.
+
+    The logits are the negative energy of the joint state pairs.
+    For each edge (i, j), computes the joint logit over all state pairs
+    (a, b), accounting for background contributions from all other nodes.
+
+    Args:
+        seq: Current sequence indices [B, N].
+        h: Potts fields [B, N, R].
+        J: Potts couplings [B, N, K, R, R].
+        edge_index: Neighbor indices [B, N, K].
+        edge_mask: Valid edge mask [B, N, K].
+
+    Returns:
+        Tuple of (joint_logits, combined_edge_mask):
+            joint_logits: [B, N, K, R, R]
+            combined_edge_mask: [B, N, K] (self-edges excluded)
+    """
+    _, N, K = edge_index.shape
+    R = h.shape[-1]
+
+    # Remove self edges (prevents leakage)
+    ii = torch.arange(N, device=edge_index.device)
+    not_self = edge_index != ii[None, :, None]
+    combined_mask = not_self & edge_mask
+
+    ### Get interactions between node states and GT neighbour states
+    S_j = gather_nodes(seq.unsqueeze(-1).float(), edge_index).long()
+    # Index into J with GT neighbour states J[..., s_j] -> [B, N, K, R]
+    S_j = repeat(S_j, "... n k 1 -> ... n k r 1", r=R)
+    J_j = torch.gather(J, -1, S_j).squeeze(-1)  # [B, N, K, R]
+
+    ### Get interactions between GT node state and neighbour states
+    # Index into J with GT node states J[..., s_i, :] -> [B, N, K, 1, R]
+    S_i = repeat(seq.long(), "b n -> b n k 1 r", k=K, r=R)
+    J_i = torch.gather(J, -2, S_i)  # [B, N, K, 1, R]
+
+    # Get node energies from GT neighbour states
+    J_j_self_edge_masked = J_j * not_self.unsqueeze(-1)  # zero out self-edges
+    E_i = h + J_j_self_edge_masked.sum(dim=2)  # [B, N, R]
+
+    # Get neighbour energies by gathering node energies
+    E_j = gather_nodes(E_i, edge_index)  # [B, N, K, R]
+
+    # Remove J_ij contribution from E_i (prevents leakage)
+    E_i_minus_ij = repeat(E_i, "b n r -> b n k r 1", k=K) - J_j.unsqueeze(
+        -1
+    )  # [B, N, K, R, 1]
+
+    # Remove J_ji contribution from E_j (prevents leakage)
+    E_j_minus_ji = repeat(E_j, "b n k r -> b n k 1 r") - J_i  # [B, N, K, 1, R]
+
+    # Joint logits (negative energy)
+    joint_logits = -(E_i_minus_ij + E_j_minus_ji + J)  # [B, N, K, R, R]
+
+    return joint_logits, combined_mask
+
+
 class GraphPotts(nn.Module):
     """Potts parameterisation from MPNN decoder features.
 
@@ -231,25 +299,26 @@ class GraphPotts(nn.Module):
         R = num_residue_types
         self.log_scale = nn.Parameter(np.log(init_scale) * torch.ones(1))
 
-        if parameterisation == GraphPottsParameterisation.LINEAR:
-            self.W_h = Linear(node_dim, R)
-            self.W_J = Linear(edge_dim, R**2)
+        match parameterisation:
+            case GraphPottsParameterisation.LINEAR:
+                self.W_h = Linear(node_dim, R)
+                self.W_J = Linear(edge_dim, R**2)
 
-        elif parameterisation == GraphPottsParameterisation.FACTOR:
-            self.W_h = Linear(node_dim, R)
-            self.W_J_left = Linear(edge_dim, R**2)
-            self.W_J_right = Linear(edge_dim, R**2)
+            case GraphPottsParameterisation.FACTOR:
+                self.W_h = Linear(node_dim, R)
+                self.W_J_left = Linear(edge_dim, R**2)
+                self.W_J_right = Linear(edge_dim, R**2)
 
-        elif parameterisation == GraphPottsParameterisation.SCORE:
-            self.num_factors = num_residue_types
-            self.W_h = Linear(node_dim, R)
-            self.W_h_bg = Linear(node_dim, 1)
-            self.W_J_bg = Linear(edge_dim, 1)
-            self.W_J_left = Linear(edge_dim, R * self.num_factors)
-            self.W_J_right = Linear(edge_dim, R * self.num_factors)
+            case GraphPottsParameterisation.SCORE:
+                self.num_factors = num_residue_types
+                self.W_h = Linear(node_dim, R)
+                self.W_h_bg = Linear(node_dim, 1)
+                self.W_J_bg = Linear(edge_dim, 1)
+                self.W_J_left = Linear(edge_dim, R * self.num_factors)
+                self.W_J_right = Linear(edge_dim, R * self.num_factors)
 
-        else:
-            raise ValueError(f"Unknown parameterisation: {parameterisation}")
+            case _:
+                assert_never(parameterisation)
 
     @typecheck
     def forward(
@@ -318,10 +387,8 @@ class GraphPotts(nn.Module):
             )
             J = torch.matmul(J_left, J_right)
 
-            # Zero-sum gauge
             h, J = _zero_sum_gauge(h, J)
 
-            # Background components
             h = h + mask_h * self.W_h_bg(node_feats)
             J = J + (mask_J * self.W_J_bg(edge_feats)).unsqueeze(-1)
 

@@ -1,7 +1,7 @@
 """Tests for the ArtiosPotts module.
 
-Tests cover the forward pass, main_train_loop, get_logits, get_joint_logits,
-and compute_loss for both pseudo and composite likelihood modes.
+Tests cover the forward pass, main_train_loop, compute_potts_single_logits,
+compute_potts_joint_logits, and compute_loss for both pseudo and composite likelihood modes.
 """
 
 import pytest
@@ -9,6 +9,10 @@ import torch
 from ml_collections import ConfigDict
 
 from artios.model.artios_potts import ArtiosPotts, PottsLossConfig
+from artios.model.modules.potts import (
+    compute_potts_joint_logits,
+    compute_potts_single_logits,
+)
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode
 from tests.context_utils import create_test_context
@@ -23,7 +27,6 @@ def _make_configs(
     label_smoothing: float = 0.0,
     symmetric_J: bool = False,
     parameterisation: str = "linear",
-    num_factors: int | None = None,
 ) -> ConfigDict:
     """Create test configs for ArtiosPotts."""
     return ConfigDict(
@@ -52,18 +55,18 @@ def _make_configs(
                 "potts": {
                     "symmetric_J": symmetric_J,
                     "parameterisation": parameterisation,
-                    "num_factors": num_factors,
-                },
-                "sampling": {
-                    "proposal": "gibbs",
-                    "n_sweeps": 5,
-                    "temperature": 0.1,
-                    "temperature_init": 10.0,
-                    "annealing_fraction": 0.5,
-                    "dt": 0.5,
-                    "complexity_penalty_weight": 0.0,
-                    "complexity_window_size": 30,
-                    "complexity_entropy_min": 2.32,
+                    "sampling": {
+                        "proposal": "gibbs",
+                        "n_sweeps": 5,
+                        "temperature": 0.1,
+                        "temperature_init": 10.0,
+                        "annealing_fraction": 0.5,
+                        "dt": 0.5,
+                        "rejection_step": True,
+                        "complexity_penalty_weight": 0.0,
+                        "complexity_window_size": 30,
+                        "complexity_entropy_min": 2.32,
+                    },
                 },
             },
         }
@@ -241,33 +244,39 @@ class TestArtiosPottsForward:
 # ---------------------------------------------------------------------------
 
 
-class TestGetLogits:
-    """Tests for the get_logits (pseudo-likelihood) method."""
+class TestComputePottsSingleLogits:
+    """Tests for compute_potts_single_logits (pseudo-likelihood)."""
 
     @pytest.fixture
-    def model_and_output(self, pseudo_configs, context, device):
+    def output_and_seq(self, pseudo_configs, context, device):
         model = ArtiosPotts(pseudo_configs).to(device)
         model.train()
         output = model.main_train_loop(context=context, seed=42)
         seq = context.token.restype.argmax(dim=-1)
-        return model, output, seq
+        return output, seq
 
-    def test_output_shape(self, model_and_output):
-        model, output, seq = model_and_output
-        logits = model.get_logits(seq, output)
+    def test_output_shape(self, output_and_seq):
+        output, seq = output_and_seq
+        logits = compute_potts_single_logits(
+            seq, output.h, output.J, output.edge_index, output.edge_mask
+        )
 
         B, N, R = 2, 32, 32
         assert logits.shape == (B, N, R)
 
-    def test_output_finite(self, model_and_output):
-        model, output, seq = model_and_output
-        logits = model.get_logits(seq, output)
+    def test_output_finite(self, output_and_seq):
+        output, seq = output_and_seq
+        logits = compute_potts_single_logits(
+            seq, output.h, output.J, output.edge_index, output.edge_mask
+        )
 
         assert torch.isfinite(logits).all(), "Logits contain non-finite values"
 
-    def test_logits_are_valid_distributions(self, model_and_output):
-        model, output, seq = model_and_output
-        logits = model.get_logits(seq, output)
+    def test_logits_are_valid_distributions(self, output_and_seq):
+        output, seq = output_and_seq
+        logits = compute_potts_single_logits(
+            seq, output.h, output.J, output.edge_index, output.edge_mask
+        )
 
         probs = torch.softmax(logits, dim=-1)
         assert torch.allclose(
@@ -277,24 +286,26 @@ class TestGetLogits:
 
 
 # ---------------------------------------------------------------------------
-# get_joint_logits tests
+# compute_potts_joint_logits tests
 # ---------------------------------------------------------------------------
 
 
-class TestGetJointLogits:
-    """Tests for the get_joint_logits (composite likelihood) method."""
+class TestComputePottsJointLogits:
+    """Tests for compute_potts_joint_logits (composite likelihood)."""
 
     @pytest.fixture
-    def model_and_output(self, pseudo_configs, context, device):
+    def output_and_seq(self, pseudo_configs, context, device):
         model = ArtiosPotts(pseudo_configs).to(device)
         model.train()
         output = model.main_train_loop(context=context, seed=42)
         seq = context.token.restype.argmax(dim=-1)
-        return model, output, seq
+        return output, seq
 
-    def test_output_shapes(self, model_and_output):
-        model, output, seq = model_and_output
-        joint_logits, edge_mask = model.get_joint_logits(seq, output)
+    def test_output_shapes(self, output_and_seq):
+        output, seq = output_and_seq
+        joint_logits, edge_mask = compute_potts_joint_logits(
+            seq, output.h, output.J, output.edge_index, output.edge_mask
+        )
 
         B, N = 2, 32
         R = 32
@@ -303,18 +314,22 @@ class TestGetJointLogits:
         assert joint_logits.shape == (B, N, K, R, R)
         assert edge_mask.shape == (B, N, K)
 
-    def test_output_finite(self, model_and_output):
-        model, output, seq = model_and_output
-        joint_logits, _ = model.get_joint_logits(seq, output)
+    def test_output_finite(self, output_and_seq):
+        output, seq = output_and_seq
+        joint_logits, _ = compute_potts_joint_logits(
+            seq, output.h, output.J, output.edge_index, output.edge_mask
+        )
 
         assert torch.isfinite(
             joint_logits
         ).all(), "Joint logits contain non-finite values"
 
-    def test_edge_mask_excludes_self_edges(self, model_and_output):
+    def test_edge_mask_excludes_self_edges(self, output_and_seq):
         """Self-edges (i->i) should be masked out."""
-        model, output, seq = model_and_output
-        _, edge_mask = model.get_joint_logits(seq, output)
+        output, seq = output_and_seq
+        _, edge_mask = compute_potts_joint_logits(
+            seq, output.h, output.J, output.edge_index, output.edge_mask
+        )
 
         N = output.edge_index.shape[1]
         ii = torch.arange(N, device=output.edge_index.device)
@@ -323,10 +338,12 @@ class TestGetJointLogits:
         # Where edge is self-edge, mask should be False
         assert not (edge_mask & is_self).any(), "Self-edges should be masked"
 
-    def test_joint_logits_normalize_over_rr(self, model_and_output):
+    def test_joint_logits_normalize_over_rr(self, output_and_seq):
         """Softmax over R*R should sum to 1 for valid edges."""
-        model, output, seq = model_and_output
-        joint_logits, edge_mask = model.get_joint_logits(seq, output)
+        output, seq = output_and_seq
+        joint_logits, edge_mask = compute_potts_joint_logits(
+            seq, output.h, output.J, output.edge_index, output.edge_mask
+        )
 
         R = joint_logits.shape[-1]
         logits_flat = joint_logits.reshape(*joint_logits.shape[:3], R * R)
@@ -552,19 +569,13 @@ class TestParameterisationVariants:
     """Tests for factor and score parameterisations through ArtiosPotts."""
 
     @pytest.fixture(
-        params=[
-            ("linear", None),
-            ("factor", None),
-            ("score", 16),
-        ],
+        params=["linear", "factor", "score"],
         ids=["linear", "factor", "score"],
     )
     def model(self, request, device):
-        parameterisation, num_factors = request.param
         configs = _make_configs(
             loss_type="pseudo",
-            parameterisation=parameterisation,
-            num_factors=num_factors,
+            parameterisation=request.param,
         )
         return ArtiosPotts(configs).to(device)
 
@@ -614,19 +625,13 @@ class TestParameterisationWithCompositeLoss:
     """Tests that all parameterisations work with composite likelihood loss."""
 
     @pytest.fixture(
-        params=[
-            ("linear", None),
-            ("factor", None),
-            ("score", 16),
-        ],
+        params=["linear", "factor", "score"],
         ids=["linear", "factor", "score"],
     )
     def model(self, request, device):
-        parameterisation, num_factors = request.param
         configs = _make_configs(
             loss_type="composite",
-            parameterisation=parameterisation,
-            num_factors=num_factors,
+            parameterisation=request.param,
         )
         return ArtiosPotts(configs).to(device)
 

@@ -50,9 +50,6 @@ def graph_potts(request, device):
         num_residue_types=8,
         parameterisation=parameterisation,
         symmetric_J=symmetric_J,
-        num_factors=16
-        if parameterisation == GraphPottsParameterisation.SCORE
-        else None,
     ).to(device)
 
 
@@ -297,16 +294,24 @@ class TestGraphPottsSymmetric:
 
     def test_symmetric_flag_stored(self):
         """Test that symmetric_J flag is stored."""
-        model = GraphPotts(32, 64, 8, symmetric_J=True)
+        model = GraphPotts(
+            32, 64, 8, GraphPottsParameterisation.LINEAR, symmetric_J=True
+        )
         assert model.symmetric_J is True
 
-        model = GraphPotts(32, 64, 8, symmetric_J=False)
+        model = GraphPotts(
+            32, 64, 8, GraphPottsParameterisation.LINEAR, symmetric_J=False
+        )
         assert model.symmetric_J is False
 
     def test_symmetric_differs_from_asymmetric(self, graph_inputs, device):
         """Test that symmetric and asymmetric produce different J."""
-        model_asym = GraphPotts(64, 128, 8, symmetric_J=False).to(device)
-        model_sym = GraphPotts(64, 128, 8, symmetric_J=True).to(device)
+        model_asym = GraphPotts(
+            64, 128, 8, GraphPottsParameterisation.LINEAR, symmetric_J=False
+        ).to(device)
+        model_sym = GraphPotts(
+            64, 128, 8, GraphPottsParameterisation.LINEAR, symmetric_J=True
+        ).to(device)
 
         # Share weights
         model_sym.load_state_dict(model_asym.state_dict())
@@ -383,7 +388,6 @@ class TestScoreBackground:
             num_residue_types=8,
             parameterisation=GraphPottsParameterisation.SCORE,
             symmetric_J=False,
-            num_factors=16,
         ).to(device)
 
         B, N, K = 2, 16, 6
@@ -422,7 +426,7 @@ class TestParameterisationEnum:
     def test_invalid_parameterisation_raises(self):
         """GraphPotts should reject invalid parameterisation values."""
         with pytest.raises(ValueError):
-            GraphPotts(32, 64, 8, parameterisation="not_a_param")
+            GraphPottsParameterisation("not_a_param")
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,6 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from einops import repeat
 from torch import Tensor
 from torch.nn import functional as F
 from typing_extensions import assert_never
@@ -17,12 +16,12 @@ from artios.model.generator import (
 )
 from artios.model.loss import composite_nll_loss, nll_loss
 from artios.model.modules.complexity import complexity_lcp
-from artios.model.modules.message_passing import gather_nodes
 from artios.model.modules.mpnn import MPNN
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
-    compute_potts_conditionals,
+    compute_potts_joint_logits,
+    compute_potts_single_logits,
 )
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode
@@ -108,7 +107,6 @@ class ArtiosPotts(nn.Module):
             context.mask.token_mask,
         )
 
-        # Build penalty function if configured
         penalty_func = None
         if self.complexity_penalty_weight > 0:
             chain_id = context.token.asym_id
@@ -204,96 +202,6 @@ class ArtiosPotts(nn.Module):
 
         return output
 
-    def get_logits(
-        self,
-        seq: Tensor,
-        output: PottsOutput,
-    ) -> Tensor:
-        """Compute Potts pseudo-loglikelihood logits.
-        The logits are the negative energy of the states.
-
-        For each node i and candidate state a, computes:
-            logit_i(a) = -(h_i(a) + sum_j J_ij(a, s_j))
-        where s_j is the ground truth state of neighbor j.
-
-        Args:
-            seq: Ground truth sequence indices [B, N].
-            output: PottsOutput containing h, J, and edge_index.
-
-        Returns:
-            Logits for each position and state [B, N, R].
-        """
-        return compute_potts_conditionals(
-            seq,
-            output.h,
-            output.J,
-            output.edge_index,
-            output.edge_mask,
-        )
-
-    def get_joint_logits(
-        self,
-        seq: Tensor,
-        output: PottsOutput,
-    ) -> tuple[Tensor, Tensor]:
-        """Compute joint Potts logits for composite likelihood.
-        The logits are the negative energy of the joint state pairs.
-
-        For each edge (i, j), computes the joint logit over all state pairs
-        (a, b), accounting for background contributions from all other nodes.
-
-        Args:
-            seq: Ground truth sequence indices [batch, n_token].
-            output: PottsOutput containing h, J, edge_index, edge_mask.
-
-        Returns:
-            Tuple of (joint_logits, edge_mask):
-                joint_logits: [batch, n_token, neighbours, R, R]
-                edge_mask: [batch, n_token, neighbours] (self-edges excluded)
-        """
-        h = output.h
-        J = output.J  # [batch, n_token, neighbours, R, R]
-        edge_index = output.edge_index
-
-        _, N, K = edge_index.shape
-        R = h.shape[-1]
-
-        # Remove self edges (prevents leakage)
-        ii = torch.arange(N, device=edge_index.device)
-        not_self = edge_index != ii[None, :, None]
-        edge_mask = not_self & output.edge_mask
-
-        ### Get interactions between node states and GT neighbour states
-        S_j = gather_nodes(seq.unsqueeze(-1).float(), edge_index).long()
-        # Index into J with GT neighbour states J[..., s_j] -> [B, N, K, R]
-        S_j = repeat(S_j, "... n k 1 -> ... n k r 1", r=R)
-        J_j = torch.gather(J, -1, S_j).squeeze(-1)  # [B, N, K, R]
-
-        ### Get interactions between GT node state and neighbour states
-        # Index into J with GT node states J[..., s_i, :] -> [B, N, K, 1, R]
-        S_i = repeat(seq.long(), "b n -> b n k 1 r", k=K, r=R)
-        J_i = torch.gather(J, -2, S_i)  # [B, N, K, 1, R]
-
-        # Get node energies from GT neighbour states
-        J_j_self_edge_masked = J_j * not_self.unsqueeze(-1)  # zero out self-edges
-        E_i = h + J_j_self_edge_masked.sum(dim=2)  # [B, N, R]
-
-        # Get neighbour energies by gathering node energies
-        E_j = gather_nodes(E_i, edge_index)  # [B, N, K, R]
-
-        # Remove J_ij contribution from E_i (prevents leakage)
-        E_i_minus_ij = repeat(E_i, "b n r -> b n k r 1", k=K) - J_j.unsqueeze(
-            -1
-        )  # [B, N, K, R, 1]
-
-        # Remove J_ji contribution from E_j (prevents leakage)
-        E_j_minus_ji = repeat(E_j, "b n k r -> b n k 1 r") - J_i  # [B, N, K, 1, R]
-
-        # Joint logits (negative energy)
-        joint_logits = -(E_i_minus_ij + E_j_minus_ji + J)  # [B, N, K, R, R]
-
-        return joint_logits, edge_mask
-
     @disable_autocast
     def compute_loss(
         self,
@@ -317,8 +225,15 @@ class ArtiosPotts(nn.Module):
         loss_weight = self.masking_sampler.get_loss_weights(output.timestep)
         eps = 1e-6
 
-        if self.loss_config.loss_type == "pseudo":
-            logits = self.get_logits(gt_seq, output)  # [B, N, R]
+        if self.loss_config.loss_type == PottsLossType.PSEUDO:
+            logits = compute_potts_single_logits(
+                gt_seq,
+                output.h,
+                output.J,
+                output.edge_index,
+                output.edge_mask,
+            )  # [B, N, R]
+
             nll = nll_loss(
                 logits=logits,
                 labels=labels,
@@ -329,8 +244,10 @@ class ArtiosPotts(nn.Module):
                 labels * F.log_softmax(logits, dim=-1), dim=-1
             )  # [B, N]
 
-        elif self.loss_config.loss_type == "composite":
-            joint_logits, edge_mask = self.get_joint_logits(gt_seq, output)
+        elif self.loss_config.loss_type == PottsLossType.COMPOSITE:
+            joint_logits, edge_mask = compute_potts_joint_logits(
+                gt_seq, output.h, output.J, output.edge_index, output.edge_mask
+            )
             nll, per_position_nll = composite_nll_loss(
                 joint_logits,
                 gt_seq,
@@ -338,8 +255,14 @@ class ArtiosPotts(nn.Module):
                 edge_mask,
                 mask,
             )
-            # Get logits for accuracy (h, J already computed, this is cheap)
-            logits = self.get_logits(gt_seq, output)  # [B, N, R]
+            # get logits for accuracy
+            logits = compute_potts_single_logits(
+                gt_seq,
+                output.h,
+                output.J,
+                output.edge_index,
+                output.edge_mask,
+            )  # [B, N, R]
 
         else:
             raise ValueError(f"Unknown loss_type: {self.loss_config.loss_type}")

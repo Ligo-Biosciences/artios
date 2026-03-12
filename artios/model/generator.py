@@ -1139,7 +1139,7 @@ def _potts_proposal_gibbs(
     If penalty_func is provided, its gradient w.r.t. S is computed via
     autograd and added to the conditional energy (following Chroma).
     """
-    from artios.model.modules.potts import compute_potts_conditionals
+    from artios.model.modules.potts import compute_potts_single_logits
 
     R = S.shape[-1]
 
@@ -1147,7 +1147,7 @@ def _potts_proposal_gibbs(
         S_idx = S.argmax(-1)  # [B, N]
 
         # Potts conditional energy: U_i(a) = h_i(a) + sum_j J_ij(a, s_j)
-        logits = compute_potts_conditionals(S_idx, h, J, edge_index, edge_mask)
+        logits = compute_potts_single_logits(S_idx, h, J, edge_index, edge_mask)
         U_i = -logits  # [B, N, R]
 
         # Add penalty gradient if provided
@@ -1201,15 +1201,16 @@ def _dlmc_energy_and_log_probs(
     transition probabilities and the self-transition (remaining mass).
     """
     from artios.model.modules.potts import (
-        compute_potts_conditionals,
         compute_potts_energy,
+        compute_potts_single_logits,
     )
 
-    B, N, R = S.shape
     S_idx = S.argmax(-1)
 
     # Conditional energy for all candidate states
-    logits = compute_potts_conditionals(S_idx, h, J, edge_index, edge_mask)
+    logits = compute_potts_single_logits(
+        S_idx, h, J, edge_index, edge_mask
+    )  # [B, N, R]
     E_all = -logits  # [B, N, R]
 
     # Compute total energy
@@ -1227,25 +1228,28 @@ def _dlmc_energy_and_log_probs(
         E_all = E_all + U_i_adjustment
         energy = energy + U_penalty.detach()
 
-    # Local equilibrium distribution
+    # Convert energies to log probs over all states
     logP_j = F.log_softmax(-E_all / temperature, dim=-1)  # [B, N, R]
 
-    # Current state log-probability
+    # Get log probs of current state
     logP_i = torch.gather(logP_j, -1, S_idx.unsqueeze(-1))  # [B, N, 1]
 
-    # Balancing function (sigmoid)
+    ### We now compare the log probs of the potential future states to the current states
+    ### If the difference is high, then we assign a high mutation rate (Q_ij).
+    ### If the difference is low, then we assign a low mutation rate (Q_ij).
+    # Calculate transition rates
     log_Q_ij = F.logsigmoid(logP_j - logP_i)  # [B, N, R]
-
-    # Rate = Q_ij / P_j
     rate = torch.exp(log_Q_ij - logP_j)  # [B, N, R]
 
+    ### The mutation rates Q_ij determine a probability of mutation over time period dt
+    ### as can be calculated using properties of the Poisson process.
     # Transition probability = P_j * (1 - exp(-dt * rate))
     logP_ij = logP_j + (-(-dt * rate).expm1()).log()  # [B, N, R]
 
-    # Zero out self-transition in log space
+    # Remove self-transition probabilities
     logP_ij = logP_ij + (1.0 - S).clamp(min=1e-30).log()
 
-    # Self-transition: remaining probability mass
+    # Prob residue i does not mutate is 1 - sum_j P_ij
     p_flip = ((1.0 - S) * logP_ij.exp()).sum(-1, keepdim=True)
     logP_ii = (1.0 - p_flip).clamp(min=1e-5).log()
     log_probs = torch.where(S.bool(), logP_ii, logP_ij)
@@ -1267,6 +1271,7 @@ def _potts_proposal_dlmc(
 ):
     B, N, R = S.shape
 
+    # get log probs of all potential mutations
     energy, log_probs = _dlmc_energy_and_log_probs(
         S,
         h,
@@ -1279,7 +1284,7 @@ def _potts_proposal_dlmc(
         penalty_func,
     )
 
-    # Sample
+    # sample from the log probs to get the mutations
     flat_probs = log_probs.exp().reshape(B * N, R)
     flat_probs = flat_probs / flat_probs.sum(-1, keepdim=True)  # renormalize
     samples = torch.multinomial(flat_probs, 1, generator=generator).reshape(B, N)
@@ -1399,7 +1404,7 @@ class PottsSampler:
             edge_index: Neighbor indices [B, N, K].
             edge_mask: Valid edge mask [B, N, K].
             token_mask: Valid token mask [B, N]. Invalid positions are not updated.
-            S_init: Initial one-hot sequence [B, N, R]. If None, initialized uniformly.
+            S_init: Initial one-hot sequence [B, N, R]. If None, initialised from field (h).
             generator: Generator for reproducibility.
             penalty_func: Optional penalty function mapping S [B, N, R] to energy [B].
                 Its gradient w.r.t. S is added to conditional energies during proposals.
@@ -1411,9 +1416,8 @@ class PottsSampler:
 
         B, N, R = h.shape
 
-        # Initialize sequence
         if S_init is None:
-            # Initialize from field-biased distribution (matches Chroma)
+            # initialise seq from field (h)
             logits = F.log_softmax(-h / self.temperature_init, dim=-1)
             flat_logits = logits.reshape(B * N, R)
             indices = torch.multinomial(
@@ -1431,7 +1435,6 @@ class PottsSampler:
         anneal_steps = int(self.annealing_fraction * self.n_sweeps)
 
         for t in range(self.n_sweeps):
-            # Anneal temperature
             if anneal_steps > 0 and t < anneal_steps:
                 frac = t / anneal_steps
                 T = self.temperature_init + frac * (

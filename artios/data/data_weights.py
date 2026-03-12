@@ -13,7 +13,7 @@ from typing import Any, Optional, Union
 
 import pandas as pd
 import pandera.pandas as pa
-from pandera.pandas import Series
+from pandera.typing import Series
 
 from artios.utils.logger import get_logger
 

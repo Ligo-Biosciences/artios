@@ -12,8 +12,8 @@ from enum import Enum
 from typing import Any, Optional, Union
 
 import pandas as pd
-import pandera as pa
-from pandera.typing import Series
+import pandera.pandas as pa
+from pandera.pandas import Series
 
 from artios.utils.logger import get_logger
 

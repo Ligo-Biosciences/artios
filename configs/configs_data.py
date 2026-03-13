@@ -247,9 +247,9 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv",  # .gz
             ),
-            "pdb_list": os.path.join(
+            "pdb_exclusion_list": os.path.join(
                 DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"
-            ),  # ["1s01", "1sr0"]
+            ),
             "random_sample_if_failed": True,
             "max_n_token": 4000,
             "use_reference_chains_only": False,
@@ -270,7 +270,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/trousers_train.csv",
             ),
-            "pdb_list": "",  # ["af-a0a0d2yk69-f1", "af-a0a3d3q4w2-f1", "af-a0a3a5v9n6-f1"],
+            # "pdb_list": "",  # ["af-a0a0d2yk69-f1", "af-a0a3d3q4w2-f1", "af-a0a3a5v9n6-f1"],
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),
@@ -285,7 +285,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/trousers_val.csv",
             ),
-            "pdb_list": "",  # ["af-a0a399nz51-f1"],
+            # "pdb_list": "",  # ["af-a0a399nz51-f1"],
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),
@@ -300,7 +300,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/shirts_with_no_pockets.csv",
             ),
-            "pdb_list": "",
+            # "pdb_list": "",
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),
@@ -330,7 +330,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/recentPDB_low_homology_maxtoken1536.csv",
             ),
-            "pdb_list": "",
+            # "pdb_list": "",
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
             "sort_by_n_token": False,
             "group_by_pdb_id": True,
@@ -348,7 +348,7 @@ data_configs = {
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR, "indices/posebusters_indices_mainchain_interface.csv"
             ),
-            "pdb_list": "",
+            # "pdb_list": "",
             "find_pocket": False,
             "find_all_pockets": False,
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data

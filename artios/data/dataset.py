@@ -100,9 +100,11 @@ class BaseSingleDataset(Dataset):
 
         # Configs for data filters
         self.max_n_token = kwargs.get("max_n_token", -1)
-        self.pdb_exclusion_list = kwargs.get("pdb_exclusion_list", None)
-        if self.pdb_exclusion_list is not None and len(self.pdb_exclusion_list) == 0:
-            self.pdb_exclusion_list = None
+        self.pdb_exclusion_lists = kwargs.get("pdb_exclusion_lists", [])
+        if isinstance(self.pdb_exclusion_lists, str):
+            self.pdb_exclusion_lists = (
+                [self.pdb_exclusion_lists] if self.pdb_exclusion_lists else []
+            )
         # Used for removing rows in the indices list. Column names and excluded values are specified in this dict.
         self.exclusion_dict = kwargs.get("exclusion", {})
         self.limits = kwargs.get(
@@ -179,13 +181,13 @@ class BaseSingleDataset(Dataset):
         indices_list: pd.DataFrame = read_indices_csv(indices_fpath)
         num_data = len(indices_list)
         logger.info(f"#Rows in indices list: {num_data}")
-        # Exclude PDB IDs in exclusion list
-        if self.pdb_exclusion_list is not None:
-            pdb_exclusion_set = set(
-                self.read_pdb_list(pdb_list=self.pdb_exclusion_list)
-            )
+        # Exclude PDB IDs in exclusion lists
+        if self.pdb_exclusion_lists:
+            pdb_exclusion_set: set[str] = set()
+            for exc_list in self.pdb_exclusion_lists:
+                pdb_exclusion_set.update(self.read_pdb_list(pdb_list=exc_list))
             indices_list = indices_list[~indices_list["pdb_id"].isin(pdb_exclusion_set)]
-            logger.info(f"[excluded by pdb_exclusion_list] #Rows: {len(indices_list)}")
+            logger.info(f"[excluded by pdb_exclusion_lists] #Rows: {len(indices_list)}")
 
         # Filter by max_n_token
         if self.max_n_token > 0:

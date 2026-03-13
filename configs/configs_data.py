@@ -247,9 +247,10 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv",  # .gz
             ),
-            "pdb_exclusion_list": os.path.join(
-                DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"
-            ),
+            "pdb_exclusion_lists": [
+                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+            ],
             "random_sample_if_failed": True,
             "max_n_token": 4000,
             "use_reference_chains_only": False,

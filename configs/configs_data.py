@@ -46,7 +46,7 @@ default_weighted_pdb_configs = {
         "alpha_dict": {
             "prot": 3,
             "nuc": 3,
-            "ligand": 5,
+            "ligand": 3,
         },
         "force_recompute_weight": True,
         "balance_protein_clusters": True,
@@ -247,7 +247,9 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv",  # .gz
             ),
-            "pdb_list": "",  # ["1s01", "1sr0"]
+            "pdb_list": os.path.join(
+                DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"
+            ),  # ["1s01", "1sr0"]
             "random_sample_if_failed": True,
             "max_n_token": -1,  # can be used for removing data with too many tokens.
             "use_reference_chains_only": False,

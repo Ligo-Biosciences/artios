@@ -44,9 +44,9 @@ default_weighted_pdb_configs = {
             "interface": 1,
         },
         "alpha_dict": {
-            "prot": 3,
-            "nuc": 3,
-            "ligand": 3,
+            "prot": 1,
+            "nuc": 1,
+            "ligand": 1,
         },
         "force_recompute_weight": True,
         "balance_protein_clusters": True,
@@ -245,7 +245,7 @@ data_configs = {
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv",  # .gz
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv",  # .gz
             ),
             "pdb_exclusion_lists": [
                 os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),

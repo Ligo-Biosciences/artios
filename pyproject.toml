@@ -71,6 +71,7 @@ dependencies = [
     "pdb2pqr",
     "GridDataFormats",
     "wandb>=0.25.0",
+    "pandera>=0.29.0",
 ]
 
 [project.optional-dependencies]

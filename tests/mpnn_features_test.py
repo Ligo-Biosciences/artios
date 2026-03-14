@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from protenix.model.modules.mpnn_features import (
+from artios.model.modules.mpnn_features import (
     EdgeRelativePositionalEncoding,
     GaussianRBF,
     MPNNFeaturizer,

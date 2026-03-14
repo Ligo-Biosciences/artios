@@ -1,11 +1,11 @@
 import torch
 
-from protenix.model.modules.layout import (
+from artios.model.modules.layout import (
     _get_key_trunk_indices,
     rearrange_to_key_subset,
     rearrange_to_query_subset,
 )
-from protenix.utils.tensor_utils import expand_at_dim
+from artios.utils.tensor_utils import expand_at_dim
 
 
 class TestGetKeyTrunkIndices:

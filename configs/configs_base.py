@@ -237,6 +237,7 @@ model_configs = {
         "potts": {
             "symmetric_J": True,
             "parameterisation": "linear",
+            "masking_sampler": "linear",
             "sampling": {
                 "proposal": "dlmc",
                 "n_sweeps": 100,

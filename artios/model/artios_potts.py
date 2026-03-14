@@ -10,6 +10,7 @@ from typing_extensions import assert_never
 
 from artios.data.features import FullContext
 from artios.model.generator import (
+    ExponentialMaskingTimestepSampler,
     LinearMaskingTimestepSampler,
     PottsProposal,
     PottsSampler,
@@ -26,6 +27,11 @@ from artios.model.modules.potts import (
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
+
+
+class MaskingSamplerType(str, Enum):
+    LINEAR = "linear"
+    EXPONENTIAL = "exponential"
 
 
 class PottsLossType(str, Enum):
@@ -45,7 +51,6 @@ class ArtiosPotts(nn.Module):
     def __init__(self, configs):
         super(ArtiosPotts, self).__init__()
 
-        self.masking_sampler = LinearMaskingTimestepSampler()
         self.mpnn = MPNN(**configs.artios_mpnn.model)
 
         node_dim = configs.artios_mpnn.model.node_dim
@@ -68,6 +73,17 @@ class ArtiosPotts(nn.Module):
             loss_type=potts_loss_cfg.loss_type,
             label_smoothing=potts_loss_cfg.label_smoothing,
         )
+
+        masking_sampler_type = MaskingSamplerType(
+            configs.artios_mpnn.potts.masking_sampler
+        )
+        match masking_sampler_type:
+            case MaskingSamplerType.LINEAR:
+                self.masking_sampler = LinearMaskingTimestepSampler()
+            case MaskingSamplerType.EXPONENTIAL:
+                self.masking_sampler = ExponentialMaskingTimestepSampler(b=100.0)
+            case _:
+                assert_never(masking_sampler_type)
 
         sampling_cfg = configs.artios_mpnn.potts.sampling
         self.potts_sampler = PottsSampler(

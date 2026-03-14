@@ -100,6 +100,7 @@ class BaseSingleDataset(Dataset):
 
         # Configs for data filters
         self.max_n_token = kwargs.get("max_n_token", -1)
+        self.pdb_inclusion_list = kwargs.get("pdb_inclusion_list", [])
         self.pdb_exclusion_lists = kwargs.get("pdb_exclusion_lists", [])
         if isinstance(self.pdb_exclusion_lists, str):
             self.pdb_exclusion_lists = (
@@ -181,6 +182,14 @@ class BaseSingleDataset(Dataset):
         indices_list: pd.DataFrame = read_indices_csv(indices_fpath)
         num_data = len(indices_list)
         logger.info(f"#Rows in indices list: {num_data}")
+        # Include only specific PDB IDs (for debugging)
+        if self.pdb_inclusion_list:
+            pdb_inclusion_set = set(
+                self.read_pdb_list(pdb_list=self.pdb_inclusion_list)
+            )
+            indices_list = indices_list[indices_list["pdb_id"].isin(pdb_inclusion_set)]
+            logger.info(f"[filtered by pdb_inclusion_list] #Rows: {len(indices_list)}")
+
         # Exclude PDB IDs in exclusion lists
         if self.pdb_exclusion_lists:
             pdb_exclusion_set: set[str] = set()

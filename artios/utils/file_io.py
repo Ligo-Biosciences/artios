@@ -35,8 +35,13 @@ from biotite.structure import (  # ty: ignore[unresolved-import]
     BondList,
 )
 
+import artios
 from artios.utils.logger import get_logger
 from artios.utils.torch_utils import map_values_to_list
+
+sys.modules["protenix"] = (
+    artios  # TODO: this might create an issue in evaluation pipeline.
+)
 
 logger = get_logger(__name__)
 

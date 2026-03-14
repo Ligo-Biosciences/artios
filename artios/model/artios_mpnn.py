@@ -8,6 +8,7 @@ from torch.nn import functional as F
 from typing_extensions import assert_never
 
 from artios.data.features import FullContext
+from artios.model.generator import CosineScheduler, LinearMaskingTimestepSampler
 from artios.model.loss import nll_loss
 from artios.model.modules.mpnn import MPNN
 from artios.model.output import ModelOutput, SequenceOutput
@@ -36,6 +37,7 @@ class ArtiosMPNN(nn.Module):
         self.sample_zero_shot = configs.artios_mpnn.sampling.zero_shot
         self.temp = configs.artios_mpnn.sampling.temperature
         self.smoothing_factor = configs.artios_mpnn.sampling.smoothing_factor
+        self.n_steps = configs.artios_mpnn.sampling.n_steps
 
         mpnn_loss_cfg = configs.loss.mpnn
         self.loss_config = MPNNLossConfig(
@@ -46,6 +48,11 @@ class ArtiosMPNN(nn.Module):
             weight_ligand=mpnn_loss_cfg.weight_ligand,
         )
 
+        self.masking_sampler = LinearMaskingTimestepSampler()
+        self.inference_scheduler = CosineScheduler(
+            configs.artios_mpnn.sampling.cosine_scale
+        )
+
         self.mpnn = MPNN(**configs.artios_mpnn.model)
 
     def main_inference_loop(
@@ -53,11 +60,12 @@ class ArtiosMPNN(nn.Module):
         context: FullContext,
         seed: Optional[int] = None,
     ) -> SequenceOutput:
-        seq_logits, _ = self.mpnn.sample(
+        seq_logits = self.mpnn.sample(
             context=context,
+            timestep_scheduler=self.inference_scheduler,
+            masking_timestep_sampler=self.masking_sampler,
+            n_steps=self.n_steps,
             temperature=self.temp,
-            zero_shot=self.sample_zero_shot,
-            smoothing_factor=self.smoothing_factor,
             seed=seed,
         )
 
@@ -67,25 +75,42 @@ class ArtiosMPNN(nn.Module):
         self,
         context: FullContext,
         seed: Optional[int] = None,
-    ) -> ModelOutput:
+    ) -> SequenceOutput:
         """
         Main training loop for the all-atom MPNN model.
 
         Args:
             context (FullContext): Full context containing all features and labels.
-            seed (Optional[int]): Seed for random number generation. Defaults to None.
+            seed (Optional[int]): Seed for reproducibility (used in eval mode).
 
         Returns:
-            ModelOutput: Model output containing the prediction.
+            SequenceOutput: Model output containing logits, masking info, and timestep.
         """
+        device = context.token.restype.device
+        batch_size = context.token.restype.shape[0]
 
-        logits, _, _ = self.mpnn(
-            context=context,
-            zero_shot=self.train_zero_shot,
-            seed=seed,
+        generator = (
+            torch.Generator(device).manual_seed(seed)
+            if not self.training and seed is not None
+            else None
         )
 
-        return ModelOutput(seq_logits=logits)
+        # Sample timesteps and convert to mask rates
+        timestep = self.masking_sampler.sample(
+            size=(batch_size,), device=device, generator=generator
+        )
+        mask_rate = self.masking_sampler.get_mask_rates(timestep)
+
+        mpnn_output = self.mpnn(
+            context=context,
+            mask_rate=mask_rate,
+        )
+
+        return SequenceOutput(
+            seq_logits=mpnn_output.logits,
+            is_masked=mpnn_output.is_masked,
+            timestep=timestep,
+        )
 
     def forward(
         self,
@@ -100,7 +125,7 @@ class ArtiosMPNN(nn.Module):
         Args:
             context (FullContext): Full context containing all features and labels.
             mode (Mode): Mode of operation.
-            seed (Optional[int]): Seed for random number generation. Defaults to None.
+            seed (Optional[int]): Seed for random number generation.
 
         Returns:
             ModelOutput: Model output containing the prediction.
@@ -124,7 +149,7 @@ class ArtiosMPNN(nn.Module):
     @disable_autocast
     def compute_loss(
         self,
-        output: ModelOutput,
+        output: SequenceOutput,
         context: FullContext,
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Compute sequence loss from model output and context.
@@ -137,22 +162,32 @@ class ArtiosMPNN(nn.Module):
             Tuple of (loss tensor, metrics dict for logging).
         """
         assert output.seq_logits is not None, "seq_logits required for loss computation"
+        assert output.timestep is not None, "timestep required for loss computation"
 
         logits = output.seq_logits  # [batch, n_token, num_residue_types]
         labels = context.token.restype.float()  # [batch, n_token, num_residue_types]
-        mask = context.mask.centre_atom_is_resolved  # [batch, n_token]
+        is_resolved = context.mask.centre_atom_is_resolved  # [batch, n_token]
+        diffusion_mask = output.is_masked  # [batch, n_token]
+        mask = is_resolved & diffusion_mask
+
+        # Get ELBO loss weight from masking sampler
+        loss_weight = self.masking_sampler.get_loss_weights(output.timestep)  # [batch]
 
         # Compute NLL loss
-        loss = nll_loss(
+        nll = nll_loss(
             logits=logits,
             labels=labels,
             mask=mask,
             label_smoothing=self.loss_config.label_smoothing,
-        )
+        )  # [batch]
+
+        # Weight by masking schedule
+        weighted_nll = loss_weight * nll  # [batch]
+        loss = weighted_nll.mean()
 
         # Compute metrics for logging
         metrics: dict[str, Tensor] = {}
-        metrics["nll_loss"] = loss.detach()
+        metrics["weighted_nll_loss"] = loss.detach()
 
         # Per-entity NLL metrics
         entity_masks = {

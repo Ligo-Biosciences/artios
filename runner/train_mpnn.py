@@ -1,17 +1,3 @@
-# Copyright 2024 ByteDance and/or its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import datetime
 import hashlib
 import logging
@@ -25,8 +11,7 @@ import rootutils
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from neptune_scale import Run
-from neptune_scale.api.run import SourceTrackingConfig
+import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
@@ -114,40 +99,13 @@ class ArtiosMPNNTrainer(object):
 
     def init_log(self):
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            source_config = SourceTrackingConfig(  # source-code tracking
-                namespace="source_code",
-                upload_entry_point=True,
-                upload_diff_head=True,
-                upload_diff_upstream=True,
-                upload_run_command=True,
-            )
-            self.neptune_run = Run(  # neptune
+            wandb.init(
                 project=self.configs.project,
-                experiment_name=self.run_name,
-                source_tracking_config=source_config,
-                run_id=self.configs.neptune_run_id
-                if self.configs.neptune_run_id
-                else None,
-                fork_run_id=self.configs.neptune_fork_run_id
-                if self.configs.neptune_fork_run_id
-                else None,
-                fork_step=int(self.configs.neptune_fork_step)
-                if self.configs.neptune_fork_step
-                else None,
+                name=self.run_name,
+                config=self.configs.to_dict(),
+                id=self.configs.wandb_id if self.configs.wandb_id else None,
+                resume="allow" if self.configs.wandb_id else None,
             )
-            # self.torchwatcher = TorchWatcher(
-            #     model=self.model.module if DIST_WRAPPER.world_size > 1 else self.model,
-            #     run=self.neptune_run,
-            #     track_layers=[
-            #         LocalAttnTransformerBlock,
-            #         Transformer,
-            #         AtomAttentionEncoder,
-            #     ],  # optionally specify
-            #     track_layers_name_includes=["linear_q", "linear_k"],
-            #     tensor_stats=["channel_rms", "abs_mean"],
-            #     base_namespace="model_metrics",
-            # )  # torchwatcher for model internals
-            self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 
     def init_env(self):
@@ -450,7 +408,7 @@ class ArtiosMPNNTrainer(object):
                 prefixed_metrics = {
                     f"{prefix}{test_name}/{k}": v for k, v in metrics.items()
                 }
-                self.neptune_run.log_metrics(prefixed_metrics, step=self.step)
+                wandb.log(prefixed_metrics, step=self.step)
 
     def update(self):
         # Clip the gradient
@@ -570,9 +528,7 @@ class ArtiosMPNNTrainer(object):
 
             if DIST_WRAPPER.rank == 0:
                 # Log to wandb
-                self.neptune_run.log_metrics(
-                    flatten_nested(weight_norms), step=self.step
-                )
+                wandb.log(flatten_nested(weight_norms), step=self.step)
 
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
@@ -586,7 +542,7 @@ class ArtiosMPNNTrainer(object):
 
             # Log to wandb
             if DIST_WRAPPER.rank == 0:
-                self.neptune_run.log_metrics({"grad_norm": total_norm}, step=self.step)
+                wandb.log({"grad_norm": total_norm}, step=self.step)
 
     def run(self):
         """
@@ -672,7 +628,7 @@ class ArtiosMPNNTrainer(object):
                         last_lr = self.lr_scheduler.get_last_lr()[0]
                         if DIST_WRAPPER.rank == 0:
                             if self.configs.use_wandb:
-                                self.neptune_run.log_metrics(
+                                wandb.log(
                                     {"train/lr": last_lr},
                                     step=self.step,
                                 )
@@ -685,7 +641,7 @@ class ArtiosMPNNTrainer(object):
                                 # )
                             self.print(f"Step {self.step}, lr: {last_lr}")
                         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                            self.neptune_run.log_metrics(metrics, step=self.step)
+                            wandb.log(metrics, step=self.step)
 
                     if step_need_save or is_last_step:
                         self.print(f"beginning Saving checkpoint at step {self.step}")

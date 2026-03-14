@@ -15,8 +15,16 @@
 import gzip
 import json
 import pickle
+import sys
 from pathlib import Path
 from typing import Any, Union
+
+# TODO: Remove once all pickled data has been re-serialized under "artios"
+# Alias old package name so pickle can resolve "protenix.*" references
+if "protenix" not in sys.modules:
+    import artios
+
+    sys.modules["protenix"] = artios
 
 import lz4.frame
 import numpy as np

@@ -70,6 +70,7 @@ dependencies = [
     "pymol-remote>=1.1.0",
     "pdb2pqr",
     "GridDataFormats",
+    "pandera>=0.29.0",
 ]
 
 [project.optional-dependencies]

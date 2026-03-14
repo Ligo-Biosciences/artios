@@ -243,47 +243,48 @@ class ArtiosPotts(nn.Module):
         loss_weight = self.masking_sampler.get_loss_weights(output.timestep)
         eps = 1e-6
 
-        if self.loss_config.loss_type == PottsLossType.PSEUDO:
-            logits = compute_potts_single_logits(
-                gt_seq,
-                output.h,
-                output.J,
-                output.edge_index,
-                output.edge_mask,
-            )  # [B, N, R]
+        match self.loss_config.loss_type:
+            case PottsLossType.PSEUDO:
+                logits = compute_potts_single_logits(
+                    gt_seq,
+                    output.h,
+                    output.J,
+                    output.edge_index,
+                    output.edge_mask,
+                )  # [B, N, R]
 
-            nll = nll_loss(
-                logits=logits,
-                labels=labels,
-                mask=mask,
-                label_smoothing=self.loss_config.label_smoothing,
-            )  # [B]
-            per_position_nll = -torch.sum(
-                labels * F.log_softmax(logits, dim=-1), dim=-1
-            )  # [B, N]
+                nll = nll_loss(
+                    logits=logits,
+                    labels=labels,
+                    mask=mask,
+                    label_smoothing=self.loss_config.label_smoothing,
+                )  # [B]
+                per_position_nll = -torch.sum(
+                    labels * F.log_softmax(logits, dim=-1), dim=-1
+                )  # [B, N]
 
-        elif self.loss_config.loss_type == PottsLossType.COMPOSITE:
-            joint_logits, edge_mask = compute_potts_joint_logits(
-                gt_seq, output.h, output.J, output.edge_index, output.edge_mask
-            )
-            nll, per_position_nll = composite_nll_loss(
-                joint_logits,
-                gt_seq,
-                output.edge_index,
-                edge_mask,
-                mask,
-            )
-            # get logits for accuracy
-            logits = compute_potts_single_logits(
-                gt_seq,
-                output.h,
-                output.J,
-                output.edge_index,
-                output.edge_mask,
-            )  # [B, N, R]
+            case PottsLossType.COMPOSITE:
+                joint_logits, edge_mask = compute_potts_joint_logits(
+                    gt_seq, output.h, output.J, output.edge_index, output.edge_mask
+                )
+                nll, per_position_nll = composite_nll_loss(
+                    joint_logits,
+                    gt_seq,
+                    output.edge_index,
+                    edge_mask,
+                    mask,
+                )
+                # get logits for accuracy
+                logits = compute_potts_single_logits(
+                    gt_seq,
+                    output.h,
+                    output.J,
+                    output.edge_index,
+                    output.edge_mask,
+                )  # [B, N, R]
 
-        else:
-            raise ValueError(f"Unknown loss_type: {self.loss_config.loss_type}")
+            case _:
+                assert_never(self.loss_config.loss_type)
 
         weighted_nll = loss_weight * nll  # [B]
         loss = weighted_nll.mean()

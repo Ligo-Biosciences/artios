@@ -350,47 +350,48 @@ class GraphPotts(nn.Module):
         R = self.num_residue_types
         param = self.parameterisation
 
-        if param == GraphPottsParameterisation.LINEAR:
-            h = mask_h * self.W_h(node_feats)
-            J_flat = mask_J * self.W_J(edge_feats)
-            J = rearrange(J_flat, "b n k (r1 r2) -> b n k r1 r2", r1=R)
+        match param:
+            case GraphPottsParameterisation.LINEAR:
+                h = mask_h * self.W_h(node_feats)
+                J_flat = mask_J * self.W_J(edge_feats)
+                J = rearrange(J_flat, "b n k (r1 r2) -> b n k r1 r2", r1=R)
 
-        elif param == GraphPottsParameterisation.FACTOR:
-            h = mask_h * self.W_h(node_feats)
-            J_left = rearrange(
-                mask_J * self.W_J_left(edge_feats),
-                "b n k (r1 r2) -> b n k r1 r2",
-                r1=R,
-            )
-            J_right = rearrange(
-                mask_J * self.W_J_right(edge_feats),
-                "b n k (r1 r2) -> b n k r1 r2",
-                r1=R,
-            )
-            J = torch.matmul(J_left, J_right)
-            h, J = _zero_sum_gauge(h, J)
+            case GraphPottsParameterisation.FACTOR:
+                h = mask_h * self.W_h(node_feats)
+                J_left = rearrange(
+                    mask_J * self.W_J_left(edge_feats),
+                    "b n k (r1 r2) -> b n k r1 r2",
+                    r1=R,
+                )
+                J_right = rearrange(
+                    mask_J * self.W_J_right(edge_feats),
+                    "b n k (r1 r2) -> b n k r1 r2",
+                    r1=R,
+                )
+                J = torch.matmul(J_left, J_right)
+                h, J = _zero_sum_gauge(h, J)
 
-        elif param == GraphPottsParameterisation.SCORE:
-            F = self.num_factors
-            h = mask_h * self.W_h(node_feats)
-            J_left = rearrange(
-                mask_J * self.W_J_left(edge_feats),
-                "b n k (r f) -> b n k r f",
-                r=R,
-                f=F,
-            )
-            J_right = rearrange(
-                mask_J * self.W_J_right(edge_feats),
-                "b n k (f r) -> b n k f r",
-                f=F,
-                r=R,
-            )
-            J = torch.matmul(J_left, J_right)
+            case GraphPottsParameterisation.SCORE:
+                F = self.num_factors
+                h = mask_h * self.W_h(node_feats)
+                J_left = rearrange(
+                    mask_J * self.W_J_left(edge_feats),
+                    "b n k (r f) -> b n k r f",
+                    r=R,
+                    f=F,
+                )
+                J_right = rearrange(
+                    mask_J * self.W_J_right(edge_feats),
+                    "b n k (f r) -> b n k f r",
+                    f=F,
+                    r=R,
+                )
+                J = torch.matmul(J_left, J_right)
 
-            h, J = _zero_sum_gauge(h, J)
+                h, J = _zero_sum_gauge(h, J)
 
-            h = h + mask_h * self.W_h_bg(node_feats)
-            J = J + (mask_J * self.W_J_bg(edge_feats)).unsqueeze(-1)
+                h = h + mask_h * self.W_h_bg(node_feats)
+                J = J + (mask_J * self.W_J_bg(edge_feats)).unsqueeze(-1)
 
         if self.symmetric_J:
             J = symmetrize_J(J, edge_index, edge_mask)

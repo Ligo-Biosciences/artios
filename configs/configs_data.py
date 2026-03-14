@@ -16,7 +16,7 @@
 import os
 from copy import deepcopy
 
-from protenix.config.extend_types import GlobalConfigValue, ListValue
+from artios.config.extend_types import GlobalConfigValue, ListValue
 
 default_test_configs = {
     "sampler_configs": {
@@ -44,11 +44,14 @@ default_weighted_pdb_configs = {
             "interface": 1,
         },
         "alpha_dict": {
-            "prot": 3,
-            "nuc": 3,
+            "prot": 1,
+            "nuc": 1,
             "ligand": 1,
         },
         "force_recompute_weight": True,
+        "balance_protein_clusters": True,
+        "balance_percentile": 0.9,
+        "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -85,7 +88,7 @@ default_distillation_configs = {
     "filter_unique_domain_prob": 0.0,
 }
 
-DATA_ROOT_DIR = "/dev/shm/af3-dev/release_data/"
+DATA_ROOT_DIR = "af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -225,7 +228,7 @@ data_configs = {
     },
     "train_sets": ListValue(
         [
-            "weightedPDB_before2109_wopb_nometalc_0925",
+            "weightedPDB_before2021_wopb_nometalc_0925",
             "trousers_train",
             "shirts_with_no_pockets",
             "shirts_with_small_pockets",
@@ -236,22 +239,26 @@ data_configs = {
         "sampler_type": "weighted",
     },
     "test_sets": ListValue(["trousers_val", "recentPDB_1536_sample384_0925"]),
-    "weightedPDB_before2109_wopb_nometalc_0925": {
+    "weightedPDB_before2021_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv",  # .gz
             ),
-            "pdb_list": "",  # ["1s01", "1sr0"]
+            "pdb_exclusion_lists": [
+                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+            ],
+            # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
-            "max_n_token": -1,  # can be used for removing data with too many tokens.
+            "max_n_token": 4000,
             "use_reference_chains_only": False,
-            "exclusion": {  # do not sample the data based on ions.
-                "mol_1_type": ListValue(["ions"]),
-                "mol_2_type": ListValue(["ions"]),
-            },
+            # "exclusion": {  # do not sample the data based on ions.
+            #     "mol_1_type": ListValue(["ions"]),
+            #     "mol_2_type": ListValue(["ions"]),
+            # },
         },
         **deepcopy(default_weighted_pdb_configs),
     },
@@ -265,7 +272,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/trousers_train.csv",
             ),
-            "pdb_list": "",  # ["af-a0a0d2yk69-f1", "af-a0a3d3q4w2-f1", "af-a0a3a5v9n6-f1"],
+            # "pdb_list": "",  # ["af-a0a0d2yk69-f1", "af-a0a3d3q4w2-f1", "af-a0a3a5v9n6-f1"],
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),
@@ -280,7 +287,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/trousers_val.csv",
             ),
-            "pdb_list": "",  # ["af-a0a399nz51-f1"],
+            # "pdb_list": "",  # ["af-a0a399nz51-f1"],
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),
@@ -295,7 +302,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/shirts_with_no_pockets.csv",
             ),
-            "pdb_list": "",
+            # "pdb_list": "",
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),
@@ -325,7 +332,7 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/recentPDB_low_homology_maxtoken1536.csv",
             ),
-            "pdb_list": "",
+            # "pdb_list": "",
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
             "sort_by_n_token": False,
             "group_by_pdb_id": True,
@@ -343,7 +350,7 @@ data_configs = {
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR, "indices/posebusters_indices_mainchain_interface.csv"
             ),
-            "pdb_list": "",
+            # "pdb_list": "",
             "find_pocket": False,
             "find_all_pockets": False,
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data

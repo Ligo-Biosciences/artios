@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from protenix.utils.geometry import random_transform
+from artios.utils.geometry import random_transform
 
 
 class TestRandomTransform:

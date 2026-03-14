@@ -5,7 +5,7 @@ import pytest
 from biotite.structure import AtomArray, AtomArrayStack, stack
 from biotite.structure.io import pdbx
 
-from protenix.utils.file_io import (
+from artios.utils.file_io import (
     dump_atomarray_stack,
     dump_atomarray_to_npz,
     load_atomarray_from_npz,

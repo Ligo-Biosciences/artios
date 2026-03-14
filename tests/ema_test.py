@@ -3,7 +3,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from protenix.utils.ema_utils import p_dot_p, solve_weights
+from artios.utils.ema_utils import p_dot_p, solve_weights
 from runner.ema import PowerLawEMAWrapper
 
 

@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from protenix.metrics.rmsd import (
+from artios.metrics.rmsd import (
     align_pred_to_true,
     partially_aligned_rmsd,
     rmsd,

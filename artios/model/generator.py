@@ -315,6 +315,40 @@ class LinearMaskingTimestepSampler(MaskingTimestepSampler):
         return torch.ones_like(t)
 
 
+@dataclass(frozen=True)
+class ExponentialMaskingTimestepSampler(MaskingTimestepSampler):
+    """Exponential masking scheduler with mask rate y = (1 - b^(2t)) / (1 - b^2)."""
+
+    b: float = 100.0
+
+    def sample(
+        self,
+        size: tuple[int, ...],
+        device: torch.device,
+        generator: torch.Generator | None = None,
+    ) -> Float[Tensor, "..."]:
+        """Sample timesteps uniformly between 0 and 1."""
+        return torch.rand(size, device=device, generator=generator)
+
+    @typecheck
+    def get_mask_rates(
+        self,
+        t: Float[Tensor, "..."],
+    ) -> Float[Tensor, "..."]:
+        """Generate mask rates using y = (1 - b^(2t)) / (1 - b^2)."""
+        return (1 - self.b ** (-2 * t)) / (1 - self.b**-2)
+
+    @typecheck
+    def get_derivative_mask_rates(
+        self,
+        t: Float[Tensor, "..."],
+    ) -> Float[Tensor, "..."]:
+        """Generate derivative: dy/dt = -2 * ln(b) * b^(2t) / (1 - b^2)."""
+        import math
+
+        return 2 * math.log(self.b) * self.b ** (2 * t) / (1 - self.b**-2)
+
+
 # =============================================================================
 # Stochasticity Schedules for SDE Integration
 # =============================================================================

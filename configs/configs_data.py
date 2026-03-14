@@ -44,8 +44,8 @@ default_weighted_pdb_configs = {
             "interface": 1,
         },
         "alpha_dict": {
-            "prot": 1,
-            "nuc": 1,
+            "prot": 3,
+            "nuc": 3,
             "ligand": 1,
         },
         "force_recompute_weight": True,
@@ -332,6 +332,10 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/recentPDB_low_homology_maxtoken1536.csv",
             ),
+            "pdb_exclusion_lists": [
+                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+            ],
             # "pdb_list": "",
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
             "sort_by_n_token": False,

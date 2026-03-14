@@ -20,7 +20,6 @@ class Fragment:
     avg_plddt: float
     length: int
     rg: float
-    sasa: float
     boundaries: str
 
 
@@ -413,18 +412,15 @@ class FragmentMaker:
         atom_array.set_annotation("fragment_id", fragment_ids)
         return atom_array
 
-    def _calculate_fragment_metrics_fast(self, atom_array: AtomArray) -> list[Fragment]:
+    def calculate_fragment_metrics(self, atom_array: AtomArray) -> list[Fragment]:
         """
-        Calculate cheap per-fragment metrics (pLDDT, length, Rg, boundaries).
-
-        Skips SASA computation (expensive). Used internally by filter_fragments
-        where SASA is not needed for filtering decisions.
+        Calculate per-fragment metrics (pLDDT, length, Rg, boundaries).
 
         Args:
             atom_array (AtomArray): AtomArray with fragment_id annotation.
 
         Returns:
-            list[Fragment]: List of Fragment objects with sasa=0.0, sorted by fragment_id.
+            list[Fragment]: List of Fragment objects sorted by fragment_id.
         """
         fragments: list[Fragment] = []
 
@@ -464,45 +460,11 @@ class FragmentMaker:
                     avg_plddt=float(avg_plddt),
                     length=length,
                     rg=float(rg),
-                    sasa=0.0,
                     boundaries=boundaries,
                 )
             )
 
         return sorted(fragments, key=lambda f: f.fragment_id)
-
-    def calculate_fragment_metrics(self, atom_array: AtomArray) -> list[Fragment]:
-        """
-        Calculate all per-fragment metrics including SASA.
-
-        Args:
-            atom_array (AtomArray): AtomArray with fragment_id annotation.
-
-        Returns:
-            list[Fragment]: List of Fragment objects sorted by fragment_id.
-        """
-        fragments = self._calculate_fragment_metrics_fast(atom_array)
-
-        # Add SASA (expensive) to each fragment
-        full_fragments = []
-        for frag in fragments:
-            mask = atom_array.fragment_id == frag.fragment_id
-            frag_atoms = atom_array[mask]
-            atom_sasa = struc.sasa(frag_atoms, vdw_radii="Single")
-            sasa = float(np.nanmean(atom_sasa))
-
-            full_fragments.append(
-                Fragment(
-                    fragment_id=frag.fragment_id,
-                    avg_plddt=frag.avg_plddt,
-                    length=frag.length,
-                    rg=frag.rg,
-                    sasa=sasa,
-                    boundaries=frag.boundaries,
-                )
-            )
-
-        return full_fragments
 
     def filter_fragments(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -521,7 +483,7 @@ class FragmentMaker:
             AtomArray: AtomArray with filtered fragments marked as -1.
         """
         fragment_ids = atom_array.fragment_id.copy()
-        fragments = self._calculate_fragment_metrics_fast(atom_array)
+        fragments = self.calculate_fragment_metrics(atom_array)
 
         for frag in fragments:
             passes_length = frag.length >= self.min_fragment_length
@@ -539,7 +501,7 @@ class FragmentMaker:
         atom_array.set_annotation("fragment_id", fragment_ids)
         return atom_array
 
-    def get_fragment_annotation(self, atom_array: AtomArray) -> AtomArray:
+    def add_fragment_annotation(self, atom_array: AtomArray) -> AtomArray:
         """
         Calculate and assign fragment_id annotation to the input AtomArray.
 
@@ -590,7 +552,6 @@ class FragmentMaker:
             "fragment_avg_plddt": [f.avg_plddt for f in fragments],
             "fragment_length": [f.length for f in fragments],
             "fragment_rg": [f.rg for f in fragments],
-            "fragment_sasa": [f.sasa for f in fragments],
             "fragment_boundaries": [f.boundaries for f in fragments],
         }
 

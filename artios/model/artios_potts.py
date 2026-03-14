@@ -81,7 +81,7 @@ class ArtiosPotts(nn.Module):
             case MaskingSamplerType.LINEAR:
                 self.masking_sampler = LinearMaskingTimestepSampler()
             case MaskingSamplerType.EXPONENTIAL:
-                self.masking_sampler = ExponentialMaskingTimestepSampler(b=100.0)
+                self.masking_sampler = ExponentialMaskingTimestepSampler(b=0.01)
             case _:
                 assert_never(masking_sampler_type)
 

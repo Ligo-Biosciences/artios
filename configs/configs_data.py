@@ -251,6 +251,7 @@ data_configs = {
                 os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
                 os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
             ],
+            # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
             "max_n_token": 4000,
             "use_reference_chains_only": False,

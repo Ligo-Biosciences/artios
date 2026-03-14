@@ -30,6 +30,7 @@ from torch.utils.data import Dataset
 
 from artios.common.constants import BACKBONE_DEFS, EvaluationChainInterface
 from artios.data.data_pipeline import DataPipeline
+from artios.data.data_weights import get_sample_weights
 from artios.data.features import FullContext
 from artios.data.featurizer import ContextGenerator
 from artios.data.filter import Filter
@@ -99,9 +100,12 @@ class BaseSingleDataset(Dataset):
 
         # Configs for data filters
         self.max_n_token = kwargs.get("max_n_token", -1)
-        self.pdb_list = kwargs.get("pdb_list", None)
-        if self.pdb_list is not None and len(self.pdb_list) == 0:
-            self.pdb_list = None
+        self.pdb_inclusion_list = kwargs.get("pdb_inclusion_list", [])
+        self.pdb_exclusion_lists = kwargs.get("pdb_exclusion_lists", [])
+        if isinstance(self.pdb_exclusion_lists, str):
+            self.pdb_exclusion_lists = (
+                [self.pdb_exclusion_lists] if self.pdb_exclusion_lists else []
+            )
         # Used for removing rows in the indices list. Column names and excluded values are specified in this dict.
         self.exclusion_dict = kwargs.get("exclusion", {})
         self.limits = kwargs.get(
@@ -178,11 +182,21 @@ class BaseSingleDataset(Dataset):
         indices_list: pd.DataFrame = read_indices_csv(indices_fpath)
         num_data = len(indices_list)
         logger.info(f"#Rows in indices list: {num_data}")
-        # Filter by pdb_list
-        if self.pdb_list is not None:
-            pdb_filter_list = set(self.read_pdb_list(pdb_list=self.pdb_list))
-            indices_list = indices_list[indices_list["pdb_id"].isin(pdb_filter_list)]
-            logger.info(f"[filtered by pdb_list] #Rows: {len(indices_list)}")
+        # Include only specific PDB IDs (for debugging)
+        if self.pdb_inclusion_list:
+            pdb_inclusion_set = set(
+                self.read_pdb_list(pdb_list=self.pdb_inclusion_list)
+            )
+            indices_list = indices_list[indices_list["pdb_id"].isin(pdb_inclusion_set)]
+            logger.info(f"[filtered by pdb_inclusion_list] #Rows: {len(indices_list)}")
+
+        # Exclude PDB IDs in exclusion lists
+        if self.pdb_exclusion_lists:
+            pdb_exclusion_set: set[str] = set()
+            for exc_list in self.pdb_exclusion_lists:
+                pdb_exclusion_set.update(self.read_pdb_list(pdb_list=exc_list))
+            indices_list = indices_list[~indices_list["pdb_id"].isin(pdb_exclusion_set)]
+            logger.info(f"[excluded by pdb_exclusion_lists] #Rows: {len(indices_list)}")
 
         # Filter by max_n_token
         if self.max_n_token > 0:
@@ -1174,153 +1188,6 @@ class WeightedMultiDataset(Dataset):
         ]
 
 
-def get_weighted_pdb_weight(
-    data_type: str,
-    cluster_size: int,
-    chain_count: dict,
-    eps: float = 1e-9,
-    beta_dict: Optional[dict] = None,
-    alpha_dict: Optional[dict] = None,
-) -> float:
-    """
-    Get sample weight for each example in a weighted PDB dataset.
-
-        data_type (str): Type of data, either 'chain' or 'interface'.
-        cluster_size (int): Cluster size of this chain/interface.
-        chain_count (dict): Count of each kind of chains, e.g., {"prot": int, "nuc": int, "ligand": int}.
-        eps (float, optional): A small epsilon value to avoid division by zero. Default is 1e-9.
-        beta_dict (Optional[dict], optional): Dictionary containing beta values for 'chain' and 'interface'.
-        alpha_dict (Optional[dict], optional): Dictionary containing alpha values for different chain types.
-
-    Returns:
-         float: Calculated weight for the given chain/interface.
-    """
-    if not beta_dict:
-        beta_dict = {
-            "chain": 0.5,
-            "interface": 1,
-        }
-    if not alpha_dict:
-        alpha_dict = {
-            "prot": 3,
-            "nuc": 3,
-            "ligand": 1,
-        }
-
-    assert cluster_size > 0
-    assert data_type in ["chain", "interface"]
-    beta = beta_dict[data_type]
-    assert set(chain_count.keys()).issubset(set(alpha_dict.keys()))
-    weight = (
-        beta
-        * sum(
-            [alpha * chain_count[data_mode] for data_mode, alpha in alpha_dict.items()]
-        )
-        / (cluster_size + eps)
-    )
-    return weight
-
-
-def calc_weights_for_df(
-    indices_df: pd.DataFrame, beta_dict: dict[str, Any], alpha_dict: dict[str, Any]
-) -> pd.DataFrame:
-    """
-    Calculate weights for each example in the dataframe.
-
-    Args:
-        indices_df: A pandas DataFrame containing the indices.
-        beta_dict: A dictionary containing beta values for different data types.
-        alpha_dict: A dictionary containing alpha values for different data types.
-
-    Returns:
-        A pandas DataFrame with an column 'weights' containing the calculated weights.
-    """
-    # Specific to assembly, and entities (chain or interface)
-    indices_df["pdb_sorted_entity_id"] = indices_df.apply(
-        lambda x: f"{x['pdb_id']}_{x['assembly_id']}_{'_'.join(sorted([str(x['entity_1_id']), str(x['entity_2_id'])]))}",
-        axis=1,
-    )
-
-    entity_member_num_dict = {}
-    for pdb_sorted_entity_id, sub_df in indices_df.groupby("pdb_sorted_entity_id"):
-        # Number of repeatative entities in the same assembly
-        entity_member_num_dict[pdb_sorted_entity_id] = len(sub_df)
-    indices_df["pdb_sorted_entity_id_member_num"] = indices_df.apply(
-        lambda x: entity_member_num_dict[x["pdb_sorted_entity_id"]], axis=1
-    )
-
-    cluster_size_record = {}
-    for cluster_id, sub_df in indices_df.groupby("cluster_id"):
-        cluster_size_record[cluster_id] = len(set(sub_df["pdb_sorted_entity_id"]))
-
-    weights = []
-    for _, row in indices_df.iterrows():
-        data_type = row["type"]
-        cluster_size = cluster_size_record[row["cluster_id"]]
-        chain_count = {"prot": 0, "nuc": 0, "ligand": 0}
-        for mol_type in [row["mol_1_type"], row["mol_2_type"]]:
-            if chain_count.get(mol_type) is None:
-                continue
-            chain_count[mol_type] += 1
-        # Weight specific to (assembly, entity(chain/interface))
-        weight = get_weighted_pdb_weight(
-            data_type=data_type,
-            cluster_size=cluster_size,
-            chain_count=chain_count,
-            beta_dict=beta_dict,
-            alpha_dict=alpha_dict,
-        )
-        weights.append(weight)
-    indices_df["weights"] = weights / indices_df["pdb_sorted_entity_id_member_num"]
-    return indices_df
-
-
-def get_sample_weights(
-    sampler_type: str,
-    indices_df: Optional[pd.DataFrame] = None,
-    beta_dict: dict = {
-        "chain": 0.5,
-        "interface": 1,
-    },
-    alpha_dict: dict = {
-        "prot": 3,
-        "nuc": 3,
-        "ligand": 1,
-    },
-    force_recompute_weight: bool = False,
-) -> Union[pd.Series, list[float]]:
-    """
-    Computes sample weights based on the specified sampler type.
-
-    Args:
-        sampler_type: The type of sampler to use ('weighted' or 'uniform').
-        indices_df: A pandas DataFrame containing the indices.
-        beta_dict: A dictionary containing beta values for different data types.
-        alpha_dict: A dictionary containing alpha values for different data types.
-        force_recompute_weight: Whether to force recomputation of weights even if they already exist.
-
-    Returns:
-        A list of sample weights.
-
-    Raises:
-        ValueError: If an unknown sampler type is provided.
-    """
-    if sampler_type == "weighted":
-        assert indices_df is not None
-        if "weights" not in indices_df.columns or force_recompute_weight:
-            indices_df = calc_weights_for_df(
-                indices_df=indices_df,
-                beta_dict=beta_dict,
-                alpha_dict=alpha_dict,
-            )
-        return indices_df["weights"].astype("float32")
-    elif sampler_type == "uniform":
-        assert indices_df is not None
-        return [1 / len(indices_df) for _ in range(len(indices_df))]
-    else:
-        raise ValueError(f"Unknown sampler type: {sampler_type}")
-
-
 def get_datasets(
     configs: ConfigDict, error_dir: Optional[str]
 ) -> tuple[WeightedMultiDataset, dict[str, BaseSingleDataset]]:
@@ -1387,6 +1254,9 @@ def get_datasets(
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
         dataset_param["motif_training"] = data_config.get("motif_training", {})
+        dataset_param["include_arrays_in_context"] = data_config.get(
+            "include_arrays_in_context", False
+        )
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
         # Training datasets don't use group_by_pdb_id, so indices_list is a DataFrame
@@ -1418,6 +1288,9 @@ def get_datasets(
         dataset_param["motif_training"] = data_config.get("motif_training", {})
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
+        dataset_param["include_arrays_in_context"] = data_config.get(
+            "include_arrays_in_context", False
+        )
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

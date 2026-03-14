@@ -346,7 +346,7 @@ class ExponentialMaskingTimestepSampler(MaskingTimestepSampler):
         """Generate derivative: dy/dt = -2 * ln(b) * b^(2t) / (1 - b^2)."""
         import math
 
-        return 2 * math.log(self.b) * self.b ** (2 * t) / (1 - self.b**-2)
+        return 2 * math.log(self.b) * self.b ** (-2 * t) / (1 - self.b**-2)
 
 
 # =============================================================================

@@ -20,7 +20,7 @@ import logging
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum, auto
 from functools import partial
-from typing import Annotated, Any, Callable, get_args, get_type_hints
+from typing import Annotated, Any, Callable, Optional, get_args, get_type_hints
 
 import torch
 from biotite.structure import AtomArray
@@ -191,7 +191,7 @@ class Context:
         for f in fields(self):
             value = getattr(self, f.name)
 
-            if not torch.is_tensor(value):
+            if value is None or not torch.is_tensor(value):
                 padded_fields[f.name] = value
                 continue
 
@@ -222,12 +222,14 @@ class TokenContext(Context):
     )
 
     # NOTE: Temporarily optional - expensive to compute, only needed for MPNN
-    token_bonds: Feature(
-        Int[Tensor, "*batch n_token n_token"],
-        type=FeatureType.TOKEN_PAIR,
-        encoding=EncodingType.IDENTITY,
-        description="Indicator for ligand-ligand and non-polymer bonds",
-    ) = None
+    token_bonds: Optional[
+        Feature(
+            Int[Tensor, "*batch n_token n_token"],
+            type=FeatureType.TOKEN_PAIR,
+            encoding=EncodingType.IDENTITY,
+            description="Indicator for ligand-ligand and non-polymer bonds",
+        )
+    ] = None
 
 
 @typecheck
@@ -422,6 +424,28 @@ class MotifContext(Context):
 
 @typecheck
 @dataclass
+class StitchedContext(Context):
+    """Stitched motif residue information for sequence design.
+
+    Populated after motif stitching to indicate which token positions
+    have fixed restypes from the motif.
+    """
+
+    stitched_mask: Mask(
+        Bool[Tensor, "*batch n_token"],
+        type=FeatureType.TOKEN,
+        description="True at positions where a motif residue has been stitched in",
+    )
+    stitched_restype: Feature(
+        Float[Tensor, "*batch n_token 32"],
+        type=FeatureType.TOKEN,
+        encoding=EncodingType.ONE_HOT,
+        description="One-hot restype at stitched positions, zero elsewhere",
+    )
+
+
+@typecheck
+@dataclass
 class CoordinateContext(Context):
     """Coordinate features."""
 
@@ -481,6 +505,7 @@ class FullContext:
     basic: BasicContext
     # NOTE: Temporarily optional - expensive to compute, currently unused
     atom_perm: AtomPermContext = field(default_factory=AtomPermContext)
+    stitched: StitchedContext | None = None
 
     def pad(self, n_max_atoms: int, n_max_tokens: int) -> FullContext:
         """Pad all features to n_max_tokens/n_max_atoms."""
@@ -544,7 +569,13 @@ class FullContext:
         """
         result = {}
         for f in fields(self):
-            result[f.name] = getattr(self, f.name).to_dict()
+            value = getattr(self, f.name)
+            if value is None:
+                continue
+            if isinstance(value, Context):
+                result[f.name] = value.to_dict()
+            else:
+                result[f.name] = value
         return result
 
     def to_unconditional(self) -> FullContext:
@@ -584,6 +615,7 @@ class FullContext:
             entity=uncond_entity,
             coordinate=self.coordinate,
             basic=self.basic,
+            stitched=self.stitched,
         )
 
     @classmethod
@@ -645,6 +677,11 @@ class FullContext:
                 n_atom=[int(n_atom)] * batch_size,
             )
 
+        # Optional: StitchedContext
+        stitched = None
+        if "stitched" in d:
+            stitched = StitchedContext.from_dict(d["stitched"])
+
         return cls(
             token=token,
             reference=reference,
@@ -656,4 +693,5 @@ class FullContext:
             entity=entity,
             coordinate=coordinate,
             basic=basic_context,
+            stitched=stitched,
         )

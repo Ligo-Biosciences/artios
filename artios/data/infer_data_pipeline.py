@@ -144,11 +144,14 @@ class MPNNDataset(Dataset):  # TODO: need a different name
 
         atom_array = self.atom_stack[index]
         token_array = AtomArrayTokenizer(atom_array).get_token_array()
+
+        stitched = self.sequence_input.stitched_residues.get(index)
+
         return ContextGenerator(
             token_array,
             atom_array,
             pdb_id=sample_name,
-        ).get_full_context()
+        ).get_full_context(stitched_residues=stitched)
 
 
 class PackingDataset(Dataset):

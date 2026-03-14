@@ -4,7 +4,7 @@ from typing import Optional
 from jaxtyping import Float
 from torch import Tensor
 
-from artios.utils.typing import typecheck
+from artios.utils.typing import Bool, Int, typecheck
 
 
 @typecheck
@@ -19,10 +19,19 @@ class ModelOutput:
 
     coordinate: Optional[Float[Tensor, "batch n_sample n_atom 3"]] = None
     seq_logits: Optional[Float[Tensor, "batch n_token num_residue_types"]] = None
+    is_masked: Optional[Bool[Tensor, "batch n_token"]] = None
     timestep: Optional[Float[Tensor, "batch n_sample"]] = None
     trajectory: Optional[Float[Tensor, "batch n_sample n_steps_plus_one n_atom 3"]] = (
         None
     )
+    h: Optional[Float[Tensor, "batch n_token num_residue_types"]] = None
+    J: Optional[
+        Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"]
+    ] = None
+    edge_index: Optional[Int[Tensor, "batch n_token neighbours"]] = None
+    edge_mask: Optional[Bool[Tensor, "batch n_token neighbours"]] = None
+    sampled_sequence: Optional[Float[Tensor, "batch n_token num_residue_types"]] = None
+    energy: Optional[Float[Tensor, "batch"]] = None
 
 
 @typecheck
@@ -63,9 +72,32 @@ class SequenceOutput(ModelOutput):
     """Output from sequence design (MPNN) model.
 
     seq_logits is required - contains logits over residue types.
+    is_masked is required for training - indicates which positions were masked.
     """
 
     seq_logits: Float[Tensor, "batch n_token num_residue_types"]  # type: ignore[assignment]
+    is_masked: Optional[Bool[Tensor, "batch n_token"]] = None  # type: ignore[assignment]
+    timestep: Optional[Float[Tensor, "batch"]] = None  # type: ignore[assignment]
+
+
+@typecheck
+@dataclass
+class PottsOutput(ModelOutput):
+    """Output from Potts sequence design model.
+
+    h and J are required - the Potts fields and couplings.
+    sampled_sequence is populated after MCMC sampling at inference.
+    energy is the Potts energy of the sampled sequence.
+    """
+
+    h: Float[Tensor, "batch n_token num_residue_types"]  # type: ignore[assignment]
+    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"]  # type: ignore[assignment]
+    edge_index: Int[Tensor, "batch n_token neighbours"]  # type: ignore[assignment]
+    edge_mask: Bool[Tensor, "batch n_token neighbours"]  # type: ignore[assignment]
+    is_masked: Bool[Tensor, "batch n_token"]  # type: ignore[assignment]
+    timestep: Optional[Float[Tensor, "batch"]] = None  # type: ignore[assignment]
+    sampled_sequence: Optional[Float[Tensor, "batch n_token num_residue_types"]] = None  # type: ignore[assignment]
+    energy: Optional[Float[Tensor, "batch"]] = None  # type: ignore[assignment]
 
 
 # Backwards compatibility alias

@@ -7,3 +7,4 @@ class ModelType(Enum):
     BACKBONE = "backbone"
     SEQUENCE_DESIGN = "sequence_design"
     PACKING = "packing"
+    POTTS = "potts"

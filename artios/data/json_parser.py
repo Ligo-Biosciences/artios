@@ -395,6 +395,13 @@ class FixedResidue(BaseModel):
             )
 
 
+class StitchedResidue(BaseModel, frozen=True):
+    """A motif residue stitched into the design chain at a known position."""
+
+    res_id: int
+    res_name: str
+
+
 class SequenceDesignInput(BaseModel):
     """Top-level input for sequence design inference.
 
@@ -433,10 +440,10 @@ class SequenceDesignInput(BaseModel):
         ...,
         description="NPZ file from backbone inference containing the full AtomArray",
     )
-    # fixed_residues: list[FixedResidue] = Field(
-    #     default_factory=list,
-    #     description="Optional additional residue constraints. Motif residues (is_motif_residue=True) have sidechain coordinates.",
-    # )
+    stitched_residues: dict[int, list[StitchedResidue]] = Field(
+        default_factory=dict,
+        description="Per-sample stitched motif residues, keyed by sample index.",
+    )
 
     # TODO: Re-enable validators if we end up using fixed residues again
     # @model_validator(mode="after")

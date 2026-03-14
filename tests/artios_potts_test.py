@@ -63,7 +63,7 @@ def _make_configs(
                         "annealing_fraction": 0.5,
                         "dt": 0.5,
                         "rejection_step": True,
-                        "complexity_penalty_weight": 0.0,
+                        "complexity_penalty_weight": 0.1,
                         "complexity_window_size": 30,
                         "complexity_entropy_min": 2.32,
                     },

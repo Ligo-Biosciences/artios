@@ -107,6 +107,23 @@ class ArtiosPotts(nn.Module):
             context.mask.token_mask,
         )
 
+        S_init = None
+        mutable_mask = context.mask.token_mask
+
+        if context.stitched is not None:
+            B, N, R = h.shape
+            stitched_mask = context.stitched.stitched_mask
+            stitched_restype = context.stitched.stitched_restype[..., :R].float()
+
+            logits = F.log_softmax(-h / self.potts_sampler.temperature_init, dim=-1)
+            indices = torch.multinomial(
+                logits.exp().reshape(B * N, R), 1, generator=generator
+            ).reshape(B, N)
+            S_init = F.one_hot(indices, R).float()
+            S_init = torch.where(stitched_mask.unsqueeze(-1), stitched_restype, S_init)
+
+            mutable_mask = context.mask.token_mask & ~stitched_mask
+
         penalty_func = None
         if self.complexity_penalty_weight > 0:
             chain_id = context.token.asym_id
@@ -129,7 +146,8 @@ class ArtiosPotts(nn.Module):
             J=J,
             edge_index=mpnn_output.edge_index,
             edge_mask=mpnn_output.edge_mask,
-            token_mask=context.mask.token_mask,
+            token_mask=mutable_mask,
+            S_init=S_init,
             generator=generator,
             penalty_func=penalty_func,
         )

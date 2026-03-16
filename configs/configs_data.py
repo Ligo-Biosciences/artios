@@ -49,7 +49,7 @@ default_weighted_pdb_configs = {
             "ligand": 1,
         },
         "force_recompute_weight": True,
-        "balance_protein_clusters": True,
+        "balance_protein_clusters": False,
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
     },
@@ -88,7 +88,7 @@ default_distillation_configs = {
     "filter_unique_domain_prob": 0.0,
 }
 
-DATA_ROOT_DIR = "/dev/shm/af3-dev/release_data/"
+DATA_ROOT_DIR = "/af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md

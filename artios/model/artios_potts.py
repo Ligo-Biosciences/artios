@@ -21,12 +21,17 @@ from artios.model.modules.mpnn import MPNN
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
+    build_alphabet_mask,
+    build_mutable_mask,
+    build_s_init,
     compute_potts_joint_logits,
     compute_potts_single_logits,
 )
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
+
+ALPHABET_BIAS = 1e4
 
 
 class MaskingSamplerType(str, Enum):
@@ -98,22 +103,37 @@ class ArtiosPotts(nn.Module):
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
         self.complexity_entropy_min = sampling_cfg.complexity_entropy_min
+        self.exclude_cys = sampling_cfg.exclude_cys
+        self.exclude_met = sampling_cfg.exclude_met
 
     def main_inference_loop(
         self,
         context: FullContext,
         seed: Optional[int] = None,
     ) -> PottsOutput:
-        batch_size = context.token.restype.shape[0]
         device = context.token.restype.device
+        restypes = context.token.restype
+        B, N, R = restypes.shape
 
         generator = (
             torch.Generator(device).manual_seed(seed) if seed is not None else None
         )
 
-        mask_rate = torch.ones(batch_size, device=device)
+        # TODO: this should be changed to a get_masked_restypes function we write in potts.py
+        if context.stitched is not None:
+            is_masked = ~context.stitched.stitched_mask & context.mask.token_mask
+            masked_restypes = self.mpnn.pad_and_mask_restypes(
+                context.stitched.stitched_restype, is_masked
+            )
+        else:
+            is_masked = context.mask.token_mask
+            masked_restypes = self.mpnn.pad_and_mask_restypes(restypes, is_masked)
 
-        mpnn_output = self.mpnn(context=context, mask_rate=mask_rate)
+        mpnn_output = self.mpnn(
+            context=context,
+            masked_restypes=masked_restypes,
+            is_masked=is_masked,
+        )
 
         h, J = self.potts(
             mpnn_output.node_feats,
@@ -123,22 +143,30 @@ class ArtiosPotts(nn.Module):
             context.mask.token_mask,
         )
 
-        S_init = None
-        mutable_mask = context.mask.token_mask
+        # TODO: I don't like how this looks
+        stitched_mask = (
+            context.stitched.stitched_mask if context.stitched is not None else None
+        )
+        stitched_restype = (
+            context.stitched.stitched_restype[..., :R].float()
+            if context.stitched is not None
+            else None
+        )
 
-        if context.stitched is not None:
-            B, N, R = h.shape
-            stitched_mask = context.stitched.stitched_mask
-            stitched_restype = context.stitched.stitched_restype[..., :R].float()
+        mutable_mask = build_mutable_mask(context.mask.token_mask, stitched_mask)
+        alphabet_mask = build_alphabet_mask(
+            mutable_mask, R, self.exclude_cys, self.exclude_met
+        )
 
-            logits = F.log_softmax(-h / self.potts_sampler.temperature_init, dim=-1)
-            indices = torch.multinomial(
-                logits.exp().reshape(B * N, R), 1, generator=generator
-            ).reshape(B, N)
-            S_init = F.one_hot(indices, R).float()
-            S_init = torch.where(stitched_mask.unsqueeze(-1), stitched_restype, S_init)
+        h = h + ~alphabet_mask * ALPHABET_BIAS
 
-            mutable_mask = context.mask.token_mask & ~stitched_mask
+        S_init = build_s_init(
+            h,
+            self.potts_sampler.temperature_init,
+            stitched_mask,
+            stitched_restype,
+            generator,
+        )
 
         penalty_func = None
         if self.complexity_penalty_weight > 0:
@@ -184,7 +212,7 @@ class ArtiosPotts(nn.Module):
         seed: Optional[int] = None,
     ) -> PottsOutput:
         device = context.token.restype.device
-        batch_size = context.token.restype.shape[0]
+        B, N, _ = context.token.restype.shape
 
         generator = (
             torch.Generator(device).manual_seed(seed)
@@ -193,11 +221,21 @@ class ArtiosPotts(nn.Module):
         )
 
         timestep = self.masking_sampler.sample(
-            size=(batch_size,), device=device, generator=generator
+            size=(B, N), device=device, generator=generator
         )
         mask_rate = self.masking_sampler.get_mask_rates(timestep)
 
-        mpnn_output = self.mpnn(context=context, mask_rate=mask_rate)
+        rand = torch.rand(B, N, device=device)
+        is_masked = (rand < mask_rate[:, None]) & context.mask.token_mask
+        masked_restypes = self.mpnn.pad_and_mask_restypes(
+            context.token.restype, is_masked
+        )
+
+        mpnn_output = self.mpnn(
+            context=context,
+            masked_restypes=masked_restypes,
+            is_masked=is_masked,
+        )
 
         h, J = self.potts(
             mpnn_output.node_feats,

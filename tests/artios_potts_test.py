@@ -55,6 +55,7 @@ def _make_configs(
                 "potts": {
                     "symmetric_J": symmetric_J,
                     "parameterisation": parameterisation,
+                    "masking_sampler": "linear",
                     "sampling": {
                         "proposal": "gibbs",
                         "n_sweeps": 5,
@@ -66,6 +67,8 @@ def _make_configs(
                         "complexity_penalty_weight": 0.1,
                         "complexity_window_size": 30,
                         "complexity_entropy_min": 2.32,
+                        "exclude_cys": False,
+                        "exclude_met": False,
                     },
                 },
             },

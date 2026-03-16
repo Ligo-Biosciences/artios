@@ -47,6 +47,99 @@ def _zero_sum_gauge(
     return h, J
 
 
+def build_mutable_mask(
+    token_mask: Bool[Tensor, "batch n_token"],
+    stitched_mask: Bool[Tensor, "batch n_token"] | None,
+) -> Bool[Tensor, "batch n_token"]:
+    """Build mask of positions that are mutable.
+    In practice, this is just the complement of the stitched mask.
+
+    Args:
+        token_mask: Valid token mask [B, N].
+        stitched_mask: Stitched (fixed) position mask [B, N], or None.
+
+    Returns:
+        Boolean mask of mutable positions [B, N].
+    """
+    if stitched_mask is not None:
+        return token_mask & ~stitched_mask
+    return token_mask
+
+
+def build_alphabet_mask(
+    mutable_mask: Bool[Tensor, "batch n_token"],
+    num_residue_types: int,
+    exclude_cys: bool = False,
+    exclude_met: bool = False,
+) -> Bool[Tensor, "batch n_token num_residue_types"]:
+    """Build mask of allowed residue types per position.
+
+    For mutable positions, allows the 20 standard amino acids (indices 0-19),
+    optionally excluding cysteine (index 4) and/or methionine (index 12).
+    Non-mutable positions are left as all-False (they are protected by
+    token_mask in the sampler).
+
+    Args:
+        mutable_mask: Mutable position mask [B, N].
+        num_residue_types: Total number of residue types R.
+        exclude_cys: If True, disallow cysteine (index 4).
+        exclude_met: If True, disallow methionine (index 12).
+
+    Returns:
+        Boolean mask of allowed residue types [B, N, R].
+    """
+    B, N = mutable_mask.shape
+    device = mutable_mask.device
+    R = num_residue_types
+
+    mask = torch.zeros(B, N, R, dtype=torch.bool, device=device)
+    # Allow first 20 amino acids for mutable positions
+    mask[:, :, :20] = mutable_mask.unsqueeze(-1)
+
+    if exclude_cys:
+        mask[:, :, 4] = False
+    if exclude_met:
+        mask[:, :, 12] = False
+
+    return mask
+
+
+def build_s_init(
+    h: Float[Tensor, "batch n_token num_residue_types"],
+    temperature: float,
+    stitched_mask: Bool[Tensor, "batch n_token"] | None,
+    stitched_restype: Float[Tensor, "batch n_token num_residue_types"] | None,
+    generator: torch.Generator | None,
+) -> Float[Tensor, "batch n_token num_residue_types"] | None:
+    """Build initial sequence for Potts sampling.
+
+    If stitched_mask is None, returns None (sampler initializes from h internally).
+    Otherwise, samples mutable positions from softmax(-h / temperature) and
+    sets stitched positions to stitched_restype.
+
+    Args:
+        h: Potts fields (already alphabet-biased) [B, N, R].
+        temperature: Initial sampling temperature.
+        stitched_mask: Stitched position mask [B, N], or None.
+        stitched_restype: One-hot stitched residue types [B, N, R], or None.
+        generator: Optional torch Generator for reproducibility.
+
+    Returns:
+        Initial one-hot sequence [B, N, R], or None.
+    """
+    if stitched_mask is None:
+        return None
+
+    B, N, R = h.shape
+    logits = torch.nn.functional.log_softmax(-h / temperature, dim=-1)
+    indices = torch.multinomial(
+        logits.exp().reshape(B * N, R), 1, generator=generator
+    ).reshape(B, N)
+    S_init = torch.nn.functional.one_hot(indices, R).float()
+    S_init = torch.where(stitched_mask.unsqueeze(-1), stitched_restype, S_init)
+    return S_init
+
+
 @typecheck
 def compute_potts_energy(
     S: Int[Tensor, "batch n_token"],

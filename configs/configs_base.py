@@ -250,6 +250,8 @@ model_configs = {
                 "complexity_penalty_weight": 1.0,
                 "complexity_window_size": 30,
                 "complexity_entropy_min": 2.32,
+                "exclude_cys": False,
+                "exclude_met": False,
             },
         },
         "sampling": {

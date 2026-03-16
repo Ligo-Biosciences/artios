@@ -49,7 +49,7 @@ default_weighted_pdb_configs = {
             "ligand": 1,
         },
         "force_recompute_weight": True,
-        "balance_protein_clusters": True,
+        "balance_protein_clusters": False,
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
     },

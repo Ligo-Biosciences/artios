@@ -287,6 +287,53 @@ def apply_protein_cluster_balancing(
     return indices_df
 
 
+def apply_monomer_pdb_boost(
+    indices_df: pd.DataFrame,
+    target_fraction: float = 0.10,
+) -> pd.DataFrame:
+    """Boost weights of rows from PDBs that have no interface rows.
+
+    Monomer-only PDBs (structures with only chain rows, no interfaces) are
+    underrepresented in sampling because interface PDBs generate many more
+    rows per structure. This multiplies all weights from monomer-only PDBs
+    by a factor that achieves the target sampling fraction.
+
+    Args:
+        indices_df: DataFrame with 'weights' column already computed.
+        target_fraction: Desired fraction of total sampling weight from
+            monomer-only PDBs. Default 0.10 (10%).
+
+    Returns:
+        DataFrame with boosted monomer-only PDB weights.
+    """
+    pdb_has_interface = set(
+        indices_df.loc[indices_df["type"] == RowType.INTERFACE, "pdb_id"].unique()
+    )
+    is_mono_only_pdb = ~indices_df["pdb_id"].isin(pdb_has_interface)
+
+    n_mono_pdbs = is_mono_only_pdb.sum()
+    if n_mono_pdbs == 0:
+        return indices_df
+
+    mono_w = indices_df.loc[is_mono_only_pdb, "weights"].sum()
+    non_mono_w = indices_df.loc[~is_mono_only_pdb, "weights"].sum()
+
+    if mono_w == 0 or target_fraction <= 0 or target_fraction >= 1:
+        return indices_df
+
+    boost = target_fraction * non_mono_w / (mono_w * (1 - target_fraction))
+    indices_df.loc[is_mono_only_pdb, "weights"] *= boost
+
+    n_mono_pdbs_unique = indices_df.loc[is_mono_only_pdb, "pdb_id"].nunique()
+    n_total_pdbs = indices_df["pdb_id"].nunique()
+    logger.info(
+        f"[monomer_pdb_boost] {n_mono_pdbs_unique}/{n_total_pdbs} monomer-only PDBs "
+        f"boosted {boost:.1f}x to reach {100 * target_fraction:.0f}% of sampling weight"
+    )
+
+    return indices_df
+
+
 def calc_weights_for_df(
     indices_df: pd.DataFrame,
     beta_dict: dict[str, Any],
@@ -294,6 +341,7 @@ def calc_weights_for_df(
     balance_protein_clusters: bool = False,
     balance_percentile: float = 0.9,
     balance_mol_type_groups: Optional[list[str]] = None,
+    monomer_pdb_target_fraction: float = 0.0,
 ) -> pd.DataFrame:
     """Calculate sampling weights for each row in the indices DataFrame.
 
@@ -301,6 +349,7 @@ def calc_weights_for_df(
       1. Filter artifact ligands (if PLINDER columns present)
       2. Compute base weight per row: beta * alpha_sum / cluster_size / member_num
       3. Optionally apply protein-cluster-balanced sampling
+      4. Optionally boost monomer-only PDB weights
 
     Args:
         indices_df: Training indices DataFrame (validated against IndicesSchema).
@@ -309,6 +358,8 @@ def calc_weights_for_df(
         balance_protein_clusters: Whether to apply protein-cluster-balanced sampling.
         balance_percentile: Percentile for the protein cluster weight cap.
         balance_mol_type_groups: Interface mol_type_groups to include in balancing.
+        monomer_pdb_target_fraction: Target sampling fraction for monomer-only PDBs.
+            Set to 0 to disable (default).
 
     Returns:
         DataFrame with 'weights' column added.
@@ -357,6 +408,12 @@ def calc_weights_for_df(
             balanced_mol_type_groups=balance_mol_type_groups,
         )
 
+    if monomer_pdb_target_fraction > 0:
+        indices_df = apply_monomer_pdb_boost(
+            indices_df,
+            target_fraction=monomer_pdb_target_fraction,
+        )
+
     return indices_df
 
 
@@ -376,6 +433,7 @@ def get_sample_weights(
     balance_protein_clusters: bool = False,
     balance_percentile: float = 0.9,
     balance_mol_type_groups: Optional[list[str]] = None,
+    monomer_pdb_target_fraction: float = 0.0,
 ) -> Union[pd.Series, list[float]]:
     """Compute sample weights based on the specified sampler type.
 
@@ -388,6 +446,8 @@ def get_sample_weights(
         balance_protein_clusters: Apply protein-cluster-balanced sampling.
         balance_percentile: Percentile for the protein cluster weight cap.
         balance_mol_type_groups: Interface groups to include in balancing.
+        monomer_pdb_target_fraction: Target sampling fraction for monomer-only
+            PDBs. Set to 0 to disable.
 
     Returns:
         Sample weights as a Series (weighted) or list (uniform).
@@ -405,6 +465,7 @@ def get_sample_weights(
                 balance_protein_clusters=balance_protein_clusters,
                 balance_percentile=balance_percentile,
                 balance_mol_type_groups=balance_mol_type_groups,
+                monomer_pdb_target_fraction=monomer_pdb_target_fraction,
             )
         return indices_df["weights"].astype("float32")
     elif sampler_type == "uniform":

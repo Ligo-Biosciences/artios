@@ -52,6 +52,7 @@ default_weighted_pdb_configs = {
         "balance_protein_clusters": True,
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
+        "monomer_pdb_target_fraction": 0.10,
     },
     "cropping_configs": {
         "method_weights": ListValue(

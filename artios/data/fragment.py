@@ -71,11 +71,11 @@ class FragmentMaker:
         self.spectral_boundary_size = spectral_boundary_size
         self.spectral_min_partition_size = spectral_min_partition_size
 
-        # Create length-dependent Rg upper bound
-        self.rg_upper_bound_line = (
-            0.029767441860465118,
-            14.279069767441861,
-        )  # slope and y-intercept w.r.t length
+        # Length-dependent Rg upper bound: rg <= rg_upper_bound_coeff * length^0.4
+        # Fitted to approximate the previous linear bound over lengths 150-500,
+        # but follows the physical scaling law for globular proteins (Rg ~ N^0.4).
+        # Previous linear bound: rg <= 0.029767441860465118 * length + 14.279069767441861
+        self.rg_upper_bound_coeff = 2.397538
 
     def filter_low_plddt_residues(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -489,9 +489,8 @@ class FragmentMaker:
             passes_length = frag.length >= self.min_fragment_length
             passes_plddt = frag.avg_plddt >= self.min_fragment_plddt
 
-            # Calculate length-dependent Rg upper bound using linear equation
-            slope, y_intercept = self.rg_upper_bound_line
-            max_rg = slope * frag.length + y_intercept
+            # Calculate length-dependent Rg upper bound: coeff * length^0.4
+            max_rg = self.rg_upper_bound_coeff * (frag.length**0.4)
             passes_rg = frag.rg <= max_rg
 
             if not (passes_length and passes_plddt and passes_rg):

@@ -49,10 +49,10 @@ default_weighted_pdb_configs = {
             "ligand": 1,
         },
         "force_recompute_weight": True,
-        "balance_protein_clusters": True,
+        "balance_protein_clusters": False,
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
-        "monomer_pdb_target_fraction": 0.10,
+        "monomer_pdb_target_fraction": 0.0,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -89,7 +89,7 @@ default_distillation_configs = {
     "filter_unique_domain_prob": 0.0,
 }
 
-DATA_ROOT_DIR = "af3-dev/release_data/"
+DATA_ROOT_DIR = "/dev/shm/af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -248,10 +248,10 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv",  # .gz
             ),
-            "pdb_exclusion_lists": [
-                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
-                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
-            ],
+            # "pdb_exclusion_lists": [
+            #     os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+            #     os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+            # ],
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
             "max_n_token": 4000,

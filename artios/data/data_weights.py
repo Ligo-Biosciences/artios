@@ -54,9 +54,6 @@ class LigandCategory(str, Enum):
     UNKNOWN = "unknown"
 
 
-# Interaction groups that involve exactly one protein side
-PROTEIN_PARTNER_GROUPS = frozenset({MolTypeGroup.LIGAND_PROT, MolTypeGroup.NUC_PROT})
-
 # Default groups to include in protein-cluster balancing
 DEFAULT_BALANCED_GROUPS = [
     MolTypeGroup.LIGAND_PROT.value,
@@ -118,38 +115,6 @@ def validate_indices(df: pd.DataFrame) -> pd.DataFrame:
     Raises pandera.errors.SchemaErrors with all violations collected.
     """
     return IndicesSchema.validate(df, lazy=True)
-
-
-# ── Helper functions ───────────────────────────────────────────────────────
-
-
-def get_protein_cluster_id(row: pd.Series) -> Optional[str]:
-    """Extract the protein-side cluster ID from an indices row.
-
-    Returns the protein cluster ID for:
-      - intra_prot chains (cluster_1_id)
-      - Interfaces with exactly one protein side (the protein side's cluster_id)
-
-    Returns None for prot_prot interfaces, non-protein chains, or rows without
-    a protein side.
-    """
-    mol_type_group = row["mol_type_group"]
-
-    if mol_type_group == MolTypeGroup.INTRA_PROT:
-        return row["cluster_1_id"]
-
-    if row["type"] != RowType.INTERFACE:
-        return None
-
-    mol_1 = row["mol_1_type"]
-    mol_2 = row["mol_2_type"]
-
-    if mol_1 == MolType.PROT and mol_2 != MolType.PROT:
-        return row["cluster_1_id"]
-    if mol_2 == MolType.PROT and mol_1 != MolType.PROT:
-        return row["cluster_2_id"]
-
-    return None
 
 
 # ── Filtering ──────────────────────────────────────────────────────────────
@@ -238,13 +203,11 @@ def apply_protein_cluster_balancing(
     """Apply protein-cluster-balanced sampling weights.
 
     Caps the total interface weight per protein cluster at tau = percentile(W_k),
-    scales down over-budget interface weights, and sets monomer (intra_prot)
-    weights to fill the gap so each protein cluster's total weight ≈ tau.
+    scaling down over-budget interface weights. All other rows (monomers,
+    prot-prot interfaces, etc.) keep their original weights.
 
     Only applies to interfaces with exactly one protein side (e.g., ligand_prot,
     nuc_prot). Prot-prot interfaces keep their original weights.
-    Monomer entries from protein clusters with no interfaces keep their original
-    weights (they have nothing to balance against).
 
     Args:
         indices_df: DataFrame with 'weights' column already computed.
@@ -258,15 +221,10 @@ def apply_protein_cluster_balancing(
     if balanced_mol_type_groups is None:
         balanced_mol_type_groups = DEFAULT_BALANCED_GROUPS
 
-    # Extract protein cluster ID for relevant rows
+    # Extract protein cluster ID for balanced interface rows
+    is_interface = indices_df["type"] == RowType.INTERFACE
     prot_cluster = pd.Series(None, index=indices_df.index, dtype=object)
 
-    # For intra_prot chains: the protein cluster is cluster_1_id
-    is_intra_prot = indices_df["mol_type_group"] == MolTypeGroup.INTRA_PROT
-    prot_cluster[is_intra_prot] = indices_df.loc[is_intra_prot, "cluster_1_id"]
-
-    # For interfaces with exactly one protein side
-    is_interface = indices_df["type"] == RowType.INTERFACE
     prot_side_1 = (
         is_interface
         & (indices_df["mol_1_type"] == MolType.PROT)
@@ -286,7 +244,6 @@ def apply_protein_cluster_balancing(
         & indices_df["mol_type_group"].isin(balanced_mol_type_groups)
         & prot_cluster.notna()
     )
-    is_monomer = is_intra_prot & prot_cluster.notna()
 
     # W_k: total interface weight per protein cluster
     interface_prot_clusters = prot_cluster[is_balanced_interface]
@@ -325,38 +282,6 @@ def apply_protein_cluster_balancing(
         f"[protein_cluster_balancing] Interface weight: "
         f"{total_weight_before:.0f} -> {total_weight_after:.0f} "
         f"({100 * (1 - total_weight_after / total_weight_before):.1f}% reduction)"
-    )
-
-    # Capped W_k
-    W_k_capped = W_k.clip(upper=tau)
-
-    # Monomer weights: (tau - W_k_capped) / |M_k|
-    # Only for clusters that have interfaces — interface-free clusters keep original weights
-    monomer_prot_clusters = prot_cluster[is_monomer]
-    has_interfaces = monomer_prot_clusters.isin(W_k.index)
-    is_rebalanced_monomer = is_monomer & prot_cluster.isin(W_k.index)
-
-    rebal_prot_clusters = prot_cluster[is_rebalanced_monomer]
-    M_k_size = rebal_prot_clusters.value_counts()
-
-    monomer_W_capped = rebal_prot_clusters.map(W_k_capped)
-    monomer_M_size = rebal_prot_clusters.map(M_k_size)
-
-    new_monomer_weights = ((tau - monomer_W_capped) / monomer_M_size).clip(lower=0.0)
-
-    old_monomer_weight = indices_df.loc[is_monomer, "weights"].sum()
-    indices_df.loc[is_rebalanced_monomer, "weights"] = new_monomer_weights.values
-    new_monomer_weight = indices_df.loc[is_monomer, "weights"].sum()
-
-    n_skipped = (~has_interfaces).sum()
-    logger.info(
-        f"[protein_cluster_balancing] {n_skipped} monomer rows from "
-        f"interface-free clusters kept original weights"
-    )
-
-    logger.info(
-        f"[protein_cluster_balancing] Monomer weight: "
-        f"{old_monomer_weight:.0f} -> {new_monomer_weight:.0f}"
     )
 
     return indices_df

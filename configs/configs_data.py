@@ -266,15 +266,13 @@ data_configs = {
     },
     "mgnify_trousers_train": {
         "base_info": {
-            "mmcif_dir": os.path.join(
-                DATA_ROOT_DIR, "af3-dev/release_data/mgnify-trousers-train/..."
-            ),
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mgnify-trousers-train/..."),
             "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "af3-dev/release_data/mgnify-trousers-train"
+                DATA_ROOT_DIR, "mgnify-trousers-train"
             ),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "af3-dev/release_data/indices/mgnify_trousers_train_indices.csv",
+                "indices/mgnify_trousers_train_indices.csv",
             ),
             "random_sample_if_failed": True,
         },
@@ -282,15 +280,11 @@ data_configs = {
     },
     "mgnify_trousers_val": {
         "base_info": {
-            "mmcif_dir": os.path.join(
-                DATA_ROOT_DIR, "af3-dev/release_data/mgnify-trousers-val/..."
-            ),
-            "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "af3-dev/release_data/mgnify-trousers-val"
-            ),
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mgnify-trousers-val/..."),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mgnify-trousers-val"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "af3-dev/release_data/indices/mgnify_trousers_val_indices.csv",
+                "indices/mgnify_trousers_val_indices.csv",
             ),
             "random_sample_if_failed": True,
         },

@@ -254,12 +254,12 @@ data_configs = {
             # ],
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
-            "max_n_token": 4000,
+            "max_n_token": -1,
             "use_reference_chains_only": False,
-            # "exclusion": {  # do not sample the data based on ions.
-            #     "mol_1_type": ListValue(["ions"]),
-            #     "mol_2_type": ListValue(["ions"]),
-            # },
+            "exclusion": {  # do not sample the data based on ions.
+                "mol_1_type": ListValue(["ions"]),
+                "mol_2_type": ListValue(["ions"]),
+            },
         },
         **deepcopy(default_weighted_pdb_configs),
     },

@@ -230,7 +230,7 @@ data_configs = {
     "train_sets": ListValue(
         [
             "weightedPDB_before2021_wopb_nometalc_0925",
-            "mgnify_train",
+            "mgnify_trousers_train",
             # "trousers_train",
             # "shirts_with_no_pockets",
             # "shirts_with_small_pockets",
@@ -240,7 +240,7 @@ data_configs = {
         "train_sample_weights": ListValue([0.01, 0.99]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["mgnify_val", "recentPDB_1536_sample384_0925"]),
+    "test_sets": ListValue(["mgnify_trousers_val", "recentPDB_1536_sample384_0925"]),
     "weightedPDB_before2021_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
@@ -264,7 +264,7 @@ data_configs = {
         },
         **deepcopy(default_weighted_pdb_configs),
     },
-    "mgnify_train": {
+    "mgnify_trousers_train": {
         "base_info": {
             "mmcif_dir": os.path.join(
                 DATA_ROOT_DIR, "af3-dev/release_data/mgnify-trousers-train/..."
@@ -280,7 +280,7 @@ data_configs = {
         },
         **deepcopy(default_distillation_configs),
     },
-    "mgnify_val": {
+    "mgnify_trousers_val": {
         "base_info": {
             "mmcif_dir": os.path.join(
                 DATA_ROOT_DIR, "af3-dev/release_data/mgnify-trousers-val/..."

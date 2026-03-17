@@ -125,27 +125,36 @@ Computing `W_k` (total interface weight per protein cluster, over `ligand_prot` 
 
 ## Protein-Cluster-Balanced Sampling
 
-Implemented in `artios/data/data_weights.py:apply_protein_cluster_balancing`. Caps the total interface weight per protein cluster so that overrepresented families don't dominate, then redistributes the freed budget to monomer entries.
+Implemented in `artios/data/data_weights.py:apply_protein_cluster_balancing`. Caps the total interface weight per protein cluster so that overrepresented families don't dominate. All other rows (monomers, prot-prot interfaces, etc.) keep their original weights.
 
 ### Algorithm
 
 1. Compute base interface weights as before: `w_i = alpha_t / |P(i)|`
-2. Sum interface weights per protein cluster: `W_k = sum(w_i for i in I(k))`
-3. Compute cap `tau = percentile_90({W_k})` (= 42.0 on training split)
+2. For each protein cluster k, sum the balanced-interface weights: `W_k = sum(w_i for i in I(k))`
+3. Compute cap `tau = percentile_90({W_k})` (= 18.0 on training split with production config)
 4. For protein clusters where `W_k > tau`, scale all their interface weights by `tau / W_k`
-5. Set monomer weight for each entry j in protein cluster k: `w_j = (tau - W_tilde_k) / |M_k|`
 
-This ensures every protein cluster gets total weight ~= tau (interfaces + monomers), achieving approximately uniform sampling across protein families.
-
-Only applies to interfaces with exactly one protein side (`ligand_prot`, `nuc_prot` by default). `prot_prot` interfaces keep their original weights. Monomer entries from protein clusters with no interfaces also keep their original weights.
+Only applies to interfaces with exactly one protein side (`ligand_prot`, `nuc_prot` by default). `prot_prot` interfaces keep their original weights. Monomer weights are not modified — the base weight formula already equalizes per-cluster monomer weight (every protein cluster contributes exactly 0.5 total monomer weight).
 
 ### Impact on training split
 
+With production config (alpha all 1.0):
+
 - 1,362 / 13,616 protein clusters (10%) are capped
-- Total balanced interface weight drops 45% (335K -> 185K)
-- The top cluster's interfaces are scaled by 0.013x (from W_k=3,212 to tau=42.0)
-- Freed weight redistributed to monomer entries of those same proteins
-- `intra_prot` weight share rises from ~8% to ~46% of total weight; `ligand_prot` share drops from ~48% to ~20%
+- Total balanced interface weight drops 45% (151K -> 83K)
+- The top cluster (`pdb_cluster_1AGW_1`, W_k=1606) is scaled by 0.011x
+- No zero-weight rows, max weight remains 2.0
+- `ligand_prot` share: 40% -> 29%, `intra_prot` stays at ~8%, `prot_prot` rises to ~32%
+
+### Reduction factors for top clusters
+
+| Percentile | W_k | Scale factor |
+|---|---|---|
+| p90 (tau) | 18.0 | 1.0 (no reduction) |
+| p95 | 36.0 | 0.50 |
+| p99 | 130.0 | 0.14 |
+| p99.9 | 513.4 | 0.035 |
+| max | 1606.0 | 0.011 |
 
 ## PLINDER Enrichment
 

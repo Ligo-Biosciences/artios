@@ -229,7 +229,7 @@ data_configs = {
     },
     "train_sets": ListValue(
         [
-            "weightedPDB_before2021_wopb_nometalc_0925",
+            "weightedPDB_before2109_wopb_nometalc_0925",  # new data: weightedPDB_before2021_wopb_nometalc_0925
             "trousers_train",
             "shirts_with_no_pockets",
             "shirts_with_small_pockets",
@@ -240,14 +240,14 @@ data_configs = {
         "sampler_type": "weighted",
     },
     "test_sets": ListValue(["trousers_val", "recentPDB_1536_sample384_0925"]),
-    "weightedPDB_before2021_wopb_nometalc_0925": {
+    "weightedPDB_before2109_wopb_nometalc_0925": {  # new data : weightedPDB_before2021_wopb_nometalc_0925
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv",  # .gz
-            ),
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  #  new data: "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv",  # .gz
+            ),  #
             # "pdb_exclusion_lists": [
             #     os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
             #     os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),

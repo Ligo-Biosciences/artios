@@ -1224,6 +1224,7 @@ def get_datasets(
             "filter_unique_domain_prob": config_dict.get(
                 "filter_unique_domain_prob", 0
             ),
+            "max_n_token": config_dict.get("max_n_token", -1),
         }
 
     data_config = configs.data

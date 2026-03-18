@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Optional
 
@@ -99,12 +99,32 @@ class ArtiosPotts(nn.Module):
             annealing_fraction=sampling_cfg.annealing_fraction,
             dt=sampling_cfg.dt,
             rejection_step=sampling_cfg.rejection_step,
+            track_trajectory=sampling_cfg.track_trajectory,
+            trajectory_interval=sampling_cfg.trajectory_interval,
         )
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
         self.complexity_entropy_min = sampling_cfg.complexity_entropy_min
         self.exclude_cys = sampling_cfg.exclude_cys
         self.exclude_met = sampling_cfg.exclude_met
+        self.ensemble_size = sampling_cfg.ensemble_size
+        self.ensemble_noise_scale = sampling_cfg.ensemble_noise_scale
+
+    def _noise_backbone(
+        self, context: FullContext, generator: torch.Generator | None
+    ) -> FullContext:
+        """Return a copy of context with Gaussian noise added to backbone coordinates."""
+        noised_backbone = context.coordinate.backbone_coordinate + (
+            torch.randn(
+                context.coordinate.backbone_coordinate.shape,
+                device=context.coordinate.backbone_coordinate.device,
+                dtype=context.coordinate.backbone_coordinate.dtype,
+                generator=generator,
+            )
+            * self.ensemble_noise_scale
+        )
+        noised_coord = replace(context.coordinate, backbone_coordinate=noised_backbone)
+        return replace(context, coordinate=noised_coord)
 
     def main_inference_loop(
         self,
@@ -119,7 +139,7 @@ class ArtiosPotts(nn.Module):
             torch.Generator(device).manual_seed(seed) if seed is not None else None
         )
 
-        # TODO: this should be changed to a get_masked_restypes function we write in potts.py
+        # # TODO: this should be changed to a get_masked_restypes function we write in potts.py
         if context.stitched is not None:
             is_masked = ~context.stitched.stitched_mask & context.mask.token_mask
             masked_restypes = self.mpnn.pad_and_mask_restypes(
@@ -129,19 +149,35 @@ class ArtiosPotts(nn.Module):
             is_masked = context.mask.token_mask
             masked_restypes = self.mpnn.pad_and_mask_restypes(restypes, is_masked)
 
-        mpnn_output = self.mpnn(
-            context=context,
-            masked_restypes=masked_restypes,
-            is_masked=is_masked,
-        )
+        # Ensemble logic, will be moved out at some point
+        h_sum = None
+        J_sum = None
+        for i in range(self.ensemble_size):
+            ctx = (
+                self._noise_backbone(context, generator)
+                if self.ensemble_size > 1
+                else context
+            )
+            mpnn_out = self.mpnn(
+                context=ctx, masked_restypes=masked_restypes, is_masked=is_masked
+            )
+            h_i, J_i = self.potts(
+                mpnn_out.node_feats,
+                mpnn_out.edge_feats,
+                mpnn_out.edge_index,
+                mpnn_out.edge_mask,
+                ctx.mask.token_mask,
+            )
+            if i == 0:
+                h_sum, J_sum = h_i, J_i
+                edge_index = mpnn_out.edge_index
+                edge_mask = mpnn_out.edge_mask
+            else:
+                h_sum = h_sum + h_i
+                J_sum = J_sum + J_i
 
-        h, J = self.potts(
-            mpnn_output.node_feats,
-            mpnn_output.edge_feats,
-            mpnn_output.edge_index,
-            mpnn_output.edge_mask,
-            context.mask.token_mask,
-        )
+        h = h_sum / self.ensemble_size
+        J = J_sum / self.ensemble_size
 
         # TODO: I don't like how this looks
         stitched_mask = (
@@ -188,8 +224,8 @@ class ArtiosPotts(nn.Module):
         result = self.potts_sampler.sample(
             h=h,
             J=J,
-            edge_index=mpnn_output.edge_index,
-            edge_mask=mpnn_output.edge_mask,
+            edge_index=edge_index,
+            edge_mask=edge_mask,
             token_mask=mutable_mask,
             S_init=S_init,
             generator=generator,
@@ -199,11 +235,14 @@ class ArtiosPotts(nn.Module):
         return PottsOutput(
             h=h,
             J=J,
-            edge_index=mpnn_output.edge_index,
-            edge_mask=mpnn_output.edge_mask,
-            is_masked=mpnn_output.is_masked,
+            edge_index=edge_index,
+            edge_mask=edge_mask,
+            is_masked=is_masked,
             sampled_sequence=result.sequence,
             energy=result.energy,
+            sequence_trajectory=result.sequence_trajectory,
+            energy_trajectory=result.energy_trajectory,
+            trajectory_sweep_indices=result.trajectory_sweep_indices,
         )
 
     def main_train_loop(

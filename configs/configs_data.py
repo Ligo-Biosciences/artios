@@ -291,66 +291,62 @@ data_configs = {
         },
         **deepcopy(default_distillation_configs),
     },
-    # "trousers_train": {
-    #     "base_info": {
-    #         "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-    #         "bioassembly_dict_dir": os.path.join(
-    #             DATA_ROOT_DIR, "trousers/bioassembly_train"
-    #         ),
-    #         "indices_fpath": os.path.join(
-    #             DATA_ROOT_DIR,
-    #             "indices/trousers_train.csv",
-    #         ),
-    #         # "pdb_list": "",  # ["af-a0a0d2yk69-f1", "af-a0a3d3q4w2-f1", "af-a0a3a5v9n6-f1"],
-    #         "random_sample_if_failed": True,
-    #     },
-    #     **deepcopy(default_distillation_configs),
-    # },
-    # "trousers_val": {
-    #     "base_info": {
-    #         "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-    #         "bioassembly_dict_dir": os.path.join(
-    #             DATA_ROOT_DIR, "trousers/bioassembly_val"
-    #         ),
-    #         "indices_fpath": os.path.join(
-    #             DATA_ROOT_DIR,
-    #             "indices/trousers_val.csv",
-    #         ),
-    #         # "pdb_list": "",  # ["af-a0a399nz51-f1"],
-    #         "random_sample_if_failed": True,
-    #     },
-    #     **deepcopy(default_distillation_configs),
-    # },
-    # "shirts_with_no_pockets": {
-    #     "base_info": {
-    #         "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-    #         "bioassembly_dict_dir": os.path.join(
-    #             DATA_ROOT_DIR, "shirts_with_no_pockets/bioassembly"
-    #         ),
-    #         "indices_fpath": os.path.join(
-    #             DATA_ROOT_DIR,
-    #             "indices/shirts_with_no_pockets.csv",
-    #         ),
-    #         # "pdb_list": "",
-    #         "random_sample_if_failed": True,
-    #     },
-    #     **deepcopy(default_distillation_configs),
-    # },
-    # "shirts_with_small_pockets": {
-    #     "base_info": {
-    #         "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-    #         "bioassembly_dict_dir": os.path.join(
-    #             DATA_ROOT_DIR, "shirts_with_small_pockets/bioassembly"
-    #         ),
-    #         "indices_fpath": os.path.join(
-    #             DATA_ROOT_DIR,
-    #             "indices/shirts_with_small_pockets.csv",
-    #         ),
-    #         "pdb_list": "",
-    #         "random_sample_if_failed": True,
-    #     },
-    #     **deepcopy(default_distillation_configs),
-    # },
+    "afdb_trousers_train": {
+        "base_info": {
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
+            "bioassembly_dict_dir": os.path.join(
+                DATA_ROOT_DIR, "trousers/bioassembly_train"
+            ),
+            "indices_fpath": os.path.join(
+                DATA_ROOT_DIR,
+                "indices/trousers_train.csv",
+            ),
+            "random_sample_if_failed": True,
+        },
+        **deepcopy(default_distillation_configs),
+    },
+    "afdb_trousers_val": {
+        "base_info": {
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
+            "bioassembly_dict_dir": os.path.join(
+                DATA_ROOT_DIR, "trousers/bioassembly_val"
+            ),
+            "indices_fpath": os.path.join(
+                DATA_ROOT_DIR,
+                "indices/trousers_val.csv",
+            ),
+            "random_sample_if_failed": True,
+        },
+        **deepcopy(default_distillation_configs),
+    },
+    "afdb_shirts_with_no_pockets": {
+        "base_info": {
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
+            "bioassembly_dict_dir": os.path.join(
+                DATA_ROOT_DIR, "shirts_with_no_pockets/bioassembly"
+            ),
+            "indices_fpath": os.path.join(
+                DATA_ROOT_DIR,
+                "indices/shirts_with_no_pockets.csv",
+            ),
+            "random_sample_if_failed": True,
+        },
+        **deepcopy(default_distillation_configs),
+    },
+    "afdb_shirts_with_small_pockets": {
+        "base_info": {
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
+            "bioassembly_dict_dir": os.path.join(
+                DATA_ROOT_DIR, "shirts_with_small_pockets/bioassembly"
+            ),
+            "indices_fpath": os.path.join(
+                DATA_ROOT_DIR,
+                "indices/shirts_with_small_pockets.csv",
+            ),
+            "random_sample_if_failed": True,
+        },
+        **deepcopy(default_distillation_configs),
+    },
     "recentPDB_1536_sample384_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),

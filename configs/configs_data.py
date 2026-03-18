@@ -299,7 +299,7 @@ data_configs = {
             ),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/trousers_train.csv",
+                "indices/afdb_trousers_train.csv",
             ),
             "random_sample_if_failed": True,
         },
@@ -313,7 +313,7 @@ data_configs = {
             ),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/trousers_val.csv",
+                "indices/afdb_trousers_val.csv",
             ),
             "random_sample_if_failed": True,
         },

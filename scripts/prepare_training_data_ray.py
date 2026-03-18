@@ -96,7 +96,10 @@ def gen_data_from_mmcifs(
     """
     # Calculate object store memory as a fraction of system memory
     total_memory = psutil.virtual_memory().total
-    object_store_memory = int(total_memory * memory_fraction)
+    available_memory = psutil.virtual_memory().available
+    object_store_memory = int(
+        min(total_memory * memory_fraction, available_memory * 0.8)
+    )
 
     # Initialize Ray
     ray.init(num_cpus=num_workers, object_store_memory=object_store_memory)

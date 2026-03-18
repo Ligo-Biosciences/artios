@@ -294,9 +294,7 @@ data_configs = {
     "afdb_trousers_train": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-            "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "trousers/bioassembly_train"
-            ),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "afdb-trousers-train"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
                 "indices/afdb_trousers_train.csv",
@@ -308,9 +306,7 @@ data_configs = {
     "afdb_trousers_val": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-            "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "trousers/bioassembly_val"
-            ),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "afdb-trousers-val"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
                 "indices/afdb_trousers_val.csv",

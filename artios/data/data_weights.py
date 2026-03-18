@@ -434,6 +434,7 @@ def get_sample_weights(
     balance_percentile: float = 0.9,
     balance_mol_type_groups: Optional[list[str]] = None,
     monomer_pdb_target_fraction: float = 0.0,
+    length_reweight_gamma: float = 0.0,
 ) -> Union[pd.Series, list[float]]:
     """Compute sample weights based on the specified sampler type.
 
@@ -448,6 +449,9 @@ def get_sample_weights(
         balance_mol_type_groups: Interface groups to include in balancing.
         monomer_pdb_target_fraction: Target sampling fraction for monomer-only
             PDBs. Set to 0 to disable.
+        length_reweight_gamma: Power exponent for length-based reweighting.
+            Weight per sample is num_tokens^gamma. 0 = uniform, 0.5 = sqrt,
+            1.0 = linear (token-proportional). Only applies to uniform sampler.
 
     Returns:
         Sample weights as a Series (weighted) or list (uniform).
@@ -470,6 +474,11 @@ def get_sample_weights(
         return indices_df["weights"].astype("float32")
     elif sampler_type == "uniform":
         assert indices_df is not None
+        if length_reweight_gamma > 0:
+            weights = (
+                indices_df["num_tokens"].astype("float32") ** length_reweight_gamma
+            )
+            return weights / weights.sum()
         return [1 / len(indices_df) for _ in range(len(indices_df))]
     else:
         raise ValueError(f"Unknown sampler type: {sampler_type}")

@@ -73,6 +73,7 @@ default_distillation_configs = {
     "sampler_configs": {
         "sampler_type": "uniform",
         "force_recompute_weight": True,
+        "length_reweight_gamma": 1.5,
     },
     "cropping_configs": {
         "method_weights": ListValue(

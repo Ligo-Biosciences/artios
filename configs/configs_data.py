@@ -319,34 +319,6 @@ data_configs = {
         },
         **deepcopy(default_distillation_configs),
     },
-    "afdb_shirts_with_no_pockets": {
-        "base_info": {
-            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-            "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "shirts_with_no_pockets/bioassembly"
-            ),
-            "indices_fpath": os.path.join(
-                DATA_ROOT_DIR,
-                "indices/shirts_with_no_pockets.csv",
-            ),
-            "random_sample_if_failed": True,
-        },
-        **deepcopy(default_distillation_configs),
-    },
-    "afdb_shirts_with_small_pockets": {
-        "base_info": {
-            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-            "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "shirts_with_small_pockets/bioassembly"
-            ),
-            "indices_fpath": os.path.join(
-                DATA_ROOT_DIR,
-                "indices/shirts_with_small_pockets.csv",
-            ),
-            "random_sample_if_failed": True,
-        },
-        **deepcopy(default_distillation_configs),
-    },
     "recentPDB_1536_sample384_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),

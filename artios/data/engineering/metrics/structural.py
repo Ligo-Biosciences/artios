@@ -95,3 +95,92 @@ def compute_sse(atom_array: struc.AtomArray) -> float:
         "beta": sse_counter.get("b", 0) / total_size,
         "coil": sse_counter.get("c", 0) / total_size,
     }
+
+
+def compute_fold_quality(atom_array: struc.AtomArray) -> dict[str, float]:
+    """Compute fold quality metrics for filtering repetitive/simplistic structures.
+
+    Three metrics that together capture backbone designability:
+        - lr_cd: long-range CA contact density (packing quality)
+        - dssp_coil: DSSP coil fraction (structural complexity)
+        - dssp_helix_align: mean pairwise alignment of nearby DSSP helices
+          (high = repetitive parallel helices, low = diverse orientations)
+
+    Args:
+        atom_array: Biotite AtomArray structure.
+
+    Returns:
+        Dictionary with keys "lr_cd", "dssp_coil", "dssp_helix_align".
+    """
+    from scipy.spatial.distance import pdist, squareform
+
+    ca_mask = atom_array.atom_name == "CA"
+    ca_atoms = atom_array[ca_mask]
+    coords = ca_atoms.coord
+    n = len(coords)
+
+    if n < 10:
+        return {"lr_cd": 0.0, "dssp_coil": 1.0, "dssp_helix_align": 0.5}
+
+    # Long-range contact density
+    dm = squareform(pdist(coords))
+    seq_sep = np.abs(np.arange(n)[:, None] - np.arange(n)[None, :])
+    lr_cd = float(((dm < 8.0) & (seq_sep >= 12)).sum() / 2 / n)
+
+    # DSSP
+    sse = struc.annotate_sse(atom_array)
+    dssp_coil = float((sse == "c").sum() / len(sse))
+
+    # Helix alignment
+    is_helix = sse == "a"
+    helix_runs: list[tuple[int, int]] = []
+    start = None
+    for i in range(len(sse)):
+        if is_helix[i]:
+            if start is None:
+                start = i
+        else:
+            if start is not None:
+                helix_runs.append((start, i))
+                start = None
+    if start is not None:
+        helix_runs.append((start, len(sse)))
+
+    dssp_helix_align = 0.5
+    if len(helix_runs) >= 3:
+        # Map SSE indices back to CA coords (SSE is per-residue on the full
+        # atom array, but we need CA coordinates for direction vectors).
+        ca_res_ids = ca_atoms.res_id
+        sse_res_ids = atom_array.res_id
+
+        dirs: list[np.ndarray] = []
+        mids: list[np.ndarray] = []
+        for s, e in helix_runs:
+            if e - s < 5:
+                continue
+            # Get CA coords for helix residues
+            helix_res = set(sse_res_ids[s:e].tolist())
+            helix_ca_mask = np.isin(ca_res_ids, list(helix_res))
+            helix_ca = coords[helix_ca_mask]
+            if len(helix_ca) < 5:
+                continue
+            d = helix_ca[-1] - helix_ca[0]
+            norm = np.linalg.norm(d)
+            if norm > 1e-6:
+                dirs.append(d / norm)
+                mids.append(helix_ca.mean(axis=0))
+
+        if len(dirs) >= 3:
+            als: list[float] = []
+            for i in range(len(dirs)):
+                for j in range(i + 1, len(dirs)):
+                    if np.linalg.norm(mids[i] - mids[j]) < 20.0:
+                        als.append(float(abs(np.dot(dirs[i], dirs[j]))))
+            if als:
+                dssp_helix_align = float(np.mean(als))
+
+    return {
+        "lr_cd": lr_cd,
+        "dssp_coil": dssp_coil,
+        "dssp_helix_align": dssp_helix_align,
+    }

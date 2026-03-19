@@ -1,4 +1,5 @@
 from collections import Counter
+from dataclasses import dataclass
 
 import biotite.structure as struc
 import numpy as np
@@ -97,7 +98,44 @@ def compute_sse(atom_array: struc.AtomArray) -> float:
     }
 
 
-def compute_fold_quality(atom_array: struc.AtomArray) -> dict[str, float]:
+@dataclass(frozen=True)
+class FoldQuality:
+    """Fold quality metrics for a protein structure or fragment.
+
+    Attributes:
+        lr_cd: Long-range CA contact density (CA pairs < 8A, |i-j| >= 12, per residue).
+        dssp_coil: DSSP coil fraction (structural complexity — loops/turns).
+        dssp_helix_align: Mean pairwise |cos(angle)| of nearby DSSP helices
+            (high = repetitive parallel helices, low = diverse orientations).
+        score: P(good) from the logistic model. Higher = more designable.
+    """
+
+    lr_cd: float
+    dssp_coil: float
+    dssp_helix_align: float
+    score: float
+
+    # Logistic regression trained on 3250 manually classified structures
+    # (2585 good, 665 bad). Features: lr_cd, dssp_coil, dssp_helix_align.
+    _MEANS = np.array([1.6047, 0.5176, 0.6085])
+    _STDS = np.array([0.4555, 0.1382, 0.1360])
+    _COEFS = np.array([0.8588, 0.8901, -0.3422])
+    _INTERCEPT = 2.0351
+    # Threshold retaining 90% of good structures, removing 67.7% of bad.
+    DEFAULT_THRESHOLD = 0.6477
+
+    @staticmethod
+    def compute_score(lr_cd: float, dssp_coil: float, dssp_helix_align: float) -> float:
+        """Compute P(good) from the 3-feature logistic model."""
+        x = np.array([lr_cd, dssp_coil, dssp_helix_align])
+        logit = float(
+            (x - FoldQuality._MEANS) / FoldQuality._STDS @ FoldQuality._COEFS
+            + FoldQuality._INTERCEPT
+        )
+        return 1.0 / (1.0 + np.exp(-logit))
+
+
+def compute_fold_quality(atom_array: struc.AtomArray) -> FoldQuality:
     """Compute fold quality metrics for filtering repetitive/simplistic structures.
 
     Three metrics that together capture backbone designability:
@@ -110,7 +148,7 @@ def compute_fold_quality(atom_array: struc.AtomArray) -> dict[str, float]:
         atom_array: Biotite AtomArray structure.
 
     Returns:
-        Dictionary with keys "lr_cd", "dssp_coil", "dssp_helix_align".
+        FoldQuality dataclass with metrics and combined score.
     """
     from scipy.spatial.distance import pdist, squareform
 
@@ -120,7 +158,12 @@ def compute_fold_quality(atom_array: struc.AtomArray) -> dict[str, float]:
     n = len(coords)
 
     if n < 10:
-        return {"lr_cd": 0.0, "dssp_coil": 1.0, "dssp_helix_align": 0.5}
+        return FoldQuality(
+            lr_cd=0.0,
+            dssp_coil=1.0,
+            dssp_helix_align=0.5,
+            score=FoldQuality.compute_score(0.0, 1.0, 0.5),
+        )
 
     # Long-range contact density
     dm = squareform(pdist(coords))
@@ -148,8 +191,6 @@ def compute_fold_quality(atom_array: struc.AtomArray) -> dict[str, float]:
 
     dssp_helix_align = 0.5
     if len(helix_runs) >= 3:
-        # Map SSE indices back to CA coords (SSE is per-residue on the full
-        # atom array, but we need CA coordinates for direction vectors).
         ca_res_ids = ca_atoms.res_id
         sse_res_ids = atom_array.res_id
 
@@ -158,7 +199,6 @@ def compute_fold_quality(atom_array: struc.AtomArray) -> dict[str, float]:
         for s, e in helix_runs:
             if e - s < 5:
                 continue
-            # Get CA coords for helix residues
             helix_res = set(sse_res_ids[s:e].tolist())
             helix_ca_mask = np.isin(ca_res_ids, list(helix_res))
             helix_ca = coords[helix_ca_mask]
@@ -179,8 +219,10 @@ def compute_fold_quality(atom_array: struc.AtomArray) -> dict[str, float]:
             if als:
                 dssp_helix_align = float(np.mean(als))
 
-    return {
-        "lr_cd": lr_cd,
-        "dssp_coil": dssp_coil,
-        "dssp_helix_align": dssp_helix_align,
-    }
+    score = FoldQuality.compute_score(lr_cd, dssp_coil, dssp_helix_align)
+    return FoldQuality(
+        lr_cd=lr_cd,
+        dssp_coil=dssp_coil,
+        dssp_helix_align=dssp_helix_align,
+        score=score,
+    )

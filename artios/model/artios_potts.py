@@ -274,12 +274,12 @@ class ArtiosPotts(nn.Module):
         )
 
         timestep = self.masking_sampler.sample(
-            size=(B, N), device=device, generator=generator
+            size=(B,), device=device, generator=generator
         )
         mask_rate = self.masking_sampler.get_mask_rates(timestep)
 
         rand = torch.rand(B, N, device=device)
-        is_masked = (rand < mask_rate) & context.mask.token_mask
+        is_masked = (rand < mask_rate[:, None]) & context.mask.token_mask
         masked_restypes = self.mpnn.pad_and_mask_restypes(
             context.token.restype, is_masked
         )

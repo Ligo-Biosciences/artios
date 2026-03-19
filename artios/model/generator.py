@@ -1,3 +1,5 @@
+import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -14,6 +16,8 @@ from artios.model.modules.potts import (
 from artios.model.utils import beta_function
 from artios.utils.geometry import centre_random_augmentation
 from artios.utils.typing import Bool, Float, Int, typecheck
+
+logger = logging.getLogger(__name__)
 
 
 class TrainingTimestepSampler(ABC):
@@ -1517,6 +1521,8 @@ class PottsSampler:
 
         Returns:
             PottsSamplingResult with final sequence (one-hot) and energy.
+
+        # TODO: changing the multinomial to gumbel max trick might be faster
         """
         B, N, R = h.shape
 
@@ -1553,6 +1559,7 @@ class PottsSampler:
         anneal_steps = int(self.annealing_fraction * self.n_sweeps)
 
         for t in range(self.n_sweeps):
+            t_sweep = time.perf_counter()
             if anneal_steps > 0 and t < anneal_steps:
                 frac = t / anneal_steps
                 T = self.temperature_init + frac * (
@@ -1607,6 +1614,10 @@ class PottsSampler:
 
             if tracker is not None:
                 tracker.record(t + 1, S, h, J, edge_index, edge_mask)
+
+            sweep_time = time.perf_counter() - t_sweep
+            if t < 11 or t == self.n_sweeps - 1 or (t + 1) % 50 == 0:
+                logger.info(f"[TIMING] Sweep {t}: {sweep_time:.4f}s")
 
         energy = compute_potts_energy(S.argmax(-1), h, J, edge_index, edge_mask)
 

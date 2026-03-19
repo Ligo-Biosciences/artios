@@ -1,3 +1,5 @@
+import logging
+import time
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Optional
@@ -30,6 +32,8 @@ from artios.model.modules.potts import (
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
+
+logger = logging.getLogger(__name__)
 
 ALPHABET_BIAS = 1e4
 
@@ -158,15 +162,23 @@ class ArtiosPotts(nn.Module):
                 if self.ensemble_size > 1
                 else context
             )
+            t_mpnn = time.perf_counter()
             mpnn_out = self.mpnn(
                 context=ctx, masked_restypes=masked_restypes, is_masked=is_masked
             )
+            logger.info(
+                f"[TIMING] MPNN forward pass (ensemble {i}): {time.perf_counter() - t_mpnn:.3f}s"
+            )
+            t_potts = time.perf_counter()
             h_i, J_i = self.potts(
                 mpnn_out.node_feats,
                 mpnn_out.edge_feats,
                 mpnn_out.edge_index,
                 mpnn_out.edge_mask,
                 ctx.mask.token_mask,
+            )
+            logger.info(
+                f"[TIMING] Potts forward pass (ensemble {i}): {time.perf_counter() - t_potts:.3f}s"
             )
             if i == 0:
                 h_sum, J_sum = h_i, J_i

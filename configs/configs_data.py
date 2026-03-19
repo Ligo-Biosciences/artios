@@ -88,6 +88,7 @@ default_distillation_configs = {
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
     "filter_unique_fragment_prob": 1.0,
     "filter_unique_domain_prob": 0.0,
+    "require_pocket_in_fragment": True,
     "max_n_token": 1500,
 }
 

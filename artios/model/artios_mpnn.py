@@ -87,7 +87,7 @@ class ArtiosMPNN(nn.Module):
             SequenceOutput: Model output containing logits, masking info, and timestep.
         """
         device = context.token.restype.device
-        batch_size = context.token.restype.shape[0]
+        B, N, _ = context.token.restype.shape
 
         generator = (
             torch.Generator(device).manual_seed(seed)
@@ -95,15 +95,21 @@ class ArtiosMPNN(nn.Module):
             else None
         )
 
-        # Sample timesteps and convert to mask rates
         timestep = self.masking_sampler.sample(
-            size=(batch_size,), device=device, generator=generator
+            size=(B, N), device=device, generator=generator
         )
         mask_rate = self.masking_sampler.get_mask_rates(timestep)
 
+        rand = torch.rand(B, N, device=device)
+        is_masked = (rand < mask_rate[:, None]) & context.mask.token_mask
+        masked_restypes = self.mpnn.pad_and_mask_restypes(
+            context.token.restype, is_masked
+        )
+
         mpnn_output = self.mpnn(
             context=context,
-            mask_rate=mask_rate,
+            masked_restypes=masked_restypes,
+            is_masked=is_masked,
         )
 
         return SequenceOutput(

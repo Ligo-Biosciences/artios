@@ -229,50 +229,26 @@ class MPNN(nn.Module):
         )
 
     @typecheck
-    def mask_restypes(
+    def pad_and_mask_restypes(
         self,
-        restypes: Int[Tensor, "batch n_token num_residue_types"],
-        mask_rate: Float[Tensor, "batch"],
-        token_mask: Optional[Bool[Tensor, "batch n_token"]] = None,
-    ) -> tuple[
-        Int[Tensor, "batch n_token num_residue_types_plus_1"],
-        Bool[Tensor, "batch n_token"],
-    ]:
-        """Randomly mask residue types by replacing with the mask token.
-
-        Each valid position is independently masked with probability `mask_rate`.
+        restypes: Num[Tensor, "batch n_token num_residue_types"],
+        is_masked: Bool[Tensor, "batch n_token"],
+    ) -> Num[Tensor, "batch n_token num_residue_types_plus_1"]:
+        """Pad restypes with the mask token dimension and apply the mask token.
 
         Args:
-            restypes: One-hot encoded residue types (int) [B, N, num_residue_types]
-            mask_rate: Per-batch probability of masking each position.
-            token_mask: Mask for valid positions. Invalid positions are never masked.
+            restypes: One-hot residue types [B, N, R]. Values at masked positions are ignored.
+            is_masked: Which positions to replace with the mask token.
 
         Returns:
-            Tuple of (masked_restypes, is_masked):
-                - masked_restypes: One-hot (int) with appended mask token dimension [B, N, num_residue_types + 1]
-                - is_masked: Boolean indicating which positions were masked [B, N]
+            Padded one-hot tensor [B, N, R+1] with mask token at masked positions.
         """
-        batch, n_token, _ = restypes.shape
-        device = restypes.device
-
-        rand = torch.rand(batch, n_token, device=device)
-        is_masked = rand < mask_rate[:, None]
-
-        if token_mask is not None:
-            is_masked = is_masked & token_mask
-
-        # Pad restypes with zero for mask dimension: [B, N, 32] -> [B, N, 33]
-        padded = F.pad(restypes, (0, 1), value=0)
-
-        # Create mask token one-hot: [33] with 1 at mask_token_idx
+        padded = F.pad(restypes, (0, 1), value=0)  # [B, N, R+1]
         mask_one_hot = torch.zeros(
-            self.num_residue_types + 1, device=device, dtype=restypes.dtype
-        )
+            self.num_residue_types + 1, device=restypes.device, dtype=restypes.dtype
+        )  # [R+1]
         mask_one_hot[self.mask_token_idx] = 1
-
-        masked_restypes = torch.where(is_masked[..., None], mask_one_hot, padded)
-
-        return masked_restypes, is_masked
+        return torch.where(is_masked[..., None], mask_one_hot, padded)
 
     @typecheck
     def decode(
@@ -404,32 +380,27 @@ class MPNN(nn.Module):
     def forward(
         self,
         context: FullContext,
-        mask_rate: Float[Tensor, "batch"],
+        masked_restypes: Num[Tensor, "batch n_token vocab_with_mask"],
+        is_masked: Bool[Tensor, "batch n_token"],
     ) -> MPNNOutput:
-        """Training forward pass with random masking.
+        """Forward pass with pre-masked sequence input.
 
-        Encodes structure, masks input sequence at the given rate, and decodes
-        to predict original tokens. Loss should be computed on masked positions only.
+        Encodes structure, then decodes masked sequence to predict original tokens.
 
         Args:
             context: Full context containing structure and sequence.
-            mask_rate: Per-batch fraction of positions to mask.
+            masked_restypes: Pre-masked residue types (one-hot including mask token dim).
+            is_masked: Boolean mask indicating which positions were masked.
 
         Returns:
             MPNNOutput containing logits, masking info, and encoder/decoder features.
         """
-        token_mask = context.mask.token_mask
-
         encoder_output = self.encode(context)
-
-        masked_restypes, is_masked = self.mask_restypes(
-            context.token.restype, mask_rate, token_mask
-        )
 
         decoder_output = self.decode(
             encoder_output=encoder_output,
             restypes=masked_restypes,
-            node_mask=token_mask,
+            node_mask=context.mask.token_mask,
         )
 
         return MPNNOutput(

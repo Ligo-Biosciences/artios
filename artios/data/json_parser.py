@@ -18,7 +18,8 @@ from artios.common.residue_names import (
     PROTEIN_COMMON_ONE_TO_THREE,
     PROTEIN_COMMON_THREE_TO_ONE,
 )
-from artios.data.ccd import is_valid_ccd_code
+
+# from artios.data.ccd import is_valid_ccd_code
 from artios.data.rdkit import is_valid_smiles, parse_smiles
 
 # ---------------------------------------------------------------------------
@@ -219,10 +220,12 @@ class CCDLigand(BaseModel):
                 raise ValueError(
                     f"CCD code must be uppercase alphanumeric, got '{code}'"
                 )
-            if not is_valid_ccd_code(code):
-                raise ValueError(
-                    f"CCD code '{code}' not found in Chemical Component Dictionary"
-                )
+            # TODO: add ccd code validation either somewhere else -- the import from ccd.py is
+            # very heavy for a fild that just contains object definitions
+            # if not is_valid_ccd_code(code):
+            #     raise ValueError(
+            #         f"CCD code '{code}' not found in Chemical Component Dictionary"
+            #     )
         return v
 
 

@@ -452,8 +452,33 @@ def _save_sequence_to_fasta(output: SequenceOutput, ctx: SaveContext) -> list[Pa
 
 
 def _save_potts(output: PottsOutput, ctx: SaveContext) -> list[Path]:
-    """Save Potts output to FASTA format."""
-    return _save_potts_to_fasta(output, ctx)
+    """Save Potts output to FASTA format, and trajectory NPZ if available."""
+    paths = _save_potts_to_fasta(output, ctx)
+    if output.sequence_trajectory is not None:
+        paths.append(_save_potts_trajectory(output, ctx))
+    return paths
+
+
+def _save_potts_trajectory(output: PottsOutput, ctx: SaveContext) -> Path:
+    """Save Potts MCMC trajectory to a single NPZ file.
+
+    Contents:
+        sequence_trajectory: int32 [batch, n_saved, n_token] — argmax residue indices.
+        energy_trajectory: float32 [batch, n_saved] — Potts energy at each saved sweep.
+        sweep_indices: int32 [n_saved] — which sweep each snapshot corresponds to.
+    """
+    output_dir = Path(ctx.sample_dirs[0])
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = output_dir / f"{ctx.sample_name}_potts_trajectory.npz"
+
+    np.savez(
+        output_path,
+        sequence_trajectory=output.sequence_trajectory.cpu().numpy().astype(np.int32),
+        energy_trajectory=output.energy_trajectory.cpu().numpy().astype(np.float32),
+        sweep_indices=np.array(output.trajectory_sweep_indices, dtype=np.int32),
+    )
+    logger.info(f"Saved Potts trajectory to {output_path}")
+    return output_path
 
 
 def _save_potts_to_fasta(output: PottsOutput, ctx: SaveContext) -> list[Path]:

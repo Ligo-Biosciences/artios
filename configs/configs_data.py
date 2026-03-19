@@ -333,6 +333,10 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/recentPDB_low_homology_maxtoken1536.csv",
             ),
+            "pdb_exclusion_lists": [
+                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+            ],
             # "pdb_list": "",
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
             "sort_by_n_token": False,

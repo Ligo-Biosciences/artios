@@ -237,6 +237,7 @@ model_configs = {
         "potts": {
             "symmetric_J": True,
             "parameterisation": "linear",
+            "masking_sampler": "linear",
             "sampling": {
                 "proposal": "dlmc",
                 "n_sweeps": 100,
@@ -249,6 +250,12 @@ model_configs = {
                 "complexity_penalty_weight": 1.0,
                 "complexity_window_size": 30,
                 "complexity_entropy_min": 2.32,
+                "exclude_cys": True,
+                "exclude_met": True,
+                "ensemble_size": 1,  # 1 = disabled, >1 = average h/J over noised backbone coords
+                "ensemble_noise_scale": 0.3,  # std of Gaussian noise added to backbone coordinates
+                "track_trajectory": False,
+                "trajectory_interval": 1,
             },
         },
         "sampling": {

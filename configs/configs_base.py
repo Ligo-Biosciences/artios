@@ -236,6 +236,7 @@ model_configs = {
         },
         "potts": {
             "symmetric_J": True,
+            "zero_sum_gauge": True,
             "parameterisation": "linear",
             "masking_sampler": "linear",
             "sampling": {

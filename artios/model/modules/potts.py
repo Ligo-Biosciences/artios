@@ -192,7 +192,7 @@ def compute_potts_energy(
     return field_energy + coupling_energy
 
 
-def symmetrize_J(
+def _symmetrize_J(
     J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
     edge_index: Int[Tensor, "batch n_token neighbours"],
     edge_mask: Bool[Tensor, "batch n_token neighbours"],
@@ -382,11 +382,13 @@ class GraphPotts(nn.Module):
         num_residue_types: int,
         parameterisation: GraphPottsParameterisation,
         symmetric_J: bool = True,
+        zero_sum_gauge: bool = True,
         init_scale: float = 0.1,
     ):
         super().__init__()
         self.num_residue_types = num_residue_types
         self.symmetric_J = symmetric_J
+        self.zero_sum_gauge = zero_sum_gauge
         self.parameterisation = parameterisation
 
         R = num_residue_types
@@ -462,7 +464,6 @@ class GraphPotts(nn.Module):
                     r1=R,
                 )
                 J = torch.matmul(J_left, J_right)
-                h, J = _zero_sum_gauge(h, J)
 
             case GraphPottsParameterisation.SCORE:
                 F = self.num_factors
@@ -481,12 +482,13 @@ class GraphPotts(nn.Module):
                 )
                 J = torch.matmul(J_left, J_right)
 
-                h, J = _zero_sum_gauge(h, J)
-
                 h = h + mask_h * self.W_h_bg(node_feats)
                 J = J + (mask_J * self.W_J_bg(edge_feats)).unsqueeze(-1)
 
+        if self.zero_sum_gauge:
+            h, J = _zero_sum_gauge(h, J)
+
         if self.symmetric_J:
-            J = symmetrize_J(J, edge_index, edge_mask)
+            J = _symmetrize_J(J, edge_index, edge_mask)
 
         return h, J

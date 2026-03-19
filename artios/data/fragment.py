@@ -11,6 +11,8 @@ from biotite.structure import AtomArray
 from scipy.sparse import csr_matrix
 from scipy.spatial import KDTree
 
+from artios.data.engineering.metrics.structural import compute_fold_quality
+
 logger = getLogger(__name__)
 
 
@@ -39,6 +41,7 @@ class FragmentMaker:
         min_contact_residues: int = 4,
         min_fragment_length: int = 150,
         min_fragment_plddt: float = 70,
+        min_fold_quality: float = 0.6477,
         spectral_k: int = 15,
         spectral_sigma: float = 8.0,
         spectral_connectivity_threshold: float = 0.05,
@@ -54,6 +57,10 @@ class FragmentMaker:
             min_contact_residues (int): Minimum number of residues with contacts to merge fragments. Defaults to 4.
             min_fragment_length (int): Minimum length of a fragment. Defaults to 150.
             min_fragment_plddt (float): Minimum pLDDT of a fragment. Defaults to 70.
+            min_fold_quality (float): Minimum fold quality score P(good) from the
+                3-feature logistic model. Fragments below this are filtered out.
+                Defaults to 0.6477 (90%-good-retention operating point).
+                Set to ``None`` to disable fold quality filtering.
             spectral_k (int): Number of nearest neighbors for kNN graph in spectral bisection. Defaults to 15.
             spectral_sigma (float): Gaussian kernel bandwidth for edge weights. Defaults to 8.0.
             spectral_connectivity_threshold (float): Fiedler value (lambda_2) above which a partition is considered well-connected. Defaults to 0.05.
@@ -65,6 +72,7 @@ class FragmentMaker:
         self.min_contact_residues = min_contact_residues
         self.min_fragment_length = min_fragment_length
         self.min_fragment_plddt = min_fragment_plddt
+        self.min_fold_quality = min_fold_quality
         self.spectral_k = spectral_k
         self.spectral_sigma = spectral_sigma
         self.spectral_connectivity_threshold = spectral_connectivity_threshold
@@ -474,7 +482,8 @@ class FragmentMaker:
         Criteria:
         - length >= min_fragment_length
         - avg_plddt >= min_fragment_plddt
-        - rg <= length-dependent upper bound (linear equation: slope * length + y_intercept)
+        - rg <= length-dependent upper bound (coeff * length^0.4)
+        - fold quality score >= min_fold_quality (if enabled)
 
         Args:
             atom_array (AtomArray): AtomArray with fragment_id annotation.
@@ -496,6 +505,15 @@ class FragmentMaker:
             if not (passes_length and passes_plddt and passes_rg):
                 mask = atom_array.fragment_id == frag.fragment_id
                 fragment_ids[mask] = -1
+                continue
+
+            # Fold quality filter (logistic model on lr_cd, dssp_coil, dssp_helix_align)
+            if self.min_fold_quality is not None:
+                frag_atoms = atom_array[atom_array.fragment_id == frag.fragment_id]
+                quality = compute_fold_quality(frag_atoms)
+                if quality.score < self.min_fold_quality:
+                    mask = atom_array.fragment_id == frag.fragment_id
+                    fragment_ids[mask] = -1
 
         atom_array.set_annotation("fragment_id", fragment_ids)
         return atom_array

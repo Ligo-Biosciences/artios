@@ -192,8 +192,6 @@ data_configs = {
         "pocket_motif_prob": 1.0,
         "whole_ligand_prob": 0.7,
         "whole_sidechain_prob": 0.05,
-        "pocket_score_threshold": 0.18,
-        "pocket_n_neighbours": 100,
         "sidechain_seed_is_tip_prob": 0.0,
         "sidechain_seed_is_in_sphere_prob": 1.0,
         "sidechain_bfs_depth_prob": 0.5,

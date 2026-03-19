@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+import logging
+import time
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Optional
 
@@ -10,6 +12,7 @@ from typing_extensions import assert_never
 
 from artios.data.features import FullContext
 from artios.model.generator import (
+    ExponentialMaskingTimestepSampler,
     LinearMaskingTimestepSampler,
     PottsProposal,
     PottsSampler,
@@ -20,12 +23,24 @@ from artios.model.modules.mpnn import MPNN
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
+    build_alphabet_mask,
+    build_mutable_mask,
+    build_s_init,
     compute_potts_joint_logits,
     compute_potts_single_logits,
 )
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
+
+logger = logging.getLogger(__name__)
+
+ALPHABET_BIAS = 1e4
+
+
+class MaskingSamplerType(str, Enum):
+    LINEAR = "linear"
+    EXPONENTIAL = "exponential"
 
 
 class PottsLossType(str, Enum):
@@ -45,7 +60,6 @@ class ArtiosPotts(nn.Module):
     def __init__(self, configs):
         super(ArtiosPotts, self).__init__()
 
-        self.masking_sampler = LinearMaskingTimestepSampler()
         self.mpnn = MPNN(**configs.artios_mpnn.model)
 
         node_dim = configs.artios_mpnn.model.node_dim
@@ -69,6 +83,17 @@ class ArtiosPotts(nn.Module):
             label_smoothing=potts_loss_cfg.label_smoothing,
         )
 
+        masking_sampler_type = MaskingSamplerType(
+            configs.artios_mpnn.potts.masking_sampler
+        )
+        match masking_sampler_type:
+            case MaskingSamplerType.LINEAR:
+                self.masking_sampler = LinearMaskingTimestepSampler()
+            case MaskingSamplerType.EXPONENTIAL:
+                self.masking_sampler = ExponentialMaskingTimestepSampler(b=0.01)
+            case _:
+                assert_never(masking_sampler_type)
+
         sampling_cfg = configs.artios_mpnn.potts.sampling
         self.potts_sampler = PottsSampler(
             proposal=PottsProposal(sampling_cfg.proposal),
@@ -78,51 +103,118 @@ class ArtiosPotts(nn.Module):
             annealing_fraction=sampling_cfg.annealing_fraction,
             dt=sampling_cfg.dt,
             rejection_step=sampling_cfg.rejection_step,
+            track_trajectory=sampling_cfg.track_trajectory,
+            trajectory_interval=sampling_cfg.trajectory_interval,
         )
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
         self.complexity_entropy_min = sampling_cfg.complexity_entropy_min
+        self.exclude_cys = sampling_cfg.exclude_cys
+        self.exclude_met = sampling_cfg.exclude_met
+        self.ensemble_size = sampling_cfg.ensemble_size
+        self.ensemble_noise_scale = sampling_cfg.ensemble_noise_scale
+
+    def _noise_backbone(
+        self, context: FullContext, generator: torch.Generator | None
+    ) -> FullContext:
+        """Return a copy of context with Gaussian noise added to backbone coordinates."""
+        noised_backbone = context.coordinate.backbone_coordinate + (
+            torch.randn(
+                context.coordinate.backbone_coordinate.shape,
+                device=context.coordinate.backbone_coordinate.device,
+                dtype=context.coordinate.backbone_coordinate.dtype,
+                generator=generator,
+            )
+            * self.ensemble_noise_scale
+        )
+        noised_coord = replace(context.coordinate, backbone_coordinate=noised_backbone)
+        return replace(context, coordinate=noised_coord)
 
     def main_inference_loop(
         self,
         context: FullContext,
         seed: Optional[int] = None,
     ) -> PottsOutput:
-        batch_size = context.token.restype.shape[0]
         device = context.token.restype.device
+        restypes = context.token.restype
+        B, N, R = restypes.shape
 
         generator = (
             torch.Generator(device).manual_seed(seed) if seed is not None else None
         )
 
-        mask_rate = torch.ones(batch_size, device=device)
+        # # TODO: this should be changed to a get_masked_restypes function we write in potts.py
+        if context.stitched is not None:
+            is_masked = ~context.stitched.stitched_mask & context.mask.token_mask
+            masked_restypes = self.mpnn.pad_and_mask_restypes(
+                context.stitched.stitched_restype, is_masked
+            )
+        else:
+            is_masked = context.mask.token_mask
+            masked_restypes = self.mpnn.pad_and_mask_restypes(restypes, is_masked)
 
-        mpnn_output = self.mpnn(context=context, mask_rate=mask_rate)
+        # Ensemble logic, will be moved out at some point
+        h_sum = None
+        J_sum = None
+        for i in range(self.ensemble_size):
+            ctx = (
+                self._noise_backbone(context, generator)
+                if self.ensemble_size > 1
+                else context
+            )
+            t_mpnn = time.perf_counter()
+            mpnn_out = self.mpnn(
+                context=ctx, masked_restypes=masked_restypes, is_masked=is_masked
+            )
+            logger.info(
+                f"[TIMING] MPNN forward pass (ensemble {i}): {time.perf_counter() - t_mpnn:.3f}s"
+            )
+            t_potts = time.perf_counter()
+            h_i, J_i = self.potts(
+                mpnn_out.node_feats,
+                mpnn_out.edge_feats,
+                mpnn_out.edge_index,
+                mpnn_out.edge_mask,
+                ctx.mask.token_mask,
+            )
+            logger.info(
+                f"[TIMING] Potts forward pass (ensemble {i}): {time.perf_counter() - t_potts:.3f}s"
+            )
+            if i == 0:
+                h_sum, J_sum = h_i, J_i
+                edge_index = mpnn_out.edge_index
+                edge_mask = mpnn_out.edge_mask
+            else:
+                h_sum = h_sum + h_i
+                J_sum = J_sum + J_i
 
-        h, J = self.potts(
-            mpnn_output.node_feats,
-            mpnn_output.edge_feats,
-            mpnn_output.edge_index,
-            mpnn_output.edge_mask,
-            context.mask.token_mask,
+        h = h_sum / self.ensemble_size
+        J = J_sum / self.ensemble_size
+
+        # TODO: I don't like how this looks
+        stitched_mask = (
+            context.stitched.stitched_mask if context.stitched is not None else None
+        )
+        stitched_restype = (
+            context.stitched.stitched_restype[..., :R].float()
+            if context.stitched is not None
+            else None
         )
 
-        S_init = None
-        mutable_mask = context.mask.token_mask
+        mutable_mask = build_mutable_mask(context.mask.token_mask, stitched_mask)
+        alphabet_mask = build_alphabet_mask(
+            mutable_mask, R, self.exclude_cys, self.exclude_met
+        )
 
-        if context.stitched is not None:
-            B, N, R = h.shape
-            stitched_mask = context.stitched.stitched_mask
-            stitched_restype = context.stitched.stitched_restype[..., :R].float()
+        h = h + ~alphabet_mask * ALPHABET_BIAS
 
-            logits = F.log_softmax(-h / self.potts_sampler.temperature_init, dim=-1)
-            indices = torch.multinomial(
-                logits.exp().reshape(B * N, R), 1, generator=generator
-            ).reshape(B, N)
-            S_init = F.one_hot(indices, R).float()
-            S_init = torch.where(stitched_mask.unsqueeze(-1), stitched_restype, S_init)
-
-            mutable_mask = context.mask.token_mask & ~stitched_mask
+        S_init = build_s_init(
+            h,
+            self.potts_sampler.temperature_init,
+            stitched_mask,
+            stitched_restype,
+            generator,
+        )
 
         penalty_func = None
         if self.complexity_penalty_weight > 0:
@@ -144,8 +236,8 @@ class ArtiosPotts(nn.Module):
         result = self.potts_sampler.sample(
             h=h,
             J=J,
-            edge_index=mpnn_output.edge_index,
-            edge_mask=mpnn_output.edge_mask,
+            edge_index=edge_index,
+            edge_mask=edge_mask,
             token_mask=mutable_mask,
             S_init=S_init,
             generator=generator,
@@ -155,11 +247,14 @@ class ArtiosPotts(nn.Module):
         return PottsOutput(
             h=h,
             J=J,
-            edge_index=mpnn_output.edge_index,
-            edge_mask=mpnn_output.edge_mask,
-            is_masked=mpnn_output.is_masked,
+            edge_index=edge_index,
+            edge_mask=edge_mask,
+            is_masked=is_masked,
             sampled_sequence=result.sequence,
             energy=result.energy,
+            sequence_trajectory=result.sequence_trajectory,
+            energy_trajectory=result.energy_trajectory,
+            trajectory_sweep_indices=result.trajectory_sweep_indices,
         )
 
     def main_train_loop(
@@ -168,7 +263,7 @@ class ArtiosPotts(nn.Module):
         seed: Optional[int] = None,
     ) -> PottsOutput:
         device = context.token.restype.device
-        batch_size = context.token.restype.shape[0]
+        B, N, _ = context.token.restype.shape
 
         generator = (
             torch.Generator(device).manual_seed(seed)
@@ -177,11 +272,21 @@ class ArtiosPotts(nn.Module):
         )
 
         timestep = self.masking_sampler.sample(
-            size=(batch_size,), device=device, generator=generator
+            size=(B, N), device=device, generator=generator
         )
         mask_rate = self.masking_sampler.get_mask_rates(timestep)
 
-        mpnn_output = self.mpnn(context=context, mask_rate=mask_rate)
+        rand = torch.rand(B, N, device=device)
+        is_masked = (rand < mask_rate[:, None]) & context.mask.token_mask
+        masked_restypes = self.mpnn.pad_and_mask_restypes(
+            context.token.restype, is_masked
+        )
+
+        mpnn_output = self.mpnn(
+            context=context,
+            masked_restypes=masked_restypes,
+            is_masked=is_masked,
+        )
 
         h, J = self.potts(
             mpnn_output.node_feats,

@@ -75,6 +75,7 @@ class ArtiosPotts(nn.Module):
                 configs.artios_mpnn.potts.parameterisation
             ),
             symmetric_J=configs.artios_mpnn.potts.symmetric_J,
+            zero_sum_gauge=configs.artios_mpnn.potts.zero_sum_gauge,
         )
 
         potts_loss_cfg = configs.loss.potts
@@ -130,6 +131,7 @@ class ArtiosPotts(nn.Module):
         noised_coord = replace(context.coordinate, backbone_coordinate=noised_backbone)
         return replace(context, coordinate=noised_coord)
 
+    # TODO: this guy needs a lot of tidying before merging to main.
     def main_inference_loop(
         self,
         context: FullContext,
@@ -272,7 +274,7 @@ class ArtiosPotts(nn.Module):
         )
 
         timestep = self.masking_sampler.sample(
-            size=(B, N), device=device, generator=generator
+            size=(B,), device=device, generator=generator
         )
         mask_rate = self.masking_sampler.get_mask_rates(timestep)
 

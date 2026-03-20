@@ -424,6 +424,8 @@ def find_realistic_pockets(
     merge_distance: float = 1.75,
     min_spheres: int = 35,
     min_binding_score: float = 0.15,
+    centroid_radius: float = 15.0,
+    min_atoms_in_radius: int = 425,
     ignore_hydrogens: bool = True,
     ignore_water: bool = True,
     ignore_hetero: bool = True,
@@ -436,6 +438,10 @@ def find_realistic_pockets(
     (lining_residues, residue_diversity), geometry (enclosure, mean_radius),
     and chemistry (aromatic_ratio, charged_ratio, carbon_atom_ratio).
     Trained with 0.2A Gaussian coordinate noise augmentation for robustness.
+
+    Additionally filters by local atom density around each pocket centroid,
+    removing pockets in sparse/disordered regions unlikely to form real
+    binding sites.
 
     Validated on a held-out test set of 39 PDBs:
         - At min_binding_score=0.15 (default): ~83% recall, ~36% precision
@@ -451,6 +457,8 @@ def find_realistic_pockets(
         merge_distance: Distance for merging sphere clusters (Å). Default: 1.75
         min_spheres: Minimum spheres per pocket cluster. Default: 35
         min_binding_score: Minimum binding score to keep (0-1). Default: 0.15
+        centroid_radius: Radius around pocket centroid to count atoms (Å). Default: 15.0
+        min_atoms_in_radius: Minimum protein atoms within centroid_radius. Default: 425
         ignore_hydrogens: Ignore hydrogen atoms. Default: True
         ignore_water: Ignore water molecules. Default: True
         ignore_hetero: Ignore hetero atoms (ligands). Default: True
@@ -477,23 +485,28 @@ def find_realistic_pockets(
     if not pockets:
         return []
 
-    # Build protein-only atom array and KDTree for scoring
+    # Build protein-only atom array and KDTree for scoring + density filtering
     protein_atoms = atomarray[~atomarray.hetero]
     protein_atoms = protein_atoms[protein_atoms.element != "H"]
     protein_atoms = protein_atoms[protein_atoms.res_name != "HOH"]
     tree = KDTree(protein_atoms.coord)
 
-    # Score and filter
+    # Score and filter by binding score + atom density
     binding_pockets = []
     for pocket in pockets:
         pocket.binding_score = score_binding_pocket(pocket, protein_atoms, tree)
-        if pocket.binding_score >= min_binding_score:
-            binding_pockets.append(pocket)
+        if pocket.binding_score < min_binding_score:
+            continue
+        atom_count = len(tree.query_ball_point(pocket.centroid, r=centroid_radius))
+        if atom_count < min_atoms_in_radius:
+            continue
+        binding_pockets.append(pocket)
 
     binding_pockets.sort(key=lambda p: p.binding_score, reverse=True)
     logger.info(
         f"Found {len(binding_pockets)} binding pockets out of {len(pockets)} "
-        f"total (min_binding_score={min_binding_score})"
+        f"total (min_binding_score={min_binding_score}, "
+        f"min_atoms_in_radius={min_atoms_in_radius})"
     )
     return binding_pockets
 

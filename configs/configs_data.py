@@ -52,6 +52,7 @@ default_weighted_pdb_configs = {
         "balance_protein_clusters": False,
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
+        "monomer_pdb_target_fraction": 0.0,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -228,7 +229,7 @@ data_configs = {
     },
     "train_sets": ListValue(
         [
-            "weightedPDB_before2021_wopb_nometalc_0925",
+            "weightedPDB_before2109_wopb_nometalc_0925",  # new data: weightedPDB_before2021_wopb_nometalc_0925
             "trousers_train",
             "shirts_with_no_pockets",
             "shirts_with_small_pockets",
@@ -239,26 +240,26 @@ data_configs = {
         "sampler_type": "weighted",
     },
     "test_sets": ListValue(["trousers_val", "recentPDB_1536_sample384_0925"]),
-    "weightedPDB_before2021_wopb_nometalc_0925": {
+    "weightedPDB_before2109_wopb_nometalc_0925": {  # new data : weightedPDB_before2021_wopb_nometalc_0925
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv",  # .gz
-            ),
-            "pdb_exclusion_lists": [
-                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
-                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
-            ],
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  #  new data: "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv",  # .gz
+            ),  #
+            # "pdb_exclusion_lists": [
+            #     os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+            #     os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+            # ],
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
-            "max_n_token": 4000,
+            "max_n_token": -1,
             "use_reference_chains_only": False,
-            # "exclusion": {  # do not sample the data based on ions.
-            #     "mol_1_type": ListValue(["ions"]),
-            #     "mol_2_type": ListValue(["ions"]),
-            # },
+            "exclusion": {  # do not sample the data based on ions.
+                "mol_1_type": ListValue(["ions"]),
+                "mol_2_type": ListValue(["ions"]),
+            },
         },
         **deepcopy(default_weighted_pdb_configs),
     },

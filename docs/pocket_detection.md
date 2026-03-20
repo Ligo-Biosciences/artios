@@ -196,6 +196,10 @@ GIVEN: a protein AtomArray
 
 8. Filtering
    Keep pockets with binding_score >= min_binding_score (default 0.15)
+
+9. Atom density filtering
+   Count protein atoms within 15A and 20A of pocket centroid
+   Keep pockets with >= 425 atoms at 15A AND >= 900 atoms at 20A
 ```
 
 ---
@@ -219,6 +223,23 @@ GIVEN: a protein AtomArray
 |-----------|---------|-------------|
 | `min_binding_score` | 0.15 | Minimum score to keep a pocket (0-1) |
 | `plddt_cutoff` | None | pLDDT threshold for confidence filtering |
+
+### Atom density
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `min_atoms_in_radius_15` | 425 | Minimum protein atoms within 15A of centroid |
+| `min_atoms_in_radius_20` | 900 | Minimum protein atoms within 20A of centroid |
+
+The 20A filter was tuned on 500 manually classified AFDB pockets (1057 good, 108 bad) and validated against 244 true-positive enzyme binding sites from PDB structures. The threshold of 900 was chosen to maximize enzyme TP retention:
+
+| | Kept | Removed |
+|---|---|---|
+| Enzyme TP (244 PDB pockets) | 95.1% | 4.9% |
+| AFDB good (1057 classified) | 81.1% | 18.9% |
+| AFDB bad (108 classified) | 51.9% | 48.1% |
+
+The 20A radius captures whether the pocket sits in a sufficiently large globular domain. Bad pockets (surface clefts, inter-domain crevices) tend to have fewer atoms at this radius. The 15A filter catches locally sparse regions while the 20A filter catches pockets in small or elongated structural contexts.
 
 ### Choosing `min_binding_score`
 

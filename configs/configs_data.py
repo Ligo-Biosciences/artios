@@ -53,7 +53,7 @@ default_weighted_pdb_configs = {
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
         "monomer_pdb_target_fraction": 0.0,
-        "filter_artifact_ligands": True,
+        "filter_artifact_ligands": False,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -247,7 +247,7 @@ data_configs = {
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv",  # .gz
+                "indices/v3_w_plinder.csv.gz",  # .gz
             ),
             # "pdb_exclusion_lists": [
             #     os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),

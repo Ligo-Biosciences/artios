@@ -256,7 +256,7 @@ data_configs = {
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
             "max_n_token": -1,
-            "max_resolution": -1,
+            "max_resolution": -1.0,
             "use_reference_chains_only": False,
             "exclusion": {  # do not sample the data based on ions.
                 "mol_1_type": ListValue(["ions"]),

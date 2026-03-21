@@ -120,7 +120,7 @@ def validate_indices(df: pd.DataFrame) -> pd.DataFrame:
 # ── Filtering ──────────────────────────────────────────────────────────────
 
 
-def filter_artifact_ligands(indices_df: pd.DataFrame) -> pd.DataFrame:
+def _filter_artifact_ligands(indices_df: pd.DataFrame) -> pd.DataFrame:
     """Filter out rows involving artifact ligands (crystallization buffer, solvents, etc.).
 
     Removes rows where any ligand side is categorized as 'artifact' based on
@@ -342,6 +342,7 @@ def calc_weights_for_df(
     balance_percentile: float = 0.9,
     balance_mol_type_groups: Optional[list[str]] = None,
     monomer_pdb_target_fraction: float = 0.0,
+    filter_artifact_ligands: bool = True,
 ) -> pd.DataFrame:
     """Calculate sampling weights for each row in the indices DataFrame.
 
@@ -360,11 +361,14 @@ def calc_weights_for_df(
         balance_mol_type_groups: Interface mol_type_groups to include in balancing.
         monomer_pdb_target_fraction: Target sampling fraction for monomer-only PDBs.
             Set to 0 to disable (default).
+        filter_artifact_ligands: Whether to remove rows with PLINDER artifact
+            ligand annotations. Default True.
 
     Returns:
         DataFrame with 'weights' column added.
     """
-    indices_df = filter_artifact_ligands(indices_df)
+    if filter_artifact_ligands:
+        indices_df = _filter_artifact_ligands(indices_df)
 
     # Specific to assembly, and entities (chain or interface)
     indices_df["pdb_sorted_entity_id"] = indices_df.apply(
@@ -434,6 +438,7 @@ def get_sample_weights(
     balance_percentile: float = 0.9,
     balance_mol_type_groups: Optional[list[str]] = None,
     monomer_pdb_target_fraction: float = 0.0,
+    filter_artifact_ligands: bool = True,
 ) -> Union[pd.Series, list[float]]:
     """Compute sample weights based on the specified sampler type.
 
@@ -466,6 +471,7 @@ def get_sample_weights(
                 balance_percentile=balance_percentile,
                 balance_mol_type_groups=balance_mol_type_groups,
                 monomer_pdb_target_fraction=monomer_pdb_target_fraction,
+                filter_artifact_ligands=filter_artifact_ligands,
             )
         return indices_df["weights"].astype("float32")
     elif sampler_type == "uniform":

@@ -100,6 +100,7 @@ class BaseSingleDataset(Dataset):
 
         # Configs for data filters
         self.max_n_token = kwargs.get("max_n_token", -1)
+        self.max_resolution = kwargs.get("max_resolution", -1)
         self.pdb_inclusion_list = kwargs.get("pdb_inclusion_list", [])
         self.pdb_exclusion_lists = kwargs.get("pdb_exclusion_lists", [])
         if isinstance(self.pdb_exclusion_lists, str):
@@ -207,6 +208,17 @@ class BaseSingleDataset(Dataset):
             logger.info(f"[removed] #PDB: {removed_list['pdb_id'].nunique()}")
             logger.info(
                 f"[filtered by n_token ({self.max_n_token})] #Rows: {len(indices_list)}"
+            )
+
+        # Filter by max_resolution
+        if self.max_resolution > 0:
+            valid_mask = indices_list["resolution"].astype(float) <= self.max_resolution
+            removed_list = indices_list[~valid_mask]
+            indices_list = indices_list[valid_mask]
+            logger.info(f"[removed] #Rows: {len(removed_list)}")
+            logger.info(f"[removed] #PDB: {removed_list['pdb_id'].nunique()}")
+            logger.info(
+                f"[filtered by resolution ({self.max_resolution})] #Rows: {len(indices_list)}"
             )
 
         # Filter by exclusion_dict

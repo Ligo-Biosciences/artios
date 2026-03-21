@@ -234,11 +234,12 @@ data_configs = {
     "train_sets": ListValue(
         [
             "weightedPDB_before2021_wopb_nometalc_0925",
+            "afdb_trousers_train",
             "mgnify_trousers_train",
         ]
     ),
     "train_sampler": {
-        "train_sample_weights": ListValue([0.01, 0.99]),
+        "train_sample_weights": ListValue([0.00, 0.4, 0.6]),
         "sampler_type": "weighted",
     },
     "test_sets": ListValue(["mgnify_trousers_val", "recentPDB_1536_sample384_0925"]),

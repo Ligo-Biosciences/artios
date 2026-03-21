@@ -126,6 +126,7 @@ class BaseSingleDataset(Dataset):
         )
         self.filter_unique_domain_prob = kwargs.get("filter_unique_domain_prob", 0.1)
         assert self.filter_unique_fragment_prob + self.filter_unique_domain_prob <= 1
+        self.require_pocket_in_fragment = kwargs.get("require_pocket_in_fragment", True)
 
         self.error_dir = kwargs.get("error_dir", None)
         if self.error_dir is not None:
@@ -496,9 +497,31 @@ class BaseSingleDataset(Dataset):
     #     return atom_array
 
     @staticmethod
-    def _filter_for_unique_id(atom_array: AtomArray, id_type: str) -> AtomArray:
-        """Filter for a unique id."""
-        id = np.random.choice(np.unique(atom_array.get_annotation(id_type)))
+    def _filter_for_unique_id(
+        atom_array: AtomArray,
+        id_type: str,
+        require_annotation: str | None = None,
+    ) -> AtomArray:
+        """Filter for a unique id, optionally requiring a non-zero annotation.
+
+        Args:
+            atom_array: Input atom array.
+            id_type: Annotation name to select a unique value from (e.g. "fragment_id").
+            require_annotation: If set, only consider ids where at least one atom
+                has this annotation > 0 (e.g. "pocket_id"). Falls back to all ids
+                if none qualify or the annotation is missing.
+        """
+        ids = np.unique(atom_array.get_annotation(id_type))
+        if (
+            require_annotation is not None
+            and require_annotation in atom_array.get_annotation_categories()
+        ):
+            ann = atom_array.get_annotation(require_annotation)
+            id_ann = atom_array.get_annotation(id_type)
+            has_ann = np.array([np.any(ann[id_ann == uid] > 0) for uid in ids])
+            if has_ann.any():
+                ids = ids[has_ann]
+        id = np.random.choice(ids)
         return atom_array[atom_array.get_annotation(id_type) == id]
 
     @profile_function("dataset.process_one")
@@ -581,7 +604,11 @@ class BaseSingleDataset(Dataset):
         if p < self.filter_unique_fragment_prob:
             # apply fragment filter
             bioassembly_dict["atom_array"] = self._filter_for_unique_id(
-                atom_array=bioassembly_dict["atom_array"], id_type="fragment_id"
+                atom_array=bioassembly_dict["atom_array"],
+                id_type="fragment_id",
+                require_annotation="pocket_id"
+                if self.require_pocket_in_fragment
+                else None,
             )
             tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
             bioassembly_dict["token_array"] = tokenizer.get_token_array()
@@ -1224,6 +1251,10 @@ def get_datasets(
             "filter_unique_domain_prob": config_dict.get(
                 "filter_unique_domain_prob", 0
             ),
+            "require_pocket_in_fragment": config_dict.get(
+                "require_pocket_in_fragment", True
+            ),
+            "max_n_token": config_dict.get("max_n_token", -1),
         }
 
     data_config = configs.data

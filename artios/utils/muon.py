@@ -244,7 +244,7 @@ class BatchedMuonWithAdam(torch.optim.Optimizer):
                     exp_avg_sqs=exp_avg_sqs,
                     max_exp_avg_sqs=max_exp_avg_sqs,
                     state_steps=state_steps,
-                    fused=True,
+                    fused=False,
                     decoupled_weight_decay=True,
                     amsgrad=False,
                     beta1=group["betas"][0],

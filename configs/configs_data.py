@@ -53,6 +53,7 @@ default_weighted_pdb_configs = {
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
         "monomer_pdb_target_fraction": 0.0,
+        "filter_artifact_ligands": True,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -255,6 +256,7 @@ data_configs = {
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
             "max_n_token": -1,
+            "max_resolution": -1,
             "use_reference_chains_only": False,
             "exclusion": {  # do not sample the data based on ions.
                 "mol_1_type": ListValue(["ions"]),

@@ -75,6 +75,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+engineering = [
+    "foldcomp>=1.0.0",
+    "xgboost>=3.2.0",
+]
 dev = [
     "pytest>=6.0",
     "pytest-cov",

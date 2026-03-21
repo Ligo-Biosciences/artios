@@ -73,6 +73,9 @@ default_distillation_configs = {
     "sampler_configs": {
         "sampler_type": "uniform",
         "force_recompute_weight": True,
+        # Weight ~ num_tokens^gamma. At gamma=1.5, a 10x longer protein gets
+        # ~31x sampling weight, biasing toward longer sequences with more
+        # interesting geometry. 0 = uniform, 1 = token-proportional.
         "length_reweight_gamma": 1.5,
     },
     "cropping_configs": {
@@ -232,9 +235,6 @@ data_configs = {
         [
             "weightedPDB_before2021_wopb_nometalc_0925",
             "mgnify_trousers_train",
-            # "trousers_train",
-            # "shirts_with_no_pockets",
-            # "shirts_with_small_pockets",
         ]
     ),
     "train_sampler": {

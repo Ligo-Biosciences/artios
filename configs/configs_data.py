@@ -53,6 +53,7 @@ default_weighted_pdb_configs = {
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
         "monomer_pdb_target_fraction": 0.10,
+        "filter_artifact_ligands": False,
     },
     "cropping_configs": {
         "method_weights": ListValue(

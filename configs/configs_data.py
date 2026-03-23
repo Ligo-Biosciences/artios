@@ -333,6 +333,10 @@ data_configs = {
             "group_by_pdb_id": True,
             "find_eval_chain_interface": False,
             "random_sample_if_failed": True,
+            "pdb_exclusion_lists": [
+                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+            ],
         },
         **deepcopy(default_test_configs),
     },

@@ -10,6 +10,7 @@ import torch.nn as nn
 from einops import rearrange, repeat
 from jaxtyping import Float
 from torch import Tensor
+from torch.utils.checkpoint import checkpoint
 
 from artios.data.features import FullContext
 from artios.model.generator import (
@@ -354,7 +355,7 @@ class DiffusionConditioning(nn.Module):
         )
         z = torch.cat(tensors=[z, relpos_embed], dim=-1)
         z = self.linear_no_bias_z(self.layernorm_z(z))
-        z = z + self.transition_z(z)
+        z = z + checkpoint(self.transition_z, z, use_reentrant=False)
 
         # Single base: atom + motif + entity types
         s_base = s_atom + s_motif

@@ -49,7 +49,7 @@ default_weighted_pdb_configs = {
             "ligand": 1,
         },
         "force_recompute_weight": True,
-        "balance_protein_clusters": False,
+        "balance_protein_clusters": True,
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
         "monomer_pdb_target_fraction": 0.10,
@@ -96,7 +96,7 @@ default_distillation_configs = {
     "max_n_token": 1500,
 }
 
-DATA_ROOT_DIR = "/dev/shm/af3-dev/release_data/"
+DATA_ROOT_DIR = "af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -258,12 +258,12 @@ data_configs = {
             ],
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
-            "max_n_token": -1,
+            "max_n_token": 4000,
             "use_reference_chains_only": False,
-            "exclusion": {  # do not sample the data based on ions.
-                "mol_1_type": ListValue(["ions"]),
-                "mol_2_type": ListValue(["ions"]),
-            },
+            # "exclusion": {  # do not sample the data based on ions.
+            #     "mol_1_type": ListValue(["ions"]),
+            #     "mol_2_type": ListValue(["ions"]),
+            # },
         },
         **deepcopy(default_weighted_pdb_configs),
     },
@@ -327,10 +327,6 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/recentPDB_low_homology_maxtoken1536.csv",
             ),
-            "pdb_exclusion_lists": [
-                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
-                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
-            ],
             # "pdb_list": "",
             "max_n_token": GlobalConfigValue("test_max_n_token"),  # filter data
             "sort_by_n_token": False,

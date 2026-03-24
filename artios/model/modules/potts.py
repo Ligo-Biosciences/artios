@@ -135,8 +135,8 @@ def build_s_init(
     indices = torch.multinomial(
         logits.exp().reshape(B * N, R), 1, generator=generator
     ).reshape(B, N)
-    S_init = torch.nn.functional.one_hot(indices, R).float()
-    S_init = torch.where(stitched_mask.unsqueeze(-1), stitched_restype, S_init)
+    S_init = torch.nn.functional.one_hot(indices, R)
+    S_init = torch.where(stitched_mask.unsqueeze(-1), stitched_restype, S_init).float()
     return S_init
 
 

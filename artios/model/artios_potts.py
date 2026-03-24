@@ -1,4 +1,3 @@
-import logging
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Optional
@@ -18,7 +17,11 @@ from artios.model.generator import (
 )
 from artios.model.loss import composite_nll_loss, nll_loss
 from artios.model.modules.mpnn import MPNN
-from artios.model.modules.penalty import aromatic_enrichment_penalty, complexity_lcp
+from artios.model.modules.penalty import (
+    aromatic_enrichment_penalty,
+    build_active_site_mask,
+    complexity_lcp,
+)
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
@@ -31,8 +34,6 @@ from artios.model.modules.potts import (
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
-
-logger = logging.getLogger(__name__)
 
 ALPHABET_BIAS = 1e4
 
@@ -117,22 +118,6 @@ class ArtiosPotts(nn.Module):
         self.aromatic_target_fraction = sampling_cfg.aromatic_target_fraction
         self.aromatic_distance_cutoff = sampling_cfg.aromatic_distance_cutoff
 
-    def _noise_backbone(
-        self, context: FullContext, generator: torch.Generator | None
-    ) -> FullContext:
-        """Return a copy of context with Gaussian noise added to backbone coordinates."""
-        noised_backbone = context.coordinate.backbone_coordinate + (
-            torch.randn(
-                context.coordinate.backbone_coordinate.shape,
-                device=context.coordinate.backbone_coordinate.device,
-                dtype=context.coordinate.backbone_coordinate.dtype,
-                generator=generator,
-            )
-            * self.ensemble_noise_scale
-        )
-        noised_coord = replace(context.coordinate, backbone_coordinate=noised_backbone)
-        return replace(context, coordinate=noised_coord)
-
     # TODO: this guy needs a lot of tidying before merging to main.
     def main_inference_loop(
         self,
@@ -141,13 +126,13 @@ class ArtiosPotts(nn.Module):
     ) -> PottsOutput:
         device = context.token.restype.device
         restypes = context.token.restype
-        B, N, R = restypes.shape
+        _, _, R = restypes.shape
 
         generator = (
             torch.Generator(device).manual_seed(seed) if seed is not None else None
         )
 
-        # # TODO: this should be changed to a get_masked_restypes function we write in potts.py
+        ### Stitching logic
         if context.stitched is not None:
             is_masked = ~context.stitched.stitched_mask & context.mask.token_mask
             masked_restypes = self.mpnn.pad_and_mask_restypes(
@@ -161,11 +146,20 @@ class ArtiosPotts(nn.Module):
         h_sum = None
         J_sum = None
         for i in range(self.ensemble_size):
-            ctx = (
-                self._noise_backbone(context, generator)
-                if self.ensemble_size > 1
-                else context
-            )
+            if self.ensemble_size > 1:
+                bb = context.coordinate.backbone_coordinate
+                noised = bb + self.ensemble_noise_scale * torch.randn(
+                    bb.shape,
+                    device=bb.device,
+                    dtype=bb.dtype,
+                    generator=generator,
+                )
+                ctx = replace(
+                    context,
+                    coordinate=replace(context.coordinate, backbone_coordinate=noised),
+                )
+            else:
+                ctx = context
             mpnn_out = self.mpnn(
                 context=ctx, masked_restypes=masked_restypes, is_masked=is_masked
             )
@@ -189,13 +183,12 @@ class ArtiosPotts(nn.Module):
         h = h_sum / self.ensemble_size
         J = J_sum / self.ensemble_size
 
-        # TODO: I don't like how this looks
         ### Initialiation logic
         stitched_mask = (
             context.stitched.stitched_mask if context.stitched is not None else None
         )
         stitched_restype = (
-            context.stitched.stitched_restype[..., :R].float()
+            context.stitched.stitched_restype[..., :R]
             if context.stitched is not None
             else None
         )
@@ -216,35 +209,6 @@ class ArtiosPotts(nn.Module):
         )
 
         ### Penalty logic
-        active_site_mask = None
-        if self.aromatic_penalty_weight > 0:
-            lig_mask = context.entity.is_ligand_token  # [B, N]
-            centre_coords = context.coordinate.centre_coordinate  # [B, N, 3]
-
-            # Ligand center of mass per batch
-            lig_coords = centre_coords * lig_mask.unsqueeze(-1).float()
-            lig_com = lig_coords.sum(dim=1) / lig_mask.float().sum(
-                dim=1, keepdim=True
-            ).clamp(min=1)  # [B, 3]
-
-            # Distance from each token to ligand CoM
-            prot_mask = context.entity.is_protein_token  # [B, N]
-            dist = (centre_coords - lig_com.unsqueeze(1)).norm(dim=-1)  # [B, N]
-
-            active_site_mask = (
-                (dist < self.aromatic_distance_cutoff)
-                & prot_mask
-                & context.mask.token_mask
-            )
-
-            n_lig = lig_mask.sum().item()
-            n_active = active_site_mask.sum(dim=-1).tolist()
-            logger.info(
-                f"Aromatic penalty: {n_lig} ligand tokens, "
-                f"active site sizes per batch: {n_active}, "
-                f"ligand CoM: {lig_com[0].tolist()}"
-            )
-
         penalties = []
 
         if self.complexity_penalty_weight > 0:
@@ -265,10 +229,16 @@ class ArtiosPotts(nn.Module):
 
             penalties.append(lcp_penalty)
 
-        if self.aromatic_penalty_weight > 0 and active_site_mask is not None:
+        if self.aromatic_penalty_weight > 0:
+            arom_mask = build_active_site_mask(
+                context.coordinate.centre_coordinate,
+                context.entity.is_ligand_token,
+                context.entity.is_protein_token,
+                context.mask.token_mask,
+                self.aromatic_distance_cutoff,
+            )
             arom_weight = self.aromatic_penalty_weight
             arom_target = self.aromatic_target_fraction
-            arom_mask = active_site_mask
 
             def aromatic_penalty(S: torch.Tensor) -> torch.Tensor:
                 return arom_weight * aromatic_enrichment_penalty(

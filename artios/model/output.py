@@ -98,6 +98,9 @@ class PottsOutput(ModelOutput):
     timestep: Optional[Float[Tensor, "batch"]] = None  # type: ignore[assignment]
     sampled_sequence: Optional[Float[Tensor, "batch n_token num_residue_types"]] = None  # type: ignore[assignment]
     energy: Optional[Float[Tensor, "batch"]] = None  # type: ignore[assignment]
+    sequence_trajectory: Optional[Int[Tensor, "batch n_saved n_token"]] = None
+    energy_trajectory: Optional[Float[Tensor, "batch n_saved"]] = None
+    trajectory_sweep_indices: list[int] | None = None
 
 
 # Backwards compatibility alias

@@ -6,6 +6,10 @@ Tests GraphPotts parameterization and J symmetrization.
 import pytest
 import torch
 
+from artios.model.modules.penalty import (
+    AROMATIC_INDICES,
+    aromatic_enrichment_penalty,
+)
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
@@ -455,3 +459,125 @@ class TestPottsOutput:
         assert output.edge_mask.shape == (B, N, K)
         assert output.is_masked.shape == (B, N)
         assert output.timestep.shape == (B,)
+
+
+# ---------------------------------------------------------------------------
+# Aromatic enrichment penalty tests
+# ---------------------------------------------------------------------------
+
+
+class TestAromaticEnrichmentPenalty:
+    """Tests for the aromatic enrichment penalty function."""
+
+    @pytest.fixture
+    def setup(self, device):
+        B, N, R = 2, 10, 20
+        return B, N, R, device
+
+    def test_zero_penalty_when_above_target(self, setup):
+        """Penalty should be 0 when aromatic fraction >= target."""
+        B, N, R, device = setup
+        target = 0.25
+
+        # Build S where all active site positions are aromatic (fraction=1.0)
+        S = torch.zeros(B, N, R, device=device)
+        S[:, :, 0] = 1.0  # default to ALA
+        active_site_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+        active_site_mask[:, :4] = True  # 4 active site positions
+
+        # Set active site positions to PHE (index 13)
+        S[:, :4, 0] = 0.0
+        S[:, :4, 13] = 1.0
+
+        penalty = aromatic_enrichment_penalty(
+            S, active_site_mask, target_fraction=target
+        )
+        assert torch.allclose(
+            penalty, torch.zeros(B, device=device)
+        ), "Penalty should be 0 when aromatic fraction >= target"
+
+    def test_positive_penalty_when_below_target(self, setup):
+        """Penalty should be positive when aromatic fraction < target."""
+        B, N, R, device = setup
+        target = 0.25
+
+        # Build S where no active site positions are aromatic (fraction=0.0)
+        S = torch.zeros(B, N, R, device=device)
+        S[:, :, 0] = 1.0  # all ALA
+        active_site_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+        active_site_mask[:, :4] = True
+
+        penalty = aromatic_enrichment_penalty(
+            S, active_site_mask, target_fraction=target
+        )
+        assert (penalty > 0).all(), "Penalty should be positive when below target"
+
+    def test_gradient_nonzero_only_at_active_aromatic(self, setup):
+        """Gradient w.r.t. S should be nonzero only at active site aromatic indices."""
+        B, N, R, device = setup
+        target = 0.5  # high target to ensure penalty is active
+
+        S = torch.zeros(B, N, R, device=device, requires_grad=True)
+        # Initialize to ALA everywhere (no aromatics)
+        with torch.no_grad():
+            S.data[:, :, 0] = 1.0
+
+        active_site_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+        active_site_mask[:, 2:5] = True  # positions 2, 3, 4
+
+        penalty = aromatic_enrichment_penalty(
+            S, active_site_mask, target_fraction=target
+        )
+        penalty.sum().backward()
+
+        grad = S.grad  # [B, N, R]
+
+        # Non-active-site positions should have zero gradient
+        non_active = ~active_site_mask
+        assert (
+            grad[:, non_active[0], :] == 0
+        ).all(), "Gradient should be zero outside active site"
+
+        # Non-aromatic indices at active site should have zero gradient
+        non_aromatic_mask = torch.ones(R, dtype=torch.bool)
+        non_aromatic_mask[AROMATIC_INDICES] = False
+        assert (
+            grad[:, active_site_mask[0], :][:, :, non_aromatic_mask] == 0
+        ).all(), "Gradient should be zero for non-aromatic indices"
+
+        # Aromatic indices at active site should have nonzero gradient
+        assert (
+            grad[:, active_site_mask[0], :][:, :, AROMATIC_INDICES] != 0
+        ).any(), "Gradient should be nonzero for aromatic indices in active site"
+
+    def test_no_active_site_returns_zero(self, setup):
+        """Penalty should be 0 when there are no active site residues."""
+        B, N, R, device = setup
+
+        S = torch.randn(B, N, R, device=device)
+        active_site_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+
+        penalty = aromatic_enrichment_penalty(S, active_site_mask)
+        assert torch.allclose(
+            penalty, torch.zeros(B, device=device)
+        ), "Penalty should be 0 with empty active site"
+
+    def test_exact_target_gives_zero(self, setup):
+        """Penalty should be 0 when aromatic fraction exactly equals target."""
+        B, N, R, device = setup
+        target = 0.25
+
+        S = torch.zeros(B, N, R, device=device)
+        active_site_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+        active_site_mask[:, :4] = True
+
+        # 1 of 4 active site positions is aromatic → fraction = 0.25
+        S[:, :3, 0] = 1.0  # ALA
+        S[:, 3, 13] = 1.0  # PHE
+
+        penalty = aromatic_enrichment_penalty(
+            S, active_site_mask, target_fraction=target
+        )
+        assert torch.allclose(
+            penalty, torch.zeros(B, device=device), atol=1e-6
+        ), "Penalty should be 0 when fraction equals target"

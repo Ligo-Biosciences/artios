@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Optional
 
@@ -10,22 +10,37 @@ from typing_extensions import assert_never
 
 from artios.data.features import FullContext
 from artios.model.generator import (
+    ExponentialMaskingTimestepSampler,
     LinearMaskingTimestepSampler,
     PottsProposal,
     PottsSampler,
 )
 from artios.model.loss import composite_nll_loss, nll_loss
-from artios.model.modules.complexity import complexity_lcp
 from artios.model.modules.mpnn import MPNN
+from artios.model.modules.penalty import (
+    aromatic_enrichment_penalty,
+    build_active_site_mask,
+    complexity_lcp,
+)
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
+    build_alphabet_mask,
+    build_mutable_mask,
+    build_s_init,
     compute_potts_joint_logits,
     compute_potts_single_logits,
 )
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
+
+ALPHABET_BIAS = 1e4
+
+
+class MaskingSamplerType(str, Enum):
+    LINEAR = "linear"
+    EXPONENTIAL = "exponential"
 
 
 class PottsLossType(str, Enum):
@@ -45,7 +60,6 @@ class ArtiosPotts(nn.Module):
     def __init__(self, configs):
         super(ArtiosPotts, self).__init__()
 
-        self.masking_sampler = LinearMaskingTimestepSampler()
         self.mpnn = MPNN(**configs.artios_mpnn.model)
 
         node_dim = configs.artios_mpnn.model.node_dim
@@ -61,6 +75,7 @@ class ArtiosPotts(nn.Module):
                 configs.artios_mpnn.potts.parameterisation
             ),
             symmetric_J=configs.artios_mpnn.potts.symmetric_J,
+            zero_sum_gauge=configs.artios_mpnn.potts.zero_sum_gauge,
         )
 
         potts_loss_cfg = configs.loss.potts
@@ -68,6 +83,17 @@ class ArtiosPotts(nn.Module):
             loss_type=potts_loss_cfg.loss_type,
             label_smoothing=potts_loss_cfg.label_smoothing,
         )
+
+        masking_sampler_type = MaskingSamplerType(
+            configs.artios_mpnn.potts.masking_sampler
+        )
+        match masking_sampler_type:
+            case MaskingSamplerType.LINEAR:
+                self.masking_sampler = LinearMaskingTimestepSampler()
+            case MaskingSamplerType.EXPONENTIAL:
+                self.masking_sampler = ExponentialMaskingTimestepSampler(b=0.01)
+            case _:
+                assert_never(masking_sampler_type)
 
         sampling_cfg = configs.artios_mpnn.potts.sampling
         self.potts_sampler = PottsSampler(
@@ -78,74 +104,161 @@ class ArtiosPotts(nn.Module):
             annealing_fraction=sampling_cfg.annealing_fraction,
             dt=sampling_cfg.dt,
             rejection_step=sampling_cfg.rejection_step,
+            track_trajectory=sampling_cfg.track_trajectory,
+            trajectory_interval=sampling_cfg.trajectory_interval,
         )
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
         self.complexity_entropy_min = sampling_cfg.complexity_entropy_min
+        self.exclude_cys = sampling_cfg.exclude_cys
+        self.exclude_met = sampling_cfg.exclude_met
+        self.ensemble_size = sampling_cfg.ensemble_size
+        self.ensemble_noise_scale = sampling_cfg.ensemble_noise_scale
+        self.aromatic_penalty_weight = sampling_cfg.aromatic_penalty_weight
+        self.aromatic_target_fraction = sampling_cfg.aromatic_target_fraction
+        self.aromatic_distance_cutoff = sampling_cfg.aromatic_distance_cutoff
 
+    # TODO: this guy needs a lot of tidying before merging to main.
     def main_inference_loop(
         self,
         context: FullContext,
         seed: Optional[int] = None,
     ) -> PottsOutput:
-        batch_size = context.token.restype.shape[0]
         device = context.token.restype.device
+        restypes = context.token.restype
+        _, _, R = restypes.shape
 
         generator = (
             torch.Generator(device).manual_seed(seed) if seed is not None else None
         )
 
-        mask_rate = torch.ones(batch_size, device=device)
+        ### Stitching logic
+        if context.stitched is not None:
+            is_masked = ~context.stitched.stitched_mask & context.mask.token_mask
+            masked_restypes = self.mpnn.pad_and_mask_restypes(
+                context.stitched.stitched_restype, is_masked
+            )
+        else:
+            is_masked = context.mask.token_mask
+            masked_restypes = self.mpnn.pad_and_mask_restypes(restypes, is_masked)
 
-        mpnn_output = self.mpnn(context=context, mask_rate=mask_rate)
+        ### Ensemble logic
+        h_sum = None
+        J_sum = None
+        for i in range(self.ensemble_size):
+            if self.ensemble_size > 1:
+                bb = context.coordinate.backbone_coordinate
+                noised = bb + self.ensemble_noise_scale * torch.randn(
+                    bb.shape,
+                    device=bb.device,
+                    dtype=bb.dtype,
+                    generator=generator,
+                )
+                ctx = replace(
+                    context,
+                    coordinate=replace(context.coordinate, backbone_coordinate=noised),
+                )
+            else:
+                ctx = context
+            mpnn_out = self.mpnn(
+                context=ctx, masked_restypes=masked_restypes, is_masked=is_masked
+            )
 
-        h, J = self.potts(
-            mpnn_output.node_feats,
-            mpnn_output.edge_feats,
-            mpnn_output.edge_index,
-            mpnn_output.edge_mask,
-            context.mask.token_mask,
+            h_i, J_i = self.potts(
+                mpnn_out.node_feats,
+                mpnn_out.edge_feats,
+                mpnn_out.edge_index,
+                mpnn_out.edge_mask,
+                ctx.mask.token_mask,
+            )
+
+            if i == 0:
+                h_sum, J_sum = h_i, J_i
+                edge_index = mpnn_out.edge_index
+                edge_mask = mpnn_out.edge_mask
+            else:
+                h_sum = h_sum + h_i
+                J_sum = J_sum + J_i
+
+        h = h_sum / self.ensemble_size
+        J = J_sum / self.ensemble_size
+
+        ### Initialiation logic
+        stitched_mask = (
+            context.stitched.stitched_mask if context.stitched is not None else None
+        )
+        stitched_restype = (
+            context.stitched.stitched_restype[..., :R]
+            if context.stitched is not None
+            else None
         )
 
-        S_init = None
-        mutable_mask = context.mask.token_mask
+        mutable_mask = build_mutable_mask(context.mask.token_mask, stitched_mask)
+        alphabet_mask = build_alphabet_mask(
+            mutable_mask, R, self.exclude_cys, self.exclude_met
+        )
 
-        if context.stitched is not None:
-            B, N, R = h.shape
-            stitched_mask = context.stitched.stitched_mask
-            stitched_restype = context.stitched.stitched_restype[..., :R].float()
+        h = h + ~alphabet_mask * ALPHABET_BIAS
 
-            logits = F.log_softmax(-h / self.potts_sampler.temperature_init, dim=-1)
-            indices = torch.multinomial(
-                logits.exp().reshape(B * N, R), 1, generator=generator
-            ).reshape(B, N)
-            S_init = F.one_hot(indices, R).float()
-            S_init = torch.where(stitched_mask.unsqueeze(-1), stitched_restype, S_init)
+        S_init = build_s_init(
+            h,
+            self.potts_sampler.temperature_init,
+            stitched_mask,
+            stitched_restype,
+            generator,
+        )
 
-            mutable_mask = context.mask.token_mask & ~stitched_mask
+        ### Penalty logic
+        penalties = []
 
-        penalty_func = None
         if self.complexity_penalty_weight > 0:
             chain_id = context.token.asym_id
             token_mask = context.mask.token_mask
-            weight = self.complexity_penalty_weight
-            window_size = self.complexity_window_size
-            entropy_min = self.complexity_entropy_min
+            lcp_weight = self.complexity_penalty_weight
+            lcp_window_size = self.complexity_window_size
+            lcp_entropy_min = self.complexity_entropy_min
 
-            def penalty_func(S: torch.Tensor) -> torch.Tensor:
-                return weight * complexity_lcp(
+            def lcp_penalty(S: torch.Tensor) -> torch.Tensor:
+                return lcp_weight * complexity_lcp(
                     S,
                     chain_id,
                     token_mask,
-                    window_size=window_size,
-                    entropy_min=entropy_min,
+                    window_size=lcp_window_size,
+                    entropy_min=lcp_entropy_min,
                 )
 
+            penalties.append(lcp_penalty)
+
+        if self.aromatic_penalty_weight > 0:
+            arom_mask = build_active_site_mask(
+                context.coordinate.centre_coordinate,
+                context.entity.is_ligand_token,
+                context.entity.is_protein_token,
+                context.mask.token_mask,
+                self.aromatic_distance_cutoff,
+            )
+            arom_weight = self.aromatic_penalty_weight
+            arom_target = self.aromatic_target_fraction
+
+            def aromatic_penalty(S: torch.Tensor) -> torch.Tensor:
+                return arom_weight * aromatic_enrichment_penalty(
+                    S, arom_mask, target_fraction=arom_target
+                )
+
+            penalties.append(aromatic_penalty)
+
+        penalty_func = None
+        if penalties:
+
+            def penalty_func(S: torch.Tensor) -> torch.Tensor:
+                return sum(p(S) for p in penalties)
+
+        ### Sampling logic
         result = self.potts_sampler.sample(
             h=h,
             J=J,
-            edge_index=mpnn_output.edge_index,
-            edge_mask=mpnn_output.edge_mask,
+            edge_index=edge_index,
+            edge_mask=edge_mask,
             token_mask=mutable_mask,
             S_init=S_init,
             generator=generator,
@@ -155,11 +268,14 @@ class ArtiosPotts(nn.Module):
         return PottsOutput(
             h=h,
             J=J,
-            edge_index=mpnn_output.edge_index,
-            edge_mask=mpnn_output.edge_mask,
-            is_masked=mpnn_output.is_masked,
+            edge_index=edge_index,
+            edge_mask=edge_mask,
+            is_masked=is_masked,
             sampled_sequence=result.sequence,
             energy=result.energy,
+            sequence_trajectory=result.sequence_trajectory,
+            energy_trajectory=result.energy_trajectory,
+            trajectory_sweep_indices=result.trajectory_sweep_indices,
         )
 
     def main_train_loop(
@@ -168,7 +284,7 @@ class ArtiosPotts(nn.Module):
         seed: Optional[int] = None,
     ) -> PottsOutput:
         device = context.token.restype.device
-        batch_size = context.token.restype.shape[0]
+        B, N, _ = context.token.restype.shape
 
         generator = (
             torch.Generator(device).manual_seed(seed)
@@ -177,11 +293,21 @@ class ArtiosPotts(nn.Module):
         )
 
         timestep = self.masking_sampler.sample(
-            size=(batch_size,), device=device, generator=generator
+            size=(B,), device=device, generator=generator
         )
         mask_rate = self.masking_sampler.get_mask_rates(timestep)
 
-        mpnn_output = self.mpnn(context=context, mask_rate=mask_rate)
+        rand = torch.rand(B, N, device=device)
+        is_masked = (rand < mask_rate[:, None]) & context.mask.token_mask
+        masked_restypes = self.mpnn.pad_and_mask_restypes(
+            context.token.restype, is_masked
+        )
+
+        mpnn_output = self.mpnn(
+            context=context,
+            masked_restypes=masked_restypes,
+            is_masked=is_masked,
+        )
 
         h, J = self.potts(
             mpnn_output.node_feats,

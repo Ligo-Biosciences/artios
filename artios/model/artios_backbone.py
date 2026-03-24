@@ -164,12 +164,24 @@ class ArtiosBackbone(nn.Module):
         t = timestep[..., :, None, None]
         r_noisy = t * x_target_augment + (1 - t) * noise
 
+        # Self-conditioning: with probability p, warm-start with a no-grad forward pass
+        prev_pred = None
+        if torch.rand(1).item() < self.configs.self_conditioning_prob:
+            with torch.no_grad():
+                prev_pred = self.diffusion_module(
+                    r_noisy=r_noisy,
+                    timestep=timestep,
+                    context=context,
+                    inplace_safe=inplace_safe,
+                ).detach()
+
         # Denoising
         pred = self.diffusion_module(
             r_noisy=r_noisy,
             timestep=timestep,
             context=context,
             inplace_safe=inplace_safe,
+            prev_pred=prev_pred,
         )
 
         # Correct symmetric atoms

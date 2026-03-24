@@ -496,7 +496,7 @@ class ContextGenerator(object):
                 res_name = stitched_map[int(res_id)]
                 stitched_mask[i] = True
                 onehot = self.restype_onehot_encoded([res_name])  # [1, 32]
-                stitched_restype[i] = onehot[0].float()
+                stitched_restype[i] = onehot[0]
 
         return StitchedContext(
             stitched_mask=stitched_mask,

@@ -253,6 +253,9 @@ model_configs = {
                 "complexity_entropy_min": 2.32,
                 "exclude_cys": True,
                 "exclude_met": True,
+                "aromatic_penalty_weight": 0.0,
+                "aromatic_target_fraction": 0.25,
+                "aromatic_distance_cutoff": 8.0,
                 "ensemble_size": 1,  # 1 = disabled, >1 = average h/J over noised backbone coords
                 "ensemble_noise_scale": 0.3,  # std of Gaussian noise added to backbone coordinates
                 "track_trajectory": False,

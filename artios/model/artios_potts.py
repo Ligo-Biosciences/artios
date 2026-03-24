@@ -1,5 +1,4 @@
 import logging
-import time
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Optional
@@ -18,8 +17,8 @@ from artios.model.generator import (
     PottsSampler,
 )
 from artios.model.loss import composite_nll_loss, nll_loss
-from artios.model.modules.complexity import complexity_lcp
 from artios.model.modules.mpnn import MPNN
+from artios.model.modules.penalty import aromatic_enrichment_penalty, complexity_lcp
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
@@ -114,6 +113,9 @@ class ArtiosPotts(nn.Module):
         self.exclude_met = sampling_cfg.exclude_met
         self.ensemble_size = sampling_cfg.ensemble_size
         self.ensemble_noise_scale = sampling_cfg.ensemble_noise_scale
+        self.aromatic_penalty_weight = sampling_cfg.aromatic_penalty_weight
+        self.aromatic_target_fraction = sampling_cfg.aromatic_target_fraction
+        self.aromatic_distance_cutoff = sampling_cfg.aromatic_distance_cutoff
 
     def _noise_backbone(
         self, context: FullContext, generator: torch.Generator | None
@@ -155,7 +157,7 @@ class ArtiosPotts(nn.Module):
             is_masked = context.mask.token_mask
             masked_restypes = self.mpnn.pad_and_mask_restypes(restypes, is_masked)
 
-        # Ensemble logic, will be moved out at some point
+        ### Ensemble logic
         h_sum = None
         J_sum = None
         for i in range(self.ensemble_size):
@@ -164,14 +166,10 @@ class ArtiosPotts(nn.Module):
                 if self.ensemble_size > 1
                 else context
             )
-            t_mpnn = time.perf_counter()
             mpnn_out = self.mpnn(
                 context=ctx, masked_restypes=masked_restypes, is_masked=is_masked
             )
-            logger.info(
-                f"[TIMING] MPNN forward pass (ensemble {i}): {time.perf_counter() - t_mpnn:.3f}s"
-            )
-            t_potts = time.perf_counter()
+
             h_i, J_i = self.potts(
                 mpnn_out.node_feats,
                 mpnn_out.edge_feats,
@@ -179,9 +177,7 @@ class ArtiosPotts(nn.Module):
                 mpnn_out.edge_mask,
                 ctx.mask.token_mask,
             )
-            logger.info(
-                f"[TIMING] Potts forward pass (ensemble {i}): {time.perf_counter() - t_potts:.3f}s"
-            )
+
             if i == 0:
                 h_sum, J_sum = h_i, J_i
                 edge_index = mpnn_out.edge_index
@@ -194,6 +190,7 @@ class ArtiosPotts(nn.Module):
         J = J_sum / self.ensemble_size
 
         # TODO: I don't like how this looks
+        ### Initialiation logic
         stitched_mask = (
             context.stitched.stitched_mask if context.stitched is not None else None
         )
@@ -218,23 +215,75 @@ class ArtiosPotts(nn.Module):
             generator,
         )
 
-        penalty_func = None
+        ### Penalty logic
+        active_site_mask = None
+        if self.aromatic_penalty_weight > 0:
+            lig_mask = context.entity.is_ligand_token  # [B, N]
+            centre_coords = context.coordinate.centre_coordinate  # [B, N, 3]
+
+            # Ligand center of mass per batch
+            lig_coords = centre_coords * lig_mask.unsqueeze(-1).float()
+            lig_com = lig_coords.sum(dim=1) / lig_mask.float().sum(
+                dim=1, keepdim=True
+            ).clamp(min=1)  # [B, 3]
+
+            # Distance from each token to ligand CoM
+            prot_mask = context.entity.is_protein_token  # [B, N]
+            dist = (centre_coords - lig_com.unsqueeze(1)).norm(dim=-1)  # [B, N]
+
+            active_site_mask = (
+                (dist < self.aromatic_distance_cutoff)
+                & prot_mask
+                & context.mask.token_mask
+            )
+
+            n_lig = lig_mask.sum().item()
+            n_active = active_site_mask.sum(dim=-1).tolist()
+            logger.info(
+                f"Aromatic penalty: {n_lig} ligand tokens, "
+                f"active site sizes per batch: {n_active}, "
+                f"ligand CoM: {lig_com[0].tolist()}"
+            )
+
+        penalties = []
+
         if self.complexity_penalty_weight > 0:
             chain_id = context.token.asym_id
             token_mask = context.mask.token_mask
-            weight = self.complexity_penalty_weight
-            window_size = self.complexity_window_size
-            entropy_min = self.complexity_entropy_min
+            lcp_weight = self.complexity_penalty_weight
+            lcp_window_size = self.complexity_window_size
+            lcp_entropy_min = self.complexity_entropy_min
 
-            def penalty_func(S: torch.Tensor) -> torch.Tensor:
-                return weight * complexity_lcp(
+            def lcp_penalty(S: torch.Tensor) -> torch.Tensor:
+                return lcp_weight * complexity_lcp(
                     S,
                     chain_id,
                     token_mask,
-                    window_size=window_size,
-                    entropy_min=entropy_min,
+                    window_size=lcp_window_size,
+                    entropy_min=lcp_entropy_min,
                 )
 
+            penalties.append(lcp_penalty)
+
+        if self.aromatic_penalty_weight > 0 and active_site_mask is not None:
+            arom_weight = self.aromatic_penalty_weight
+            arom_target = self.aromatic_target_fraction
+            arom_mask = active_site_mask
+
+            def aromatic_penalty(S: torch.Tensor) -> torch.Tensor:
+                return arom_weight * aromatic_enrichment_penalty(
+                    S, arom_mask, target_fraction=arom_target
+                )
+
+            penalties.append(aromatic_penalty)
+
+        penalty_func = None
+        if penalties:
+
+            def penalty_func(S: torch.Tensor) -> torch.Tensor:
+                return sum(p(S) for p in penalties)
+
+        ### Sampling logic
         result = self.potts_sampler.sample(
             h=h,
             J=J,

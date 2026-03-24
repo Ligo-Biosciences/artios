@@ -1,15 +1,8 @@
-"""Local composition perplexity penalty for sequence sampling.
-
-Penalizes sequences with low local amino acid diversity, encouraging
-compositionally complex (natural-looking) sequences during MCMC sampling.
-
-Adapted from Chroma (Ingraham et al., 2023).
-"""
-
 import numpy as np
 import torch
 from torch import Tensor
 
+from artios.common.constants import AROMATIC_INDICES
 from artios.utils.typing import Bool, Float, Int
 
 
@@ -152,3 +145,45 @@ def complexity_lcp(
     # Mask and sum
     U = (mask_i_valid * U).sum(dim=1)  # [B]
     return U
+
+
+def aromatic_enrichment_penalty(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    active_site_mask: Bool[Tensor, "batch n_token"],
+    target_fraction: float = 0.25,
+) -> Float[Tensor, "batch"]:
+    """Penalize low aromatic residue fraction in the active site.
+
+    Encourages aromatic residues (PHE, TRP, TYR, HIS) near the ligand
+    binding site during MCMC sampling. Only penalizes when the aromatic
+    fraction falls below the target — sequences that already meet or
+    exceed the target receive zero penalty.
+
+    Unlike LCP, this is a linear function of S, so autograd gives correct
+    gradients even with one-hot inputs (no straight-through estimator needed).
+
+    Args:
+        S: One-hot (or soft) sequence tensor [B, N, R].
+        active_site_mask: Boolean mask for active site protein residues [B, N].
+        target_fraction: Target aromatic fraction in active site (default 0.25).
+
+    Returns:
+        Penalty energy per sample [B]. Higher = more penalty.
+    """
+    # Sum aromatic probabilities per position: [B, N]
+    S_aromatic = S[:, :, AROMATIC_INDICES].sum(dim=-1)
+
+    # Mask to active site and compute counts
+    mask_float = active_site_mask.float()
+    aromatic_count = (S_aromatic * mask_float).sum(dim=-1)  # [B]
+    n_active = mask_float.sum(dim=-1)  # [B]
+
+    # Fraction of aromatic residues in active site
+    frac = aromatic_count / (n_active + 1e-8)  # [B]
+
+    # Only penalize when below target (one-sided quadratic)
+    penalty = (frac - target_fraction).clamp(max=0).square()  # [B]
+
+    # Zero out for batches with no active site residues
+    has_active_site = n_active > 0
+    return penalty * has_active_site.float()

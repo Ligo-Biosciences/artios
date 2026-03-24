@@ -52,7 +52,8 @@ default_weighted_pdb_configs = {
         "balance_protein_clusters": False,
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
-        "monomer_pdb_target_fraction": 0.0,
+        "monomer_pdb_target_fraction": 0.10,
+        "should_filter_artifact_ligands": False,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -73,6 +74,10 @@ default_distillation_configs = {
     "sampler_configs": {
         "sampler_type": "uniform",
         "force_recompute_weight": True,
+        # Weight ~ num_tokens^gamma. At gamma=1.5, a 10x longer protein gets
+        # ~31x sampling weight, biasing toward longer sequences with more
+        # interesting geometry. 0 = uniform, 1 = token-proportional.
+        "length_reweight_gamma": 1.5,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -87,6 +92,8 @@ default_distillation_configs = {
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
     "filter_unique_fragment_prob": 1.0,
     "filter_unique_domain_prob": 0.0,
+    "require_pocket_in_fragment": True,
+    "max_n_token": 1500,
 }
 
 DATA_ROOT_DIR = "/dev/shm/af3-dev/release_data/"
@@ -189,8 +196,6 @@ data_configs = {
         "pocket_motif_prob": 1.0,
         "whole_ligand_prob": 0.7,
         "whole_sidechain_prob": 0.05,
-        "pocket_score_threshold": 0.18,
-        "pocket_n_neighbours": 100,
         "sidechain_seed_is_tip_prob": 0.0,
         "sidechain_seed_is_in_sphere_prob": 1.0,
         "sidechain_bfs_depth_prob": 0.5,
@@ -229,29 +234,28 @@ data_configs = {
     },
     "train_sets": ListValue(
         [
-            "weightedPDB_before2109_wopb_nometalc_0925",  # new data: weightedPDB_before2021_wopb_nometalc_0925
-            "trousers_train",
-            "shirts_with_no_pockets",
-            "shirts_with_small_pockets",
+            "weightedPDB_before2021_wopb_nometalc_0925",
+            "afdb_trousers_train",
+            "mgnify_trousers_train",
         ]
     ),
     "train_sampler": {
-        "train_sample_weights": ListValue([0.01, 0.8, 0.1, 0.09]),
+        "train_sample_weights": ListValue([0.00, 0.4, 0.6]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["trousers_val", "recentPDB_1536_sample384_0925"]),
-    "weightedPDB_before2109_wopb_nometalc_0925": {  # new data : weightedPDB_before2021_wopb_nometalc_0925
+    "test_sets": ListValue(["mgnify_trousers_val", "recentPDB_1536_sample384_0925"]),
+    "weightedPDB_before2021_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  #  new data: "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv",  # .gz
-            ),  #
-            # "pdb_exclusion_lists": [
-            #     os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
-            #     os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
-            # ],
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv.gz",  # .gz
+            ),
+            "pdb_exclusion_lists": [
+                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+            ],
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
             "max_n_token": -1,
@@ -263,62 +267,52 @@ data_configs = {
         },
         **deepcopy(default_weighted_pdb_configs),
     },
-    "trousers_train": {
+    "mgnify_trousers_train": {
         "base_info": {
-            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mgnify-trousers-train/..."),
             "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "trousers/bioassembly_train"
+                DATA_ROOT_DIR, "mgnify-trousers-train"
             ),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/trousers_train.csv",
+                "indices/mgnify_trousers_train_indices.csv",
             ),
-            # "pdb_list": "",  # ["af-a0a0d2yk69-f1", "af-a0a3d3q4w2-f1", "af-a0a3a5v9n6-f1"],
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),
     },
-    "trousers_val": {
+    "mgnify_trousers_val": {
         "base_info": {
-            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-            "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "trousers/bioassembly_val"
-            ),
+            "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mgnify-trousers-val/..."),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mgnify-trousers-val"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/trousers_val.csv",
+                "indices/mgnify_trousers_val_indices.csv",
             ),
-            # "pdb_list": "",  # ["af-a0a399nz51-f1"],
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),
     },
-    "shirts_with_no_pockets": {
+    "afdb_trousers_train": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-            "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "shirts_with_no_pockets/bioassembly"
-            ),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "afdb-trousers-train"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/shirts_with_no_pockets.csv",
+                "indices/afdb_trousers_train.csv",
             ),
-            # "pdb_list": "",
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),
     },
-    "shirts_with_small_pockets": {
+    "afdb_trousers_val": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "trousers/..."),
-            "bioassembly_dict_dir": os.path.join(
-                DATA_ROOT_DIR, "shirts_with_small_pockets/bioassembly"
-            ),
+            "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "afdb-trousers-val"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/shirts_with_small_pockets.csv",
+                "indices/afdb_trousers_val.csv",
             ),
-            "pdb_list": "",
             "random_sample_if_failed": True,
         },
         **deepcopy(default_distillation_configs),
@@ -343,6 +337,10 @@ data_configs = {
             "group_by_pdb_id": True,
             "find_eval_chain_interface": False,
             "random_sample_if_failed": True,
+            "pdb_exclusion_lists": [
+                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+            ],
         },
         **deepcopy(default_test_configs),
     },

@@ -6,9 +6,7 @@ pipeline which handles training/inference featurization.
 
 Submodules:
     - metrics: Structural and quality metrics for protein structures
-    - processors: Parallel processing of protein databases (FoldComp, PDB)
-    - filters: Filtering logic and visualization for dataset curation
-    - cli: Command-line interfaces for data engineering tasks
+    - afdb: AlphaFold Database processing pipeline
+    - mgnify: MGnify structure processing pipeline
+    - scripts: Miscellaneous data processing scripts
 """
-
-__version__ = "0.1.0"

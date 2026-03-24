@@ -28,3 +28,7 @@ pdb-samples/**/*.cif
 pdb-samples/**/*.pdb
 pdb-samples/**/*.fasta
 notebooks/sample-proteins/
+
+# Generated PDB/CIF outputs
+notebooks/PDBs/
+notebooks/PDBs_noise_*/

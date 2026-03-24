@@ -295,6 +295,224 @@ def find_confident_pockets(
     )
 
 
+# Amino acid categories for binding site analysis
+_AROMATIC_RES = frozenset({"PHE", "TYR", "TRP", "HIS"})
+_CHARGED_RES = frozenset({"ASP", "GLU", "LYS", "ARG", "HIS"})
+
+# Binding score model weights (logistic regression trained on 130 PDB structures
+# with ground-truth ligand positions from pdb-samples/tracker.json).
+# Trained with 0.2Å Gaussian coordinate noise augmentation for robustness.
+# Features are: n_spheres, lining_residues, enclosure, mean_radius,
+# aromatic_ratio, charged_ratio, residue_diversity, carbon_atom_ratio
+_BINDING_WEIGHTS = np.array(
+    [0.004118, 0.021214, 6.494799, 2.550456, 3.697266, -1.462200, 0.122680, 4.379412]
+)
+_BINDING_BIAS = -21.796847
+
+
+def _compute_binding_features(
+    pocket: Pocket,
+    protein_atoms: struc.AtomArray,
+    tree: KDTree,
+) -> np.ndarray:
+    """Compute binding-relevant features for a pocket.
+
+    Returns feature vector: [n_spheres, lining_residues, enclosure,
+    mean_radius, aromatic_ratio, charged_ratio, residue_diversity,
+    carbon_atom_ratio]
+    """
+    sphere_centers = np.array([s.center for s in pocket.spheres])
+    centroid = pocket.centroid
+
+    # --- Contact analysis (4.5Å from sphere centers) ---
+    contact_indices: set[int] = set()
+    for sc in sphere_centers:
+        contact_indices.update(tree.query_ball_point(sc, 4.5))
+
+    if contact_indices:
+        contact_atoms = protein_atoms[sorted(contact_indices)]
+        res_keys = set(
+            zip(contact_atoms.chain_id, contact_atoms.res_id, contact_atoms.res_name)
+        )
+        lining_residues = len(res_keys)
+        residue_diversity = len({r[2] for r in res_keys})
+        aromatic_ratio = (
+            sum(1 for r in res_keys if r[2] in _AROMATIC_RES) / lining_residues
+        )
+        charged_ratio = (
+            sum(1 for r in res_keys if r[2] in _CHARGED_RES) / lining_residues
+        )
+        carbon_atom_ratio = float(
+            np.sum(contact_atoms.element == "C") / len(contact_atoms)
+        )
+    else:
+        lining_residues = 0
+        residue_diversity = 0
+        aromatic_ratio = 0.0
+        charged_ratio = 0.0
+        carbon_atom_ratio = 0.0
+
+    # --- Enclosure (ray casting from centroid) ---
+    n_rays = 100
+    golden_ratio = (1 + np.sqrt(5)) / 2
+    indices = np.arange(n_rays)
+    theta = 2 * np.pi * indices / golden_ratio
+    phi = np.arccos(1 - 2 * (indices + 0.5) / n_rays)
+    directions = np.column_stack(
+        [np.sin(phi) * np.cos(theta), np.sin(phi) * np.sin(theta), np.cos(phi)]
+    )
+    steps = np.arange(0.5, 10.5, 0.5)
+    hits = 0
+    for d in directions:
+        ray_points = centroid + np.outer(steps, d)
+        dists, _ = tree.query(ray_points)
+        if np.any(dists < 2.0):
+            hits += 1
+    enclosure = hits / n_rays
+
+    # Mean sphere radius
+    mean_radius = float(np.mean([s.radius for s in pocket.spheres]))
+
+    return np.array(
+        [
+            pocket.n_spheres,
+            lining_residues,
+            enclosure,
+            mean_radius,
+            aromatic_ratio,
+            charged_ratio,
+            residue_diversity,
+            carbon_atom_ratio,
+        ]
+    )
+
+
+def score_binding_pocket(
+    pocket: Pocket,
+    protein_atoms: struc.AtomArray,
+    tree: KDTree,
+) -> float:
+    """Score how likely a pocket is a realistic ligand binding site.
+
+    Uses a logistic model trained on 130 PDB structures with known ligand
+    positions and 0.2A Gaussian coordinate noise augmentation. Higher scores
+    indicate more realistic pockets with characteristics of real binding sites:
+    appropriate size, good enclosure, aromatic contacts, and diverse residue
+    environments.
+
+    Args:
+        pocket: Detected pocket to score
+        protein_atoms: Protein-only atoms (no water, hetero, or hydrogens)
+        tree: KDTree built from protein_atoms.coord
+
+    Returns:
+        Score between 0 and 1 (probability of being a real binding site)
+    """
+    features = _compute_binding_features(pocket, protein_atoms, tree)
+    logit = float(np.dot(_BINDING_WEIGHTS, features) + _BINDING_BIAS)
+    return 1.0 / (1.0 + np.exp(-logit))
+
+
+def find_realistic_pockets(
+    atomarray: struc.AtomArray,
+    *,
+    r_min: float = 3.0,
+    r_max: float = 6.0,
+    polar_probe_radius: float = 5.0,
+    sasa_cutoff: float = 10.0,
+    plddt_cutoff: float | None = None,
+    merge_distance: float = 1.75,
+    min_spheres: int = 35,
+    min_binding_score: float = 0.15,
+    min_atoms_in_radius_15: int = 425,
+    min_atoms_in_radius_20: int = 900,
+    ignore_hydrogens: bool = True,
+    ignore_water: bool = True,
+    ignore_hetero: bool = True,
+) -> list[Pocket]:
+    """Detect realistic ligand binding pockets in a protein structure.
+
+    Extends find_pockets() with a binding-likelihood score that filters out
+    surface clefts and non-functional cavities. Each pocket is scored by a
+    logistic model using 8 features: pocket size (n_spheres), contact complexity
+    (lining_residues, residue_diversity), geometry (enclosure, mean_radius),
+    and chemistry (aromatic_ratio, charged_ratio, carbon_atom_ratio).
+    Trained with 0.2A Gaussian coordinate noise augmentation for robustness.
+
+    Additionally filters by local atom density around each pocket centroid
+    at two radii (15Å and 20Å), removing pockets in sparse/disordered regions
+    unlikely to form real binding sites.
+
+    Validated on a held-out test set of 39 PDBs:
+        - At min_binding_score=0.15 (default): ~83% recall, ~36% precision
+        - At min_binding_score=0.25: ~64% recall, ~46% precision
+
+    Args:
+        atomarray: Biotite AtomArray with structure data
+        r_min: Minimum alpha-sphere radius (Å). Default: 3.0
+        r_max: Maximum alpha-sphere radius (Å). Default: 6.0
+        polar_probe_radius: Probe radius for SASA polarity test (Å). Default: 5.0
+        sasa_cutoff: SASA cutoff for buried spheres (Å²). Default: 10.0
+        plddt_cutoff: AlphaFold pLDDT cutoff. None disables filtering. Default: None
+        merge_distance: Distance for merging sphere clusters (Å). Default: 1.75
+        min_spheres: Minimum spheres per pocket cluster. Default: 35
+        min_binding_score: Minimum binding score to keep (0-1). Default: 0.15
+        min_atoms_in_radius_15: Minimum protein atoms within 15Å of centroid. Default: 425
+        min_atoms_in_radius_20: Minimum protein atoms within 20Å of centroid. Default: 900
+        ignore_hydrogens: Ignore hydrogen atoms. Default: True
+        ignore_water: Ignore water molecules. Default: True
+        ignore_hetero: Ignore hetero atoms (ligands). Default: True
+
+    Returns:
+        list[Pocket]: Pockets likely to be real binding sites, sorted by
+            binding_score (highest first). Each pocket has a `binding_score`
+            attribute set.
+    """
+    pockets = find_pockets(
+        atomarray,
+        r_min=r_min,
+        r_max=r_max,
+        polar_probe_radius=polar_probe_radius,
+        sasa_cutoff=sasa_cutoff,
+        plddt_cutoff=plddt_cutoff,
+        merge_distance=merge_distance,
+        min_spheres=min_spheres,
+        ignore_hydrogens=ignore_hydrogens,
+        ignore_water=ignore_water,
+        ignore_hetero=ignore_hetero,
+    )
+
+    if not pockets:
+        return []
+
+    # Build protein-only atom array and KDTree for scoring + density filtering
+    protein_atoms = atomarray[~atomarray.hetero]
+    protein_atoms = protein_atoms[protein_atoms.element != "H"]
+    protein_atoms = protein_atoms[protein_atoms.res_name != "HOH"]
+    tree = KDTree(protein_atoms.coord)
+
+    # Score and filter by binding score + atom density at 15Å and 20Å
+    binding_pockets = []
+    for pocket in pockets:
+        pocket.binding_score = score_binding_pocket(pocket, protein_atoms, tree)
+        if pocket.binding_score < min_binding_score:
+            continue
+        if len(tree.query_ball_point(pocket.centroid, r=15.0)) < min_atoms_in_radius_15:
+            continue
+        if len(tree.query_ball_point(pocket.centroid, r=20.0)) < min_atoms_in_radius_20:
+            continue
+        binding_pockets.append(pocket)
+
+    binding_pockets.sort(key=lambda p: p.binding_score, reverse=True)
+    logger.info(
+        f"Found {len(binding_pockets)} binding pockets out of {len(pockets)} "
+        f"total (min_binding_score={min_binding_score}, "
+        f"min_atoms_in_radius_15={min_atoms_in_radius_15}, "
+        f"min_atoms_in_radius_20={min_atoms_in_radius_20})"
+    )
+    return binding_pockets
+
+
 def find_globular_pockets(
     atomarray: struc.AtomArray,
     *,

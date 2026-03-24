@@ -10,7 +10,6 @@ from typing import Any
 import networkx as nx
 import numpy as np
 from biotite.structure import AtomArray
-from scipy.spatial import KDTree
 
 from artios.common import atom_types
 
@@ -47,8 +46,6 @@ class MotifMaker:
         whole_ligand_prob: float = 0.7,
         drop_ligand_motif_prob: float = 0.1,
         whole_sidechain_prob: float = 0.2,
-        pocket_score_threshold: float = 0.18,
-        pocket_n_neighbours: int = 25,
         sidechain_seed_is_tip_prob: float = 0.1,
         sidechain_seed_is_in_sphere_prob: float = 0.8,
         sidechain_bfs_depth_prob: float = 0.5,
@@ -86,8 +83,6 @@ class MotifMaker:
             drop_ligand_motif_prob (float): Probability of not including ligand atoms in the motif generated
                 around the ligand.
             whole_sidechain_prob (float): Probability the whole sidechain is included vs partial.
-            pocket_score_threshold (float): Threshold for pocket score to identify seed atoms.
-            pocket_n_neighbours (int): Number of neighbours for pocket score calculation.
             sidechain_seed_is_tip_prob (float): Probability tip atom is used as seed.
             sidechain_seed_is_in_sphere_prob (float): Probability in-sphere atom is used as seed.
             sidechain_bfs_depth_prob (float): Probability parameter for geometric distribution of BFS depth.
@@ -117,8 +112,6 @@ class MotifMaker:
         self.whole_ligand_prob = whole_ligand_prob
         self.drop_ligand_motif_prob = drop_ligand_motif_prob
         self.whole_sidechain_prob = whole_sidechain_prob
-        self.pocket_score_threshold = pocket_score_threshold
-        self.pocket_n_neighbours = pocket_n_neighbours
         self.sidechain_seed_is_tip_prob = sidechain_seed_is_tip_prob
         self.sidechain_seed_is_in_sphere_prob = sidechain_seed_is_in_sphere_prob
         self.sidechain_bfs_depth_prob = sidechain_bfs_depth_prob
@@ -468,7 +461,7 @@ class MotifMaker:
 
     def _generate_chain_motif_mask(self, atom_array: AtomArray) -> np.ndarray:
         """
-        Generates a motif mask centered around a pocket on a polymer chain.
+        Generates a motif mask centered around a random atom on a polymer chain.
 
         Args:
             atom_array (AtomArray): Input Biotite AtomArray
@@ -482,9 +475,6 @@ class MotifMaker:
         polymer_mask = np.isin(atom_array.chain_mol_type, ["protein", "RNA", "DNA"])
 
         if not polymer_mask.any():
-            # logger.warning(
-            #     "No polymer chains in the atom array. Setting all is_motif to 0."
-            # )
             return is_motif
 
         # Pick a random polymer chain
@@ -494,23 +484,8 @@ class MotifMaker:
         chain_mask = atom_array.asym_id_int == chain_id
         chain_array = atom_array[chain_mask]
 
-        # Compute pocket scores
-        pocket_scores = compute_pocket_scores(
-            chain_array, n_neighbors=self.pocket_n_neighbours
-        )
-
-        # Identify pocket atoms in chain
-        pocket_atom_indices_in_chain = np.where(
-            pocket_scores <= self.pocket_score_threshold
-        )[0]
-
-        if len(pocket_atom_indices_in_chain) == 0:
-            # logger.warning("No pocket atoms found. Setting all is_motif to 0.")
-            return is_motif
-
-        # Get seed point from pocket
-        pocket_atoms = chain_array[pocket_atom_indices_in_chain]
-        seed_coord = get_random_seed_atom_from_array(pocket_atoms)
+        # Get seed point from a random atom on the chain
+        seed_coord = get_random_seed_atom_from_array(chain_array)
 
         # Generate motif around seed
         motif_mask = self._generate_motif_around_point_mask(
@@ -678,40 +653,6 @@ class MotifMaker:
         partial_motif_mask[selected_indices] = 1
 
         return partial_motif_mask
-
-
-def compute_pocket_scores(chain_array: AtomArray, n_neighbors: int = 25) -> np.ndarray:
-    """
-    Compute pocket scores for atoms in the array. The score is the distance between the target
-    atom and the centroid of the nearest n_neighbors neighbours.
-
-    Args:
-        chain_array (AtomArray): AtomArray containing all atoms
-        n_neighbors (int): Number of nearest neighbors to use for centroid calculation
-
-    Returns:
-        np.ndarray: Array of pocket scores for atoms. Lower scores indicate deeper pockets.
-
-    Notes:
-        - Lower pocket_score means the atom is more likely in a pocket
-        - Typical pocket threshold: score < 0.18 Å suggests pocket atom (we think)
-        - Adjust n_neighbors based on protein size (20-30 works well for most cases)
-    """
-    # Query for n_neighbors
-    coords = chain_array.coord
-    tree = KDTree(coords)
-    _, indices = tree.query(coords, k=min(len(coords), n_neighbors + 1))
-    neighbor_indices = indices[:, 1:]
-
-    # Calculate pocket scores for each atom
-    scores = np.zeros(len(coords))
-    for i, neighbor_idx in enumerate(neighbor_indices):
-        neighbor_coords = coords[neighbor_idx]
-        centroid = np.mean(neighbor_coords, axis=0)
-
-        # Distance from point to centroid (pocket score)
-        scores[i] = np.linalg.norm(coords[i] - centroid)
-    return scores
 
 
 def get_random_seed_atom_from_array(atom_array: AtomArray) -> np.ndarray:

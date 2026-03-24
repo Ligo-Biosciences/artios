@@ -7,6 +7,10 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from artios.model.modules.potts import (
+    compute_potts_energy,
+    compute_potts_single_logits,
+)
 from artios.model.utils import beta_function
 from artios.utils.geometry import centre_random_augmentation
 from artios.utils.typing import Bool, Float, Int, typecheck
@@ -313,6 +317,40 @@ class LinearMaskingTimestepSampler(MaskingTimestepSampler):
     ) -> Float[Tensor, "..."]:
         """Generate the derivative of the mask rates."""
         return torch.ones_like(t)
+
+
+@dataclass(frozen=True)
+class ExponentialMaskingTimestepSampler(MaskingTimestepSampler):
+    """Exponential masking scheduler with mask rate y = (1 - b^(2t)) / (1 - b^2)."""
+
+    b: float = 100.0
+
+    def sample(
+        self,
+        size: tuple[int, ...],
+        device: torch.device,
+        generator: torch.Generator | None = None,
+    ) -> Float[Tensor, "..."]:
+        """Sample timesteps uniformly between 0 and 1."""
+        return torch.rand(size, device=device, generator=generator)
+
+    @typecheck
+    def get_mask_rates(
+        self,
+        t: Float[Tensor, "..."],
+    ) -> Float[Tensor, "..."]:
+        """Generate mask rates using y = (1 - b^(2t)) / (1 - b^2)."""
+        return (1 - self.b ** (-2 * t)) / (1 - self.b**-2)
+
+    @typecheck
+    def get_derivative_mask_rates(
+        self,
+        t: Float[Tensor, "..."],
+    ) -> Float[Tensor, "..."]:
+        """Generate derivative: dy/dt = -2 * ln(b) * b^(2t) / (1 - b^2)."""
+        import math
+
+        return 2 * math.log(self.b) * self.b ** (-2 * t) / (1 - self.b**-2)
 
 
 # =============================================================================
@@ -1075,6 +1113,9 @@ class PottsSamplingResult:
 
     sequence: Float[Tensor, "batch n_token num_residue_types"]
     energy: Float[Tensor, "batch"]
+    sequence_trajectory: Int[Tensor, "batch n_saved n_token"] | None = None
+    energy_trajectory: Float[Tensor, "batch n_saved"] | None = None
+    trajectory_sweep_indices: list[int] | None = None
 
 
 def _color_graph(
@@ -1139,8 +1180,6 @@ def _potts_proposal_gibbs(
     If penalty_func is provided, its gradient w.r.t. S is computed via
     autograd and added to the conditional energy (following Chroma).
     """
-    from artios.model.modules.potts import compute_potts_single_logits
-
     R = S.shape[-1]
 
     for color_mask in color_masks:
@@ -1200,11 +1239,6 @@ def _dlmc_energy_and_log_probs(
     Returns (energy, log_probs) where log_probs includes both off-diagonal
     transition probabilities and the self-transition (remaining mass).
     """
-    from artios.model.modules.potts import (
-        compute_potts_energy,
-        compute_potts_single_logits,
-    )
-
     S_idx = S.argmax(-1)
 
     # Conditional energy for all candidate states
@@ -1352,6 +1386,72 @@ def _mh_rejection_step(
     return torch.where(accept[:, None, None].bool(), S_new, S)
 
 
+@dataclass
+class TrajectoryTracker:
+    """Class for tracking mutation trajectory during Potts sampling."""
+
+    save_set: set[int]
+    save_list: list[int]
+    seq_traj: Int[Tensor, "batch n_saved n_token"]
+    energy_traj: Float[Tensor, "batch n_saved"]
+
+    @staticmethod
+    def create(
+        n_sweeps: int,
+        interval: int,
+        S: Float[Tensor, "batch n_token num_residue_types"],
+        h: Float[Tensor, "batch n_token num_residue_types"],
+        J: Float[
+            Tensor, "batch n_token neighbours num_residue_types num_residue_types"
+        ],
+        edge_index: Int[Tensor, "batch n_token neighbours"],
+        edge_mask: Bool[Tensor, "batch n_token neighbours"],
+    ) -> "TrajectoryTracker":
+        B, N, _ = S.shape
+
+        save_list = list(range(0, n_sweeps + 1, interval))
+        if n_sweeps not in save_list:
+            save_list.append(n_sweeps)
+        n_saved = len(save_list)
+
+        seq_traj = torch.zeros(B, n_saved, N, dtype=torch.long, device=S.device)
+        energy_traj = torch.zeros(B, n_saved, device=S.device)
+
+        S_idx = S.argmax(-1)
+
+        seq_traj[:, 0] = S_idx
+        energy_traj[:, 0] = compute_potts_energy(S_idx, h, J, edge_index, edge_mask)
+
+        return TrajectoryTracker(
+            save_set=set(save_list),
+            save_list=save_list,
+            seq_traj=seq_traj,
+            energy_traj=energy_traj,
+        )
+
+    def record(
+        self,
+        sweep: int,
+        S: Float[Tensor, "batch n_token num_residue_types"],
+        h: Float[Tensor, "batch n_token num_residue_types"],
+        J: Float[
+            Tensor, "batch n_token neighbours num_residue_types num_residue_types"
+        ],
+        edge_index: Int[Tensor, "batch n_token neighbours"],
+        edge_mask: Bool[Tensor, "batch n_token neighbours"],
+    ) -> None:
+        if sweep not in self.save_set:
+            return
+
+        idx = self.save_list.index(sweep)
+        S_idx = S.argmax(-1)
+
+        self.seq_traj[:, idx] = S_idx
+        self.energy_traj[:, idx] = compute_potts_energy(
+            S_idx, h, J, edge_index, edge_mask
+        )
+
+
 @dataclass(frozen=True)
 class PottsSampler:
     """MCMC sampler for Potts energy landscapes.
@@ -1382,6 +1482,12 @@ class PottsSampler:
     rejection_step: bool = False
     """If True, apply Metropolis-Hastings correction to DLMC proposals."""
 
+    track_trajectory: bool = False
+    """If True, store sequence (as argmax indices) and energy at saved sweeps."""
+
+    trajectory_interval: int = 1
+    """Save trajectory every N sweeps. Initial and final states are always saved."""
+
     @typecheck
     def sample(
         self,
@@ -1411,9 +1517,9 @@ class PottsSampler:
 
         Returns:
             PottsSamplingResult with final sequence (one-hot) and energy.
-        """
-        from artios.model.modules.potts import compute_potts_energy
 
+        # TODO: changing the multinomial to gumbel max trick might be faster
+        """
         B, N, R = h.shape
 
         if S_init is None:
@@ -1426,6 +1532,20 @@ class PottsSampler:
             S = F.one_hot(indices, R).float()
         else:
             S = S_init
+
+        tracker = (
+            TrajectoryTracker.create(
+                self.n_sweeps,
+                self.trajectory_interval,
+                S,
+                h,
+                J,
+                edge_index,
+                edge_mask,
+            )
+            if self.track_trajectory
+            else None
+        )
 
         # Pre-compute graph colouring for Gibbs
         color_masks = None
@@ -1487,7 +1607,15 @@ class PottsSampler:
                 else:
                     S = result.S_new
 
-        # Compute final energy
+            if tracker is not None:
+                tracker.record(t + 1, S, h, J, edge_index, edge_mask)
+
         energy = compute_potts_energy(S.argmax(-1), h, J, edge_index, edge_mask)
 
-        return PottsSamplingResult(sequence=S, energy=energy)
+        return PottsSamplingResult(
+            sequence=S,
+            energy=energy,
+            sequence_trajectory=tracker.seq_traj if tracker else None,
+            energy_trajectory=tracker.energy_traj if tracker else None,
+            trajectory_sweep_indices=tracker.save_list if tracker else None,
+        )

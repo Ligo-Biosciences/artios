@@ -27,6 +27,9 @@ def _make_configs(
     label_smoothing: float = 0.0,
     symmetric_J: bool = False,
     parameterisation: str = "linear",
+    track_trajectory: bool = False,
+    trajectory_interval: int = 1,
+    proposal: str = "gibbs",
 ) -> ConfigDict:
     """Create test configs for ArtiosPotts."""
     return ConfigDict(
@@ -55,8 +58,9 @@ def _make_configs(
                 "potts": {
                     "symmetric_J": symmetric_J,
                     "parameterisation": parameterisation,
+                    "masking_sampler": "linear",
                     "sampling": {
-                        "proposal": "gibbs",
+                        "proposal": proposal,
                         "n_sweeps": 5,
                         "temperature": 0.1,
                         "temperature_init": 10.0,
@@ -66,6 +70,12 @@ def _make_configs(
                         "complexity_penalty_weight": 0.1,
                         "complexity_window_size": 30,
                         "complexity_entropy_min": 2.32,
+                        "exclude_cys": False,
+                        "exclude_met": False,
+                        "ensemble_size": 1,
+                        "ensemble_noise_scale": 0.3,
+                        "track_trajectory": track_trajectory,
+                        "trajectory_interval": trajectory_interval,
                     },
                 },
             },
@@ -676,3 +686,81 @@ class TestInvalidConfig:
 
         with pytest.raises(ValueError, match="Unknown loss_type"):
             model.compute_loss(output, context)
+
+
+# ---------------------------------------------------------------------------
+# Trajectory tracking tests
+# ---------------------------------------------------------------------------
+
+
+class TestTrajectoryTracking:
+    """Tests for Potts trajectory tracking during MCMC sampling."""
+
+    def test_trajectory_none_by_default(self, pseudo_configs, context, device):
+        """Trajectory fields are None when track_trajectory=False (default)."""
+        model = ArtiosPotts(pseudo_configs).to(device)
+        model.eval()
+        with torch.no_grad():
+            output = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+        assert output.sequence_trajectory is None
+        assert output.energy_trajectory is None
+
+    @pytest.mark.parametrize("proposal", ["gibbs", "dlmc"])
+    def test_trajectory_shapes(self, context, device, proposal):
+        """Trajectory tensors have correct shapes for both proposal methods."""
+        n_sweeps = 5
+        configs = _make_configs(
+            track_trajectory=True, trajectory_interval=1, proposal=proposal
+        )
+        model = ArtiosPotts(configs).to(device)
+        model.eval()
+        with torch.no_grad():
+            output = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+
+        B, N = 2, 32
+        n_saved = n_sweeps + 1  # interval=1 saves every sweep + initial
+        assert output.sequence_trajectory is not None
+        assert output.energy_trajectory is not None
+        assert output.sequence_trajectory.shape == (B, n_saved, N)
+        assert output.energy_trajectory.shape == (B, n_saved)
+
+    def test_trajectory_interval_reduces_size(self, context, device):
+        """trajectory_interval > 1 reduces the number of saved steps."""
+        n_sweeps = 5
+        interval = 2
+        configs = _make_configs(track_trajectory=True, trajectory_interval=interval)
+        model = ArtiosPotts(configs).to(device)
+        model.eval()
+        with torch.no_grad():
+            output = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+
+        # save_list = [0, 2, 4, 5] (0,2,4 from range, 5 appended as final)
+        expected_n_saved = len(
+            list(range(0, n_sweeps + 1, interval))
+            + ([n_sweeps] if n_sweeps % interval != 0 else [])
+        )
+        assert output.sequence_trajectory.shape[1] == expected_n_saved
+        assert output.energy_trajectory.shape[1] == expected_n_saved
+
+    def test_trajectory_final_matches_output(self, context, device):
+        """Final trajectory entry should match the returned sequence and energy."""
+        configs = _make_configs(track_trajectory=True, trajectory_interval=1)
+        model = ArtiosPotts(configs).to(device)
+        model.eval()
+        with torch.no_grad():
+            output = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+
+        final_seq_indices = output.sampled_sequence.argmax(-1)
+        assert torch.equal(output.sequence_trajectory[:, -1], final_seq_indices)
+        assert torch.allclose(output.energy_trajectory[:, -1], output.energy)
+
+    def test_trajectory_dtype(self, context, device):
+        """sequence_trajectory should be int64, energy_trajectory should be float."""
+        configs = _make_configs(track_trajectory=True)
+        model = ArtiosPotts(configs).to(device)
+        model.eval()
+        with torch.no_grad():
+            output = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+
+        assert output.sequence_trajectory.dtype == torch.long
+        assert output.energy_trajectory.dtype in (torch.float32, torch.float64)

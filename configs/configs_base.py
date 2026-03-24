@@ -158,6 +158,7 @@ model_configs = {
             1
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
+    "self_conditioning_prob": 0.5,
     "train_timestep_sampler": {
         "alpha": 1.9,
         # "beta": 1.0,

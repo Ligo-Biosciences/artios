@@ -5,7 +5,6 @@ import os
 import time
 import warnings
 from contextlib import nullcontext
-from glob import glob
 from pathlib import Path
 from typing import Optional
 
@@ -15,8 +14,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
-from neptune_scale import Run
-from neptune_scale.api.run import SourceTrackingConfig
+import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
@@ -26,7 +24,6 @@ from artios.data.dataloader import get_dataloaders
 from artios.data.features import FullContext
 from artios.metrics.lddt_metrics import LDDTMetrics
 from artios.model.artios_backbone import ArtiosBackbone
-from artios.model.modules.transformer import DiffusionTransformer, DiTBlock
 from artios.model.output import ModelOutput
 from artios.model.utils import Mode
 from artios.utils.distributed import DIST_WRAPPER, wait_for_all_processes
@@ -39,7 +36,6 @@ from artios.utils.metrics import SimpleMetricAggregator
 from artios.utils.monitoring import grad_norm
 from artios.utils.profiler import profile_function
 from artios.utils.seed import seed_everything
-from artios.utils.torchwatcher import TorchWatcher
 from artios.utils.training import flatten_nested, get_optimizer
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
@@ -48,7 +44,8 @@ from runner.inference import InferenceRunner, infer_predict
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-# Neptune logging configuration handled in init_log
+# Disable WANDB's console output capture to reduce unnecessary logging
+os.environ["WANDB_CONSOLE"] = "off"
 
 
 class ArtiosBackboneTrainer(object):
@@ -111,47 +108,14 @@ class ArtiosBackboneTrainer(object):
         )
 
     def init_log(self):
-        self.neptune_run = None
-        self.torchwatcher = None
         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-            source_config = SourceTrackingConfig(  # source-code tracking
-                namespace="source_code",
-                upload_entry_point=True,
-                upload_diff_head=True,
-                upload_diff_upstream=True,
-                upload_run_command=True,
-            )
-            self.neptune_run = Run(
+            wandb.init(
                 project=self.configs.project,
-                experiment_name=self.run_name,
-                source_tracking_config=source_config,
-                run_id=self.configs.neptune_run_id
-                if self.configs.neptune_run_id
-                else None,
-                fork_run_id=self.configs.neptune_fork_run_id
-                if self.configs.neptune_fork_run_id
-                else None,
-                fork_step=int(self.configs.neptune_fork_step)
-                if self.configs.neptune_fork_step
-                else None,
+                name=self.run_name,
+                config=self.configs.to_dict(),
+                id=self.configs.wandb_id if self.configs.wandb_id else None,
+                resume="allow" if self.configs.wandb_id else None,
             )
-            if self.configs.get("enable_torchwatcher", False):
-                self.torchwatcher = TorchWatcher(
-                    model=self.backbone_model.module
-                    if DIST_WRAPPER.world_size > 1
-                    else self.backbone_model,
-                    run=self.neptune_run,
-                    track_layers=[
-                        DiffusionTransformer,
-                        DiTBlock,
-                    ],  # optionally specify
-                    track_layers_name_includes=["linear_q", "linear_k"],
-                    tensor_stats=["channel_rms"],
-                    base_namespace="model_metrics",
-                )  # torchwatcher for model internals
-            else:
-                self.torchwatcher = None
-            self.neptune_run.log_configs(flatten_nested(self.configs.to_dict()))
         self.train_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 
     def init_env(self):
@@ -533,13 +497,13 @@ class ArtiosBackboneTrainer(object):
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
-            # Log validation metrics to Neptune
+            # Log validation metrics to WandB
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                 prefix = f"{ema_suffix}/" if ema_suffix else ""
                 prefixed_metrics = {
                     f"{prefix}{test_name}/{k}": v for k, v in metrics.items()
                 }
-                self.neptune_run.log_metrics(prefixed_metrics, step=self.step)
+                wandb.log(prefixed_metrics, step=self.step)
 
         return metrics
 
@@ -666,7 +630,7 @@ class ArtiosBackboneTrainer(object):
         self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
         return output_paths
 
-    def _run_inference_and_log(self, log_outputs_to_neptune: bool = True):
+    def _run_inference_and_log(self):
         """
         Runs inference during evaluation.
         """
@@ -685,17 +649,6 @@ class ArtiosBackboneTrainer(object):
             use_distributed_sampler=False,
         )
 
-        if log_outputs_to_neptune and self.configs.use_wandb:
-            self.print(f"Logging inference output to Neptune for step {self.step}")
-            filepaths = glob(
-                os.path.join(self.prediction_dir, f"step_{self.step}", "**/*.cif"),
-                recursive=True,
-            )
-            self.print(f"Found {len(filepaths)} files to log to Neptune")
-
-            files_dict = {f"structures/{Path(fp).name}": fp for fp in filepaths}
-            self.neptune_run.log_files(files=files_dict, step=self.step)
-
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""
         if (
@@ -707,7 +660,7 @@ class ArtiosBackboneTrainer(object):
 
         # Perform inference during evaluation
         if self.configs.run_training_time_inference and DIST_WRAPPER.rank == 0:
-            self._run_inference_and_log(log_outputs_to_neptune=True)
+            self._run_inference_and_log()
 
         # Calculate and log weight norms for each parameter
         weight_norms = {}
@@ -731,10 +684,7 @@ class ArtiosBackboneTrainer(object):
             weight_norms[f"weight_norms/{name}"] = norm
 
             if DIST_WRAPPER.rank == 0:
-                # Log to neptune
-                self.neptune_run.log_metrics(
-                    flatten_nested(weight_norms), step=self.step
-                )
+                wandb.log(flatten_nested(weight_norms), step=self.step)
 
     @profile_function("on_before_optimizer_step")
     def on_before_optimizer_step(self):
@@ -742,9 +692,8 @@ class ArtiosBackboneTrainer(object):
         if self.configs.monitor.grad_norm:
             _, total_norm = grad_norm(self.backbone_model, norm_type=2)
 
-            # Log to neptune
             if DIST_WRAPPER.rank == 0:
-                self.neptune_run.log_metrics({"grad_norm": total_norm}, step=self.step)
+                wandb.log({"grad_norm": total_norm}, step=self.step)
 
     def save_training_sample(
         self,
@@ -868,21 +817,13 @@ class ArtiosBackboneTrainer(object):
                         last_lr = self.lr_scheduler.get_last_lr()[0]
                         if DIST_WRAPPER.rank == 0:
                             if self.configs.use_wandb:
-                                self.neptune_run.log_metrics(
+                                wandb.log(
                                     {"train/lr": last_lr},
                                     step=self.step,
                                 )
-                                if self.torchwatcher is not None:
-                                    self.torchwatcher.watch(
-                                        step=self.step,
-                                        track_gradients=False,
-                                        track_activations=True,
-                                        track_parameters=False,
-                                        prefix="train",
-                                    )
                             self.print(f"Step {self.step}, lr: {last_lr}")
                         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                            self.neptune_run.log_metrics(metrics, step=self.step)
+                            wandb.log(metrics, step=self.step)
 
                     if step_need_save or is_last_step:
                         self.print(f"Saving checkpoint at step {self.step}")

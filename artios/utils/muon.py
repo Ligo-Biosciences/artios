@@ -231,7 +231,9 @@ class BatchedMuonWithAdam(torch.optim.Optimizer):
                     grads.append(p.grad)
                     exp_avgs.append(state["exp_avg"])
                     exp_avg_sqs.append(state["exp_avg_sq"])
-                    max_exp_avg_sqs.append(torch.zeros_like(p))
+                    max_exp_avg_sqs.append(
+                        torch.tensor([], dtype=p.dtype, device=p.device)
+                    )
                     state_steps.append(state["step"])
 
                 # Adam Update
@@ -242,7 +244,7 @@ class BatchedMuonWithAdam(torch.optim.Optimizer):
                     exp_avg_sqs=exp_avg_sqs,
                     max_exp_avg_sqs=max_exp_avg_sqs,
                     state_steps=state_steps,
-                    fused=True,
+                    fused=False,
                     decoupled_weight_decay=True,
                     amsgrad=False,
                     beta1=group["betas"][0],

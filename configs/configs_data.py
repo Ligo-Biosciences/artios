@@ -53,6 +53,7 @@ default_weighted_pdb_configs = {
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
         "monomer_pdb_target_fraction": 0.10,
+        "should_filter_artifact_ligands": False,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -234,11 +235,12 @@ data_configs = {
     "train_sets": ListValue(
         [
             "weightedPDB_before2021_wopb_nometalc_0925",
+            "afdb_trousers_train",
             "mgnify_trousers_train",
         ]
     ),
     "train_sampler": {
-        "train_sample_weights": ListValue([0.01, 0.99]),
+        "train_sample_weights": ListValue([0.00, 0.4, 0.6]),
         "sampler_type": "weighted",
     },
     "test_sets": ListValue(["mgnify_trousers_val", "recentPDB_1536_sample384_0925"]),
@@ -248,7 +250,7 @@ data_configs = {
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv",  # .gz
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv.gz",  # .gz
             ),
             "pdb_exclusion_lists": [
                 os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
@@ -331,6 +333,10 @@ data_configs = {
             "group_by_pdb_id": True,
             "find_eval_chain_interface": False,
             "random_sample_if_failed": True,
+            "pdb_exclusion_lists": [
+                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+            ],
         },
         **deepcopy(default_test_configs),
     },

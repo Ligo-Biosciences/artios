@@ -342,11 +342,12 @@ def calc_weights_for_df(
     balance_percentile: float = 0.9,
     balance_mol_type_groups: Optional[list[str]] = None,
     monomer_pdb_target_fraction: float = 0.0,
+    should_filter_artifact_ligands: bool = False,
 ) -> pd.DataFrame:
     """Calculate sampling weights for each row in the indices DataFrame.
 
     Steps:
-      1. Filter artifact ligands (if PLINDER columns present)
+      1. Optionally filter artifact ligands (if PLINDER columns present)
       2. Compute base weight per row: beta * alpha_sum / cluster_size / member_num
       3. Optionally apply protein-cluster-balanced sampling
       4. Optionally boost monomer-only PDB weights
@@ -360,11 +361,13 @@ def calc_weights_for_df(
         balance_mol_type_groups: Interface mol_type_groups to include in balancing.
         monomer_pdb_target_fraction: Target sampling fraction for monomer-only PDBs.
             Set to 0 to disable (default).
+        should_filter_artifact_ligands: Whether to filter out artifact ligands. Default False.
 
     Returns:
         DataFrame with 'weights' column added.
     """
-    indices_df = filter_artifact_ligands(indices_df)
+    if should_filter_artifact_ligands:
+        indices_df = filter_artifact_ligands(indices_df)
 
     # Specific to assembly, and entities (chain or interface)
     indices_df["pdb_sorted_entity_id"] = indices_df.apply(
@@ -434,6 +437,7 @@ def get_sample_weights(
     balance_percentile: float = 0.9,
     balance_mol_type_groups: Optional[list[str]] = None,
     monomer_pdb_target_fraction: float = 0.0,
+    should_filter_artifact_ligands: bool = False,
     length_reweight_gamma: float = 0.0,
 ) -> Union[pd.Series, list[float]]:
     """Compute sample weights based on the specified sampler type.
@@ -449,6 +453,7 @@ def get_sample_weights(
         balance_mol_type_groups: Interface groups to include in balancing.
         monomer_pdb_target_fraction: Target sampling fraction for monomer-only
             PDBs. Set to 0 to disable.
+        should_filter_artifact_ligands: Whether to filter out artifact ligands. Default False.
         length_reweight_gamma: Power exponent for length-based reweighting.
             Weight per sample is num_tokens^gamma. 0 = uniform, 0.5 = sqrt,
             1.0 = linear (token-proportional). Only applies to uniform sampler.
@@ -470,6 +475,7 @@ def get_sample_weights(
                 balance_percentile=balance_percentile,
                 balance_mol_type_groups=balance_mol_type_groups,
                 monomer_pdb_target_fraction=monomer_pdb_target_fraction,
+                should_filter_artifact_ligands=should_filter_artifact_ligands,
             )
         return indices_df["weights"].astype("float32")
     elif sampler_type == "uniform":

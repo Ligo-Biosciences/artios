@@ -5,7 +5,6 @@ import os
 import time
 import warnings
 from contextlib import nullcontext
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -26,10 +25,7 @@ from artios.metrics.lddt_metrics import LDDTMetrics
 from artios.model.artios_backbone import ArtiosBackbone
 from artios.model.output import ModelOutput
 from artios.model.utils import Mode
-from artios.utils.distributed import DIST_WRAPPER, wait_for_all_processes
-from artios.utils.ema_utils import (
-    calculate_post_hoc_ema,  # , log_ema_validation_curves
-)
+from artios.utils.distributed import DIST_WRAPPER
 from artios.utils.inference import ModelType
 from artios.utils.lr_scheduler import get_lr_scheduler
 from artios.utils.metrics import SimpleMetricAggregator
@@ -39,7 +35,7 @@ from artios.utils.seed import seed_everything
 from artios.utils.training import flatten_nested, get_optimizer
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
-from runner.ema import PowerLawEMAWrapper
+from runner.ema import EMAWrapper
 from runner.inference import InferenceRunner, infer_predict
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -76,7 +72,6 @@ class ArtiosBackboneTrainer(object):
         self.run_dir = f"{self.configs.base_dir}/{self.run_name}"
         self.checkpoint_dir = f"{self.run_dir}/checkpoints"
         self.ema_checkpoint_dir = f"{self.run_dir}/ema_checkpoints"
-        self.post_hoc_ema_checkpoint_dir = f"{self.run_dir}/post_hoc_ema_checkpoints"
         self.prediction_dir = f"{self.run_dir}/predictions"
         self.training_samples_dir = f"{self.run_dir}/training_samples"
         self.dump_dir = f"{self.run_dir}/dumps"
@@ -90,7 +85,6 @@ class ArtiosBackboneTrainer(object):
             os.makedirs(self.run_dir)
             os.makedirs(self.checkpoint_dir)
             os.makedirs(self.ema_checkpoint_dir)
-            os.makedirs(self.post_hoc_ema_checkpoint_dir)
             os.makedirs(self.prediction_dir)
             os.makedirs(self.training_samples_dir)
             os.makedirs(self.dump_dir)
@@ -103,7 +97,7 @@ class ArtiosBackboneTrainer(object):
 
         self.print(
             f"Using run name: {self.run_name}, run dir: {self.run_dir}, checkpoint_dir: "
-            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, post_hoc_ema_checkpoint_dir: {self.post_hoc_ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, "
+            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, "
             + f"{self.error_dir} training_samples_dir: {self.training_samples_dir}"
         )
 
@@ -186,19 +180,14 @@ class ArtiosBackboneTrainer(object):
         else:
             self.backbone_model = self.raw_backbone_model
 
-        if self.configs.get("power_law_ema_sigma", []):  # Check if list is not empty
-            self.power_law_ema_wrappers = []  # Store wrappers in a list
-            for sigma in self.configs.power_law_ema_sigma:
-                wrapper = PowerLawEMAWrapper(
-                    model=self.backbone_model,
-                    sigma=sigma,
-                    mutable_param_keywords=self.configs.ema_mutable_param_keywords,
-                )
-                wrapper.register()
-                self.power_law_ema_wrappers.append(wrapper)
-            self.print(
-                f"Initialized {len(self.power_law_ema_wrappers)} power law EMA wrappers with standard deviations: {self.configs.power_law_ema_sigma}"
+        if self.configs.get("ema_decay", -1) > 0:
+            assert self.configs.ema_decay < 1
+            self.ema_wrapper = EMAWrapper(
+                self.backbone_model,
+                self.configs.ema_decay,
+                self.configs.ema_mutable_param_keywords,
             )
+            self.ema_wrapper.register()
 
         torch.cuda.empty_cache()
         self.optimizer = get_optimizer(self.configs, self.backbone_model)
@@ -301,72 +290,7 @@ class ArtiosBackboneTrainer(object):
 
             return model
 
-        # Load power-law EMA wrappers from checkpoint
-        if self.configs.load_ema_checkpoint_paths_directory:
-            checkpoint_dir = self.configs.load_ema_checkpoint_paths_directory
-            if not os.path.exists(checkpoint_dir):
-                raise Exception(
-                    f"EMA checkpoint directory does not exist: {checkpoint_dir}"
-                )
-
-            # Get all checkpoint files from directory
-            checkpoint_files = [
-                f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")
-            ]
-            self.print(
-                f"Found {len(checkpoint_files)} EMA checkpoints in {checkpoint_dir}"
-            )
-
-            # Create mapping of sigma values to their corresponding wrappers
-            sigma_to_wrapper = {
-                wrapper.sigma: wrapper for wrapper in self.power_law_ema_wrappers
-            }
-            # Find the latest checkpoint for each sigma value
-            sigma_to_latest_checkpoint = {}
-
-            for checkpoint_file in checkpoint_files:
-                # Extract step and sigma from filename (format: "{step}_ema_{sigma}.pt")
-                try:
-                    parts = checkpoint_file.replace(".pt", "").split("_ema_")
-                    step = int(parts[0])
-                    sigma = float(parts[1])
-                except (IndexError, ValueError):
-                    self.print(
-                        f"Warning: Could not extract step and sigma from checkpoint filename: {checkpoint_file}"
-                    )
-                    continue
-
-                # Keep track of the latest checkpoint for each sigma
-                if (
-                    sigma not in sigma_to_latest_checkpoint
-                    or step
-                    > sigma_to_latest_checkpoint[sigma][
-                        0
-                    ]  # TODO: assert step is smaller than the loaded checkpoint of backbone model (or give warning).
-                ):
-                    sigma_to_latest_checkpoint[sigma] = (step, checkpoint_file)
-
-            # Load only the latest checkpoint for each sigma
-            for sigma, (step, checkpoint_file) in sigma_to_latest_checkpoint.items():
-                if sigma not in sigma_to_wrapper:
-                    self.print(
-                        f"Warning: No matching wrapper found for sigma={sigma} in checkpoint: {checkpoint_file}"
-                    )
-                    continue
-
-                checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
-
-                # Register only the wrapper corresponding to this sigma
-                _load_checkpoint(
-                    checkpoint_path, load_params_only=True, model=self.backbone_model
-                )
-                matching_wrapper = sigma_to_wrapper[sigma]
-                matching_wrapper.register()
-                self.print(
-                    f"Loaded and registered latest EMA checkpoint for sigma={sigma} at step {step}: {checkpoint_file}"
-                )
-
-        # Load model parameters (With no EMA) from checkpoint
+        # Load model parameters from checkpoint
         if self.configs.load_backbone_checkpoint_path:
             self.backbone_model = _load_checkpoint(
                 self.configs.load_backbone_checkpoint_path,
@@ -377,7 +301,16 @@ class ArtiosBackboneTrainer(object):
                 skip_load_step=self.configs.skip_load_step,
             )
 
-        # TODO: implement loading of mpnn model checkpoint
+        # Load EMA shadow: from a dedicated checkpoint if provided,
+        # otherwise re-register from the loaded backbone weights
+        if hasattr(self, "ema_wrapper"):
+            if self.configs.load_ema_checkpoint_path:
+                _load_checkpoint(
+                    self.configs.load_ema_checkpoint_path,
+                    load_params_only=True,
+                    model=self.backbone_model,
+                )
+            self.ema_wrapper.register()
 
     def print(self, msg: str):
         if DIST_WRAPPER.rank == 0:
@@ -422,35 +355,13 @@ class ArtiosBackboneTrainer(object):
 
     @torch.no_grad()
     def evaluate(self):
-        """Run evaluation on all test datasets, including post-hoc EMA if configured."""
-        all_eval_metrics = {}
-
+        """Run evaluation on all test datasets."""
         if not self.configs.eval_ema_only:
-            metrics = self._evaluate(ema_suffix="")
-            all_eval_metrics["None-EMA"] = metrics
-
-        if self.configs.calc_post_hoc_ema_during_training:
-            post_hoc_checkpoints = self.calc_post_hoc_ema()
-
-            current_state = {
-                k: v.clone() for k, v in self.backbone_model.state_dict().items()
-            }
-
-            for checkpoint_path in post_hoc_checkpoints:
-                sigma = float(checkpoint_path.stem.split("_post_hoc_ema_")[-1])
-                checkpoint = torch.load(checkpoint_path, map_location=self.device)
-                self.backbone_model.load_state_dict(checkpoint["model"])
-
-                self.print(f"Beginning evaluation for post-hoc ema with sigma:{sigma}")
-                metrics = self._evaluate(ema_suffix=f"post_hoc_ema_{sigma}")
-                all_eval_metrics[f"post_hoc_ema_{sigma}"] = metrics
-
-                del checkpoint
-                wait_for_all_processes()
-                if DIST_WRAPPER.rank == 0:
-                    os.remove(checkpoint_path)
-
-            self.backbone_model.load_state_dict(current_state)
+            self._evaluate(ema_suffix="")
+        if hasattr(self, "ema_wrapper"):
+            self.ema_wrapper.apply_shadow()
+            self._evaluate(ema_suffix=f"ema_{self.ema_wrapper.decay}")
+            self.ema_wrapper.restore()
 
     @torch.no_grad()
     def _evaluate(self, ema_suffix: str = "") -> dict:
@@ -596,40 +507,6 @@ class ArtiosBackboneTrainer(object):
         )
         return
 
-    def calc_post_hoc_ema(self):
-        """
-        Calculate post-hoc EMA checkpoints using the utility function from ema_utils.
-        This combines checkpoints with different sigma values to create new EMA profiles
-        with target sigma values specified in configs.post_hoc_ema_decay.
-        """
-        # Get all EMA checkpoint paths
-        ema_checkpoint_paths = [
-            Path(os.path.join(self.ema_checkpoint_dir, f))
-            for f in os.listdir(self.ema_checkpoint_dir)
-            if f.endswith(".pt")
-        ]
-
-        if len(ema_checkpoint_paths) == 0:
-            self.print(f"No EMA checkpoints found in {self.ema_checkpoint_dir}")
-            return
-
-        self.print(
-            f"Found {len(ema_checkpoint_paths)} EMA checkpoints in {self.ema_checkpoint_dir}"
-        )
-
-        # Calculate post-hoc EMA checkpoints
-        save_dir = Path(self.post_hoc_ema_checkpoint_dir)
-        target_sigma_values = self.configs.post_hoc_ema_sigma
-
-        # Use the utility function to calculate post-hoc EMA checkpoints
-        output_paths = calculate_post_hoc_ema(
-            ema_checkpoint_paths=ema_checkpoint_paths,
-            target_sigma_values=target_sigma_values,
-            save_dir=save_dir,
-        )
-        self.print(f"Created {len(output_paths)} post-hoc EMA checkpoints.")
-        return output_paths
-
     def _run_inference_and_log(self):
         """
         Runs inference during evaluation.
@@ -736,8 +613,8 @@ class ArtiosBackboneTrainer(object):
             self.evaluate()
             if self.configs.eval_only:
                 return
-        use_ema = hasattr(self, "power_law_ema_wrappers")
-        self.print(f"Using power law ema's: {use_ema}")
+        use_ema = hasattr(self, "ema_wrapper")
+        self.print(f"Using EMA: {use_ema}")
 
         enable_profiling = self.configs.get("enable_profiling", False)
 
@@ -808,8 +685,7 @@ class ArtiosBackboneTrainer(object):
                     self.train_step(context)
 
                     if use_ema and is_update_step:
-                        for wrapper in self.power_law_ema_wrappers:
-                            wrapper.update(t=self.step + 1)
+                        self.ema_wrapper.update()
 
                     if step_need_log or is_last_step:
                         metrics = self.train_metric_wrapper.calc()
@@ -829,14 +705,11 @@ class ArtiosBackboneTrainer(object):
                         self.print(f"Saving checkpoint at step {self.step}")
                         self.save_checkpoint()
                         if use_ema:
-                            for wrapper in self.power_law_ema_wrappers:
-                                wrapper.apply_shadow()
-                                self.save_checkpoint(
-                                    ema_suffix=f"ema_{wrapper.sigma}",
-                                    save_model_only=True,
-                                )
-                                wrapper.restore()
-                            wait_for_all_processes()
+                            self.ema_wrapper.apply_shadow()
+                            self.save_checkpoint(
+                                ema_suffix=f"ema_{self.ema_wrapper.decay}",
+                            )
+                            self.ema_wrapper.restore()
 
                     if step_need_eval or is_last_step:
                         self.evaluate()

@@ -106,6 +106,8 @@ class ArtiosPotts(nn.Module):
             rejection_step=sampling_cfg.rejection_step,
             track_trajectory=sampling_cfg.track_trajectory,
             trajectory_interval=sampling_cfg.trajectory_interval,
+            track_u_i=sampling_cfg.track_u_i,
+            u_i_interval=sampling_cfg.u_i_interval,
         )
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
@@ -276,6 +278,8 @@ class ArtiosPotts(nn.Module):
             sequence_trajectory=result.sequence_trajectory,
             energy_trajectory=result.energy_trajectory,
             trajectory_sweep_indices=result.trajectory_sweep_indices,
+            u_i_trajectory=result.u_i_trajectory,
+            u_i_sweep_indices=result.u_i_sweep_indices,
         )
 
     def main_train_loop(

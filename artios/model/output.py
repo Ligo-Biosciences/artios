@@ -101,6 +101,10 @@ class PottsOutput(ModelOutput):
     sequence_trajectory: Optional[Int[Tensor, "batch n_saved n_token"]] = None
     energy_trajectory: Optional[Float[Tensor, "batch n_saved"]] = None
     trajectory_sweep_indices: list[int] | None = None
+    u_i_trajectory: Optional[
+        Float[Tensor, "batch n_saved_ui n_token num_residue_types"]
+    ] = None
+    u_i_sweep_indices: list[int] | None = None
 
 
 # Backwards compatibility alias

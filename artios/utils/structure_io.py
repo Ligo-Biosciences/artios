@@ -456,6 +456,8 @@ def _save_potts(output: PottsOutput, ctx: SaveContext) -> list[Path]:
     paths = _save_potts_to_fasta(output, ctx)
     if output.sequence_trajectory is not None:
         paths.append(_save_potts_trajectory(output, ctx))
+    if output.u_i_trajectory is not None:
+        paths.append(_save_potts_u_i_trajectory(output, ctx))
     return paths
 
 
@@ -478,6 +480,26 @@ def _save_potts_trajectory(output: PottsOutput, ctx: SaveContext) -> Path:
         sweep_indices=np.array(output.trajectory_sweep_indices, dtype=np.int32),
     )
     logger.info(f"Saved Potts trajectory to {output_path}")
+    return output_path
+
+
+def _save_potts_u_i_trajectory(output: PottsOutput, ctx: SaveContext) -> Path:
+    """Save Potts per-node conditional energies U_i to NPZ.
+
+    Contents:
+        u_i_trajectory: float32 [batch, n_saved_ui, n_token, R] — conditional energies.
+        sweep_indices: int32 [n_saved_ui] — which sweep each snapshot corresponds to.
+    """
+    output_dir = Path(ctx.sample_dirs[0])
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = output_dir / f"{ctx.sample_name}_potts_u_i_trajectory.npz"
+
+    np.savez(
+        output_path,
+        u_i_trajectory=output.u_i_trajectory.cpu().numpy().astype(np.float32),
+        sweep_indices=np.array(output.u_i_sweep_indices, dtype=np.int32),
+    )
+    logger.info(f"Saved Potts U_i trajectory to {output_path}")
     return output_path
 
 

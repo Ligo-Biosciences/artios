@@ -256,10 +256,12 @@ model_configs = {
                 "aromatic_penalty_weight": 0.0,
                 "aromatic_target_fraction": 0.25,
                 "aromatic_distance_cutoff": 8.0,
-                "ensemble_size": 1,  # 1 = disabled, >1 = average h/J over noised backbone coords
-                "ensemble_noise_scale": 0.3,  # std of Gaussian noise added to backbone coordinates
+                "ensemble_size": 1,
+                "ensemble_noise_scale": 0.3,
                 "track_trajectory": False,
                 "trajectory_interval": 1,
+                "track_u_i": False,
+                "u_i_interval": 20,
             },
         },
         "sampling": {

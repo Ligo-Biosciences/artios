@@ -3,6 +3,10 @@
 import torch
 import torch.nn.functional as F
 
+from artios.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_padding_length(num: int, bin_ends: list[int]) -> int:
     """
@@ -19,7 +23,13 @@ def get_padding_length(num: int, bin_ends: list[int]) -> int:
     for end in bin_ends:
         if num <= end:
             return end
-    return bin_ends[-1]
+    # Fallback: if num exceeds all bins, pad to num itself so we never
+    # return a padding target smaller than the actual size.
+    logger.warning(
+        f"Input size {num} exceeds all bin ends {bin_ends}. "
+        "Padding to exact size — this batch will not benefit from bin-aligned padding."
+    )
+    return num
 
 
 def pad_tensor(

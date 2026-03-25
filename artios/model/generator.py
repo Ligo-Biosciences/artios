@@ -1116,6 +1116,10 @@ class PottsSamplingResult:
     sequence_trajectory: Int[Tensor, "batch n_saved n_token"] | None = None
     energy_trajectory: Float[Tensor, "batch n_saved"] | None = None
     trajectory_sweep_indices: list[int] | None = None
+    u_i_trajectory: (
+        Float[Tensor, "batch n_saved_ui n_token num_residue_types"] | None
+    ) = None
+    u_i_sweep_indices: list[int] | None = None
 
 
 def _color_graph(
@@ -1160,6 +1164,15 @@ def _color_graph(
     return masks
 
 
+@dataclass
+class ProposalResult:
+    """Result of a Potts proposal step (Gibbs or DLMC)."""
+
+    S_new: Float[Tensor, "batch n_token num_residue_types"]
+    energy: Float[Tensor, "batch"] | None = None
+    log_probs: Float[Tensor, "batch n_token num_residue_types"] | None = None
+
+
 def _potts_proposal_gibbs(
     S: Float[Tensor, "batch n_token num_residue_types"],
     h: Float[Tensor, "batch n_token num_residue_types"],
@@ -1171,7 +1184,7 @@ def _potts_proposal_gibbs(
     color_masks: list[Bool[Tensor, "batch n_token"]],
     generator: torch.Generator | None = None,
     penalty_func: Callable[[Tensor], Tensor] | None = None,
-) -> Float[Tensor, "batch n_token num_residue_types"]:
+) -> ProposalResult:
     """Gibbs proposal with parallel colour sweeps.
 
     For each colour group (independent set), computes conditional logits,
@@ -1211,16 +1224,7 @@ def _potts_proposal_gibbs(
             update_mask = update_mask & token_mask
         S = torch.where(update_mask.unsqueeze(-1), S_new, S)
 
-    return S
-
-
-@dataclass
-class DLMCProposalResult:
-    """Result of a DLMC proposal step."""
-
-    S_new: Float[Tensor, "batch n_token num_residue_types"]
-    energy: Float[Tensor, "batch"]
-    log_probs: Float[Tensor, "batch n_token num_residue_types"]
+    return ProposalResult(S_new=S)
 
 
 def _dlmc_energy_and_log_probs(
@@ -1327,12 +1331,12 @@ def _potts_proposal_dlmc(
     if token_mask is not None:
         S_new = torch.where(token_mask.unsqueeze(-1), S_new, S)
 
-    return DLMCProposalResult(S_new=S_new, energy=energy, log_probs=log_probs)
+    return ProposalResult(S_new=S_new, energy=energy, log_probs=log_probs)
 
 
 def _mh_rejection_step(
     S: Float[Tensor, "batch n_token num_residue_types"],
-    forward_result: DLMCProposalResult,
+    forward_result: ProposalResult,
     h,
     J,
     edge_index,
@@ -1394,6 +1398,9 @@ class TrajectoryTracker:
     save_list: list[int]
     seq_traj: Int[Tensor, "batch n_saved n_token"]
     energy_traj: Float[Tensor, "batch n_saved"]
+    u_i_save_set: set[int] | None = None
+    u_i_save_list: list[int] | None = None
+    u_i_traj: Float[Tensor, "batch n_saved_ui n_token num_residue_types"] | None = None
 
     @staticmethod
     def create(
@@ -1406,8 +1413,9 @@ class TrajectoryTracker:
         ],
         edge_index: Int[Tensor, "batch n_token neighbours"],
         edge_mask: Bool[Tensor, "batch n_token neighbours"],
+        u_i_interval: int | None = None,
     ) -> "TrajectoryTracker":
-        B, N, _ = S.shape
+        B, N, R = S.shape
 
         save_list = list(range(0, n_sweeps + 1, interval))
         if n_sweeps not in save_list:
@@ -1422,11 +1430,28 @@ class TrajectoryTracker:
         seq_traj[:, 0] = S_idx
         energy_traj[:, 0] = compute_potts_energy(S_idx, h, J, edge_index, edge_mask)
 
+        # U_i tracking
+        u_i_save_set = None
+        u_i_save_list = None
+        u_i_traj = None
+        if u_i_interval is not None:
+            u_i_save_list = list(range(0, n_sweeps + 1, u_i_interval))
+            if n_sweeps not in u_i_save_list:
+                u_i_save_list.append(n_sweeps)
+            u_i_save_set = set(u_i_save_list)
+            n_saved_ui = len(u_i_save_list)
+            u_i_traj = torch.zeros(B, n_saved_ui, N, R, device=S.device)
+            logits = compute_potts_single_logits(S_idx, h, J, edge_index, edge_mask)
+            u_i_traj[:, 0] = -logits
+
         return TrajectoryTracker(
             save_set=set(save_list),
             save_list=save_list,
             seq_traj=seq_traj,
             energy_traj=energy_traj,
+            u_i_save_set=u_i_save_set,
+            u_i_save_list=u_i_save_list,
+            u_i_traj=u_i_traj,
         )
 
     def record(
@@ -1440,16 +1465,19 @@ class TrajectoryTracker:
         edge_index: Int[Tensor, "batch n_token neighbours"],
         edge_mask: Bool[Tensor, "batch n_token neighbours"],
     ) -> None:
-        if sweep not in self.save_set:
-            return
-
-        idx = self.save_list.index(sweep)
         S_idx = S.argmax(-1)
 
-        self.seq_traj[:, idx] = S_idx
-        self.energy_traj[:, idx] = compute_potts_energy(
-            S_idx, h, J, edge_index, edge_mask
-        )
+        if sweep in self.save_set:
+            idx = self.save_list.index(sweep)
+            self.seq_traj[:, idx] = S_idx
+            self.energy_traj[:, idx] = compute_potts_energy(
+                S_idx, h, J, edge_index, edge_mask
+            )
+
+        if self.u_i_save_set is not None and sweep in self.u_i_save_set:
+            idx = self.u_i_save_list.index(sweep)
+            logits = compute_potts_single_logits(S_idx, h, J, edge_index, edge_mask)
+            self.u_i_traj[:, idx] = -logits
 
 
 @dataclass(frozen=True)
@@ -1487,6 +1515,12 @@ class PottsSampler:
 
     trajectory_interval: int = 1
     """Save trajectory every N sweeps. Initial and final states are always saved."""
+
+    track_u_i: bool = False
+    """If True, store per-node conditional energies U_i [B, N, R] at saved sweeps."""
+
+    u_i_interval: int = 20
+    """Save U_i every N sweeps. Initial and final states are always saved."""
 
     @typecheck
     def sample(
@@ -1533,6 +1567,7 @@ class PottsSampler:
         else:
             S = S_init
 
+        need_tracker = self.track_trajectory or self.track_u_i
         tracker = (
             TrajectoryTracker.create(
                 self.n_sweeps,
@@ -1542,8 +1577,9 @@ class PottsSampler:
                 J,
                 edge_index,
                 edge_mask,
+                u_i_interval=self.u_i_interval if self.track_u_i else None,
             )
-            if self.track_trajectory
+            if need_tracker
             else None
         )
 
@@ -1564,7 +1600,7 @@ class PottsSampler:
                 T = self.temperature
 
             if self.proposal == PottsProposal.GIBBS:
-                S = _potts_proposal_gibbs(
+                result = _potts_proposal_gibbs(
                     S,
                     h,
                     J,
@@ -1576,6 +1612,7 @@ class PottsSampler:
                     generator,
                     penalty_func,
                 )
+                S = result.S_new
             elif self.proposal == PottsProposal.DLMC:
                 result = _potts_proposal_dlmc(
                     S,
@@ -1618,4 +1655,6 @@ class PottsSampler:
             sequence_trajectory=tracker.seq_traj if tracker else None,
             energy_trajectory=tracker.energy_traj if tracker else None,
             trajectory_sweep_indices=tracker.save_list if tracker else None,
+            u_i_trajectory=tracker.u_i_traj if tracker else None,
+            u_i_sweep_indices=tracker.u_i_save_list if tracker else None,
         )

@@ -77,7 +77,7 @@ default_distillation_configs = {
         # Weight ~ num_tokens^gamma. At gamma=1.5, a 10x longer protein gets
         # ~31x sampling weight, biasing toward longer sequences with more
         # interesting geometry. 0 = uniform, 1 = token-proportional.
-        "length_reweight_gamma": 1.5,
+        "length_reweight_gamma": GlobalConfigValue("length_reweight_gamma"),
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -188,6 +188,7 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": False,
     "binding_target_train_rate": 0.0,
+    "length_reweight_gamma": 0.0,
     "filter_unique_fragment_prob": 1.0,
     "filter_unique_domain_prob": 0.0,
     "motif_training": {

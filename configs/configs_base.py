@@ -238,7 +238,7 @@ model_configs = {
             "symmetric_J": True,
             "zero_sum_gauge": True,
             "parameterisation": "linear",
-            "num_factors": None,
+            "num_factors": 32,
             "masking_sampler": "linear",
             "sampling": {
                 "proposal": "dlmc",

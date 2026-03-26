@@ -384,17 +384,17 @@ class GraphPotts(nn.Module):
         symmetric_J: bool = True,
         zero_sum_gauge: bool = True,
         init_scale: float = 0.1,
-        num_factors: int | None = None,
+        num_factors: int = 32,
     ):
         super().__init__()
         self.num_residue_types = num_residue_types
         self.symmetric_J = symmetric_J
         self.zero_sum_gauge = zero_sum_gauge
         self.parameterisation = parameterisation
+        self.num_factors = num_factors
 
         R = num_residue_types
-        F = num_factors if num_factors is not None else R
-        self.num_factors = F
+        F = num_factors
         self.log_scale = nn.Parameter(np.log(init_scale) * torch.ones(1))
 
         match parameterisation:
@@ -408,12 +408,11 @@ class GraphPotts(nn.Module):
                 self.W_J_right = Linear(edge_dim, F * R)
 
             case GraphPottsParameterisation.SCORE:
-                self.num_factors = F
                 self.W_h = Linear(node_dim, R)
                 self.W_h_bg = Linear(node_dim, 1)
                 self.W_J_bg = Linear(edge_dim, 1)
-                self.W_J_left = Linear(edge_dim, R * self.num_factors)
-                self.W_J_right = Linear(edge_dim, R * self.num_factors)
+                self.W_J_left = Linear(edge_dim, R * F)
+                self.W_J_right = Linear(edge_dim, F * R)
 
             case _:
                 assert_never(parameterisation)
@@ -446,6 +445,7 @@ class GraphPotts(nn.Module):
         mask_h = scale * token_mask[..., None]
         mask_J = scale * edge_mask[..., None]
         R = self.num_residue_types
+        F = self.num_factors
         param = self.parameterisation
 
         match param:
@@ -455,7 +455,6 @@ class GraphPotts(nn.Module):
                 J = rearrange(J_flat, "b n k (r1 r2) -> b n k r1 r2", r1=R)
 
             case GraphPottsParameterisation.FACTOR:
-                F = self.num_factors
                 h = mask_h * self.W_h(node_feats)
                 J_left = rearrange(
                     mask_J * self.W_J_left(edge_feats),
@@ -472,7 +471,6 @@ class GraphPotts(nn.Module):
                 J = torch.matmul(J_left, J_right)
 
             case GraphPottsParameterisation.SCORE:
-                F = self.num_factors
                 h = mask_h * self.W_h(node_feats)
                 J_left = rearrange(
                     mask_J * self.W_J_left(edge_feats),

@@ -384,6 +384,7 @@ class GraphPotts(nn.Module):
         symmetric_J: bool = True,
         zero_sum_gauge: bool = True,
         init_scale: float = 0.1,
+        num_factors: int | None = None,
     ):
         super().__init__()
         self.num_residue_types = num_residue_types
@@ -392,6 +393,8 @@ class GraphPotts(nn.Module):
         self.parameterisation = parameterisation
 
         R = num_residue_types
+        F = num_factors if num_factors is not None else R
+        self.num_factors = F
         self.log_scale = nn.Parameter(np.log(init_scale) * torch.ones(1))
 
         match parameterisation:
@@ -401,11 +404,11 @@ class GraphPotts(nn.Module):
 
             case GraphPottsParameterisation.FACTOR:
                 self.W_h = Linear(node_dim, R)
-                self.W_J_left = Linear(edge_dim, R**2)
-                self.W_J_right = Linear(edge_dim, R**2)
+                self.W_J_left = Linear(edge_dim, R * F)
+                self.W_J_right = Linear(edge_dim, F * R)
 
             case GraphPottsParameterisation.SCORE:
-                self.num_factors = num_residue_types
+                self.num_factors = F
                 self.W_h = Linear(node_dim, R)
                 self.W_h_bg = Linear(node_dim, 1)
                 self.W_J_bg = Linear(edge_dim, 1)
@@ -452,16 +455,19 @@ class GraphPotts(nn.Module):
                 J = rearrange(J_flat, "b n k (r1 r2) -> b n k r1 r2", r1=R)
 
             case GraphPottsParameterisation.FACTOR:
+                F = self.num_factors
                 h = mask_h * self.W_h(node_feats)
                 J_left = rearrange(
                     mask_J * self.W_J_left(edge_feats),
-                    "b n k (r1 r2) -> b n k r1 r2",
-                    r1=R,
+                    "b n k (r f) -> b n k r f",
+                    r=R,
+                    f=F,
                 )
                 J_right = rearrange(
                     mask_J * self.W_J_right(edge_feats),
-                    "b n k (r1 r2) -> b n k r1 r2",
-                    r1=R,
+                    "b n k (f r) -> b n k f r",
+                    f=F,
+                    r=R,
                 )
                 J = torch.matmul(J_left, J_right)
 

@@ -120,7 +120,7 @@ def validate_indices(df: pd.DataFrame) -> pd.DataFrame:
 # ── Filtering ──────────────────────────────────────────────────────────────
 
 
-def filter_artifact_ligands(indices_df: pd.DataFrame) -> pd.DataFrame:
+def _filter_artifact_ligands(indices_df: pd.DataFrame) -> pd.DataFrame:
     """Filter out rows involving artifact ligands (crystallization buffer, solvents, etc.).
 
     Removes rows where any ligand side is categorized as 'artifact' based on

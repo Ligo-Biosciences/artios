@@ -1,8 +1,11 @@
+from dataclasses import dataclass
+from typing import Callable
+
 import numpy as np
 import torch
 from torch import Tensor
 
-from artios.common.constants import AROMATIC_INDICES
+from artios.common.constants import AROMATIC_INDICES, CHARGED_INDICES
 from artios.utils.typing import Bool, Float, Int
 
 
@@ -189,6 +192,39 @@ def aromatic_enrichment_penalty(
     return penalty * has_active_site.float()
 
 
+def charged_enrichment_penalty(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    active_site_mask: Bool[Tensor, "batch n_token"],
+    target_fraction: float = 0.25,
+) -> Float[Tensor, "batch"]:
+    """Penalize low charged residue fraction in the active site.
+
+    Encourages charged residues (ASP, GLU, ARG, LYS, HIS) near the ligand
+    binding site during MCMC sampling. Only penalizes when the charged
+    fraction falls below the target.
+
+    Args:
+        S: One-hot (or soft) sequence tensor [B, N, R].
+        active_site_mask: Boolean mask for active site protein residues [B, N].
+        target_fraction: Target charged fraction in active site (default 0.25).
+
+    Returns:
+        Penalty energy per sample [B]. Higher = more penalty.
+    """
+    S_charged = S[:, :, CHARGED_INDICES].sum(dim=-1)
+
+    mask_float = active_site_mask.float()
+    charged_count = (S_charged * mask_float).sum(dim=-1)
+    n_active = mask_float.sum(dim=-1)
+
+    frac = charged_count / (n_active + 1e-8)
+
+    penalty = (frac - target_fraction).clamp(max=0).square()
+
+    has_active_site = n_active > 0
+    return penalty * has_active_site.float()
+
+
 def build_active_site_mask(
     centre_coordinate: Float[Tensor, "batch n_token 3"],
     is_ligand_token: Bool[Tensor, "batch n_token"],
@@ -217,3 +253,22 @@ def build_active_site_mask(
     dist = (centre_coordinate - lig_com.unsqueeze(1)).norm(dim=-1)
 
     return (dist < distance_cutoff) & is_protein_token & token_mask
+
+
+@dataclass
+class PenaltyCollection:
+    """Named collection of penalty functions for Potts sampling.
+
+    Callable (sums all penalties), but also exposes individual penalties
+    by name for per-penalty gradient tracking.
+    """
+
+    penalties: dict[str, Callable[[Tensor], Tensor]]
+
+    def __call__(self, S: Tensor) -> Tensor:
+        """Sum all penalties."""
+        return sum(fn(S) for fn in self.penalties.values())
+
+    @property
+    def names(self) -> list[str]:
+        return list(self.penalties.keys())

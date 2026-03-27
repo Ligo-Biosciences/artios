@@ -18,8 +18,10 @@ from artios.model.generator import (
 from artios.model.loss import composite_nll_loss, nll_loss
 from artios.model.modules.mpnn import MPNN
 from artios.model.modules.penalty import (
+    PenaltyCollection,
     aromatic_enrichment_penalty,
     build_active_site_mask,
+    charged_enrichment_penalty,
     complexity_lcp,
 )
 from artios.model.modules.potts import (
@@ -119,7 +121,9 @@ class ArtiosPotts(nn.Module):
         self.ensemble_noise_scale = sampling_cfg.ensemble_noise_scale
         self.aromatic_penalty_weight = sampling_cfg.aromatic_penalty_weight
         self.aromatic_target_fraction = sampling_cfg.aromatic_target_fraction
-        self.aromatic_distance_cutoff = sampling_cfg.aromatic_distance_cutoff
+        self.active_site_distance_cutoff = sampling_cfg.active_site_distance_cutoff
+        self.charged_penalty_weight = sampling_cfg.charged_penalty_weight
+        self.charged_target_fraction = sampling_cfg.charged_target_fraction
 
     # TODO: this guy needs a lot of tidying before merging to main.
     def main_inference_loop(
@@ -212,7 +216,7 @@ class ArtiosPotts(nn.Module):
         )
 
         ### Penalty logic
-        penalties = []
+        penalty_dict: dict[str, callable] = {}
 
         if self.complexity_penalty_weight > 0:
             chain_id = context.token.asym_id
@@ -230,31 +234,40 @@ class ArtiosPotts(nn.Module):
                     entropy_min=lcp_entropy_min,
                 )
 
-            penalties.append(lcp_penalty)
+            penalty_dict["lcp"] = lcp_penalty
 
-        if self.aromatic_penalty_weight > 0:
-            arom_mask = build_active_site_mask(
+        # Active site mask (shared by aromatic and charged penalties)
+        needs_active_site = (
+            self.aromatic_penalty_weight > 0 or self.charged_penalty_weight > 0
+        )
+        if needs_active_site:
+            active_site_mask = build_active_site_mask(
                 context.coordinate.centre_coordinate,
                 context.entity.is_ligand_token,
                 context.entity.is_protein_token,
                 context.mask.token_mask,
-                self.aromatic_distance_cutoff,
+                self.active_site_distance_cutoff,
             )
-            arom_weight = self.aromatic_penalty_weight
-            arom_target = self.aromatic_target_fraction
+
+        if self.aromatic_penalty_weight > 0:
 
             def aromatic_penalty(S: torch.Tensor) -> torch.Tensor:
-                return arom_weight * aromatic_enrichment_penalty(
-                    S, arom_mask, target_fraction=arom_target
+                return self.aromatic_penalty_weight * aromatic_enrichment_penalty(
+                    S, active_site_mask, target_fraction=self.aromatic_target_fraction
                 )
 
-            penalties.append(aromatic_penalty)
+            penalty_dict["aromatic"] = aromatic_penalty
 
-        penalty_func = None
-        if penalties:
+        if self.charged_penalty_weight > 0:
 
-            def penalty_func(S: torch.Tensor) -> torch.Tensor:
-                return sum(p(S) for p in penalties)
+            def charged_penalty(S: torch.Tensor) -> torch.Tensor:
+                return self.charged_penalty_weight * charged_enrichment_penalty(
+                    S, active_site_mask, target_fraction=self.charged_target_fraction
+                )
+
+            penalty_dict["charged"] = charged_penalty
+
+        penalty = PenaltyCollection(penalty_dict) if penalty_dict else None
 
         ### Sampling logic
         result = self.potts_sampler.sample(
@@ -265,7 +278,7 @@ class ArtiosPotts(nn.Module):
             token_mask=mutable_mask,
             S_init=S_init,
             generator=generator,
-            penalty_func=penalty_func,
+            penalty=penalty,
         )
 
         return PottsOutput(
@@ -281,6 +294,8 @@ class ArtiosPotts(nn.Module):
             trajectory_sweep_indices=result.trajectory_sweep_indices,
             u_i_trajectory=result.u_i_trajectory,
             u_i_sweep_indices=result.u_i_sweep_indices,
+            penalty_grad_trajectories=result.penalty_grad_trajectories,
+            penalty_names=result.penalty_names,
         )
 
     def main_train_loop(

@@ -105,6 +105,8 @@ class PottsOutput(ModelOutput):
         Float[Tensor, "batch n_saved_ui n_token num_residue_types"]
     ] = None
     u_i_sweep_indices: list[int] | None = None
+    penalty_grad_trajectories: dict | None = None
+    penalty_names: list[str] | None = None
 
 
 # Backwards compatibility alias

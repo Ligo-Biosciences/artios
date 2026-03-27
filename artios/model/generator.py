@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from artios.model.modules.penalty import PenaltyCollection
 from artios.model.modules.potts import (
     compute_potts_energy,
     compute_potts_single_logits,
@@ -1120,6 +1121,10 @@ class PottsSamplingResult:
         Float[Tensor, "batch n_saved_ui n_token num_residue_types"] | None
     ) = None
     u_i_sweep_indices: list[int] | None = None
+    penalty_grad_trajectories: (
+        dict[str, Float[Tensor, "batch n_saved_ui n_token num_residue_types"]] | None
+    ) = None
+    penalty_names: list[str] | None = None
 
 
 def _color_graph(
@@ -1183,14 +1188,14 @@ def _potts_proposal_gibbs(
     temperature: float,
     color_masks: list[Bool[Tensor, "batch n_token"]],
     generator: torch.Generator | None = None,
-    penalty_func: Callable[[Tensor], Tensor] | None = None,
+    penalty: Callable[[Tensor], Tensor] | None = None,
 ) -> ProposalResult:
     """Gibbs proposal with parallel colour sweeps.
 
     For each colour group (independent set), computes conditional logits,
     samples new states, and updates S at those positions.
 
-    If penalty_func is provided, its gradient w.r.t. S is computed via
+    If penalty is provided, its gradient w.r.t. S is computed via
     autograd and added to the conditional energy (following Chroma).
     """
     R = S.shape[-1]
@@ -1203,10 +1208,10 @@ def _potts_proposal_gibbs(
         U_i = -logits  # [B, N, R]
 
         # Add penalty gradient if provided
-        if penalty_func is not None:
+        if penalty is not None:
             with torch.enable_grad():
                 S_grad = S.detach().requires_grad_(True)
-                U_penalty = penalty_func(S_grad)
+                U_penalty = penalty(S_grad)
                 U_i_adjustment = torch.autograd.grad(U_penalty.sum(), S_grad)[
                     0
                 ].detach()
@@ -1236,7 +1241,7 @@ def _dlmc_energy_and_log_probs(
     token_mask,
     temperature,
     dt=0.1,
-    penalty_func=None,
+    penalty=None,
 ):
     """Compute DLMC energy and transition log-probabilities for a given state.
 
@@ -1255,10 +1260,10 @@ def _dlmc_energy_and_log_probs(
     energy = compute_potts_energy(S_idx, h, J, edge_index, edge_mask)
 
     # Add penalty gradient if provided
-    if penalty_func is not None:
+    if penalty is not None:
         with torch.enable_grad():
             S_grad = S.detach().requires_grad_(True)
-            U_penalty = penalty_func(S_grad)
+            U_penalty = penalty(S_grad)
             U_i_adjustment = torch.autograd.grad(U_penalty.sum(), S_grad)[0].detach()
             U_i_adjustment = U_i_adjustment - torch.gather(
                 U_i_adjustment, -1, S_idx.unsqueeze(-1)
@@ -1305,7 +1310,7 @@ def _potts_proposal_dlmc(
     temperature,
     dt=0.1,
     generator=None,
-    penalty_func=None,
+    penalty=None,
 ):
     B, N, R = S.shape
 
@@ -1319,7 +1324,7 @@ def _potts_proposal_dlmc(
         token_mask,
         temperature,
         dt,
-        penalty_func,
+        penalty,
     )
 
     # sample from the log probs to get the mutations
@@ -1344,7 +1349,7 @@ def _mh_rejection_step(
     token_mask,
     temperature: float,
     dt: float,
-    penalty_func: Callable[[Tensor], Tensor] | None,
+    penalty: Callable[[Tensor], Tensor] | None,
     generator: torch.Generator | None,
 ) -> Float[Tensor, "batch n_token num_residue_types"]:
     """Metropolis-Hastings correction for DLMC proposals.
@@ -1367,7 +1372,7 @@ def _mh_rejection_step(
         token_mask,
         temperature,
         dt,
-        penalty_func,
+        penalty,
     )
 
     # Flux = -U/T + sum_i log P(transition to target)
@@ -1400,6 +1405,8 @@ class TrajectoryTracker:
     energy_traj: Float[Tensor, "batch n_saved"]
     u_i_save_set: set[int] | None = None
     u_i_save_list: list[int] | None = None
+    penalty_collection: PenaltyCollection | None = None
+    penalty_grad_trajs: dict | None = None
     u_i_traj: Float[Tensor, "batch n_saved_ui n_token num_residue_types"] | None = None
 
     @staticmethod
@@ -1414,6 +1421,7 @@ class TrajectoryTracker:
         edge_index: Int[Tensor, "batch n_token neighbours"],
         edge_mask: Bool[Tensor, "batch n_token neighbours"],
         u_i_interval: int | None = None,
+        penalty: Callable[[Tensor], Tensor] | None = None,
     ) -> "TrajectoryTracker":
         B, N, R = S.shape
 
@@ -1444,6 +1452,22 @@ class TrajectoryTracker:
             logits = compute_potts_single_logits(S_idx, h, J, edge_index, edge_mask)
             u_i_traj[:, 0] = -logits
 
+        # Penalty gradient tracking (at same interval as U_i)
+        p_collection = None
+        p_grad_trajs = None
+        if u_i_interval is not None and penalty is not None:
+            p_collection = penalty
+            p_grad_trajs = {}
+            for name, fn in p_collection.penalties.items():
+                traj = torch.zeros(B, n_saved_ui, N, R, device=S.device)
+                # Record initial gradient at sweep 0
+                with torch.enable_grad():
+                    S_grad = S.detach().requires_grad_(True)
+                    val = fn(S_grad)
+                    grad = torch.autograd.grad(val.sum(), S_grad)[0].detach()
+                traj[:, 0] = grad
+                p_grad_trajs[name] = traj
+
         return TrajectoryTracker(
             save_set=set(save_list),
             save_list=save_list,
@@ -1452,6 +1476,8 @@ class TrajectoryTracker:
             u_i_save_set=u_i_save_set,
             u_i_save_list=u_i_save_list,
             u_i_traj=u_i_traj,
+            penalty_collection=p_collection,
+            penalty_grad_trajs=p_grad_trajs,
         )
 
     def record(
@@ -1478,6 +1504,18 @@ class TrajectoryTracker:
             idx = self.u_i_save_list.index(sweep)
             logits = compute_potts_single_logits(S_idx, h, J, edge_index, edge_mask)
             self.u_i_traj[:, idx] = -logits
+
+            # Per-penalty gradient tracking
+            if (
+                self.penalty_collection is not None
+                and self.penalty_grad_trajs is not None
+            ):
+                for name, fn in self.penalty_collection.penalties.items():
+                    with torch.enable_grad():
+                        S_grad = S.detach().requires_grad_(True)
+                        val = fn(S_grad)
+                        grad = torch.autograd.grad(val.sum(), S_grad)[0].detach()
+                    self.penalty_grad_trajs[name][:, idx] = grad
 
 
 @dataclass(frozen=True)
@@ -1534,7 +1572,7 @@ class PottsSampler:
         token_mask: Bool[Tensor, "batch n_token"] | None = None,
         S_init: Float[Tensor, "batch n_token num_residue_types"] | None = None,
         generator: torch.Generator | None = None,
-        penalty_func: Callable[[Tensor], Tensor] | None = None,
+        penalty: Callable[[Tensor], Tensor] | None = None,
     ) -> PottsSamplingResult:
         """Sample sequences from the Potts energy landscape.
 
@@ -1546,7 +1584,7 @@ class PottsSampler:
             token_mask: Valid token mask [B, N]. Invalid positions are not updated.
             S_init: Initial one-hot sequence [B, N, R]. If None, initialised from field (h).
             generator: Generator for reproducibility.
-            penalty_func: Optional penalty function mapping S [B, N, R] to energy [B].
+            penalty: Optional penalty (callable) mapping S [B, N, R] to energy [B].
                 Its gradient w.r.t. S is added to conditional energies during proposals.
 
         Returns:
@@ -1578,6 +1616,7 @@ class PottsSampler:
                 edge_index,
                 edge_mask,
                 u_i_interval=self.u_i_interval if self.track_u_i else None,
+                penalty=penalty,
             )
             if need_tracker
             else None
@@ -1610,7 +1649,7 @@ class PottsSampler:
                     T,
                     color_masks,
                     generator,
-                    penalty_func,
+                    penalty,
                 )
                 S = result.S_new
             elif self.proposal == PottsProposal.DLMC:
@@ -1624,7 +1663,7 @@ class PottsSampler:
                     T,
                     self.dt,
                     generator,
-                    penalty_func,
+                    penalty,
                 )
 
                 if self.rejection_step:
@@ -1638,7 +1677,7 @@ class PottsSampler:
                         token_mask,
                         T,
                         self.dt,
-                        penalty_func,
+                        penalty,
                         generator,
                     )
                 else:
@@ -1657,4 +1696,8 @@ class PottsSampler:
             trajectory_sweep_indices=tracker.save_list if tracker else None,
             u_i_trajectory=tracker.u_i_traj if tracker else None,
             u_i_sweep_indices=tracker.u_i_save_list if tracker else None,
+            penalty_grad_trajectories=tracker.penalty_grad_trajs if tracker else None,
+            penalty_names=tracker.penalty_collection.names
+            if tracker and tracker.penalty_collection
+            else None,
         )

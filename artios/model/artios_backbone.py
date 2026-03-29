@@ -163,7 +163,7 @@ class ArtiosBackbone(nn.Module):
 
         # Per-entity noise translation: offset each chain's noise independently
         if self.s_noise_entity_trans > 0:
-            entity_ids = context.chain_perm.mol_id  # [*batch, n_atom]
+            entity_ids = context.index.atom_asym_id  # [*batch, n_atom]
             n_entities = int(entity_ids.max()) + 1
             entity_offsets = self.s_noise_entity_trans * torch.randn(
                 *batch_shape,

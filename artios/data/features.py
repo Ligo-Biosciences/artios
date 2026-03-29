@@ -312,6 +312,11 @@ class IndexContext(Context):
         type=FeatureType.ATOM,
         description="Token atom (which atom within token) index for each atom",
     )
+    atom_asym_id: Auxiliary(
+        Int[Tensor, "*batch n_atom"],
+        type=FeatureType.ATOM,
+        description="Chain ID at atom level (reflects motif unindexing)",
+    )
 
 
 @typecheck

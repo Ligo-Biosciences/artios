@@ -11,6 +11,7 @@ from einops import rearrange, repeat
 from torch import Tensor, nn
 from typing_extensions import assert_never
 
+from artios.common.residue_names import PROTEIN_TYPES_ONE_LETTER_TO_INT
 from artios.model.modules.message_passing import gather_nodes
 from artios.model.modules.primitives import Linear
 from artios.utils.typing import Bool, Float, Int, typecheck
@@ -102,6 +103,23 @@ def build_alphabet_mask(
         mask[:, :, 12] = False
 
     return mask
+
+
+def build_energy_bias_vector(
+    energy_bias: dict[str, float],
+    num_residue_types: int,
+    device: torch.device,
+) -> Tensor | None:
+    """Build a per-residue energy bias vector from a 1-letter-code-to-value mapping."""
+    bias = torch.zeros(num_residue_types, device=device)
+    any_nonzero = False
+    for code, value in energy_bias.items():
+        if value == 0.0:
+            continue
+        idx = PROTEIN_TYPES_ONE_LETTER_TO_INT[code]
+        bias[idx] = value
+        any_nonzero = True
+    return bias if any_nonzero else None
 
 
 def build_s_init(

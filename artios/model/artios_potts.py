@@ -28,6 +28,7 @@ from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
     build_alphabet_mask,
+    build_energy_bias_vector,
     build_mutable_mask,
     build_s_init,
     compute_potts_joint_logits,
@@ -117,8 +118,10 @@ class ArtiosPotts(nn.Module):
         self.complexity_entropy_min = sampling_cfg.complexity_entropy_min
         self.exclude_cys = sampling_cfg.exclude_cys
         self.exclude_met = sampling_cfg.exclude_met
+        self.energy_bias = dict(sampling_cfg.energy_bias)
         self.ensemble_size = sampling_cfg.ensemble_size
         self.ensemble_noise_scale = sampling_cfg.ensemble_noise_scale
+        self.ensemble_dropout = sampling_cfg.ensemble_dropout
         self.aromatic_penalty_weight = sampling_cfg.aromatic_penalty_weight
         self.aromatic_target_fraction = sampling_cfg.aromatic_target_fraction
         self.active_site_distance_cutoff = sampling_cfg.active_site_distance_cutoff
@@ -150,10 +153,15 @@ class ArtiosPotts(nn.Module):
             masked_restypes = self.mpnn.pad_and_mask_restypes(restypes, is_masked)
 
         ### Ensemble logic
+        if self.ensemble_dropout and self.mpnn.dropout > 0:
+            for m in self.mpnn.modules():
+                if isinstance(m, nn.Dropout):
+                    m.train()
+
         h_sum = None
         J_sum = None
         for i in range(self.ensemble_size):
-            if self.ensemble_size > 1:
+            if self.ensemble_noise_scale > 0 and self.ensemble_size > 1:
                 bb = context.coordinate.backbone_coordinate
                 noised = bb + self.ensemble_noise_scale * torch.randn(
                     bb.shape,
@@ -167,6 +175,7 @@ class ArtiosPotts(nn.Module):
                 )
             else:
                 ctx = context
+
             mpnn_out = self.mpnn(
                 context=ctx, masked_restypes=masked_restypes, is_masked=is_masked
             )
@@ -187,6 +196,11 @@ class ArtiosPotts(nn.Module):
                 h_sum = h_sum + h_i
                 J_sum = J_sum + J_i
 
+        if self.ensemble_dropout and self.mpnn.dropout > 0:
+            for m in self.mpnn.modules():
+                if isinstance(m, nn.Dropout):
+                    m.eval()
+
         h = h_sum / self.ensemble_size
         J = J_sum / self.ensemble_size
 
@@ -206,6 +220,10 @@ class ArtiosPotts(nn.Module):
         )
 
         h = h + ~alphabet_mask * ALPHABET_BIAS
+
+        energy_bias = build_energy_bias_vector(self.energy_bias, R, device)
+        if energy_bias is not None:
+            h = h + energy_bias
 
         S_init = build_s_init(
             h,
@@ -236,7 +254,7 @@ class ArtiosPotts(nn.Module):
 
             penalty_dict["lcp"] = lcp_penalty
 
-        # Active site mask (shared by aromatic and charged penalties)
+        # Active site mask
         needs_active_site = (
             self.aromatic_penalty_weight > 0 or self.charged_penalty_weight > 0
         )

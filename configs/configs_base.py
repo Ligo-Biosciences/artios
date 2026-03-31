@@ -190,6 +190,7 @@ model_configs = {
         "track_trajectory": False,
         "trajectory_step_stride": 10,
         "centre_and_augment_coords_during_sampling": True,
+        "self_conditioning": True,
     },
     "model": {
         "N_model_seed": 1,  # for inference

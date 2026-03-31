@@ -103,6 +103,7 @@ class ArtiosBackbone(nn.Module):
             cfg_schedule=cfg_schedule,
             centre_coords=self.sampling_configs.centre_and_augment_coords_during_sampling,
             track_trajectory=self.sampling_configs.track_trajectory,
+            self_conditioning=self.sampling_configs.self_conditioning,
         )
 
         return BackboneOutput(

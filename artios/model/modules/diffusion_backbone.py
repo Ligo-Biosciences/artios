@@ -537,6 +537,7 @@ class DiffusionModule(nn.Module):
         inplace_safe: bool = False,
         eps: float = 1e-5,
         cfg_schedule: CFGSchedule = NoCFG(),
+        self_conditioning: bool = True,
     ) -> VelocityScorePredictor:
         """Create a VelocityScorePredictor bound to this module and context.
 
@@ -548,6 +549,9 @@ class DiffusionModule(nn.Module):
             eps: Small constant for numerical stability.
             cfg_schedule: CFG schedule. Use NoCFG() to skip classifier-free guidance
                 entirely (no unconditional forward pass). Defaults to NoCFG().
+            self_conditioning: Whether to chain predictions across sampling steps.
+                When True, each step receives the aligned previous prediction.
+                When False, prev_pred is always None (no self-conditioning).
 
         Returns:
             A callable satisfying VelocityScorePredictor protocol.
@@ -559,6 +563,14 @@ class DiffusionModule(nn.Module):
             conditioning_cache = self.diffusion_conditioning.compute_cache(ctx)
             prev_pred: Optional[Float[Tensor, "... n_atom 3"]] = None
 
+            # Upweight ligand/nucleic atoms in self-conditioning alignment
+            align_weight = (
+                ctx.mask.is_resolved
+                + 5.0 * ctx.entity.is_dna
+                + 5.0 * ctx.entity.is_rna
+                + 10.0 * ctx.entity.is_ligand
+            )
+
             def predictor(
                 x_noisy: Float[Tensor, "... n_atom 3"],
                 timestep: Float[Tensor, "..."],
@@ -567,13 +579,15 @@ class DiffusionModule(nn.Module):
 
                 # Align previous prediction to current noisy coords (handles frame changes)
                 aligned_prev = None
-                if prev_pred is not None:
+                if self_conditioning and prev_pred is not None:
                     n_sample = x_noisy.shape[-3]
                     mask = repeat(ctx.mask.is_resolved, "... n -> ... s n", s=n_sample)
+                    weight = repeat(align_weight, "... n -> ... s n", s=n_sample)
                     aligned_prev, _, _ = align_pred_to_true(
                         pred_pose=prev_pred,
                         true_pose=x_noisy,
                         atom_mask=mask,
+                        weight=weight,
                     )
 
                 coords_pred = self.forward(
@@ -585,7 +599,8 @@ class DiffusionModule(nn.Module):
                     prev_pred=aligned_prev,
                 )
 
-                prev_pred = coords_pred.detach()
+                if self_conditioning:
+                    prev_pred = coords_pred.detach()
 
                 t = repeat(timestep, "... -> ... 1 1")
                 velocity = (coords_pred - x_noisy) / torch.clamp(1 - t, min=eps)
@@ -621,6 +636,7 @@ class DiffusionModule(nn.Module):
         inplace_safe: bool = False,
         centre_coords: bool = False,
         track_trajectory: bool = False,
+        self_conditioning: bool = True,
     ) -> SamplingResult:
         """Backbone denoising sampling using flow matching.
 
@@ -658,7 +674,10 @@ class DiffusionModule(nn.Module):
             centre_coords=centre_coords,
         )
         predictor = self.as_predictor(
-            context, inplace_safe=inplace_safe, cfg_schedule=cfg_schedule
+            context,
+            inplace_safe=inplace_safe,
+            cfg_schedule=cfg_schedule,
+            self_conditioning=self_conditioning,
         )
 
         return sampler.sample(

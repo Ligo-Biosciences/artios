@@ -58,6 +58,7 @@ class ArtiosBackbone(nn.Module):
 
         self.diffusion_module = DiffusionModule(**configs.model.diffusion_module)
         self.sigma_coord = configs.sigma_coord
+        self.s_noise_entity_trans = 2.0
 
     def main_inference_loop(
         self,
@@ -102,6 +103,7 @@ class ArtiosBackbone(nn.Module):
             cfg_schedule=cfg_schedule,
             centre_coords=self.sampling_configs.centre_and_augment_coords_during_sampling,
             track_trajectory=self.sampling_configs.track_trajectory,
+            self_conditioning=self.sampling_configs.self_conditioning,
         )
 
         return BackboneOutput(
@@ -160,9 +162,39 @@ class ArtiosBackbone(nn.Module):
             * self.sigma_coord
         )
 
+        # Per-entity noise translation: offset each chain's noise independently
+        if self.s_noise_entity_trans > 0:
+            entity_ids = context.index.atom_asym_id  # [*batch, n_atom]
+            n_entities = int(entity_ids.max()) + 1
+            entity_offsets = self.s_noise_entity_trans * torch.randn(
+                *batch_shape,
+                n_sample,
+                n_entities,
+                3,
+                device=device,
+                dtype=dtype,
+                generator=generator,
+            )
+            # One-hot lookup: broadcast entity translations to atom positions
+            entity_map = nn.functional.one_hot(entity_ids.long(), n_entities).to(dtype)
+            noise = noise + torch.einsum(
+                "...ae,...sec->...sac", entity_map, entity_offsets
+            )
+
         # Flow matching interpolation
         t = timestep[..., :, None, None]
         r_noisy = t * x_target_augment + (1 - t) * noise
+
+        # Self-conditioning: with probability p, warm-start with a no-grad forward pass
+        prev_pred = None
+        if torch.rand(1).item() < self.configs.self_conditioning_prob:
+            with torch.no_grad():
+                prev_pred = self.diffusion_module(
+                    r_noisy=r_noisy,
+                    timestep=timestep,
+                    context=context,
+                    inplace_safe=inplace_safe,
+                ).detach()
 
         # Denoising
         pred = self.diffusion_module(
@@ -170,6 +202,7 @@ class ArtiosBackbone(nn.Module):
             timestep=timestep,
             context=context,
             inplace_safe=inplace_safe,
+            prev_pred=prev_pred,
         )
 
         # Correct symmetric atoms

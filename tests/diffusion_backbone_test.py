@@ -477,5 +477,159 @@ class TestDiffusionModule:
             assert torch.isfinite(output).all()
 
 
+class TestSelfConditioning:
+    """Tests for self-conditioning in DiffusionModule."""
+
+    @pytest.fixture
+    def diffusion_module(self, device):
+        config = {
+            "sigma_coord": 12.0,
+            "c_z": 128,
+            "c_token": 64,
+            "c_atom": 128,
+            "c_s": 384,
+            "transformer": {"num_blocks": 2, "num_heads": 4},
+            "dropout": 0.0,
+            "blocks_per_ckpt": None,
+        }
+        return DiffusionModule(**config).to(device)
+
+    def test_forward_without_prev_pred(self, diffusion_module, context, device):
+        """Forward pass without prev_pred should work as before."""
+        n_atoms = context.reference.ref_pos.shape[-2]
+        batch_size = context.token.residue_index.shape[0]
+
+        r_noisy = torch.randn(batch_size, 1, n_atoms, 3, device=device)
+        timestep = torch.rand(batch_size, 1, device=device)
+
+        output = diffusion_module(r_noisy=r_noisy, timestep=timestep, context=context)
+
+        assert output.shape == (batch_size, 1, n_atoms, 3)
+        assert torch.isfinite(output).all()
+
+    def test_forward_with_prev_pred(self, diffusion_module, context, device):
+        """Forward pass with prev_pred should produce valid output."""
+        n_atoms = context.reference.ref_pos.shape[-2]
+        batch_size = context.token.residue_index.shape[0]
+
+        r_noisy = torch.randn(batch_size, 1, n_atoms, 3, device=device)
+        timestep = torch.rand(batch_size, 1, device=device)
+        prev_pred = torch.randn(batch_size, 1, n_atoms, 3, device=device)
+
+        output = diffusion_module(
+            r_noisy=r_noisy, timestep=timestep, context=context, prev_pred=prev_pred
+        )
+
+        assert output.shape == (batch_size, 1, n_atoms, 3)
+        assert torch.isfinite(output).all()
+
+    def test_prev_pred_changes_output(self, diffusion_module, context, device):
+        """Providing prev_pred should change the model output."""
+        n_atoms = context.reference.ref_pos.shape[-2]
+        batch_size = context.token.residue_index.shape[0]
+
+        # Many layers are zero-init (readout, prev_pred_embed, linear_s, etc.)
+        # so the network squashes differences at init. Set all weights to
+        # small non-zero values to simulate a partially-trained model.
+        with torch.no_grad():
+            for p in diffusion_module.parameters():
+                if p.ndim >= 2:
+                    p.normal_(std=0.02)
+
+        r_noisy = torch.randn(batch_size, 1, n_atoms, 3, device=device)
+        timestep = torch.rand(batch_size, 1, device=device)
+        prev_pred = torch.randn(batch_size, 1, n_atoms, 3, device=device) * 10.0
+
+        diffusion_module.eval()
+        with torch.no_grad():
+            out_without = diffusion_module(
+                r_noisy=r_noisy, timestep=timestep, context=context
+            )
+            out_with = diffusion_module(
+                r_noisy=r_noisy,
+                timestep=timestep,
+                context=context,
+                prev_pred=prev_pred,
+            )
+
+        assert not torch.allclose(out_without, out_with, atol=1e-5)
+
+    def test_gradient_flows_through_prev_pred_path(
+        self, diffusion_module, context, device
+    ):
+        """Gradients should flow through the main pass (not the prev_pred itself)."""
+        n_atoms = context.reference.ref_pos.shape[-2]
+        batch_size = context.token.residue_index.shape[0]
+
+        r_noisy = torch.randn(batch_size, 1, n_atoms, 3, device=device)
+        timestep = torch.rand(batch_size, 1, device=device)
+        # prev_pred is detached (as in training protocol)
+        prev_pred = torch.randn(batch_size, 1, n_atoms, 3, device=device)
+
+        output = diffusion_module(
+            r_noisy=r_noisy, timestep=timestep, context=context, prev_pred=prev_pred
+        )
+        loss = output.sum()
+        loss.backward()
+
+        # self_cond_merge should have gradients (it processes the concat)
+        assert diffusion_module.self_cond_merge.weight.grad is not None
+        assert torch.isfinite(diffusion_module.self_cond_merge.weight.grad).all()
+
+        # prev_pred_embed should have gradients
+        assert diffusion_module.linear_no_bias_prev_pred_embed.weight.grad is not None
+
+    def test_predictor_self_conditions_across_steps(
+        self, diffusion_module, context, device
+    ):
+        """The predictor should use self-conditioning from the previous step."""
+        n_atoms = context.reference.ref_pos.shape[-2]
+        batch_size = context.token.residue_index.shape[0]
+
+        # Set zero-init weights to non-zero so the network produces distinct outputs
+        with torch.no_grad():
+            for p in diffusion_module.parameters():
+                if p.ndim >= 2:
+                    p.normal_(std=0.02)
+
+        diffusion_module.eval()
+        predictor = diffusion_module.as_predictor(context=context)
+
+        x = torch.randn(batch_size, 1, n_atoms, 3, device=device)
+        t = torch.full((batch_size, 1), 0.5, device=device)
+
+        with torch.no_grad():
+            # First call: no prev_pred available
+            v1, s1 = predictor(x, t)
+
+            # Second call: should use prev_pred from first call
+            v2, s2 = predictor(x, t)
+
+        # Same input but different output because second call has self-conditioning
+        assert not torch.allclose(v1, v2, atol=1e-5)
+
+    def test_sample_with_self_conditioning(self, diffusion_module, device):
+        """Sampling should work with self-conditioning enabled."""
+        context = create_test_context(
+            batch_size=1, n_tokens=16, n_atoms=32, device=device
+        )
+        n_atoms = context.reference.ref_pos.shape[-2]
+        n_sample = 2
+
+        timestep_scheduler = LaProteinaCoordScheduler(scale=10.0)
+
+        with torch.no_grad():
+            result = diffusion_module.sample(
+                context=context,
+                timestep_scheduler=timestep_scheduler,
+                n_steps=3,
+                stochasticity=Deterministic(),
+                n_sample=n_sample,
+            )
+
+        assert result.final.shape == (1, n_sample, n_atoms, 3)
+        assert torch.isfinite(result.final).all()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -154,6 +154,7 @@ model_configs = {
             1
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
+    "self_conditioning_prob": 0.5,
     "train_timestep_sampler": {
         "alpha": 1.9,
         # "beta": 1.0,
@@ -189,6 +190,7 @@ model_configs = {
         "track_trajectory": False,
         "trajectory_step_stride": 10,
         "centre_and_augment_coords_during_sampling": True,
+        "self_conditioning": True,
     },
     "model": {
         "N_model_seed": 1,  # for inference

@@ -563,14 +563,6 @@ class DiffusionModule(nn.Module):
             conditioning_cache = self.diffusion_conditioning.compute_cache(ctx)
             prev_pred: Optional[Float[Tensor, "... n_atom 3"]] = None
 
-            # Upweight ligand/nucleic atoms in self-conditioning alignment
-            align_weight = (
-                ctx.mask.is_resolved
-                + 5.0 * ctx.entity.is_dna
-                + 5.0 * ctx.entity.is_rna
-                + 10.0 * ctx.entity.is_ligand
-            )
-
             def predictor(
                 x_noisy: Float[Tensor, "... n_atom 3"],
                 timestep: Float[Tensor, "..."],
@@ -582,12 +574,10 @@ class DiffusionModule(nn.Module):
                 if self_conditioning and prev_pred is not None:
                     n_sample = x_noisy.shape[-3]
                     mask = repeat(ctx.mask.is_resolved, "... n -> ... s n", s=n_sample)
-                    weight = repeat(align_weight, "... n -> ... s n", s=n_sample)
                     aligned_prev, _, _ = align_pred_to_true(
                         pred_pose=prev_pred,
                         true_pose=x_noisy,
                         atom_mask=mask,
-                        weight=weight,
                     )
 
                 coords_pred = self.forward(

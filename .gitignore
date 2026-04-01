@@ -32,3 +32,6 @@ notebooks/sample-proteins/
 # Generated PDB/CIF outputs
 notebooks/PDBs/
 notebooks/PDBs_noise_*/
+
+# Reference distributions
+reference-dists/

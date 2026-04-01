@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable
 
@@ -5,7 +6,9 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from artios.common import residue_names
 from artios.common.constants import AROMATIC_INDICES, CHARGED_INDICES
+from artios.common.residue_stats import OrganismAAFrequencies
 from artios.utils.typing import Bool, Float, Int
 
 
@@ -274,11 +277,21 @@ def build_active_site_mask(
     return (dist < distance_cutoff) & is_protein_token & token_mask
 
 
+def _frequencies_to_tensor(
+    freq_map: Mapping[str, float],
+    device: torch.device,
+    residue_order: tuple[str, ...] = residue_names.PROTEIN_TYPES,
+) -> Tensor:
+    """Convert residue-name-keyed frequencies to a tensor ordered by residue_order."""
+    return torch.tensor(
+        [freq_map[res] for res in residue_order], device=device, dtype=torch.float32
+    )
+
+
 def composition_chi_squared_penalty(
     S: Float[Tensor, "batch n_token num_residue_types"],
     protein_mutable_mask: Bool[Tensor, "batch n_token"],
-    mu_ref: Float[Tensor, "num_natural_aas"],
-    sigma_ref: Float[Tensor, "num_natural_aas"],
+    organism_freqs: OrganismAAFrequencies,
     k: float = 1.0,
     num_natural_aas: int = 20,
 ) -> Float[Tensor, "batch"]:
@@ -297,8 +310,7 @@ def composition_chi_squared_penalty(
     Args:
         S: One-hot (or soft) sequence tensor [B, N, R].
         protein_mutable_mask: Boolean mask for mutable protein positions [B, N].
-        mu_ref: Reference mean AA frequency vector [Q].
-        sigma_ref: Reference std AA frequency vector [Q].
+        organism_freqs: Reference organism AA frequency statistics.
         k: Dead zone width in standard deviations (0 = no dead zone).
         num_natural_aas: Number of natural amino acid types (default 20).
 
@@ -306,6 +318,8 @@ def composition_chi_squared_penalty(
         Penalty per sample [B]. Higher = more divergent composition.
     """
     Q = num_natural_aas
+    mu_ref = _frequencies_to_tensor(organism_freqs.mean, S.device)
+    sigma_ref = _frequencies_to_tensor(organism_freqs.std, S.device)
 
     S_aa = S[..., :Q]  # [B, N, Q]
     mask = protein_mutable_mask.float().unsqueeze(-1)  # [B, N, 1]

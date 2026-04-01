@@ -9,7 +9,7 @@ from torch import Tensor
 from torch.nn import functional as F
 from typing_extensions import assert_never
 
-from artios.common.constants import AA_FREQUENCIES
+from artios.common.residue_stats import AA_FREQUENCIES, Organism
 from artios.data.features import FullContext
 from artios.model.generator import (
     ExponentialMaskingTimestepSampler,
@@ -54,20 +54,6 @@ class MaskingSamplerType(str, Enum):
 class PottsLossType(str, Enum):
     PSEUDO = "pseudo"
     COMPOSITE = "composite"
-
-
-# TODO: find a place to move this to
-class Organism(str, Enum):
-    """Organism whose AA frequency distribution to match during sampling."""
-
-    SWISSPROT = "swissprot"
-    ECOLI = "ecoli"
-    BSUBTILIS = "bsubtilis"
-    YEAST = "yeast"
-    HUMAN = "human"
-    MOUSE = "mouse"
-    ARABIDOPSIS = "arabidopsis"
-    FLY = "fly"
 
 
 @dataclass(frozen=True)
@@ -353,19 +339,13 @@ class ArtiosPotts(nn.Module):
 
         if self.composition_penalty_weight > 0:
             comp_mask = mutable_mask & context.entity.is_protein_token
-            org_data = AA_FREQUENCIES[self.composition_organism.value]
-            mu_ref = torch.tensor(org_data["mean"], device=device, dtype=torch.float32)
-            sigma_ref = torch.tensor(
-                org_data["std"], device=device, dtype=torch.float32
-            )
+            org_freqs = AA_FREQUENCIES[self.composition_organism]
             k = self.composition_tolerance_k
 
             def composition_penalty(S: torch.Tensor) -> torch.Tensor:
                 return (
                     self.composition_penalty_weight
-                    * composition_chi_squared_penalty(
-                        S, comp_mask, mu_ref, sigma_ref, k=k
-                    )
+                    * composition_chi_squared_penalty(S, comp_mask, org_freqs, k=k)
                 )
 
             penalty_dict["composition"] = composition_penalty

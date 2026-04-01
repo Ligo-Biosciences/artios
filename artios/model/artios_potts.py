@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Optional
@@ -8,6 +9,7 @@ from torch import Tensor
 from torch.nn import functional as F
 from typing_extensions import assert_never
 
+from artios.common.residue_stats import AA_FREQUENCIES, Organism
 from artios.data.features import FullContext
 from artios.model.generator import (
     ExponentialMaskingTimestepSampler,
@@ -18,14 +20,18 @@ from artios.model.generator import (
 from artios.model.loss import composite_nll_loss, nll_loss
 from artios.model.modules.mpnn import MPNN
 from artios.model.modules.penalty import (
+    PenaltyCollection,
     aromatic_enrichment_penalty,
     build_active_site_mask,
+    charged_enrichment_penalty,
     complexity_lcp,
+    composition_chi_squared_penalty,
 )
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
     build_alphabet_mask,
+    build_energy_bias_vector,
     build_mutable_mask,
     build_s_init,
     compute_potts_joint_logits,
@@ -34,8 +40,10 @@ from artios.model.modules.potts import (
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
+from artios.utils.ensemble import sample_anm_displacements
 
 ALPHABET_BIAS = 1e4
+logger = logging.getLogger(__name__)
 
 
 class MaskingSamplerType(str, Enum):
@@ -76,6 +84,7 @@ class ArtiosPotts(nn.Module):
             ),
             symmetric_J=configs.artios_mpnn.potts.symmetric_J,
             zero_sum_gauge=configs.artios_mpnn.potts.zero_sum_gauge,
+            num_factors=configs.artios_mpnn.potts.num_factors,
         )
 
         potts_loss_cfg = configs.loss.potts
@@ -106,17 +115,28 @@ class ArtiosPotts(nn.Module):
             rejection_step=sampling_cfg.rejection_step,
             track_trajectory=sampling_cfg.track_trajectory,
             trajectory_interval=sampling_cfg.trajectory_interval,
+            track_u_i=sampling_cfg.track_u_i,
+            u_i_interval=sampling_cfg.u_i_interval,
         )
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
         self.complexity_entropy_min = sampling_cfg.complexity_entropy_min
         self.exclude_cys = sampling_cfg.exclude_cys
         self.exclude_met = sampling_cfg.exclude_met
+        self.energy_bias = dict(sampling_cfg.energy_bias)
         self.ensemble_size = sampling_cfg.ensemble_size
         self.ensemble_noise_scale = sampling_cfg.ensemble_noise_scale
+        self.ensemble_dropout = sampling_cfg.ensemble_dropout
+        self.ensemble_anm = sampling_cfg.ensemble_anm
+        self.ensemble_anm_gamma = sampling_cfg.ensemble_anm_gamma
         self.aromatic_penalty_weight = sampling_cfg.aromatic_penalty_weight
         self.aromatic_target_fraction = sampling_cfg.aromatic_target_fraction
-        self.aromatic_distance_cutoff = sampling_cfg.aromatic_distance_cutoff
+        self.active_site_distance_cutoff = sampling_cfg.active_site_distance_cutoff
+        self.charged_penalty_weight = sampling_cfg.charged_penalty_weight
+        self.charged_target_fraction = sampling_cfg.charged_target_fraction
+        self.composition_penalty_weight = sampling_cfg.composition_penalty_weight
+        self.composition_organism = Organism(sampling_cfg.composition_organism)
+        self.composition_tolerance_k = sampling_cfg.composition_tolerance_k
 
     # TODO: this guy needs a lot of tidying before merging to main.
     def main_inference_loop(
@@ -143,10 +163,57 @@ class ArtiosPotts(nn.Module):
             masked_restypes = self.mpnn.pad_and_mask_restypes(restypes, is_masked)
 
         ### Ensemble logic
+        if self.ensemble_dropout and self.mpnn.dropout > 0:
+            for m in self.mpnn.modules():
+                if isinstance(m, nn.Dropout):
+                    m.train()
+
+        # Pre-compute ANM displacements
+        anm_displacements = None
+        if self.ensemble_anm and self.ensemble_size > 1:
+            logger.info("Computing ANM displacements")
+            bb_coord = context.coordinate.backbone_coordinate
+            B, n_token = bb_coord.shape[0], bb_coord.shape[1]
+            device, dtype = bb_coord.device, bb_coord.dtype
+
+            anm_list = []
+            for b in range(B):
+                logger.info(f"Computing ANM displacements for batch {b}")
+                valid_protein = (
+                    context.entity.is_protein_token[b] & context.mask.token_mask[b]
+                )
+                ca_coords = bb_coord[b, :, 1, :]  # [n_token, 3], index 1 = CA
+                ca_protein = ca_coords[valid_protein]
+
+                disps = sample_anm_displacements(
+                    ca_coords=ca_protein.float(),
+                    n_conformations=self.ensemble_size,
+                    gamma=self.ensemble_anm_gamma,
+                    generator=generator,
+                )
+                full_disps = torch.zeros(
+                    self.ensemble_size, n_token, 3, device=device, dtype=dtype
+                )
+                full_disps[:, valid_protein, :] = disps.to(dtype)
+
+                anm_list.append(full_disps)
+
+            anm_displacements = torch.stack(
+                anm_list, dim=0
+            )  # [B, ensemble_size, n_token, 3]
+
         h_sum = None
         J_sum = None
         for i in range(self.ensemble_size):
-            if self.ensemble_size > 1:
+            if anm_displacements is not None:
+                disp = anm_displacements[:, i, :, :]  # [B, n_token, 3]
+                bb = context.coordinate.backbone_coordinate
+                noised = bb + disp[:, :, None, :]  # broadcast over 5 backbone atoms
+                ctx = replace(
+                    context,
+                    coordinate=replace(context.coordinate, backbone_coordinate=noised),
+                )
+            elif self.ensemble_noise_scale > 0 and self.ensemble_size > 1:
                 bb = context.coordinate.backbone_coordinate
                 noised = bb + self.ensemble_noise_scale * torch.randn(
                     bb.shape,
@@ -160,6 +227,7 @@ class ArtiosPotts(nn.Module):
                 )
             else:
                 ctx = context
+
             mpnn_out = self.mpnn(
                 context=ctx, masked_restypes=masked_restypes, is_masked=is_masked
             )
@@ -179,6 +247,11 @@ class ArtiosPotts(nn.Module):
             else:
                 h_sum = h_sum + h_i
                 J_sum = J_sum + J_i
+
+        if self.ensemble_dropout and self.mpnn.dropout > 0:
+            for m in self.mpnn.modules():
+                if isinstance(m, nn.Dropout):
+                    m.eval()
 
         h = h_sum / self.ensemble_size
         J = J_sum / self.ensemble_size
@@ -200,6 +273,10 @@ class ArtiosPotts(nn.Module):
 
         h = h + ~alphabet_mask * ALPHABET_BIAS
 
+        energy_bias = build_energy_bias_vector(self.energy_bias, R, device)
+        if energy_bias is not None:
+            h = h + energy_bias
+
         S_init = build_s_init(
             h,
             self.potts_sampler.temperature_init,
@@ -209,7 +286,7 @@ class ArtiosPotts(nn.Module):
         )
 
         ### Penalty logic
-        penalties = []
+        penalty_dict: dict[str, callable] = {}
 
         if self.complexity_penalty_weight > 0:
             chain_id = context.token.asym_id
@@ -227,31 +304,53 @@ class ArtiosPotts(nn.Module):
                     entropy_min=lcp_entropy_min,
                 )
 
-            penalties.append(lcp_penalty)
+            penalty_dict["lcp"] = lcp_penalty
 
-        if self.aromatic_penalty_weight > 0:
-            arom_mask = build_active_site_mask(
+        # Active site mask
+        needs_active_site = (
+            self.aromatic_penalty_weight > 0 or self.charged_penalty_weight > 0
+        )
+        if needs_active_site:
+            active_site_mask = build_active_site_mask(
                 context.coordinate.centre_coordinate,
                 context.entity.is_ligand_token,
                 context.entity.is_protein_token,
                 context.mask.token_mask,
-                self.aromatic_distance_cutoff,
+                self.active_site_distance_cutoff,
             )
-            arom_weight = self.aromatic_penalty_weight
-            arom_target = self.aromatic_target_fraction
+
+        if self.aromatic_penalty_weight > 0:
 
             def aromatic_penalty(S: torch.Tensor) -> torch.Tensor:
-                return arom_weight * aromatic_enrichment_penalty(
-                    S, arom_mask, target_fraction=arom_target
+                return self.aromatic_penalty_weight * aromatic_enrichment_penalty(
+                    S, active_site_mask, target_fraction=self.aromatic_target_fraction
                 )
 
-            penalties.append(aromatic_penalty)
+            penalty_dict["aromatic"] = aromatic_penalty
 
-        penalty_func = None
-        if penalties:
+        if self.charged_penalty_weight > 0:
 
-            def penalty_func(S: torch.Tensor) -> torch.Tensor:
-                return sum(p(S) for p in penalties)
+            def charged_penalty(S: torch.Tensor) -> torch.Tensor:
+                return self.charged_penalty_weight * charged_enrichment_penalty(
+                    S, active_site_mask, target_fraction=self.charged_target_fraction
+                )
+
+            penalty_dict["charged"] = charged_penalty
+
+        if self.composition_penalty_weight > 0:
+            comp_mask = mutable_mask & context.entity.is_protein_token
+            org_freqs = AA_FREQUENCIES[self.composition_organism]
+            k = self.composition_tolerance_k
+
+            def composition_penalty(S: torch.Tensor) -> torch.Tensor:
+                return (
+                    self.composition_penalty_weight
+                    * composition_chi_squared_penalty(S, comp_mask, org_freqs, k=k)
+                )
+
+            penalty_dict["composition"] = composition_penalty
+
+        penalty = PenaltyCollection(penalty_dict) if penalty_dict else None
 
         ### Sampling logic
         result = self.potts_sampler.sample(
@@ -262,7 +361,7 @@ class ArtiosPotts(nn.Module):
             token_mask=mutable_mask,
             S_init=S_init,
             generator=generator,
-            penalty_func=penalty_func,
+            penalty=penalty,
         )
 
         return PottsOutput(
@@ -276,6 +375,10 @@ class ArtiosPotts(nn.Module):
             sequence_trajectory=result.sequence_trajectory,
             energy_trajectory=result.energy_trajectory,
             trajectory_sweep_indices=result.trajectory_sweep_indices,
+            u_i_trajectory=result.u_i_trajectory,
+            u_i_sweep_indices=result.u_i_sweep_indices,
+            penalty_grad_trajectories=result.penalty_grad_trajectories,
+            penalty_names=result.penalty_names,
         )
 
     def main_train_loop(

@@ -30,6 +30,8 @@ def _make_configs(
     track_trajectory: bool = False,
     trajectory_interval: int = 1,
     proposal: str = "gibbs",
+    track_u_i: bool = False,
+    u_i_interval: int = 1,
 ) -> ConfigDict:
     """Create test configs for ArtiosPotts."""
     return ConfigDict(
@@ -72,10 +74,17 @@ def _make_configs(
                         "complexity_entropy_min": 2.32,
                         "exclude_cys": False,
                         "exclude_met": False,
+                        "aromatic_penalty_weight": 0.0,
+                        "aromatic_target_fraction": 0.25,
+                        "active_site_distance_cutoff": 8.0,
+                        "charged_penalty_weight": 0.0,
+                        "charged_target_fraction": 0.25,
                         "ensemble_size": 1,
                         "ensemble_noise_scale": 0.3,
                         "track_trajectory": track_trajectory,
                         "trajectory_interval": trajectory_interval,
+                        "track_u_i": track_u_i,
+                        "u_i_interval": u_i_interval,
                     },
                 },
             },
@@ -764,3 +773,67 @@ class TestTrajectoryTracking:
 
         assert output.sequence_trajectory.dtype == torch.long
         assert output.energy_trajectory.dtype in (torch.float32, torch.float64)
+
+    def test_u_i_none_by_default(self, pseudo_configs, context, device):
+        """U_i trajectory fields are None when track_u_i=False (default)."""
+        model = ArtiosPotts(pseudo_configs).to(device)
+        model.eval()
+        with torch.no_grad():
+            output = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+        assert output.u_i_trajectory is None
+        assert output.u_i_sweep_indices is None
+
+    @pytest.mark.parametrize("proposal", ["gibbs", "dlmc"])
+    def test_u_i_trajectory_shapes(self, context, device, proposal):
+        """U_i trajectory tensors have correct shapes for both proposal methods."""
+        n_sweeps = 5
+        u_i_interval = 1
+        configs = _make_configs(
+            track_u_i=True, u_i_interval=u_i_interval, proposal=proposal
+        )
+        model = ArtiosPotts(configs).to(device)
+        model.eval()
+        with torch.no_grad():
+            output = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+
+        B, N = context.token.restype.shape[:2]
+        R = configs.artios_mpnn.model.num_residue_types
+        n_saved_ui = n_sweeps + 1  # interval=1 means every sweep + initial
+        assert output.u_i_trajectory is not None
+        assert output.u_i_trajectory.shape == (B, n_saved_ui, N, R)
+        assert output.u_i_sweep_indices == list(range(n_sweeps + 1))
+
+    def test_u_i_interval_reduces_size(self, context, device):
+        """u_i_interval > 1 reduces the number of saved U_i snapshots."""
+        n_sweeps = 5
+        u_i_interval = 2
+        configs = _make_configs(track_u_i=True, u_i_interval=u_i_interval)
+        model = ArtiosPotts(configs).to(device)
+        model.eval()
+        with torch.no_grad():
+            output = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+
+        # save_list = [0, 2, 4, 5] (0,2,4 from range, 5 appended as final)
+        expected_n_saved = len(
+            list(range(0, n_sweeps + 1, u_i_interval))
+            + ([n_sweeps] if n_sweeps % u_i_interval != 0 else [])
+        )
+        assert output.u_i_trajectory.shape[1] == expected_n_saved
+        assert len(output.u_i_sweep_indices) == expected_n_saved
+
+    def test_u_i_final_matches_recomputation(self, context, device):
+        """Final U_i snapshot should match manual recomputation from final sequence."""
+        configs = _make_configs(track_u_i=True, u_i_interval=1)
+        model = ArtiosPotts(configs).to(device)
+        model.eval()
+        with torch.no_grad():
+            output = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+
+        # Recompute U_i from final sequence
+        S_idx = output.sampled_sequence.argmax(-1)
+        logits = compute_potts_single_logits(
+            S_idx, output.h, output.J, output.edge_index, output.edge_mask
+        )
+        expected_u_i = -logits
+
+        assert torch.allclose(output.u_i_trajectory[:, -1], expected_u_i, atol=1e-5)

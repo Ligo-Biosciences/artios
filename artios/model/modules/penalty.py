@@ -1,9 +1,34 @@
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Callable
+
 import numpy as np
 import torch
 from torch import Tensor
 
-from artios.common.constants import AROMATIC_INDICES
+from artios.common import residue_names
+from artios.common.constants import AROMATIC_INDICES, CHARGED_INDICES
+from artios.common.residue_stats import OrganismAAFrequencies
 from artios.utils.typing import Bool, Float, Int
+
+
+@dataclass
+class PenaltyCollection:
+    """Named collection of penalty functions for Potts sampling.
+
+    Callable (sums all penalties), but also exposes individual penalties
+    by name for per-penalty gradient tracking.
+    """
+
+    penalties: dict[str, Callable[[Tensor], Tensor]]
+
+    def __call__(self, S: Tensor) -> Tensor:
+        """Sum all penalties."""
+        return sum(fn(S) for fn in self.penalties.values())
+
+    @property
+    def names(self) -> list[str]:
+        return list(self.penalties.keys())
 
 
 def complexity_lcp(
@@ -189,6 +214,39 @@ def aromatic_enrichment_penalty(
     return penalty * has_active_site.float()
 
 
+def charged_enrichment_penalty(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    active_site_mask: Bool[Tensor, "batch n_token"],
+    target_fraction: float = 0.25,
+) -> Float[Tensor, "batch"]:
+    """Penalize low charged residue fraction in the active site.
+
+    Encourages charged residues (ASP, GLU, ARG, LYS, HIS) near the ligand
+    binding site during MCMC sampling. Only penalizes when the charged
+    fraction falls below the target.
+
+    Args:
+        S: One-hot (or soft) sequence tensor [B, N, R].
+        active_site_mask: Boolean mask for active site protein residues [B, N].
+        target_fraction: Target charged fraction in active site (default 0.25).
+
+    Returns:
+        Penalty energy per sample [B]. Higher = more penalty.
+    """
+    S_charged = S[:, :, CHARGED_INDICES].sum(dim=-1)
+
+    mask_float = active_site_mask.float()
+    charged_count = (S_charged * mask_float).sum(dim=-1)
+    n_active = mask_float.sum(dim=-1)
+
+    frac = charged_count / (n_active + 1e-8)
+
+    penalty = (frac - target_fraction).clamp(max=0).square()
+
+    has_active_site = n_active > 0
+    return penalty * has_active_site.float()
+
+
 def build_active_site_mask(
     centre_coordinate: Float[Tensor, "batch n_token 3"],
     is_ligand_token: Bool[Tensor, "batch n_token"],
@@ -217,3 +275,61 @@ def build_active_site_mask(
     dist = (centre_coordinate - lig_com.unsqueeze(1)).norm(dim=-1)
 
     return (dist < distance_cutoff) & is_protein_token & token_mask
+
+
+def _frequencies_to_tensor(
+    freq_map: Mapping[str, float],
+    device: torch.device,
+    residue_order: tuple[str, ...] = residue_names.PROTEIN_TYPES,
+) -> Tensor:
+    """Convert residue-name-keyed frequencies to a tensor ordered by residue_order."""
+    return torch.tensor(
+        [freq_map[res] for res in residue_order], device=device, dtype=torch.float32
+    )
+
+
+def composition_chi_squared_penalty(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    protein_mutable_mask: Bool[Tensor, "batch n_token"],
+    organism_freqs: OrganismAAFrequencies,
+    k: float = 1.0,
+    num_natural_aas: int = 20,
+) -> Float[Tensor, "batch"]:
+    """Dead-zone composition penalty against organism-specific AA frequencies.
+
+    Computes empirical amino acid frequencies over mutable protein positions
+    and penalizes deviation beyond k standard deviations from the reference mean.
+    Compositions within the dead zone (mu +/- k*sigma) receive zero penalty.
+
+    The penalty is normalized by sigma^2 so that each amino acid contributes
+    in units of excess z-scores squared.
+
+    Since composition p is linear in S, standard autograd gives exact
+    gradients (no straight-through estimator needed).
+
+    Args:
+        S: One-hot (or soft) sequence tensor [B, N, R].
+        protein_mutable_mask: Boolean mask for mutable protein positions [B, N].
+        organism_freqs: Reference organism AA frequency statistics.
+        k: Dead zone width in standard deviations (0 = no dead zone).
+        num_natural_aas: Number of natural amino acid types (default 20).
+
+    Returns:
+        Penalty per sample [B]. Higher = more divergent composition.
+    """
+    Q = num_natural_aas
+    mu_ref = _frequencies_to_tensor(organism_freqs.mean, S.device)
+    sigma_ref = _frequencies_to_tensor(organism_freqs.std, S.device)
+
+    S_aa = S[..., :Q]  # [B, N, Q]
+    mask = protein_mutable_mask.float().unsqueeze(-1)  # [B, N, 1]
+
+    counts = (S_aa * mask).sum(dim=1)  # [B, Q]
+    n_eff = mask.sum(dim=1)  # [B, 1]
+    p = counts / (n_eff + 1e-8)  # [B, Q]
+
+    deviation = (p - mu_ref).abs() - k * sigma_ref  # [B, Q]
+    penalty = (deviation.clamp(min=0) ** 2 / (sigma_ref**2 + 1e-8)).sum(dim=-1)  # [B]
+
+    has_positions = n_eff.squeeze(-1) > 0
+    return penalty * has_positions.float()

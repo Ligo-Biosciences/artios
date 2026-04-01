@@ -11,6 +11,7 @@ from einops import rearrange, repeat
 from torch import Tensor, nn
 from typing_extensions import assert_never
 
+from artios.common.residue_names import PROTEIN_TYPES_ONE_LETTER_TO_INT
 from artios.model.modules.message_passing import gather_nodes
 from artios.model.modules.primitives import Linear
 from artios.utils.typing import Bool, Float, Int, typecheck
@@ -102,6 +103,23 @@ def build_alphabet_mask(
         mask[:, :, 12] = False
 
     return mask
+
+
+def build_energy_bias_vector(
+    energy_bias: dict[str, float],
+    num_residue_types: int,
+    device: torch.device,
+) -> Tensor | None:
+    """Build a per-residue energy bias vector from a 1-letter-code-to-value mapping."""
+    bias = torch.zeros(num_residue_types, device=device)
+    any_nonzero = False
+    for code, value in energy_bias.items():
+        if value == 0.0:
+            continue
+        idx = PROTEIN_TYPES_ONE_LETTER_TO_INT[code]
+        bias[idx] = value
+        any_nonzero = True
+    return bias if any_nonzero else None
 
 
 def build_s_init(
@@ -384,14 +402,17 @@ class GraphPotts(nn.Module):
         symmetric_J: bool = True,
         zero_sum_gauge: bool = True,
         init_scale: float = 0.1,
+        num_factors: int = 32,
     ):
         super().__init__()
         self.num_residue_types = num_residue_types
         self.symmetric_J = symmetric_J
         self.zero_sum_gauge = zero_sum_gauge
         self.parameterisation = parameterisation
+        self.num_factors = num_factors
 
         R = num_residue_types
+        F = num_factors
         self.log_scale = nn.Parameter(np.log(init_scale) * torch.ones(1))
 
         match parameterisation:
@@ -401,16 +422,15 @@ class GraphPotts(nn.Module):
 
             case GraphPottsParameterisation.FACTOR:
                 self.W_h = Linear(node_dim, R)
-                self.W_J_left = Linear(edge_dim, R**2)
-                self.W_J_right = Linear(edge_dim, R**2)
+                self.W_J_left = Linear(edge_dim, R * F)
+                self.W_J_right = Linear(edge_dim, F * R)
 
             case GraphPottsParameterisation.SCORE:
-                self.num_factors = num_residue_types
                 self.W_h = Linear(node_dim, R)
                 self.W_h_bg = Linear(node_dim, 1)
                 self.W_J_bg = Linear(edge_dim, 1)
-                self.W_J_left = Linear(edge_dim, R * self.num_factors)
-                self.W_J_right = Linear(edge_dim, R * self.num_factors)
+                self.W_J_left = Linear(edge_dim, R * F)
+                self.W_J_right = Linear(edge_dim, F * R)
 
             case _:
                 assert_never(parameterisation)
@@ -443,6 +463,7 @@ class GraphPotts(nn.Module):
         mask_h = scale * token_mask[..., None]
         mask_J = scale * edge_mask[..., None]
         R = self.num_residue_types
+        F = self.num_factors
         param = self.parameterisation
 
         match param:
@@ -455,18 +476,19 @@ class GraphPotts(nn.Module):
                 h = mask_h * self.W_h(node_feats)
                 J_left = rearrange(
                     mask_J * self.W_J_left(edge_feats),
-                    "b n k (r1 r2) -> b n k r1 r2",
-                    r1=R,
+                    "b n k (r f) -> b n k r f",
+                    r=R,
+                    f=F,
                 )
                 J_right = rearrange(
                     mask_J * self.W_J_right(edge_feats),
-                    "b n k (r1 r2) -> b n k r1 r2",
-                    r1=R,
+                    "b n k (f r) -> b n k f r",
+                    f=F,
+                    r=R,
                 )
                 J = torch.matmul(J_left, J_right)
 
             case GraphPottsParameterisation.SCORE:
-                F = self.num_factors
                 h = mask_h * self.W_h(node_feats)
                 J_left = rearrange(
                     mask_J * self.W_J_left(edge_feats),

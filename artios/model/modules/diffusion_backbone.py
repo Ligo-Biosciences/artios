@@ -13,6 +13,7 @@ from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
 from artios.data.features import FullContext
+from artios.metrics.rmsd import align_pred_to_true
 from artios.model.generator import (
     CFGPredictor,
     CFGSchedule,
@@ -480,6 +481,8 @@ class DiffusionModule(nn.Module):
         self.use_fine_grained_checkpoint = use_fine_grained_checkpoint
 
         self.linear_no_bias_r_embed = LinearNoBias(3, c_token)
+        self.linear_no_bias_prev_pred_embed = LinearNoBias(3, c_token, init="zeros")
+        self.self_cond_merge = LinearNoBias(2 * c_token, c_token)
 
         self.diffusion_conditioning = DiffusionConditioning(
             sigma_coord=sigma_coord,
@@ -534,6 +537,7 @@ class DiffusionModule(nn.Module):
         inplace_safe: bool = False,
         eps: float = 1e-5,
         cfg_schedule: CFGSchedule = NoCFG(),
+        self_conditioning: bool = True,
     ) -> VelocityScorePredictor:
         """Create a VelocityScorePredictor bound to this module and context.
 
@@ -545,6 +549,9 @@ class DiffusionModule(nn.Module):
             eps: Small constant for numerical stability.
             cfg_schedule: CFG schedule. Use NoCFG() to skip classifier-free guidance
                 entirely (no unconditional forward pass). Defaults to NoCFG().
+            self_conditioning: Whether to chain predictions across sampling steps.
+                When True, each step receives the aligned previous prediction.
+                When False, prev_pred is always None (no self-conditioning).
 
         Returns:
             A callable satisfying VelocityScorePredictor protocol.
@@ -554,18 +561,36 @@ class DiffusionModule(nn.Module):
         def make_predictor(ctx: FullContext) -> VelocityScorePredictor:
             """Create a predictor bound to a specific context."""
             conditioning_cache = self.diffusion_conditioning.compute_cache(ctx)
+            prev_pred: Optional[Float[Tensor, "... n_atom 3"]] = None
 
             def predictor(
                 x_noisy: Float[Tensor, "... n_atom 3"],
                 timestep: Float[Tensor, "..."],
             ) -> tuple[Float[Tensor, "... n_atom 3"], Float[Tensor, "... n_atom 3"]]:
+                nonlocal prev_pred  # hidden statefulness for self conditioning
+
+                # Align previous prediction to current noisy coords (handles frame changes)
+                aligned_prev = None
+                if self_conditioning and prev_pred is not None:
+                    n_sample = x_noisy.shape[-3]
+                    mask = repeat(ctx.mask.is_resolved, "... n -> ... s n", s=n_sample)
+                    aligned_prev, _, _ = align_pred_to_true(
+                        pred_pose=prev_pred,
+                        true_pose=x_noisy,
+                        atom_mask=mask,
+                    )
+
                 coords_pred = self.forward(
                     r_noisy=x_noisy,
                     timestep=timestep,
                     context=ctx,
                     cache=conditioning_cache,
                     inplace_safe=inplace_safe,
+                    prev_pred=aligned_prev,
                 )
+
+                if self_conditioning:
+                    prev_pred = coords_pred.detach()
 
                 t = repeat(timestep, "... -> ... 1 1")
                 velocity = (coords_pred - x_noisy) / torch.clamp(1 - t, min=eps)
@@ -601,6 +626,7 @@ class DiffusionModule(nn.Module):
         inplace_safe: bool = False,
         centre_coords: bool = False,
         track_trajectory: bool = False,
+        self_conditioning: bool = True,
     ) -> SamplingResult:
         """Backbone denoising sampling using flow matching.
 
@@ -638,7 +664,10 @@ class DiffusionModule(nn.Module):
             centre_coords=centre_coords,
         )
         predictor = self.as_predictor(
-            context, inplace_safe=inplace_safe, cfg_schedule=cfg_schedule
+            context,
+            inplace_safe=inplace_safe,
+            cfg_schedule=cfg_schedule,
+            self_conditioning=self_conditioning,
         )
 
         return sampler.sample(
@@ -658,6 +687,7 @@ class DiffusionModule(nn.Module):
         context: FullContext,
         cache: Optional[CachedConditioning] = None,
         inplace_safe: bool = False,
+        prev_pred: Optional[Float[Tensor, "... n_sample n_atom 3"]] = None,
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
         """The raw network to be trained. This is v_theta(x_t, t).
         c_noise(sigma) is computed in Conditioning module.
@@ -697,7 +727,12 @@ class DiffusionModule(nn.Module):
         # [..., 1, N_token, N_token]
 
         # Average coordinates per token
-        q_skip = self.linear_no_bias_r_embed(r_noisy)
+        q_r = self.linear_no_bias_r_embed(r_noisy)
+        if prev_pred is not None:
+            q_prev = self.linear_no_bias_prev_pred_embed(prev_pred)
+            q_skip = self.self_cond_merge(torch.cat([q_r, q_prev], dim=-1))
+        else:
+            q_skip = q_r
 
         a_token = average_atom_to_token(
             x_atom=q_skip,  # [..., N_sample, N_atom, 3]
@@ -769,6 +804,7 @@ class DiffusionModule(nn.Module):
         context: FullContext,
         cache: Optional[CachedConditioning] = None,
         inplace_safe: bool = False,
+        prev_pred: Optional[Float[Tensor, "... n_sample n_atom 3"]] = None,
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
         """Performs a forward pass of the diffusion module.
 
@@ -778,6 +814,7 @@ class DiffusionModule(nn.Module):
             context: Full context containing all features and labels.
             cache: Precomputed timestep-independent conditioning from DiffusionConditioning.
             inplace_safe: Whether it is safe to use inplace operations.
+            prev_pred: Previous denoised prediction for self-conditioning.
 
         Returns:
             Predicted coordinates
@@ -788,6 +825,11 @@ class DiffusionModule(nn.Module):
         # Scale input noisy coords to unit variance
         r_noisy_unit = (r_noisy / self.sigma_coord) * self.c_in(timestep_)
 
+        # Scale previous prediction the same way
+        prev_pred_unit = None
+        if prev_pred is not None:
+            prev_pred_unit = (prev_pred / self.sigma_coord) * self.c_in(timestep_)
+
         # Predict velocity
         out = self.f_forward(
             r_noisy=r_noisy_unit,
@@ -795,6 +837,7 @@ class DiffusionModule(nn.Module):
             context=context,
             cache=cache,
             inplace_safe=inplace_safe,
+            prev_pred=prev_pred_unit,
         )
 
         # Apply skip connections and output scaling

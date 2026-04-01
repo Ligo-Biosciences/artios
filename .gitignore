@@ -34,4 +34,4 @@ notebooks/PDBs/
 notebooks/PDBs_noise_*/
 
 # Reference distributions
-reference_dists/
+reference-dists/

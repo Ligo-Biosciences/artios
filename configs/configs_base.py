@@ -56,12 +56,8 @@ basic_configs = {
     "seed": 42,
     "deterministic": False,
     "deterministic_seed": False,
-    "post_hoc_ema_checkpoint_dir": "",
     "ema_decay": 0.999,
-    "power_law_ema_sigma": ListValue([0.08, 0.12]),
-    "post_hoc_ema_sigma": ListValue([0.08]),
-    "calc_post_hoc_ema_during_training": True,
-    "load_ema_checkpoint_paths_directory": "",
+    "load_ema_checkpoint_path": "",
     "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],
     "enable_profiling": True,
@@ -158,6 +154,7 @@ model_configs = {
             1
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
+    "self_conditioning_prob": 0.5,
     "train_timestep_sampler": {
         "alpha": 1.9,
         # "beta": 1.0,
@@ -193,6 +190,7 @@ model_configs = {
         "track_trajectory": False,
         "trajectory_step_stride": 10,
         "centre_and_augment_coords_during_sampling": True,
+        "self_conditioning": True,
     },
     "model": {
         "N_model_seed": 1,  # for inference

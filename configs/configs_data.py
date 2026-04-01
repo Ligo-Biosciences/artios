@@ -77,7 +77,7 @@ default_distillation_configs = {
         # Weight ~ num_tokens^gamma. At gamma=1.5, a 10x longer protein gets
         # ~31x sampling weight, biasing toward longer sequences with more
         # interesting geometry. 0 = uniform, 1 = token-proportional.
-        "length_reweight_gamma": 1.5,
+        "length_reweight_gamma": 0.0,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -96,7 +96,7 @@ default_distillation_configs = {
     "max_n_token": 1500,
 }
 
-DATA_ROOT_DIR = "af3-dev/release_data/"
+DATA_ROOT_DIR = "/af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md

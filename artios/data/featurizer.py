@@ -348,6 +348,7 @@ class ContextGenerator(object):
             atom_to_tokatom_idx=torch.Tensor(
                 self.cropped_atom_array.tokatom_idx
             ).long(),
+            atom_asym_id=torch.Tensor(self.cropped_atom_array.asym_id_int).long(),
         )
 
     def get_entity_context(self) -> EntityContext:

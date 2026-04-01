@@ -9,6 +9,25 @@ from artios.common.constants import AROMATIC_INDICES, CHARGED_INDICES
 from artios.utils.typing import Bool, Float, Int
 
 
+@dataclass
+class PenaltyCollection:
+    """Named collection of penalty functions for Potts sampling.
+
+    Callable (sums all penalties), but also exposes individual penalties
+    by name for per-penalty gradient tracking.
+    """
+
+    penalties: dict[str, Callable[[Tensor], Tensor]]
+
+    def __call__(self, S: Tensor) -> Tensor:
+        """Sum all penalties."""
+        return sum(fn(S) for fn in self.penalties.values())
+
+    @property
+    def names(self) -> list[str]:
+        return list(self.penalties.keys())
+
+
 def complexity_lcp(
     S: Float[Tensor, "batch n_token num_residue_types"],
     chain_id: Int[Tensor, "batch n_token"],
@@ -255,20 +274,48 @@ def build_active_site_mask(
     return (dist < distance_cutoff) & is_protein_token & token_mask
 
 
-@dataclass
-class PenaltyCollection:
-    """Named collection of penalty functions for Potts sampling.
+def composition_chi_squared_penalty(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    protein_mutable_mask: Bool[Tensor, "batch n_token"],
+    mu_ref: Float[Tensor, "num_natural_aas"],
+    sigma_ref: Float[Tensor, "num_natural_aas"],
+    k: float = 1.0,
+    num_natural_aas: int = 20,
+) -> Float[Tensor, "batch"]:
+    """Dead-zone composition penalty against organism-specific AA frequencies.
 
-    Callable (sums all penalties), but also exposes individual penalties
-    by name for per-penalty gradient tracking.
+    Computes empirical amino acid frequencies over mutable protein positions
+    and penalizes deviation beyond k standard deviations from the reference mean.
+    Compositions within the dead zone (mu +/- k*sigma) receive zero penalty.
+
+    The penalty is normalized by sigma^2 so that each amino acid contributes
+    in units of excess z-scores squared.
+
+    Since composition p is linear in S, standard autograd gives exact
+    gradients (no straight-through estimator needed).
+
+    Args:
+        S: One-hot (or soft) sequence tensor [B, N, R].
+        protein_mutable_mask: Boolean mask for mutable protein positions [B, N].
+        mu_ref: Reference mean AA frequency vector [Q].
+        sigma_ref: Reference std AA frequency vector [Q].
+        k: Dead zone width in standard deviations (0 = no dead zone).
+        num_natural_aas: Number of natural amino acid types (default 20).
+
+    Returns:
+        Penalty per sample [B]. Higher = more divergent composition.
     """
+    Q = num_natural_aas
 
-    penalties: dict[str, Callable[[Tensor], Tensor]]
+    S_aa = S[..., :Q]  # [B, N, Q]
+    mask = protein_mutable_mask.float().unsqueeze(-1)  # [B, N, 1]
 
-    def __call__(self, S: Tensor) -> Tensor:
-        """Sum all penalties."""
-        return sum(fn(S) for fn in self.penalties.values())
+    counts = (S_aa * mask).sum(dim=1)  # [B, Q]
+    n_eff = mask.sum(dim=1)  # [B, 1]
+    p = counts / (n_eff + 1e-8)  # [B, Q]
 
-    @property
-    def names(self) -> list[str]:
-        return list(self.penalties.keys())
+    deviation = (p - mu_ref).abs() - k * sigma_ref  # [B, Q]
+    penalty = (deviation.clamp(min=0) ** 2 / (sigma_ref**2 + 1e-8)).sum(dim=-1)  # [B]
+
+    has_positions = n_eff.squeeze(-1) > 0
+    return penalty * has_positions.float()

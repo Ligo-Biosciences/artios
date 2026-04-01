@@ -456,6 +456,10 @@ def _save_potts(output: PottsOutput, ctx: SaveContext) -> list[Path]:
     paths = _save_potts_to_fasta(output, ctx)
     if output.sequence_trajectory is not None:
         paths.append(_save_potts_trajectory(output, ctx))
+    if output.u_i_trajectory is not None:
+        paths.append(_save_potts_u_i_trajectory(output, ctx))
+    if output.penalty_grad_trajectories is not None:
+        paths.append(_save_potts_penalty_gradients(output, ctx))
     return paths
 
 
@@ -478,6 +482,51 @@ def _save_potts_trajectory(output: PottsOutput, ctx: SaveContext) -> Path:
         sweep_indices=np.array(output.trajectory_sweep_indices, dtype=np.int32),
     )
     logger.info(f"Saved Potts trajectory to {output_path}")
+    return output_path
+
+
+def _save_potts_penalty_gradients(output: PottsOutput, ctx: SaveContext) -> Path:
+    """Save per-penalty gradient trajectories to NPZ.
+
+    Contents:
+        penalty_grad_{name}: float32 [batch, n_saved_ui, n_token, R] per penalty.
+        sweep_indices: int32 [n_saved_ui].
+        penalty_names: string array of penalty names.
+    """
+    output_dir = Path(ctx.sample_dirs[0])
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = output_dir / f"{ctx.sample_name}_potts_penalty_gradients.npz"
+
+    arrays = {}
+    for name in output.penalty_names:
+        arrays[f"penalty_grad_{name}"] = (
+            output.penalty_grad_trajectories[name].cpu().numpy().astype(np.float32)
+        )
+    arrays["sweep_indices"] = np.array(output.u_i_sweep_indices, dtype=np.int32)
+    arrays["penalty_names"] = np.array(output.penalty_names)
+
+    np.savez(output_path, **arrays)
+    logger.info(f"Saved Potts penalty gradients to {output_path}")
+    return output_path
+
+
+def _save_potts_u_i_trajectory(output: PottsOutput, ctx: SaveContext) -> Path:
+    """Save Potts per-node conditional energies U_i to NPZ.
+
+    Contents:
+        u_i_trajectory: float32 [batch, n_saved_ui, n_token, R] — conditional energies.
+        sweep_indices: int32 [n_saved_ui] — which sweep each snapshot corresponds to.
+    """
+    output_dir = Path(ctx.sample_dirs[0])
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = output_dir / f"{ctx.sample_name}_potts_u_i_trajectory.npz"
+
+    np.savez(
+        output_path,
+        u_i_trajectory=output.u_i_trajectory.cpu().numpy().astype(np.float32),
+        sweep_indices=np.array(output.u_i_sweep_indices, dtype=np.int32),
+    )
+    logger.info(f"Saved Potts U_i trajectory to {output_path}")
     return output_path
 
 

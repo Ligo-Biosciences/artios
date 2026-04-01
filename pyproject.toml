@@ -72,6 +72,7 @@ dependencies = [
     "GridDataFormats",
     "wandb>=0.25.0",
     "pandera>=0.29.0",
+    "ipywidgets>=8.1.8",
 ]
 
 [project.optional-dependencies]

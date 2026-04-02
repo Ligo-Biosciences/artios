@@ -15,6 +15,7 @@
 import logging
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -31,6 +32,31 @@ from artios.utils.file_io import (
     load_atomarray_from_npz,
     load_gzip_pickle,
 )
+
+
+@dataclass(frozen=True)
+class BioassemblyData:
+    """Typed, frozen container for a parsed bioassembly structure.
+
+    Constructed once at load time and never mutated. Consumers should
+    destructure into local variables for any preprocessing that modifies
+    the atom_array or token_array.
+    """
+
+    atom_array: AtomArray
+    token_array: TokenArray
+    pdb_id: str
+    sequences: dict[str, str]
+    entity_poly_type: dict[str, str]
+    resolution: float = -1.0
+
+    def __post_init__(self):
+        n_tokens = int(self.atom_array.centre_atom_mask.sum())
+        if len(self.token_array) != n_tokens:
+            raise ValueError(
+                f"{self.pdb_id}: token_array length {len(self.token_array)} "
+                f"!= centre_atom_mask count {n_tokens}"
+            )
 
 
 class DataPipeline(object):
@@ -113,31 +139,37 @@ class DataPipeline(object):
     @staticmethod
     def get_data_bioassembly(
         bioassembly_dict_fpath: Union[str, Path],
-    ) -> dict[str, Any]:
-        """
-        Get the bioassembly dict.
+        pdb_id_override: str | None = None,
+    ) -> BioassemblyData:
+        """Load a bioassembly from disk as a typed, frozen BioassemblyData.
 
         Args:
-            bioassembly_dict_fpath (Union[str, Path]): The path to the bioassembly dictionary file.
+            bioassembly_dict_fpath: Path to the .pkl.gz metadata file.
+            pdb_id_override: If set, use this instead of the pdb_id stored in the pkl.
 
         Returns:
-            dict[str, Any]: The bioassembly dict with sequence, atom_array and token_array.
+            BioassemblyData: Frozen container with atom_array, token_array, and metadata.
 
         Raises:
-            AssertionError: If the bioassembly dictionary file does not exist.
+            FileNotFoundError: If the metadata file does not exist.
         """
         bioassembly_dict_path = Path(bioassembly_dict_fpath)
+        if not bioassembly_dict_path.exists():
+            raise FileNotFoundError(f"File not found: {bioassembly_dict_path}")
 
-        assert (
-            bioassembly_dict_path.exists()
-        ), f"File not exists {bioassembly_dict_path}"
-        bioassembly_dict = load_gzip_pickle(bioassembly_dict_path)
+        raw = load_gzip_pickle(bioassembly_dict_path)
 
-        # Load and add atom array to the bioassembly dict
         npz_path = bioassembly_dict_path.with_suffix("").with_suffix(".npz")
-        bioassembly_dict["atom_array"] = load_atomarray_from_npz(npz_path)
+        atom_array = load_atomarray_from_npz(npz_path)
 
-        return bioassembly_dict
+        return BioassemblyData(
+            atom_array=atom_array,
+            token_array=raw["token_array"],
+            pdb_id=pdb_id_override or raw.get("pdb_id", ""),
+            sequences=raw.get("sequences", {}),
+            entity_poly_type=raw.get("entity_poly_type", {}),
+            resolution=raw.get("resolution", -1.0),
+        )
 
     @staticmethod
     def _map_ref_chain(

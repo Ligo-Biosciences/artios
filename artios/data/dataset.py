@@ -29,7 +29,7 @@ from ml_collections.config_dict import ConfigDict
 from torch.utils.data import Dataset
 
 from artios.common.constants import BACKBONE_DEFS, EvaluationChainInterface
-from artios.data.data_pipeline import DataPipeline
+from artios.data.data_pipeline import BioassemblyData, DataPipeline
 from artios.data.data_weights import get_sample_weights
 from artios.data.features import FullContext
 from artios.data.featurizer import ContextGenerator
@@ -383,7 +383,7 @@ class BaseSingleDataset(Dataset):
         raise RuntimeError(f"Failed to load data after 10 attempts for idx {idx}")
 
     @profile_function("dataset._get_bioassembly_data")
-    def _get_bioassembly_data(self, idx: int) -> tuple[pd.Series, dict[str, Any], str]:
+    def _get_bioassembly_data(self, idx: int) -> tuple[pd.Series, BioassemblyData, str]:
         sample_indice = self._get_sample_indice(idx=idx)
         if self.bioassembly_dict_dir is None:
             raise ValueError(
@@ -394,11 +394,11 @@ class BaseSingleDataset(Dataset):
             self.bioassembly_dict_dir,
             sample_indice.pdb_id + ".pkl.gz",  # .pkl.gz
         )
-        bioassembly_dict = DataPipeline.get_data_bioassembly(
-            bioassembly_dict_fpath=bioassembly_dict_fpath
+        bio = DataPipeline.get_data_bioassembly(
+            bioassembly_dict_fpath=bioassembly_dict_fpath,
+            pdb_id_override=sample_indice.pdb_id,
         )
-        bioassembly_dict["pdb_id"] = sample_indice.pdb_id
-        return sample_indice, bioassembly_dict, bioassembly_dict_fpath
+        return sample_indice, bio, bioassembly_dict_fpath
 
     @staticmethod
     def _reassign_atom_array_chain_id(atom_array: AtomArray):
@@ -539,99 +539,81 @@ class BaseSingleDataset(Dataset):
         self,
         idx: int,
     ) -> FullContext:
-        """
-        Processes a single data sample by retrieving bioassembly data, applying various transformations, and cropping the data.
-        It then extracts features and labels, and optionally returns the processed atom and token arrays.
+        """Process a single data sample into model-ready features.
+
+        Loads a frozen BioassemblyData, destructures it into local variables,
+        applies preprocessing/augmentation, crops, and featurizes.
 
         Args:
             idx: The index of the data sample to process.
 
         Returns:
-            A dict containing the input features, labels, basic_info and optionally the processed atom and token arrays.
+            FullContext with all features for this sample.
         """
         import time
 
         timings = {}
         process_start = time.time()
 
+        # --- Load (returns frozen BioassemblyData) ---
         t0 = time.time()
-        (
-            sample_indice,
-            bioassembly_dict,
-            bioassembly_dict_fpath,
-        ) = self._get_bioassembly_data(idx=idx)
+        sample_indice, bio, bioassembly_dict_fpath = self._get_bioassembly_data(idx=idx)
         timings["get_bioassembly"] = time.time() - t0
 
+        # Destructure into local variables — all mutation happens on these locals,
+        # never on the frozen BioassemblyData.
+        atom_array = bio.atom_array
+        token_array = bio.token_array
+        pdb_id = bio.pdb_id
+
+        # --- Select ---
         if self.use_reference_chains_only:
-            # Get the reference chains
             ref_chain_ids = [sample_indice.chain_1_id, sample_indice.chain_2_id]
             if sample_indice.type == "chain":
                 ref_chain_ids.pop(-1)
-            # Remove other chains from the bioassembly_dict
-            # Remove them safely using the crop method
-            token_centre_atom_indices = bioassembly_dict["token_array"].get_annotation(
-                "centre_atom_index"
-            )
-            token_chain_id = bioassembly_dict["atom_array"][
-                token_centre_atom_indices
-            ].chain_id
+            token_centre_atom_indices = token_array.get_annotation("centre_atom_index")
+            token_chain_id = atom_array[token_centre_atom_indices].chain_id
             is_ref_chain = np.isin(token_chain_id, ref_chain_ids)
-            (
-                bioassembly_dict["token_array"],
-                bioassembly_dict["atom_array"],
-                _,
-                _,
-            ) = CropData.select_by_token_indices(
-                token_array=bioassembly_dict["token_array"],
-                atom_array=bioassembly_dict["atom_array"],
+            token_array, atom_array, _, _ = CropData.select_by_token_indices(
+                token_array=token_array,
+                atom_array=atom_array,
                 selected_token_indices=np.arange(len(is_ref_chain))[is_ref_chain],
             )
 
+        # --- Augment (pre-crop) ---
         if self.shuffle_mols:
-            (
-                bioassembly_dict["token_array"],
-                bioassembly_dict["atom_array"],
-            ) = self._shuffle_array_based_on_mol_id(
-                token_array=bioassembly_dict["token_array"],
-                atom_array=bioassembly_dict["atom_array"],
+            token_array, atom_array = self._shuffle_array_based_on_mol_id(
+                token_array=token_array,
+                atom_array=atom_array,
             )
 
         if self.shuffle_sym_ids:
-            bioassembly_dict["atom_array"] = self._assign_random_sym_id(
-                bioassembly_dict["atom_array"]
-            )
+            atom_array = self._assign_random_sym_id(atom_array)
 
         t1 = time.time()
         if self.reassign_continuous_chain_ids:
-            bioassembly_dict["atom_array"] = self._reassign_atom_array_chain_id(
-                bioassembly_dict["atom_array"]
-            )
+            atom_array = self._reassign_atom_array_chain_id(atom_array)
         timings["preprocessing"] = time.time() - t1
 
         t_frag = time.time()
         p = np.random.rand()
-        # Filter for a unique fragment/domain. Used for Distillation data.
         if p < self.filter_unique_fragment_prob:
-            # apply fragment filter
-            bioassembly_dict["atom_array"] = self._filter_for_unique_id(
-                atom_array=bioassembly_dict["atom_array"],
+            atom_array = self._filter_for_unique_id(
+                atom_array=atom_array,
                 id_type="fragment_id",
                 require_annotation="pocket_id"
                 if self.require_pocket_in_fragment
                 else None,
             )
-            tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
-            bioassembly_dict["token_array"] = tokenizer.get_token_array()
+            token_array = AtomArrayTokenizer(atom_array).get_token_array()
         elif p < self.filter_unique_fragment_prob + self.filter_unique_domain_prob:
-            # apply domain filter
-            bioassembly_dict["atom_array"] = self._filter_for_unique_id(
-                atom_array=bioassembly_dict["atom_array"], id_type="domain_id"
+            atom_array = self._filter_for_unique_id(
+                atom_array=atom_array, id_type="domain_id"
             )
-            tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
-            bioassembly_dict["token_array"] = tokenizer.get_token_array()
+            token_array = AtomArrayTokenizer(atom_array).get_token_array()
         timings["fragment_filter"] = time.time() - t_frag
 
-        # Crop
+        # --- Crop ---
         t2 = time.time()
         (
             crop_method,
@@ -642,12 +624,17 @@ class BaseSingleDataset(Dataset):
             reference_token_index,
         ) = self.crop(
             sample_indice=sample_indice,
-            bioassembly_dict=bioassembly_dict,
+            atom_array=atom_array,
+            token_array=token_array,
+            sequences=bio.sequences,
+            entity_poly_type=bio.entity_poly_type,
+            pdb_id=pdb_id,
             **self.cropping_configs,
         )
+        del atom_array, token_array  # prevent accidental use of pre-crop arrays
         timings["crop"] = time.time() - t2
 
-        # Centre random augment
+        # --- Augment (post-crop) ---
         t_aug = time.time()
         cropped_atom_array.coord = random_transform(
             points=cropped_atom_array.coord,
@@ -658,21 +645,11 @@ class BaseSingleDataset(Dataset):
         )
         timings["augmentation"] = time.time() - t_aug
 
-        t3 = time.time()
-        # cropped_atom_array = (
-        #     self._assign_binding_target(  # TODO: all references to targets can go
-        #         atom_array=cropped_atom_array,
-        #         train_with_binding_target=self.train_with_binding_target,
-        #         binding_target_train_rate=self.binding_target_train_rate,
-        #     )
-        # )
-        timings["assign_binding_target"] = time.time() - t3
-
-        # Motif handling
+        # --- Motif ---
         tmotif = time.time()
         if self.motif_configs["motif_train_rate"] > 0.0:
             cropped_atom_array = self._apply_motif_processing(
-                cropped_atom_array, pdb_id=bioassembly_dict["pdb_id"]
+                cropped_atom_array, pdb_id=pdb_id
             )
         else:
             cropped_atom_array.set_annotation(
@@ -682,30 +659,25 @@ class BaseSingleDataset(Dataset):
                 "is_motif_related", np.zeros(len(cropped_atom_array), dtype=int)
             )
 
-        tokenizer = AtomArrayTokenizer(cropped_atom_array)
-        cropped_token_array = tokenizer.get_token_array()
-
+        cropped_token_array = AtomArrayTokenizer(cropped_atom_array).get_token_array()
         timings["motif"] = time.time() - tmotif
 
+        # --- Featurize ---
         t4 = time.time()
-
-        # Get context
         context = ContextGenerator(
             cropped_token_array=cropped_token_array,
             cropped_atom_array=cropped_atom_array,
             ref_pos_augment=self.ref_pos_augment,
             lig_atom_rename=self.lig_atom_rename,
             bioassembly_dict_fpath=bioassembly_dict_fpath,
-            pdb_id=bioassembly_dict["pdb_id"],
+            pdb_id=pdb_id,
         ).get_full_context(include_arrays=self.include_arrays_in_context)
-
         timings["get_feature_and_label"] = time.time() - t4
 
-        # Log if process_one took too long
         total_time = time.time() - process_start
-        if total_time > SLOW_STEP_THRESHOLD:  # Log slow processing (> 1 second)
+        if total_time > SLOW_STEP_THRESHOLD:
             logger.warning(
-                f"SLOW process_one for idx={idx}, pdb_id={sample_indice.pdb_id}: "
+                f"SLOW process_one for idx={idx}, pdb_id={pdb_id}: "
                 f"{total_time:.2f}s - "
                 f"bioassembly={timings.get('get_bioassembly', 0):.3f}s, "
                 f"preprocess={timings.get('preprocessing', 0):.3f}s, "
@@ -723,7 +695,11 @@ class BaseSingleDataset(Dataset):
     def crop(
         self,
         sample_indice: pd.Series,
-        bioassembly_dict: dict[str, Any],
+        atom_array: AtomArray,
+        token_array: TokenArray,
+        sequences: dict[str, str],
+        entity_poly_type: dict[str, str],
+        pdb_id: str,
         crop_size: int,
         method_weights: list[float],
         contiguous_crop_complete_lig: bool = False,
@@ -731,13 +707,25 @@ class BaseSingleDataset(Dataset):
         drop_last: bool = True,
         remove_metal: bool = True,
     ) -> tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any], int]:
-        """
-        Crops the bioassembly data based on the specified configurations.
+        """Crops the bioassembly data based on the specified configurations.
+
+        Takes explicit atom_array/token_array (which may have been mutated by
+        preprocessing) plus metadata for MSA featurization.
 
         Returns:
             A tuple containing the cropping method, cropped token array, cropped atom array,
                 cropped MSA features, and cropped template features.
         """
+        # Bridge to DataPipeline.crop which still takes dict[str, Any].
+        # TODO: update DataPipeline.crop and msa_featurizer signatures to accept
+        # explicit args, then remove this dict construction.
+        bioassembly_dict: dict[str, Any] = {
+            "atom_array": atom_array,
+            "token_array": token_array,
+            "sequences": sequences,
+            "entity_poly_type": entity_poly_type,
+            "pdb_id": pdb_id,
+        }
         return DataPipeline.crop(
             one_sample=sample_indice,
             bioassembly_dict=bioassembly_dict,

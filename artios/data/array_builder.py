@@ -14,7 +14,7 @@ from typing_extensions import assert_never
 
 from artios.common.constants import BACKBONE_DEFS
 from artios.common.residue_names import PROTEIN_COMMON_ONE_TO_THREE as PROTEIN_1to3
-from artios.data import ccd
+from artios.data import annotation, ccd
 from artios.data.json_parser import (
     BackboneInput,
     CCDLigand,
@@ -23,7 +23,7 @@ from artios.data.json_parser import (
     SMILESLigand,
 )
 from artios.data.motif_parser import Motif, MotifLigand, MotifResidue
-from artios.data.parser import AddAtomArrayAnnot, MMCIFParser
+from artios.data.parser import MMCIFParser
 from artios.data.rdkit import (
     AtomInfo,
     infer_atom_map_from_substructure,
@@ -77,31 +77,29 @@ def add_atom_array_attributes(
     """
     sequences = {entity_id: "" for entity_id in np.unique(atom_array.label_entity_id)}
 
-    atom_array = AddAtomArrayAnnot.add_token_mol_type(atom_array, sequences)
-    atom_array = AddAtomArrayAnnot.add_centre_atom_mask(atom_array)
-    atom_array = AddAtomArrayAnnot.add_cano_seq_resname(atom_array)
-    atom_array = AddAtomArrayAnnot.add_tokatom_idx(atom_array)
-    atom_array = AddAtomArrayAnnot.add_modified_res_mask(atom_array)
-    atom_array = AddAtomArrayAnnot.unique_chain_and_add_ids(atom_array)
-    atom_array = AddAtomArrayAnnot.find_equiv_mol_and_assign_ids(
+    atom_array = annotation.add_token_mol_type(atom_array, sequences)
+    atom_array = annotation.add_centre_atom_mask(atom_array)
+    atom_array = annotation.add_cano_seq_resname(atom_array)
+    atom_array = annotation.add_tokatom_idx(atom_array)
+    atom_array = annotation.add_modified_res_mask(atom_array)
+    atom_array = annotation.unique_chain_and_add_ids(atom_array)
+    atom_array = annotation.find_equiv_mol_and_assign_ids(
         atom_array, check_final_equiv=False
     )
-    atom_array = AddAtomArrayAnnot.add_ref_space_uid(atom_array)
+    atom_array = annotation.add_ref_space_uid(atom_array)
 
     original_motif_mapping: list[dict] = []
     if has_motif:
         atom_array, original_motif_mapping = (
-            AddAtomArrayAnnot.update_ids_to_unindex_motif_residues(
+            annotation.update_ids_to_unindex_motif_residues(
                 atom_array, update_labels=True
             )
         )
 
-    atom_array = AddAtomArrayAnnot.add_atom_mol_type_mask(atom_array)
+    atom_array = annotation.add_atom_mol_type_mask(atom_array)
 
     if has_motif:
-        atom_array = AddAtomArrayAnnot.update_centre_atom_mask_to_include_motif(
-            atom_array
-        )
+        atom_array = annotation.update_centre_atom_mask_to_include_motif(atom_array)
 
     atom_array.set_annotation("resolution", np.ones(len(atom_array)))
     atom_array.set_annotation("is_resolved", [True] * len(atom_array))

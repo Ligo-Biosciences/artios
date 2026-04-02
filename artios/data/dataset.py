@@ -81,7 +81,8 @@ class BaseSingleDataset(Dataset):
         self.ref_pos_augment = kwargs.get("ref_pos_augment", True)
         self.lig_atom_rename = kwargs.get("lig_atom_rename", False)
         self.reassign_continuous_chain_ids = kwargs.get(
-            "reassign_continuous_chain_ids", False
+            "reassign_continuous_chain_ids",
+            False,  # TODO: needs further investigation
         )
         self.shuffle_mols = kwargs.get("shuffle_mols", False)
         self.shuffle_sym_ids = kwargs.get("shuffle_sym_ids", False)
@@ -282,7 +283,7 @@ class BaseSingleDataset(Dataset):
         if self.find_eval_chain_interface:
             # Remove data that does not contain eval_type in the EvaluationChainInterface list
             indices_list = indices_list[
-                indices_list["eval_type"].apply(lambda x: x in EvaluationChainInterface)
+                indices_list["eval_type"].isin(EvaluationChainInterface)
             ]
 
         if self.limits > 0 and len(indices_list) > self.limits:
@@ -411,9 +412,7 @@ class BaseSingleDataset(Dataset):
 
         def _get_contiguous_array(array):
             array_uniq = np.sort(np.unique(array))
-            map_dict = {i: idx for idx, i in enumerate(array_uniq)}
-            new_array = np.vectorize(map_dict.get)(array)
-            return new_array
+            return np.searchsorted(array_uniq, array)
 
         atom_array.asym_id_int = _get_contiguous_array(atom_array.asym_id_int)
         atom_array.entity_id_int = _get_contiguous_array(atom_array.entity_id_int)
@@ -467,10 +466,9 @@ class BaseSingleDataset(Dataset):
         def _shuffle(x):
             x_unique = np.sort(np.unique(x))
             x_shuffled = x_unique.copy()
-            np.random.shuffle(x_shuffled)  # shuffle in-place
-            map_dict = dict(zip(x_unique, x_shuffled))
-            new_x = np.vectorize(map_dict.get)(x)
-            return new_x.copy()
+            np.random.shuffle(x_shuffled)
+            indices = np.searchsorted(x_unique, x)
+            return x_shuffled[indices].copy()
 
         for entity_id in np.unique(atom_array.label_entity_id):
             mask = atom_array.label_entity_id == entity_id

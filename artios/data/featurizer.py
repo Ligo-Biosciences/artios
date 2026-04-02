@@ -1,10 +1,10 @@
-import copy
 from collections import defaultdict
 from functools import cached_property
 from typing import Union
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from biotite.structure import AtomArray, get_residue_starts
 from sklearn.neighbors import KDTree  # TODO: switch to scipy
 
@@ -108,16 +108,10 @@ class ContextGenerator(object):
         Returns:
             torch.Tensor: A tensor representing the binary encoding of the input values.
         """
-        onehot_dict = {}
         num_keys = len(encode_def_list)
-        for index, key in enumerate(encode_def_list):
-            onehot = [0] * num_keys
-            onehot[index] = 1
-            onehot_dict[key] = onehot
-
-        onehot_encoded_data = [onehot_dict[item] for item in input_list]
-        onehot_tensor = torch.Tensor(onehot_encoded_data).long()
-        return onehot_tensor
+        idx_map = {key: idx for idx, key in enumerate(encode_def_list)}
+        indices = torch.tensor([idx_map[item] for item in input_list], dtype=torch.long)
+        return F.one_hot(indices, num_classes=num_keys).to(torch.long)
 
     @staticmethod
     def restype_onehot_encoded(restype_list: list[str]) -> torch.Tensor:
@@ -165,21 +159,13 @@ class ContextGenerator(object):
         Returns:
             torch.Tensor:  A Tensor of character encoded atom names
         """
-        onehot_dict = {}
-        for index, key in enumerate(range(64)):
-            onehot = [0] * 64
-            onehot[index] = 1
-            onehot_dict[key] = onehot
-        # [N_atom, 4, 64]
-        mol_encode = []
-        for atom_name in atom_names:
-            # [4, 64]
-            atom_encode = []
-            for name_str in atom_name.ljust(4):
-                atom_encode.append(onehot_dict[ord(name_str) - 32])
-            mol_encode.append(atom_encode)
-        onehot_tensor = torch.Tensor(mol_encode).long()
-        return onehot_tensor
+        # Vectorized: encode all atom names at once via ASCII codes
+        n = len(atom_names)
+        padded = "".join(name.ljust(4)[:4] for name in atom_names)
+        char_codes = np.frombuffer(padded.encode("ascii"), dtype=np.uint8)
+        indices = np.clip(char_codes.astype(np.int64) - 32, 0, 63)
+        indices_tensor = torch.from_numpy(indices).reshape(n, 4)
+        return F.one_hot(indices_tensor, num_classes=64).to(torch.long)
 
     def get_token_context(self) -> TokenContext:
         """
@@ -196,10 +182,16 @@ class ContextGenerator(object):
 
         context = TokenContext(
             token_index=torch.arange(0, len(self.cropped_token_array)),
-            residue_index=torch.Tensor(self.centre_atoms.res_id.astype(int)).long(),
-            asym_id=torch.Tensor(self.centre_atoms.asym_id_int).long(),
-            entity_id=torch.Tensor(self.centre_atoms.entity_id_int).long(),
-            sym_id=torch.Tensor(self.centre_atoms.sym_id_int).long(),
+            residue_index=torch.from_numpy(self.centre_atoms.res_id.astype(np.int64)),
+            asym_id=torch.from_numpy(
+                np.asarray(self.centre_atoms.asym_id_int, dtype=np.int64)
+            ),
+            entity_id=torch.from_numpy(
+                np.asarray(self.centre_atoms.entity_id_int, dtype=np.int64)
+            ),
+            sym_id=torch.from_numpy(
+                np.asarray(self.centre_atoms.sym_id_int, dtype=np.int64)
+            ),
             restype=restype_onehot,
             # NOTE: token_bonds disabled - expensive O(n_token^2) computation, currently unused
             # token_bonds=self.get_bonds(),
@@ -217,9 +209,13 @@ class ContextGenerator(object):
             ChainPermContext
         """
         chain_perm_context = ChainPermContext(
-            mol_id=torch.Tensor(self.cropped_atom_array.mol_id).long(),
-            mol_atom_index=torch.Tensor(self.cropped_atom_array.mol_atom_index).long(),
-            entity_mol_id=torch.Tensor(self.cropped_atom_array.entity_mol_id).long(),
+            mol_id=torch.from_numpy(self.cropped_atom_array.mol_id.astype(np.int64)),
+            mol_atom_index=torch.from_numpy(
+                self.cropped_atom_array.mol_atom_index.astype(np.int64)
+            ),
+            entity_mol_id=torch.from_numpy(
+                self.cropped_atom_array.entity_mol_id.astype(np.int64)
+            ),
         )
         return chain_perm_context
 
@@ -233,7 +229,7 @@ class ContextGenerator(object):
         res_starts = get_residue_starts(
             self.cropped_atom_array, add_exclusive_stop=True
         )
-        new_atom_names = copy.deepcopy(self.cropped_atom_array.atom_name)
+        new_atom_names = self.cropped_atom_array.atom_name.copy()
         for start, stop in zip(res_starts[:-1], res_starts[1:]):
             res_mol_type = self.cropped_atom_array.mol_type[start]
             if res_mol_type != "ligand":
@@ -272,16 +268,22 @@ class ContextGenerator(object):
             atom_names = self.cropped_atom_array.atom_name
 
         ref_conf_context = ReferenceConformerContext(
-            ref_pos=torch.Tensor(ref_pos),
-            ref_mask=torch.Tensor(self.cropped_atom_array.ref_mask).long(),
+            ref_pos=torch.from_numpy(ref_pos.astype(np.float32)),
+            ref_mask=torch.from_numpy(
+                np.asarray(self.cropped_atom_array.ref_mask, dtype=np.int64)
+            ),
             ref_element=ContextGenerator.elem_onehot_encoded(
                 self.cropped_atom_array.element
             ).long(),
-            ref_charge=torch.Tensor(self.cropped_atom_array.ref_charge).long(),
+            ref_charge=torch.from_numpy(
+                np.asarray(self.cropped_atom_array.ref_charge, dtype=np.int64)
+            ),
             ref_atom_name_chars=ContextGenerator.ref_atom_name_chars_encoded(
                 atom_names.tolist()
-            ).long(),
-            ref_space_uid=torch.Tensor(self.cropped_atom_array.ref_space_uid).long(),
+            ),
+            ref_space_uid=torch.from_numpy(
+                np.asarray(self.cropped_atom_array.ref_space_uid, dtype=np.int64)
+            ),
         )
 
         return ref_conf_context
@@ -296,46 +298,47 @@ class ContextGenerator(object):
             torch.Tensor of shape [n_token, n_token] indicating bonds between tokens
         """
         num_tokens = len(self.cropped_token_array)
-        adj_matrix = self.cropped_atom_array.bonds.adjacency_matrix().astype(int)
+        token_adj_matrix = np.zeros((num_tokens, num_tokens), dtype=np.int64)
 
-        token_adj_matrix = np.zeros((num_tokens, num_tokens), dtype=int)
-        atom_bond_mask = adj_matrix > 0
+        bond_array = self.cropped_atom_array.bonds.as_array()
+        if len(bond_array) == 0:
+            return torch.from_numpy(token_adj_matrix)
 
-        for i in range(num_tokens):
-            atoms_i = self.cropped_token_array[i].atom_indices
-            token_i_mol_type = self.cropped_atom_array.mol_type[atoms_i[0]]
-            token_i_res_name = self.cropped_atom_array.res_name[atoms_i[0]]
-            token_i_ref_space_uid = self.cropped_atom_array.ref_space_uid[atoms_i[0]]
-            unstd_res_token_i = (
-                token_i_res_name not in STD_RESIDUES and token_i_mol_type != "ligand"
-            )
-            is_polymer_i = token_i_mol_type in ["protein", "dna", "rna"]
+        bond_atom_i = bond_array[:, 0]
+        bond_atom_j = bond_array[:, 1]
 
-            for j in range(i + 1, num_tokens):
-                atoms_j = self.cropped_token_array[j].atom_indices
-                token_j_mol_type = self.cropped_atom_array.mol_type[atoms_j[0]]
-                token_j_res_name = self.cropped_atom_array.res_name[atoms_j[0]]
-                token_j_ref_space_uid = self.cropped_atom_array.ref_space_uid[
-                    atoms_j[0]
-                ]
-                unstd_res_token_j = (
-                    token_j_res_name not in STD_RESIDUES
-                    and token_j_mol_type != "ligand"
-                )
-                is_polymer_j = token_j_mol_type in ["protein", "dna", "rna"]
+        # Per-atom properties
+        mol_type = self.cropped_atom_array.mol_type
+        res_name = self.cropped_atom_array.res_name
+        ref_space_uid = self.cropped_atom_array.ref_space_uid
 
-                # The polymer-polymer (std-std, std-unstd, and inter-unstd) bond will not be included in token_bonds.
-                if is_polymer_i and is_polymer_j:
-                    is_same_res = token_i_ref_space_uid == token_j_ref_space_uid
-                    unstd_res_bonds = unstd_res_token_i and unstd_res_token_j
-                    if not (is_same_res and unstd_res_bonds):
-                        continue
+        polymer_mask = np.isin(mol_type, ["protein", "dna", "rna"])
+        unstd_polymer_mask = polymer_mask & ~np.isin(
+            res_name, list(STD_RESIDUES.keys())
+        )
 
-                sub_matrix = atom_bond_mask[np.ix_(atoms_i, atoms_j)]
-                if np.any(sub_matrix):
-                    token_adj_matrix[i, j] = 1
-                    token_adj_matrix[j, i] = 1
-        return torch.Tensor(token_adj_matrix).long()
+        # Exclude polymer-polymer bonds UNLESS both endpoints are non-standard and same ref_space_uid
+        both_polymer = polymer_mask[bond_atom_i] & polymer_mask[bond_atom_j]
+        both_unstd = unstd_polymer_mask[bond_atom_i] & unstd_polymer_mask[bond_atom_j]
+        same_ref_space = ref_space_uid[bond_atom_i] == ref_space_uid[bond_atom_j]
+        exclude_mask = both_polymer & ~(both_unstd & same_ref_space)
+
+        kept_i = bond_atom_i[~exclude_mask]
+        kept_j = bond_atom_j[~exclude_mask]
+
+        # Map atom indices to token indices
+        atom_to_token = self.atom_to_token_idx.numpy()
+        token_i = atom_to_token[kept_i]
+        token_j = atom_to_token[kept_j]
+
+        # Filter out intra-token bonds
+        inter_token = token_i != token_j
+        token_i = token_i[inter_token]
+        token_j = token_j[inter_token]
+
+        token_adj_matrix[token_i, token_j] = 1
+        token_adj_matrix[token_j, token_i] = 1
+        return torch.from_numpy(token_adj_matrix)
 
     def get_index_context(self) -> IndexContext:
         """Get atom-to-token index mappings and global features.
@@ -345,10 +348,12 @@ class ContextGenerator(object):
         """
         return IndexContext(
             atom_to_token_idx=self.atom_to_token_idx,
-            atom_to_tokatom_idx=torch.Tensor(
-                self.cropped_atom_array.tokatom_idx
-            ).long(),
-            atom_asym_id=torch.Tensor(self.cropped_atom_array.asym_id_int).long(),
+            atom_to_tokatom_idx=torch.from_numpy(
+                self.cropped_atom_array.tokatom_idx.astype(np.int64)
+            ),
+            atom_asym_id=torch.from_numpy(
+                np.asarray(self.cropped_atom_array.asym_id_int, dtype=np.int64)
+            ),
         )
 
     def get_entity_context(self) -> EntityContext:
@@ -359,19 +364,21 @@ class ContextGenerator(object):
         """
 
         def get_token_level_moltype(mol_type: str):
-            is_x_atom = torch.Tensor(
-                getattr(self.cropped_atom_array, f"is_{mol_type}")
-            ).to(dtype=torch.bool)
+            is_x_atom = torch.from_numpy(
+                getattr(self.cropped_atom_array, f"is_{mol_type}").astype(bool)
+            )
             is_x_token = torch.zeros(len(self.cropped_token_array), dtype=torch.bool)
             is_x_token.scatter_(dim=-1, index=self.atom_to_token_idx, src=is_x_atom)
 
             return is_x_token
 
         return EntityContext(
-            is_protein=torch.Tensor(self.cropped_atom_array.is_protein).bool(),
-            is_ligand=torch.Tensor(self.cropped_atom_array.is_ligand).bool(),
-            is_dna=torch.Tensor(self.cropped_atom_array.is_dna).bool(),
-            is_rna=torch.Tensor(self.cropped_atom_array.is_rna).bool(),
+            is_protein=torch.from_numpy(
+                self.cropped_atom_array.is_protein.astype(bool)
+            ),
+            is_ligand=torch.from_numpy(self.cropped_atom_array.is_ligand.astype(bool)),
+            is_dna=torch.from_numpy(self.cropped_atom_array.is_dna.astype(bool)),
+            is_rna=torch.from_numpy(self.cropped_atom_array.is_rna.astype(bool)),
             is_protein_token=get_token_level_moltype("protein"),
             is_ligand_token=get_token_level_moltype("ligand"),
             is_dna_token=get_token_level_moltype("dna"),
@@ -391,17 +398,21 @@ class ContextGenerator(object):
         ]
 
         return MaskContext(
-            centre_atom_mask=torch.Tensor(
-                self.cropped_atom_array.centre_atom_mask
-            ).bool(),
-            atom_mask=torch.ones(len(self.cropped_atom_array)).bool(),
-            is_resolved=torch.Tensor(self.cropped_atom_array.is_resolved).bool(),
-            centre_atom_is_resolved=torch.Tensor(centre_atom_is_resolved).bool(),
+            centre_atom_mask=torch.from_numpy(
+                self.cropped_atom_array.centre_atom_mask.astype(bool)
+            ),
+            atom_mask=torch.ones(len(self.cropped_atom_array), dtype=torch.bool),
+            is_resolved=torch.from_numpy(
+                self.cropped_atom_array.is_resolved.astype(bool)
+            ),
+            centre_atom_is_resolved=torch.from_numpy(
+                centre_atom_is_resolved.astype(bool)
+            ),
             backbone_mask=torch.Tensor(self.backbone_atoms_and_mask[1]).bool(),
-            atom_loss_mask=torch.Tensor(
-                atom_is_resolved * atom_in_token_w_resolved_centre_atom
-            ).bool(),
-            token_mask=torch.ones(len(self.cropped_token_array)).bool(),
+            atom_loss_mask=torch.from_numpy(
+                (atom_is_resolved * atom_in_token_w_resolved_centre_atom).astype(bool)
+            ),
+            token_mask=torch.ones(len(self.cropped_token_array), dtype=torch.bool),
         )
 
     def get_motif_context(self) -> MotifContext:
@@ -424,8 +435,8 @@ class ContextGenerator(object):
         restype_onehot = self.restype_onehot_encoded(restype)
 
         # TODO: this part is a bit ugly with the reshapes etc.
-        motif_restype = restype_onehot * torch.Tensor(
-            is_motif_related_token * token_resolved
+        motif_restype = restype_onehot * torch.from_numpy(
+            (is_motif_related_token * token_resolved).astype(np.float32)
         ).unsqueeze(-1)  # [N_token, 32]
 
         motif_coordinate = self.centre_atoms.coord * is_motif_token.reshape(
@@ -433,12 +444,14 @@ class ContextGenerator(object):
         )  # [N_token, 3]
 
         return MotifContext(
-            is_motif=torch.Tensor(is_motif).bool(),
-            is_motif_related=torch.Tensor(is_motif_related).bool(),
-            is_motif_token=torch.Tensor(is_motif_token).bool(),
-            is_motif_related_token=torch.Tensor(is_motif_related_token).bool(),
+            is_motif=torch.from_numpy(is_motif.astype(bool)),
+            is_motif_related=torch.from_numpy(is_motif_related.astype(bool)),
+            is_motif_token=torch.from_numpy(is_motif_token.astype(bool)),
+            is_motif_related_token=torch.from_numpy(
+                is_motif_related_token.astype(bool)
+            ),
             motif_restype=motif_restype.float(),
-            motif_coordinate=torch.Tensor(motif_coordinate).float(),
+            motif_coordinate=torch.from_numpy(motif_coordinate.astype(np.float32)),
         )
 
     def get_coordinate_context(self) -> CoordinateContext:
@@ -448,8 +461,12 @@ class ContextGenerator(object):
             CoordinateContext: Coordinates features.
         """
         return CoordinateContext(
-            coordinate=torch.Tensor(self.cropped_atom_array.coord).float(),
-            centre_coordinate=torch.Tensor(self.centre_atoms.coord),
+            coordinate=torch.from_numpy(
+                self.cropped_atom_array.coord.astype(np.float32)
+            ),
+            centre_coordinate=torch.from_numpy(
+                self.centre_atoms.coord.astype(np.float32)
+            ),
             backbone_coordinate=self.backbone_atoms_and_mask[0],
             resolution=float(self.cropped_atom_array.resolution[0]),
         )

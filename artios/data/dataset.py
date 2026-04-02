@@ -29,6 +29,7 @@ from ml_collections.config_dict import ConfigDict
 from torch.utils.data import Dataset
 
 from artios.common.constants import BACKBONE_DEFS, EvaluationChainInterface
+from artios.data import annotation
 from artios.data.data_pipeline import BioassemblyData, DataPipeline
 from artios.data.data_weights import get_sample_weights
 from artios.data.features import FullContext
@@ -36,7 +37,6 @@ from artios.data.featurizer import ContextGenerator
 from artios.data.filter import Filter
 from artios.data.motif_maker import MotifMaker
 from artios.data.msa_featurizer import MSAFeaturizer
-from artios.data.parser import AddAtomArrayAnnot
 from artios.data.tokenizer import AtomArrayTokenizer, TokenArray
 from artios.utils.cropping import CropData
 from artios.utils.file_io import read_indices_csv
@@ -939,9 +939,7 @@ class BaseSingleDataset(Dataset):
             AtomArray: AtomArray with updated IDs for motif-related residues
         """
         # Discard the mapping for training - only needed for inference RMSD computation
-        atom_array, _ = AddAtomArrayAnnot.update_ids_to_unindex_motif_residues(
-            atom_array
-        )
+        atom_array, _ = annotation.update_ids_to_unindex_motif_residues(atom_array)
         return atom_array
 
     @staticmethod
@@ -951,7 +949,7 @@ class BaseSingleDataset(Dataset):
         related atoms. This is important as the Featurizer looks at the
         centre atom indices to retrieve the correct chain, res IDs etc.
         """
-        return AddAtomArrayAnnot.update_centre_atom_mask_to_include_motif(atom_array)
+        return annotation.update_centre_atom_mask_to_include_motif(atom_array)
 
     @profile_function("dataset.get_feature_and_label")
     def get_context(

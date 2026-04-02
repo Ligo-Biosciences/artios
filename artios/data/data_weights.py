@@ -367,7 +367,7 @@ def calc_weights_for_df(
         DataFrame with 'weights' column added.
     """
     if should_filter_artifact_ligands:
-        indices_df = filter_artifact_ligands(indices_df)
+        indices_df = _filter_artifact_ligands(indices_df)
 
     # Specific to assembly, and entities (chain or interface)
     indices_df["pdb_sorted_entity_id"] = indices_df.apply(

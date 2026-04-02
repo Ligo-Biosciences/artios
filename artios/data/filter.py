@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
 from typing import Optional
 
 import biotite.structure as struc
@@ -680,31 +681,6 @@ class Filter(object):
         return atom_array
 
     @staticmethod
-    def remove_protein_side_chains(atom_array: AtomArray) -> AtomArray:
-        """
-        Removes protein side chains from the input AtomArray and changes every residue name annotation to glycine.
-        Only keeps backbone atoms (N, CA, C, O) and changes all residue names to GLY.
-
-        Args:
-            atom_array (AtomArray): Input atom array containing protein structure
-
-        Returns:
-            AtomArray: Modified atom array with only backbone atoms and all residues labeled as GLY
-        TODO: remove this guy completely
-        """
-        # Keep only backbone atoms
-        backbone_mask = np.isin(atom_array.atom_name, ["N", "CA", "C", "O", "OXT"]) | (
-            atom_array.mol_type != "protein"
-        )
-        backbone_array = atom_array[backbone_mask]
-
-        # Change residue names to GLY only for proteins
-        protein_mask = backbone_array.mol_type == "protein"
-        backbone_array.res_name[protein_mask] = "GLY"
-
-        return backbone_array
-
-    @staticmethod
     def remove_non_motif_residue_sidechains(atom_array: AtomArray) -> AtomArray:
         """
         Removes side chain atoms only from residues that aren't part of the motif. This is only performed
@@ -764,3 +740,89 @@ class Filter(object):
 
         mask = atom_array.fragment_id != -1
         return atom_array[mask]
+
+
+def clean_structure(
+    atom_array: AtomArray,
+    entity_poly_type: dict[str, str],
+    add_missing: Callable[[AtomArray], AtomArray],
+    *,
+    remove_water: bool = True,
+    remove_hydrogens: bool = True,
+    remove_unknown_residues: bool = True,
+    remove_distant_ca_chains: bool = True,
+    fix_mse: bool = True,
+    fix_arg: bool = True,
+    remove_element_x: bool = True,
+    remove_crystallization_aids: bool = False,
+) -> AtomArray | None:
+    """Clean a parsed structure by applying filters in the correct order.
+
+    Encodes ordering constraints internally:
+    - MSE→MET must precede add_missing (so SE→SD matches MET CCD reference)
+    - element X removal must follow add_missing (ASX→ASP, GLX→GLU)
+    - crystallization aids removed last (they depend on entity_poly_type)
+
+    Args:
+        atom_array: Parsed structure from mmCIF.
+        entity_poly_type: Mapping of entity_id to polymer type string.
+        add_missing: Callback to add missing atoms/residues (typically
+            MMCIFParser.add_missing_atoms_and_residues, which depends on
+            parser instance state).
+        remove_water: Remove HOH molecules.
+        remove_hydrogens: Remove H/D atoms.
+        remove_unknown_residues: Remove polymer chains with unknown residues.
+        remove_distant_ca_chains: Remove chains with consecutive CA > 15Å apart.
+        fix_mse: Convert MSE residues to MET.
+        fix_arg: Fix arginine NH1/NH2 naming ambiguity.
+        remove_element_x: Remove element X atoms (after add_missing).
+        remove_crystallization_aids: Remove crystallization aids (for crystallography).
+
+    Returns:
+        Cleaned AtomArray, or None if no atoms survive.
+    """
+    # Avoid circular import — mse_to_met and fix_arginine are static methods
+    # on MMCIFParser, but they only take an AtomArray.
+    from artios.data.parser import MMCIFParser
+
+    steps: list[Callable[[AtomArray], AtomArray]] = []
+
+    if remove_water:
+        steps.append(Filter.remove_water)
+    if remove_hydrogens:
+        steps.append(Filter.remove_hydrogens)
+    if remove_unknown_residues:
+        steps.append(
+            lambda aa: Filter.remove_polymer_chains_with_unknown_residues(
+                aa, entity_poly_type, condition="any"
+            )
+        )
+    if remove_distant_ca_chains:
+        steps.append(
+            lambda aa: Filter.remove_polymer_chains_with_consecutive_c_alpha_too_far_away(
+                aa, entity_poly_type
+            )
+        )
+    if fix_arg:
+        steps.append(MMCIFParser.fix_arginine)
+    if fix_mse:
+        steps.append(MMCIFParser.mse_to_met)
+
+    # add_missing must come after MSE→MET so atom names match CCD reference
+    steps.append(add_missing)
+
+    if remove_element_x:
+        # Must come after add_missing (ASX→ASP, GLX→GLU replacements)
+        steps.append(Filter.remove_element_X)
+
+    if remove_crystallization_aids:
+        steps.append(
+            lambda aa: Filter.remove_crystallization_aids(aa, entity_poly_type)
+        )
+
+    for step in steps:
+        atom_array = step(atom_array)
+        if len(atom_array) == 0:
+            return None
+
+    return atom_array

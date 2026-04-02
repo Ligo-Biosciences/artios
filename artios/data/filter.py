@@ -492,6 +492,12 @@ class Filter(object):
                 (sorted_chain_id[in_core_mask], sorted_chain_id[~in_core_mask])
             )
 
+        # De-duplicate sorted_chain_id while preserving distance order
+        seen = set()
+        sorted_chain_id = np.array(
+            [x for x in sorted_chain_id if not (x in seen or seen.add(x))]
+        )
+
         closest_chain_id = set()
         chain_ids_to_token_num = {}
         if max_tokens_num is None:
@@ -499,12 +505,10 @@ class Filter(object):
 
         tokens = 0
         for chain_id in sorted_chain_id:
-            # get token num
-            if chain_id not in chain_ids_to_token_num:
-                chain_ids_to_token_num[chain_id] = atom_array.centre_atom_mask[
-                    atom_array.mol_id == chain_id
-                ].sum()
-            chain_token_num = chain_ids_to_token_num[chain_id]
+            chain_token_num = chain_ids_to_token_num.setdefault(
+                chain_id,
+                atom_array.centre_atom_mask[atom_array.mol_id == chain_id].sum(),
+            )
 
             if len(closest_chain_id) >= max_chains_num:
                 if tokens + chain_token_num > max_tokens_num:
@@ -686,6 +690,7 @@ class Filter(object):
 
         Returns:
             AtomArray: Modified atom array with only backbone atoms and all residues labeled as GLY
+        TODO: remove this guy completely
         """
         # Keep only backbone atoms
         backbone_mask = np.isin(atom_array.atom_name, ["N", "CA", "C", "O", "OXT"]) | (

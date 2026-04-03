@@ -96,7 +96,7 @@ default_distillation_configs = {
     "max_n_token": 1500,
 }
 
-DATA_ROOT_DIR = "/af3-dev/release_data/"
+DATA_ROOT_DIR = "af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md

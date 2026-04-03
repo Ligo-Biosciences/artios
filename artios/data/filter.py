@@ -20,7 +20,8 @@ import numpy as np
 from biotite.structure import AtomArray, get_molecule_indices
 from scipy.spatial.distance import cdist
 
-from artios.common.constants import BACKBONE_DEFS, CRYSTALLIZATION_AIDS
+from artios.common.ccd_sets import CRYSTALLIZATION_AIDS
+from artios.common.constants import BACKBONE_DEFS
 
 
 class Filter(object):

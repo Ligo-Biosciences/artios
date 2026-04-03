@@ -3,7 +3,6 @@ import hashlib
 import logging
 import os
 import time
-import warnings
 from contextlib import nullcontext
 from typing import Optional
 
@@ -154,9 +153,6 @@ class ArtiosBackboneTrainer(object):
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         logging.info("Finished init ENV.")
-
-        # Suppress annoying atomworks warnings
-        warnings.filterwarnings("ignore", module="atomworks")
 
     def init_loss(self):
         self.lddt_metrics = LDDTMetrics(self.configs)

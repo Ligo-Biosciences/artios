@@ -18,6 +18,7 @@ from typing import Optional
 import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray, get_molecule_indices
+from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist
 
 from artios.common.ccd_sets import (
@@ -26,6 +27,7 @@ from artios.common.ccd_sets import (
     EXTRA_CRYSTALLIZATION_AIDS,
 )
 from artios.common.constants import BACKBONE_DEFS
+from artios.common.elements import METALS
 
 
 class Filter(object):
@@ -103,6 +105,38 @@ class Filter(object):
         non_artifact_mask = ~np.isin(atom_array.res_name, list(ARTIFACT_LIGANDS))
         poly_mask = np.isin(atom_array.label_entity_id, list(entity_poly_type.keys()))
         return atom_array[poly_mask | non_artifact_mask]
+
+    @staticmethod
+    def remove_unbound_metal_ions(
+        atom_array: AtomArray,
+        radius: float = 3.0,
+        min_contacts: int = 3,
+    ) -> AtomArray:
+        """Remove metal ions that are not coordinated by nearby heavy atoms.
+
+        Detects metal ions as hetero atoms with a metal element, then removes
+        those with fewer than `min_contacts` non-metal heavy atoms within
+        `radius` angstroms.
+        """
+        metal_mask = atom_array.hetero & np.isin(atom_array.element, list(METALS))
+        if not metal_mask.any():
+            return atom_array
+
+        heavy_mask = (atom_array.element != "H") & ~metal_mask
+        if not heavy_mask.any():
+            return atom_array[~metal_mask]
+
+        tree = KDTree(atom_array.coord[heavy_mask])
+        neighbor_counts = tree.query_ball_point(
+            atom_array.coord[metal_mask], radius, return_length=True
+        )
+
+        metal_indices = np.where(metal_mask)[0]
+        remove_indices = metal_indices[neighbor_counts < min_contacts]
+
+        keep_mask = np.ones(len(atom_array), dtype=bool)
+        keep_mask[remove_indices] = False
+        return atom_array[keep_mask]
 
     @staticmethod
     def _get_clashing_chains(
@@ -771,6 +805,7 @@ def clean_structure(
     remove_distant_ca_chains: bool = True,
     remove_crystallization_aids: bool = True,
     remove_artifact_ligands: bool = True,
+    remove_unbound_metal_ions: bool = True,
 ) -> AtomArray | None:
     """Clean a parsed structure by removing unwanted atoms and chains.
 
@@ -787,6 +822,7 @@ def clean_structure(
         remove_distant_ca_chains: Remove chains with consecutive CA > 15Å apart.
         remove_crystallization_aids: Remove crystallization aids (SO4, GOL, etc.).
         remove_artifact_ligands: Remove artifact ligands (ions, buffers, solvents, PEGs, etc.).
+        remove_unbound_metal_ions: Remove metal ions with <3 heavy atoms within 3Å.
 
     Returns:
         Cleaned AtomArray, or None if no atoms survive.
@@ -815,6 +851,8 @@ def clean_structure(
         )
     if remove_artifact_ligands:
         steps.append(lambda aa: Filter.remove_artifact_ligands(aa, entity_poly_type))
+    if remove_unbound_metal_ions:
+        steps.append(Filter.remove_unbound_metal_ions)
 
     for step in steps:
         atom_array = step(atom_array)

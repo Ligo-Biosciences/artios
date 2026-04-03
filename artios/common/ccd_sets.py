@@ -1,23 +1,15 @@
 """CCD (Chemical Component Dictionary) code sets for filtering ligands, glycans, and artifacts."""
 
-# AlphaFold3 SI Table 9
-LIGAND_EXCLUSION = {'144', 'SEP', 'PG0', 'BEN', 'NH4', 'PO4', '3SY', 'BO3', 'UNL', 'MES', 'FLC', 'PGR', '15P', 'MYR',
-                    'POL', 'CIT', 'N', 'SPD', 'CAQ', 'IPA', 'EGL', 'SAR', 'NO3', 'STU', 'NHE', 'BU1', 'OXA', 'TPO',
-                    'EEE', 'CAD', 'CBM', 'SPM', 'BCN', 'FMT', 'PEP', 'CM', 'BAM', 'ETF', 'IOD', 'MLI', 'MRD', 'SCN',
-                    'GSH', 'CCN', 'SR', '1PE', 'ACY', 'STE', '9JE', 'SEO', 'IHS', 'MLA', 'TBU', 'DEP', 'STO', 'ACE',
-                    'NA', 'TRS', 'CPT', 'OHE', 'TME', 'CL', 'BME', 'DN', '3HR', 'LDA', 'SO4', 'MPD', 'OLC', 'DOD',
-                    'PE4', 'DOX', 'CMO', 'POP', 'PG4', '2F2', 'DMS', 'IMD', 'NH2', 'EOX', 'IPH', 'ACT', '7PE', 'UNX',
-                    'GTT', '7N5', 'AZI', 'FCY', 'SIN', 'AAE', 'BTB', 'BTC', 'PGE', 'PE3', 'MB3', 'EDO', 'PLM', 'BCT',
-                    'EOH', 'P6G', 'ACN', 'D10', 'EPE', 'DIO', 'CO3', 'PVO', 'TAR', 'URE', 'BDN', 'GOL', 'MSE', 'HED',
-                    'CLR', 'MEG', 'IHP', 'PEO', 'CXS', 'MOH', 'GYF', 'PEG', 'FJO', 'FW5', 'OLA', '2JC', 'ABA', 'O4B',
-                    'UPL', 'OME', 'C8E', 'OMB', 'UNK'}  # fmt: skip
+# =============================================================================
+# Crystallization artifacts — always removed at parse time
+# =============================================================================
 
 # AlphaFold3 COMMON_CRYSTALLIZATION_AIDS
 CRYSTALLIZATION_AIDS = (
     "SO4", "GOL", "EDO", "PO4", "ACT", "PEG", "DMS", "TRS", "PGE", "PG4", "FMT", "EPE", "MPD", "MES", "CD", "IOD",
 )  # fmt: skip
 
-# Additional crystallization artifacts not in the AF3 lists above
+# Additional crystallization artifacts not in the AF3 list
 EXTRA_CRYSTALLIZATION_AIDS = (
     "PGO",  # S-1,2-propanediol
     "BR",  # bromide ion (phasing reagent)
@@ -48,7 +40,85 @@ EXTRA_CRYSTALLIZATION_AIDS = (
     "SBT",  # 2-butanol (solvent)
 )
 
-# AlphaFold3 SI Table 11
+# =============================================================================
+# AlphaFold3 SI Table 9 — LIGAND_EXCLUSION, split into subsets
+# =============================================================================
+
+# Pure artifacts: always safe to remove at parse time (never biologically relevant)
+# These are ions, buffers, solvents, PEGs, small acids, detergents, reducing agents,
+# unknowns, and misc additives. ~100 codes, ~155k PDB entries.
+ARTIFACT_LIGANDS = {
+    # Ions & salts (14)
+    'AZI', 'BCT', 'BO3', 'CL', 'CO3', 'IOD', 'NA', 'NH4', 'NO3', 'PO4', 'POP', 'SCN', 'SO4', 'SR',
+    # Buffers (12)
+    '144', 'BCN', 'BTB', 'CAD', 'CIT', 'CXS', 'EPE', 'FLC', 'IMD', 'MES', 'NHE', 'TRS',
+    # Solvents & cryoprotectants (26)
+    '2F2', '3HR', '9JE', 'ACN', 'BU1', 'CCN', 'D10', 'DIO', 'DMS', 'DOD', 'EDO', 'EEE',
+    'EOH', 'ETF', 'FJO', 'FW5', 'GOL', 'IPA', 'MOH', 'MPD', 'MRD', 'PG0', 'PGR', 'POL', 'TBU', 'TME',
+    # PEG variants (12)
+    '15P', '1PE', '7PE', 'C8E', 'O4B', 'P6G', 'PE3', 'PE4', 'PEG', 'PEO', 'PG4', 'PGE',
+    # Small acids, bases & additives (16)
+    'AAE', 'ACE', 'ACT', 'ACY', 'DEP', 'FMT', 'IHP', 'IHS', 'MLA', 'MLI', 'NH2', 'OXA', 'PEP', 'SIN', 'TAR', 'URE',
+    # Detergents (4)
+    'LDA', 'MB3', 'OMB', 'OME',
+    # Reducing agents (4)
+    'BME', 'GSH', 'GYF', 'HED',
+    # Unknowns (2)
+    'UNL', 'UNX',
+    # Other misc (15)
+    '3SY', '7N5', 'BAM', 'BDN', 'BTC', 'CM', 'CMO', 'DOX', 'EGL', 'EOX', 'FCY', 'GTT', 'OHE', 'SEO', 'STO',
+}  # fmt: skip
+
+# Modified residues: part of polymer chains, handled by conversion (e.g. MSE→MET).
+# Must NOT be removed from atom arrays — they would break chains. ~15.8k PDB entries.
+MODIFIED_RESIDUES = {
+    "SEP",  # phosphoserine
+    "TPO",  # phosphothreonine
+    "MSE",  # selenomethionine
+    "MEG",  # modified glutamic acid
+    "ABA",  # alpha-aminobutyric acid
+    "PVO",  # modified alanine
+    "2JC",  # N-ethylglycine
+    "SAR",  # sarcosine
+    "UNK",  # unknown residue
+    "DN",  # unknown deoxynucleotide
+    "N",  # unknown nucleotide
+}
+
+# Fatty acids & lipids: can be biologically relevant (e.g. cholesterol in GPCRs,
+# palmitate on hedgehog). ~3k PDB entries.
+LIPID_LIGANDS = {
+    "CLR",  # cholesterol
+    "MYR",  # myristic acid
+    "OLA",  # oleic acid
+    "OLC",  # monoolein
+    "PLM",  # palmitic acid
+    "STE",  # stearic acid
+    "UPL",  # unknown phospholipid fragment
+}
+
+# Pharma probes & bioactive molecules: genuine ligands in many contexts
+# (e.g. staurosporine in kinases, benzamidine in proteases). ~1.2k PDB entries.
+BIOACTIVE_LIGANDS = {
+    "BEN",  # benzamidine (serine protease inhibitor)
+    "CAQ",  # catechol
+    "CBM",  # carbamoyl group
+    "CPT",  # cisplatin
+    "IPH",  # phenol
+    "SPD",  # spermidine
+    "SPM",  # spermine
+    "STU",  # staurosporine (kinase inhibitor)
+}
+
+# Full AF3 SI Table 9 set (union of all subsets above)
+LIGAND_EXCLUSION = (
+    ARTIFACT_LIGANDS | MODIFIED_RESIDUES | LIPID_LIGANDS | BIOACTIVE_LIGANDS
+)
+
+# =============================================================================
+# Glycans — AlphaFold3 SI Table 11
+# =============================================================================
+
 GLYCANS = {'79J', 'LXZ', 'KO1', 'Z57', 'XDX', '8OQ', 'G0S', '14T', 'ZB3', '9PG', 'BGL', 'GYU', 'AHG', 'SUC', 'ADA', 'NGR',
            '4R1', 'EBQ', 'GAF', 'NAA', 'GYP', 'NDG', 'U2D', 'ISL', '9GP', 'KDM', 'HSX', 'NYT', 'V3P', '4NN', 'Z3L', 'ZCZ',
            'D5E', 'RIP', '3LR', 'GL1', 'K99', 'MQG', 'RAM', 'TUP', 'KDB', 'SIO', 'Z5L', 'GUL', 'GU2', 'EQV', '0V4', 'ABD',

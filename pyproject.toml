@@ -58,7 +58,6 @@ dependencies = [
     "peppr",
     "jaxtyping",
     "pocketeer[dev,vis]==0.0.4",
-    "atomworks>=1.0.3",
     "ray>=2.48.0",
     "polars>=1.35.2",
     "rapidgzip>=0.15.2",

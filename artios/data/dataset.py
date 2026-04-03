@@ -129,6 +129,7 @@ class BaseSingleDataset(Dataset):
         self.filter_unique_domain_prob = kwargs.get("filter_unique_domain_prob", 0.1)
         assert self.filter_unique_fragment_prob + self.filter_unique_domain_prob <= 1
         self.require_pocket_in_fragment = kwargs.get("require_pocket_in_fragment", True)
+        self.remove_excluded_ligands = kwargs.get("remove_excluded_ligands", True)
 
         self.error_dir = kwargs.get("error_dir", None)
         if self.error_dir is not None:

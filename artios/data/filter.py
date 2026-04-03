@@ -20,7 +20,11 @@ import numpy as np
 from biotite.structure import AtomArray, get_molecule_indices
 from scipy.spatial.distance import cdist
 
-from artios.common.ccd_sets import CRYSTALLIZATION_AIDS
+from artios.common.ccd_sets import (
+    ARTIFACT_LIGANDS,
+    CRYSTALLIZATION_AIDS,
+    EXTRA_CRYSTALLIZATION_AIDS,
+)
 from artios.common.constants import BACKBONE_DEFS
 
 
@@ -82,9 +86,23 @@ class Filter(object):
 
         Ref: AlphaFold3 SI Chapter 2.5.4
         """
-        non_aids_mask = ~np.isin(atom_array.res_name, CRYSTALLIZATION_AIDS)
+        all_aids = set(CRYSTALLIZATION_AIDS) | set(EXTRA_CRYSTALLIZATION_AIDS)
+        non_aids_mask = ~np.isin(atom_array.res_name, list(all_aids))
         poly_mask = np.isin(atom_array.label_entity_id, list(entity_poly_type.keys()))
         return atom_array[poly_mask | non_aids_mask]
+
+    @staticmethod
+    def remove_artifact_ligands(
+        atom_array: AtomArray, entity_poly_type: dict
+    ) -> AtomArray:
+        """Remove artifact ligands (ions, buffers, solvents, PEGs, etc.).
+
+        Only removes non-polymer chains. Polymer chains are preserved even if
+        they contain matching residue names (e.g. modified residues).
+        """
+        non_artifact_mask = ~np.isin(atom_array.res_name, list(ARTIFACT_LIGANDS))
+        poly_mask = np.isin(atom_array.label_entity_id, list(entity_poly_type.keys()))
+        return atom_array[poly_mask | non_artifact_mask]
 
     @staticmethod
     def _get_clashing_chains(
@@ -746,46 +764,33 @@ class Filter(object):
 def clean_structure(
     atom_array: AtomArray,
     entity_poly_type: dict[str, str],
-    add_missing: Callable[[AtomArray], AtomArray],
     *,
     remove_water: bool = True,
     remove_hydrogens: bool = True,
     remove_unknown_residues: bool = True,
     remove_distant_ca_chains: bool = True,
-    fix_mse: bool = True,
-    fix_arg: bool = True,
-    remove_element_x: bool = True,
-    remove_crystallization_aids: bool = False,
+    remove_crystallization_aids: bool = True,
+    remove_artifact_ligands: bool = True,
 ) -> AtomArray | None:
-    """Clean a parsed structure by applying filters in the correct order.
+    """Clean a parsed structure by removing unwanted atoms and chains.
 
-    Encodes ordering constraints internally:
-    - MSE→MET must precede add_missing (so SE→SD matches MET CCD reference)
-    - element X removal must follow add_missing (ASX→ASP, GLX→GLU)
-    - crystallization aids removed last (they depend on entity_poly_type)
+    This is a pure filtering step — no atom additions or residue fixes.
+    MSE→MET conversion, arginine fixes, and add_missing should be called
+    separately after this function.
 
     Args:
         atom_array: Parsed structure from mmCIF.
         entity_poly_type: Mapping of entity_id to polymer type string.
-        add_missing: Callback to add missing atoms/residues (typically
-            MMCIFParser.add_missing_atoms_and_residues, which depends on
-            parser instance state).
         remove_water: Remove HOH molecules.
         remove_hydrogens: Remove H/D atoms.
         remove_unknown_residues: Remove polymer chains with unknown residues.
         remove_distant_ca_chains: Remove chains with consecutive CA > 15Å apart.
-        fix_mse: Convert MSE residues to MET.
-        fix_arg: Fix arginine NH1/NH2 naming ambiguity.
-        remove_element_x: Remove element X atoms (after add_missing).
-        remove_crystallization_aids: Remove crystallization aids (for crystallography).
+        remove_crystallization_aids: Remove crystallization aids (SO4, GOL, etc.).
+        remove_artifact_ligands: Remove artifact ligands (ions, buffers, solvents, PEGs, etc.).
 
     Returns:
         Cleaned AtomArray, or None if no atoms survive.
     """
-    # Avoid circular import — mse_to_met and fix_arginine are static methods
-    # on MMCIFParser, but they only take an AtomArray.
-    from artios.data.parser import MMCIFParser
-
     steps: list[Callable[[AtomArray], AtomArray]] = []
 
     if remove_water:
@@ -804,22 +809,12 @@ def clean_structure(
                 aa, entity_poly_type
             )
         )
-    if fix_arg:
-        steps.append(MMCIFParser.fix_arginine)
-    if fix_mse:
-        steps.append(MMCIFParser.mse_to_met)
-
-    # add_missing must come after MSE→MET so atom names match CCD reference
-    steps.append(add_missing)
-
-    if remove_element_x:
-        # Must come after add_missing (ASX→ASP, GLX→GLU replacements)
-        steps.append(Filter.remove_element_X)
-
     if remove_crystallization_aids:
         steps.append(
             lambda aa: Filter.remove_crystallization_aids(aa, entity_poly_type)
         )
+    if remove_artifact_ligands:
+        steps.append(lambda aa: Filter.remove_artifact_ligands(aa, entity_poly_type))
 
     for step in steps:
         atom_array = step(atom_array)

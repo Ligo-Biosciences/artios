@@ -287,6 +287,7 @@ model_configs = {
                 "ensemble_dropout": False,
                 "ensemble_anm": False,
                 "ensemble_anm_gamma": 0.2388,
+                "ensemble_anm_cutoff": 15.0,
                 "track_trajectory": False,
                 "trajectory_interval": 1,
                 "track_u_i": False,

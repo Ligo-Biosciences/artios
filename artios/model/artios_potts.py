@@ -129,6 +129,7 @@ class ArtiosPotts(nn.Module):
         self.ensemble_dropout = sampling_cfg.ensemble_dropout
         self.ensemble_anm = sampling_cfg.ensemble_anm
         self.ensemble_anm_gamma = sampling_cfg.ensemble_anm_gamma
+        self.ensemble_anm_cutoff = sampling_cfg.ensemble_anm_cutoff
         self.aromatic_penalty_weight = sampling_cfg.aromatic_penalty_weight
         self.aromatic_target_fraction = sampling_cfg.aromatic_target_fraction
         self.active_site_distance_cutoff = sampling_cfg.active_site_distance_cutoff
@@ -189,6 +190,7 @@ class ArtiosPotts(nn.Module):
                     ca_coords=ca_protein.float(),
                     n_conformations=self.ensemble_size,
                     gamma=self.ensemble_anm_gamma,
+                    cutoff=self.ensemble_anm_cutoff,
                     generator=generator,
                 )
                 full_disps = torch.zeros(

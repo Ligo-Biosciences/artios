@@ -8,20 +8,85 @@ from typing import Dict, Optional
 
 import biotite.structure as struc
 import numpy as np
-from atomworks.io.tools.rdkit import (
-    CONVERTIBLE_RDKIT_BOND_TYPES,
-    RDKIT_BOND_TYPE_TO_BIOTITE,
-    RDKIT_HYBRIDIZATION_TO_INT,
-    not_isin,
-)
-from atomworks.io.tools.rdkit import (
-    smiles_to_rdkit as smiles_to_rdkit_mol,
-)
 from biotite.structure import AtomArray
 from rdkit import Chem
-from rdkit.Chem import AdjustQueryParameters, AdjustQueryProperties
+from rdkit.Chem import AdjustQueryParameters, AdjustQueryProperties, AllChem
+
+# --- Constants inlined from atomworks.io.tools.rdkit ---
+
+RDKIT_HYBRIDIZATION_TO_INT: dict[Chem.rdchem.HybridizationType, int] = {
+    Chem.rdchem.HybridizationType.S: 0,
+    Chem.rdchem.HybridizationType.SP: 1,
+    Chem.rdchem.HybridizationType.SP2: 2,
+    Chem.rdchem.HybridizationType.SP2D: 3,
+    Chem.rdchem.HybridizationType.SP3: 4,
+    Chem.rdchem.HybridizationType.SP3D: 5,
+    Chem.rdchem.HybridizationType.SP3D2: 6,
+    Chem.rdchem.HybridizationType.OTHER: 7,
+    Chem.rdchem.HybridizationType.UNSPECIFIED: -1,
+}
+
+RDKIT_BOND_TYPE_TO_BIOTITE: dict[tuple[Chem.BondType, bool], struc.bonds.BondType] = {
+    (Chem.BondType.UNSPECIFIED, False): struc.bonds.BondType.ANY,
+    (Chem.BondType.SINGLE, False): struc.bonds.BondType.SINGLE,
+    (Chem.BondType.DOUBLE, False): struc.bonds.BondType.DOUBLE,
+    (Chem.BondType.TRIPLE, False): struc.bonds.BondType.TRIPLE,
+    (Chem.BondType.QUADRUPLE, False): struc.bonds.BondType.QUADRUPLE,
+    (Chem.BondType.DATIVE, False): struc.bonds.BondType.COORDINATION,
+    (Chem.BondType.SINGLE, True): struc.bonds.BondType.AROMATIC_SINGLE,
+    (Chem.BondType.DOUBLE, True): struc.bonds.BondType.AROMATIC_DOUBLE,
+    (Chem.BondType.TRIPLE, True): struc.bonds.BondType.AROMATIC_TRIPLE,
+}
+
+CONVERTIBLE_RDKIT_BOND_TYPES: frozenset[Chem.BondType] = frozenset(
+    bond_type for bond_type, _ in RDKIT_BOND_TYPE_TO_BIOTITE
+)
 
 logger = logging.getLogger(__name__)
+
+
+def not_isin(element: np.ndarray, array: np.ndarray, **kwargs) -> np.ndarray:
+    """Like ~np.isin, but uses the invert kwarg for efficiency."""
+    return np.isin(element, array, invert=True, **kwargs)
+
+
+def smiles_to_rdkit_mol(
+    smiles: str,
+    *,
+    sanitize: bool = True,
+    timeout: int = 5,
+    generate_conformers: bool = True,
+) -> Chem.Mol:
+    """Generate an RDKit molecule from a SMILES string.
+
+    Optionally generates and minimizes a 3D conformer.
+    """
+    mol = Chem.MolFromSmiles(smiles, sanitize=sanitize)
+    if mol is None:
+        raise Chem.MolSanitizeException(
+            f"Failed to create molecule from SMILES string: {smiles}. "
+            "Try setting `sanitize=False`."
+        )
+
+    if not generate_conformers:
+        return mol
+
+    mol = Chem.AddHs(mol)
+
+    etkdg = AllChem.ETKDGv3()
+    etkdg.useRandomCoords = True
+    etkdg.optimizerForceTol = 1e-3
+    etkdg.timeout = timeout
+    AllChem.EmbedMolecule(mol, params=etkdg)
+
+    if mol.GetNumConformers() > 0:
+        ff = AllChem.UFFGetMoleculeForceField(mol)
+        ff.Initialize()
+        ff.Minimize(energyTol=1e-7, maxIts=500)
+
+    mol = Chem.RemoveHs(mol)
+    return mol
+
 
 UNKNOWN_LIGAND = "UNL"
 HYDROGEN_LIKE_SYMBOLS = ["H", "D", "T"]

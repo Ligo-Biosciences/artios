@@ -116,6 +116,28 @@ class TestAnnotatedStructure:
         with pytest.raises(AttributeError):
             structure.resolution = 2.0  # type: ignore[misc]
 
+    def test_save_load_roundtrip(self, structure, tmp_path):
+        """save() then load() should produce an identical structure."""
+        path = tmp_path / "test.npz"
+        structure.save(path)
+        loaded = AnnotatedStructure.load(path)
+
+        assert len(loaded.atoms) == len(structure.atoms)
+        assert loaded.grouping.n_tokens == structure.grouping.n_tokens
+        assert loaded.resolution == pytest.approx(structure.resolution)
+        np.testing.assert_array_equal(
+            loaded.grouping.centre_atom_mask, structure.grouping.centre_atom_mask
+        )
+        np.testing.assert_array_equal(
+            loaded.entity_ids.asym_id_int, structure.entity_ids.asym_id_int
+        )
+        np.testing.assert_allclose(
+            loaded.reference.ref_pos, structure.reference.ref_pos, atol=1e-6
+        )
+        np.testing.assert_array_equal(
+            loaded.type_masks.mol_type, structure.type_masks.mol_type
+        )
+
 
 # ---------------------------------------------------------------------------
 # Token-level cached properties

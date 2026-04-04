@@ -392,15 +392,13 @@ class BaseSingleDataset(Dataset):
                 "bioassembly_dict_dir must be set to load bioassembly data"
             )
 
-        bioassembly_dict_fpath = os.path.join(
-            self.bioassembly_dict_dir,
-            sample_indice.pdb_id + ".pkl.gz",  # .pkl.gz
-        )
+        pdb_id = sample_indice.pdb_id
+        npz_path = os.path.join(self.bioassembly_dict_dir, pdb_id + ".npz")
         bio = DataPipeline.get_data_bioassembly(
-            bioassembly_dict_fpath=bioassembly_dict_fpath,
-            pdb_id_override=sample_indice.pdb_id,
+            bioassembly_fpath=npz_path,
+            pdb_id_override=pdb_id,
         )
-        return sample_indice, bio, bioassembly_dict_fpath
+        return sample_indice, bio, npz_path
 
     @staticmethod
     def _reassign_atom_array_chain_id(atom_array: AtomArray):

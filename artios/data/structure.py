@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 
 import biotite.structure as struc
 import numpy as np
@@ -17,6 +18,7 @@ from numpy.typing import NDArray
 
 from artios.common.constants import STD_RESIDUES
 from artios.data import annotation
+from artios.utils.file_io import dump_atomarray_to_npz, load_atomarray_from_npz
 
 # Typed array aliases — encode dtype in the type system, shapes in comments.
 IntArray = NDArray[np.int64]
@@ -327,6 +329,26 @@ class AnnotatedStructure:
             self,
             motif=MotifAnnotation(is_motif=is_motif, is_motif_related=is_motif_related),
         )
+
+    # -- Serialization --
+
+    def save(self, path: str | Path) -> None:
+        """Save to a single .npz file.
+
+        All data needed to reconstruct the AnnotatedStructure is stored
+        as annotations on the AtomArray. ``load()`` roundtrips exactly.
+        """
+        dump_atomarray_to_npz(self.atoms, path)
+
+    @classmethod
+    def load(cls, path: str | Path) -> AnnotatedStructure:
+        """Load from an .npz file saved with ``save()``.
+
+        Reconstructs typed fields and computes TokenGrouping from the
+        atom-level annotations stored in the file.
+        """
+        atom_array = load_atomarray_from_npz(path)
+        return cls.from_atom_array(atom_array)
 
     # -- Construction --
 

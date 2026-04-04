@@ -26,21 +26,18 @@ from biotite.structure import AtomArray
 
 from artios.data.msa_featurizer import MSAFeaturizer
 from artios.data.parser import DistillationMMCIFParser, MMCIFParser
+from artios.data.structure import AnnotatedStructure
 from artios.data.tokenizer import AtomArrayTokenizer, TokenArray
 from artios.utils.cropping import CropData
-from artios.utils.file_io import (
-    load_atomarray_from_npz,
-    load_gzip_pickle,
-)
 
 
 @dataclass(frozen=True)
 class BioassemblyData:
-    """Typed, frozen container for a parsed bioassembly structure.
+    """Obsolete — replaced by ``AnnotatedStructure``.
 
-    Constructed once at load time and never mutated. Consumers should
-    destructure into local variables for any preprocessing that modifies
-    the atom_array or token_array.
+    Only survives because ``CropData`` and ``dataset.py`` still expect
+    a ``token_array`` field. Will be deleted in Step B when CropData
+    accepts ``AnnotatedStructure`` directly.
     """
 
     atom_array: AtomArray
@@ -69,19 +66,17 @@ class DataPipeline(object):
         mmcif: Union[str, Path],
         pdb_cluster_file: Union[str, Path, None] = None,
         dataset: str = "WeightedPDB",
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        """
-        Get raw data from mmcif with tokenizer and a list of chains and interfaces for sampling.
+    ) -> tuple[list[dict[str, Any]], AnnotatedStructure | None]:
+        """Parse an mmCIF file into an AnnotatedStructure and sample indices.
 
         Args:
-            mmcif (Union[str, Path]): The raw mmcif file.
-            pdb_cluster_file (Union[str, Path, None], optional): Cluster info txt file. Defaults to None.
-            dataset (str, optional): The dataset type, either "WeightedPDB" or "Distillation". Defaults to "WeightedPDB".
+            mmcif: Path to the mmCIF file.
+            pdb_cluster_file: Cluster info txt file for deduplication.
+            dataset: "WeightedPDB" or "Distillation".
 
         Returns:
-            tuple[list[dict[str, Any]], dict[str, Any]]:
-                sample_indices_list (list[dict[str, Any]]): The sample indices list (each one is a chain or an interface).
-                bioassembly_dict (dict[str, Any]): The bioassembly dict with sequence, atom_array, and token_array.
+            sample_indices_list: Per-chain/interface sampling metadata.
+            structure: The annotated structure, or None on failure.
         """
         try:
             if dataset == "WeightedPDB":
@@ -99,25 +94,21 @@ class DataPipeline(object):
                 bioassembly_dict=bioassembly_dict, pdb_cluster_file=pdb_cluster_file
             )
             if len(sample_indices_list) == 0:
-                # empty indices and AtomArray
-                return [], bioassembly_dict
+                return [], None
 
             atom_array = bioassembly_dict["atom_array"]
+            if atom_array is None:
+                return [], None
+
             atom_array.set_annotation(
                 "resolution", [parser.resolution] * len(atom_array)
             )
-
-            tokenizer = AtomArrayTokenizer(atom_array)
-            token_array = tokenizer.get_token_array()
-            bioassembly_dict["msa_features"] = None
-            bioassembly_dict["template_features"] = None
-
-            bioassembly_dict["token_array"] = token_array
-            return sample_indices_list, bioassembly_dict
+            structure = AnnotatedStructure.from_atom_array(atom_array)
+            return sample_indices_list, structure
 
         except Exception as e:
             logging.warning("Gen data failed for %s due to %s", mmcif, e)
-            return [], {}
+            return [], None
 
     @staticmethod
     def get_label_entity_id_to_asym_id_int(atom_array: AtomArray) -> dict[str, int]:
@@ -138,37 +129,35 @@ class DataPipeline(object):
 
     @staticmethod
     def get_data_bioassembly(
-        bioassembly_dict_fpath: Union[str, Path],
+        bioassembly_fpath: Union[str, Path],
         pdb_id_override: str | None = None,
     ) -> BioassemblyData:
-        """Load a bioassembly from disk as a typed, frozen BioassemblyData.
+        """Load a bioassembly from a single ``.npz`` file.
+
+        The file is saved by ``AnnotatedStructure.save()``. TokenArray is
+        constructed on the fly from the atom-level annotations.
 
         Args:
-            bioassembly_dict_fpath: Path to the .pkl.gz metadata file.
-            pdb_id_override: If set, use this instead of the pdb_id stored in the pkl.
+            bioassembly_fpath: Path to the ``.npz`` file.
+            pdb_id_override: If set, use this instead of deriving from filename.
 
         Returns:
             BioassemblyData: Frozen container with atom_array, token_array, and metadata.
-
-        Raises:
-            FileNotFoundError: If the metadata file does not exist.
         """
-        bioassembly_dict_path = Path(bioassembly_dict_fpath)
-        if not bioassembly_dict_path.exists():
-            raise FileNotFoundError(f"File not found: {bioassembly_dict_path}")
-
-        raw = load_gzip_pickle(bioassembly_dict_path)
-
-        npz_path = bioassembly_dict_path.with_suffix("").with_suffix(".npz")
-        atom_array = load_atomarray_from_npz(npz_path)
-
+        path = Path(bioassembly_fpath)
+        structure = AnnotatedStructure.load(path)
+        pdb_id = pdb_id_override or path.stem
+        # TODO(Step B): Remove this. TokenArray is only constructed here because
+        # CropData still expects it. Once CropData accepts AnnotatedStructure,
+        # this call and BioassemblyData.token_array can be deleted.
+        token_array = AtomArrayTokenizer(structure.atoms).get_token_array()
         return BioassemblyData(
-            atom_array=atom_array,
-            token_array=raw["token_array"],
-            pdb_id=pdb_id_override or raw.get("pdb_id", ""),
-            sequences=raw.get("sequences", {}),
-            entity_poly_type=raw.get("entity_poly_type", {}),
-            resolution=raw.get("resolution", -1.0),
+            atom_array=structure.atoms,
+            token_array=token_array,
+            pdb_id=pdb_id,
+            sequences={},
+            entity_poly_type={},
+            resolution=structure.resolution,
         )
 
     @staticmethod
@@ -281,6 +270,10 @@ class DataPipeline(object):
     ) -> tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any], int]:
         """
         Crop data based on the crop size and reference chain indices.
+
+        .. deprecated::
+            This method still operates on (TokenArray, AtomArray) via bioassembly_dict.
+            It will be replaced by AnnotatedStructure.select_tokens() in Step B.
 
         Args:
             one_sample (pd.Series): A dict of one chain or interface from indices list.

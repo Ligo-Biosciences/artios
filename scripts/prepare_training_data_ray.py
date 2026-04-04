@@ -1,5 +1,9 @@
 """
-Generate bioassembly dictionaries and npz files for fast atom array loading at training time.
+Generate bioassembly .npz files and sample indices for training.
+
+Processes mmCIF files in parallel using Ray Data, writing results
+progressively to parquet (indices) and npz (structures) so that
+a crash doesn't lose completed work.
 
 Usage:
     python scripts/prepare_training_data_ray.py \
@@ -10,240 +14,148 @@ Usage:
       [--distillation] \
       [--n-cpu <n_cpu>]
 
-Arguments:
-    --input-path         Path to input directory containing .cif/.cif.gz files,
-                         OR a .txt file listing MMCIF file paths (required)
-    --output-csv         Path to output CSV file where sample indices will be saved (required)
-    --bio-output-dir     Directory where bioassembly outputs (.pkl.gz and .npz) will be saved (required)
-    --cluster-file       Path to cluster txt file (optional)
-    --distillation       Use the 'Distillation' dataset setting (optional flag)
-    --n-cpu             Number of worker processes for parallel processing (default: 1)
+Example:
+    python scripts/prepare_training_data_ray.py \
+        -i af3-dev/release_data/mmcif \
+        -o af3-dev/release_data/indices/mmcif_indices \
+        -b af3-dev/release_data/mmcif_bioassembly \
+        -c af3-dev/release_data/clusters-by-entity-40.txt \
+        -n 220
 
-python artios-all-atom/scripts/prepare_training_data_ray.py \
-    -i af3-dev/release_data/posebusters_mmcif \
-    -o af3-dev/release_data/indices/full_mmcif.csv \
-    -b af3-dev/release_data/posebusters_bioassembly \
-    -c af3-dev/release_data/clusters-by-entity-40.txt \
-    -n 220
-
-Note:
-    Ray might complain about not having enough object store memory. If you have sudo privileges,
-    the following command should fix it:
-        sudo mount -o remount,size=600G /dev/shm
 """
 
 import argparse
-import csv
+import os
 from pathlib import Path
-from typing import Optional
 
-import pandas as pd
 import psutil
 import ray
-from tqdm import tqdm
 
 from artios.data.data_pipeline import DataPipeline
 
 
-def gen_a_bioassembly_data(
-    mmcif: Path,
-    bioassembly_output_dir: Path,
-    cluster_file: Optional[Path],
-    distillation: bool = False,
-) -> Optional[list[dict]]:
-    """
-    Generates bioassembly data from an mmCIF file and saves it to the specified output directory.
-
-    Args:
-        mmcif (Path): Path to the mmCIF file.
-        bioassembly_output_dir (Path): Directory where the bioassembly data will be saved.
-        cluster_file (Optional[Path]): Path to the cluster file, if available.
-        distillation (bool, optional): Flag indicating whether to use the 'Distillation' setting. Defaults to False.
-
-    Returns:
-        Optional[list[dict]]: A list of sample indices if data is successfully generated, otherwise None.
-    """
-    dataset = "Distillation" if distillation else "WeightedPDB"
+def process_mmcif(row: dict) -> list[dict]:
+    """Process a single mmCIF file: generate npz and return sample indices."""
+    mmcif = row["path"]
+    bio_output_dir = row["bio_output_dir"]
+    cluster_file = row["cluster_file"]
+    dataset = row["dataset"]
 
     sample_indices_list, structure = DataPipeline.get_data_from_mmcif(
         mmcif, cluster_file, dataset
     )
 
-    if sample_indices_list and structure is not None:
-        pdb_id = sample_indices_list[0]["pdb_id"]
-        structure.save(bioassembly_output_dir / f"{pdb_id}.npz")
-        return sample_indices_list
+    if not sample_indices_list or structure is None:
+        return []
+
+    pdb_id = sample_indices_list[0]["pdb_id"]
+    structure.save(Path(bio_output_dir) / f"{pdb_id}.npz")
+    return sample_indices_list
 
 
-def gen_data_from_mmcifs(
-    mmcif_list: list[Path],
-    output_indices_csv: Path,
-    bioassembly_output_dir: Path,
-    cluster_file: Optional[Path],
-    distillation: bool = False,
-    num_workers: int = 1,
-    memory_fraction: float = 0.5,  # default to 50% of system memory
-):
-    """
-    Generates training data from a list of mmCIF files using Ray for parallel processing.
-    """
-    # Calculate object store memory as a fraction of system memory
-    total_memory = psutil.virtual_memory().total
-    available_memory = psutil.virtual_memory().available
-    object_store_memory = int(
-        min(total_memory * memory_fraction, available_memory * 0.8)
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate bioassembly npz files and sample indices for training"
     )
-
-    # Initialize Ray
-    ray.init(num_cpus=num_workers, object_store_memory=object_store_memory)
-
-    # Create a remote version of gen_a_bioassembly_data
-    @ray.remote
-    def gen_a_bioassembly_data_remote(
-        mmcif, bioassembly_output_dir, cluster_file, distillation
-    ):
-        return gen_a_bioassembly_data(
-            mmcif, bioassembly_output_dir, cluster_file, distillation
-        )
-
-    # Submit tasks to Ray
-    futures = [
-        gen_a_bioassembly_data_remote.remote(
-            mmcif, bioassembly_output_dir, cluster_file, distillation
-        )
-        for mmcif in mmcif_list
-    ]
-
-    # Get results with progress bar
-    all_sample_indices_list = []
-    pbar = tqdm(total=len(futures), desc="Processing mmCIF files")
-    while futures:
-        # num_returns=-1 gets ALL completed tasks, not just one
-        done_ids, futures = ray.wait(
-            futures, num_returns=min(len(futures), 1000), timeout=0.5
-        )
-        if done_ids:
-            results = ray.get(done_ids)
-            for result in results:
-                if result:
-                    all_sample_indices_list.append(result)
-            pbar.update(len(done_ids))
-    pbar.close()
-
-    # Shutdown Ray
-    ray.shutdown()
-
-    # Merge results
-    merged_results = []
-    for sample_indices_list in all_sample_indices_list:
-        merged_results.extend(sample_indices_list)
-
-    df = pd.DataFrame(merged_results)
-    df.to_csv(output_indices_csv, index=False, quoting=csv.QUOTE_NONNUMERIC)
-
-
-def run_gen_data(
-    input_path: Path,
-    output_indices_csv: Path,
-    bioassembly_output_dir: Path,
-    cluster_file: Optional[Path],
-    distillation: bool = False,
-    num_workers: int = 1,
-):
-    """
-    Generates data from MMCIF files and saves the output to specified locations.
-
-    Args:
-        input_path (str): Path to the input directory containing MMCIF files or a text file listing MMCIF file paths.
-        output_indices_csv (str): Path to the output CSV file where indices will be saved.
-        bioassembly_output_dir (str): Directory where bioassembly outputs will be saved.
-        cluster_file (Optional[str]): Path to the cluster file, if any.
-        distillation (bool, optional): Flag indicating whether to use the 'Distillation' setting. Defaults to False.
-        num_workers (int, optional): Number of worker processes to use. Defaults to 1.
-
-    Raises:
-        NotImplementedError: If the input path is not a directory or a text file.
-    """
-
-    input_path = Path(input_path)
-    bioassembly_output_dir = Path(bioassembly_output_dir)
-    output_indices_csv = Path(output_indices_csv)
-
-    # create directory for output
-    output_indices_csv.parent.mkdir(parents=True, exist_ok=True)
-    bioassembly_output_dir.mkdir(parents=True, exist_ok=True)
-
-    if input_path.is_dir():
-        mmcif_list = list(input_path.glob("*.cif")) + list(input_path.glob("*.cif.gz"))
-    elif input_path.suffix == ".txt":
-        with open(input_path) as f:
-            mmcif_list = [i.strip() for i in f.readlines()]
-    else:
-        raise NotImplementedError(f"Unsupported input path: {input_path}")
-
-    gen_data_from_mmcifs(
-        mmcif_list,
-        output_indices_csv,
-        bioassembly_output_dir,
-        cluster_file,
-        distillation,
-        num_workers,
-    )
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
     parser.add_argument(
         "-i",
         "--input_path",
         type=Path,
-        default=None,
-        help="Path to the input directory containing MMCIF files or a .txt file listing MMCIF file paths.",
+        required=True,
+        help="Directory containing .cif/.cif.gz files, or a .txt file listing paths.",
     )
     parser.add_argument(
         "-o",
         "--output_csv",
-        type=Path,
-        default=None,
-        help="Path to the output CSV file where indices will be saved.",
+        type=str,
+        required=True,
+        help="Output CSV path for sample indices.",
     )
     parser.add_argument(
         "-b",
         "--bio_output_dir",
         type=Path,
-        default=None,
-        help="Directory where bioassembly outputs will be saved.",
+        required=True,
+        help="Directory where bioassembly .npz files will be saved.",
     )
     parser.add_argument(
         "-c",
         "--cluster_file",
         type=Path,
         default=None,
-        help="Path to the cluster txt file, if any",
+        help="Path to the cluster txt file.",
     )
-
     parser.add_argument(
         "-d",
         "--distillation",
         action="store_true",
-        help="Whether to use the 'Distillation' setting",
+        help="Use the 'Distillation' dataset setting.",
     )
-
     parser.add_argument(
         "-n",
         "--n_cpu",
         type=int,
-        default=1,
-        help="Number of worker processes to use. Defaults to 1.",
+        default=None,
+        help="Number of CPUs for Ray (defaults to all available).",
     )
-
     args = parser.parse_args()
 
-    run_gen_data(
-        input_path=args.input_path,
-        output_indices_csv=args.output_csv,
-        bioassembly_output_dir=args.bio_output_dir,
-        cluster_file=args.cluster_file,
-        distillation=args.distillation,
-        num_workers=args.n_cpu,
-    )
+    # Resolve input files
+    input_path = Path(args.input_path)
+    if input_path.is_dir():
+        mmcif_list = sorted(
+            list(input_path.glob("*.cif")) + list(input_path.glob("*.cif.gz"))
+        )
+    elif input_path.suffix == ".txt":
+        with open(input_path) as f:
+            mmcif_list = [line.strip() for line in f if line.strip()]
+    else:
+        raise ValueError(f"Unsupported input path: {input_path}")
+
+    print(f"Found {len(mmcif_list)} mmCIF files")
+
+    # Create output dirs
+    args.bio_output_dir.mkdir(parents=True, exist_ok=True)
+    Path(args.output_csv).parent.mkdir(parents=True, exist_ok=True)
+
+    # Init Ray
+    num_cpus = args.n_cpu or os.cpu_count()
+    total_memory = psutil.virtual_memory().total
+    available_memory = psutil.virtual_memory().available
+    object_store_memory = int(min(total_memory * 0.5, available_memory * 0.8))
+    ray.init(num_cpus=num_cpus, object_store_memory=object_store_memory)
+
+    dataset = "Distillation" if args.distillation else "WeightedPDB"
+    cluster_file = str(args.cluster_file) if args.cluster_file else None
+
+    items = [
+        {
+            "path": str(p),
+            "bio_output_dir": str(args.bio_output_dir),
+            "cluster_file": cluster_file,
+            "dataset": dataset,
+        }
+        for p in mmcif_list
+    ]
+
+    ds = ray.data.from_items(items)
+    ds = ds.repartition(num_cpus * 4)
+    ds = ds.flat_map(process_mmcif, concurrency=num_cpus)
+
+    print(f"Processing {len(items)} structures...")
+    parquet_dir = args.output_csv + "_parquet"
+    ds.write_parquet(parquet_dir)
+    ray.shutdown()
+
+    print("Converting parquet to CSV...")
+    import csv
+
+    import pandas as pd
+
+    df = pd.read_parquet(parquet_dir)
+    df.to_csv(args.output_csv, index=False, quoting=csv.QUOTE_NONNUMERIC)
+    print(f"Done! {len(df)} indices written to {args.output_csv}")
+
+
+if __name__ == "__main__":
+    main()

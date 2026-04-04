@@ -150,7 +150,7 @@ class ContextGenerator:
             TokenContext
         """
         centre = self.centre_atom_indices
-        restype = self.s.cano_seq_resname[centre]
+        restype = self.s.derived.cano_seq_resname[centre]
         restype_onehot = self.restype_onehot_encoded(restype)
 
         return TokenContext(
@@ -300,7 +300,9 @@ class ContextGenerator:
         """
         return IndexContext(
             atom_to_token_idx=self.atom_to_token_idx,
-            atom_to_tokatom_idx=torch.from_numpy(self.s.tokatom_idx.astype(np.int64)),
+            atom_to_tokatom_idx=torch.from_numpy(
+                self.s.derived.tokatom_idx.astype(np.int64)
+            ),
             atom_asym_id=torch.from_numpy(
                 self.s.entity_ids.asym_id_int.astype(np.int64)
             ),
@@ -338,14 +340,16 @@ class ContextGenerator:
         Returns:
             MaskContext: Atom-level masks for loss computation and attention.
         """
-        atom_is_resolved = self.s.is_resolved.astype(int)
-        centre_is_resolved = self.s.token_is_resolved.astype(int)
+        atom_is_resolved = self.s.training.is_resolved.astype(int)
+        centre_is_resolved = self.s.training.is_resolved[
+            self.centre_atom_indices
+        ].astype(int)
         atom_in_resolved_token = centre_is_resolved[self.atom_to_token_idx]
 
         return MaskContext(
             centre_atom_mask=torch.from_numpy(self.s.grouping.centre_atom_mask),
             atom_mask=torch.ones(len(self.s.atoms), dtype=torch.bool),
-            is_resolved=torch.from_numpy(self.s.is_resolved.astype(bool)),
+            is_resolved=torch.from_numpy(self.s.training.is_resolved.astype(bool)),
             centre_atom_is_resolved=torch.from_numpy(centre_is_resolved.astype(bool)),
             backbone_mask=torch.Tensor(self.backbone_atoms_and_mask[1]).bool(),
             atom_loss_mask=torch.from_numpy(
@@ -373,11 +377,13 @@ class ContextGenerator:
             is_motif = np.zeros(n_atoms, dtype=int)
             is_motif_related = np.zeros(n_atoms, dtype=int)
 
-        token_resolved = self.s.token_is_resolved  # [N_token]
+        token_resolved = self.s.training.is_resolved[
+            self.centre_atom_indices
+        ]  # [N_token]
         is_motif_token = is_motif[centre]  # [N_token]
         is_motif_related_token = is_motif_related[centre]  # [N_token]
 
-        restype = self.s.cano_seq_resname[centre]
+        restype = self.s.derived.cano_seq_resname[centre]
         restype_onehot = self.restype_onehot_encoded(restype)
 
         # TODO: this part is a bit ugly with the reshapes etc.
@@ -428,7 +434,9 @@ class ContextGenerator:
             token_array=None,
             pdb_id=self.pdb_id,
             bioassembly_dict_fpath=self.bioassembly_dict_fpath,
-            n_asym=len(np.unique(self.s.token_chain_ids)),
+            n_asym=len(
+                np.unique(self.s.entity_ids.asym_id_int[self.centre_atom_indices])
+            ),
             n_token=self.s.grouping.n_tokens,
             n_atom=len(self.s.atoms),
             original_motif_mapping=self.original_motif_mapping,
@@ -675,7 +683,7 @@ def _extract_backbone_atoms(
 
         # Ligands or non-standard residues: use centre atom only (no backbone)
         if mol_type == "ligand" or not is_standard:
-            if structure.is_resolved[centre_idx]:
+            if structure.training.is_resolved[centre_idx]:
                 backbone_coords[token_idx, 0] = atoms.coord[centre_idx]
                 backbone_mask[token_idx, 0] = 1.0
             continue
@@ -694,7 +702,7 @@ def _extract_backbone_atoms(
             global_idx = name_to_global.get(atom_name)
             if global_idx is not None:
                 backbone_coords[token_idx, bb_idx] = atoms.coord[global_idx]
-                resolved = structure.is_resolved[global_idx]
+                resolved = structure.training.is_resolved[global_idx]
                 backbone_mask[token_idx, bb_idx] = resolved
                 if resolved:
                     atom_coords[atom_name] = atoms.coord[global_idx]

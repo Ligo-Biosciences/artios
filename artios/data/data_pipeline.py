@@ -14,46 +14,17 @@
 
 import logging
 import os
-from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Union
 
 import biotite.structure.io as strucio
 import numpy as np
 import pandas as pd
 from biotite.structure import AtomArray
 
-from artios.data.msa_featurizer import MSAFeaturizer
 from artios.data.parser import DistillationMMCIFParser, MMCIFParser
 from artios.data.structure import AnnotatedStructure
-from artios.data.tokenizer import AtomArrayTokenizer, TokenArray
-from artios.utils.cropping import CropData
-
-
-@dataclass(frozen=True)
-class BioassemblyData:
-    """Obsolete — replaced by ``AnnotatedStructure``.
-
-    Only survives because ``CropData`` and ``dataset.py`` still expect
-    a ``token_array`` field. Will be deleted in Step B when CropData
-    accepts ``AnnotatedStructure`` directly.
-    """
-
-    atom_array: AtomArray
-    token_array: TokenArray
-    pdb_id: str
-    sequences: dict[str, str]
-    entity_poly_type: dict[str, str]
-    resolution: float = -1.0
-
-    def __post_init__(self):
-        n_tokens = int(self.atom_array.centre_atom_mask.sum())
-        if len(self.token_array) != n_tokens:
-            raise ValueError(
-                f"{self.pdb_id}: token_array length {len(self.token_array)} "
-                f"!= centre_atom_mask count {n_tokens}"
-            )
+from artios.utils import cropping_v2
 
 
 class DataPipeline(object):
@@ -111,284 +82,112 @@ class DataPipeline(object):
             return [], None
 
     @staticmethod
-    def get_label_entity_id_to_asym_id_int(atom_array: AtomArray) -> dict[str, int]:
-        """
-        Get a dictionary that associates each label_entity_id with its corresponding asym_id_int.
-
-        Args:
-            atom_array (AtomArray): AtomArray object
-
-        Returns:
-            dict[str, int]: label_entity_id to its asym_id_int
-        """
-        entity_to_asym_id = defaultdict(set)
-        for atom in atom_array:
-            entity_id = atom.label_entity_id
-            entity_to_asym_id[entity_id].add(atom.asym_id_int)
-        return entity_to_asym_id
-
-    @staticmethod
     def get_data_bioassembly(
         bioassembly_fpath: Union[str, Path],
-        pdb_id_override: str | None = None,
-    ) -> BioassemblyData:
+    ) -> AnnotatedStructure:
         """Load a bioassembly from a single ``.npz`` file.
-
-        The file is saved by ``AnnotatedStructure.save()``. TokenArray is
-        constructed on the fly from the atom-level annotations.
 
         Args:
             bioassembly_fpath: Path to the ``.npz`` file.
-            pdb_id_override: If set, use this instead of deriving from filename.
 
         Returns:
-            BioassemblyData: Frozen container with atom_array, token_array, and metadata.
+            AnnotatedStructure loaded from disk.
         """
-        path = Path(bioassembly_fpath)
-        structure = AnnotatedStructure.load(path)
-        pdb_id = pdb_id_override or path.stem
-        # TODO(Step B): Remove this. TokenArray is only constructed here because
-        # CropData still expects it. Once CropData accepts AnnotatedStructure,
-        # this call and BioassemblyData.token_array can be deleted.
-        token_array = AtomArrayTokenizer(structure.atoms).get_token_array()
-        return BioassemblyData(
-            atom_array=structure.atoms,
-            token_array=token_array,
-            pdb_id=pdb_id,
-            sequences={},
-            entity_poly_type={},
-            resolution=structure.resolution,
-        )
+        return AnnotatedStructure.load(Path(bioassembly_fpath))
 
     @staticmethod
     def _map_ref_chain(
-        one_sample: pd.Series, bioassembly_dict: dict[str, Any]
+        one_sample: pd.Series,
+        structure: AnnotatedStructure,
+        pdb_id: str,
     ) -> list[int]:
-        """
-        Map the chain or interface chain_x_id to the reference chain asym_id.
+        """Map the chain or interface chain_x_id to the reference chain asym_id.
 
         Args:
-            one_sample (pd.Series): A dict of one chain or interface from indices list.
-            bioassembly_dict (dict[str, Any]): The bioassembly dict with sequence, atom_array and token_array.
+            one_sample: A row from the indices CSV.
+            structure: The annotated structure.
+            pdb_id: PDB identifier for error messages.
 
         Returns:
-            list[int]: A list of asym_id_lnt of the chosen chain or interface, length 1 or 2.
+            List of asym_id_int values for the reference chain(s), length 1 or 2.
         """
-        atom_array = bioassembly_dict["atom_array"]
+        chain_id = structure.atoms.chain_id
+        asym_id_int = structure.entity_ids.asym_id_int
         ref_chain_indices = []
         for chain_id_field in ["chain_1_id", "chain_2_id"]:
-            chain_id = one_sample[chain_id_field]
+            cid = one_sample[chain_id_field]
             assert np.isin(
-                chain_id, np.unique(atom_array.chain_id)
-            ), f"PDB {bioassembly_dict['pdb_id']} {chain_id_field}:{chain_id} not in atom_array"
-            chain_asym_id = atom_array[atom_array.chain_id == chain_id].asym_id_int[0]
-            ref_chain_indices.append(chain_asym_id)
+                cid, np.unique(chain_id)
+            ), f"PDB {pdb_id} {chain_id_field}:{cid} not in atom_array"
+            ref_chain_indices.append(int(asym_id_int[chain_id == cid][0]))
             if one_sample["type"] == "chain":
                 break
         return ref_chain_indices
 
     @staticmethod
-    def get_msa_raw_features(
-        bioassembly_dict: dict[str, Any],
-        selected_indices: np.ndarray | None,
-        msa_featurizer: Optional[MSAFeaturizer],
-    ) -> Optional[dict[str, np.ndarray]]:
-        """
-        Get tokenized MSA features of the bioassembly
-
-        Args:
-            bioassembly_dict (Mapping[str, Any]): The bioassembly dict with sequence, atom_array and token_array.
-            selected_indices (torch.Tensor): Cropped token indices.
-            msa_featurizer (MSAFeaturizer): MSAFeaturizer instance.
-
-        Returns:
-            Optional[dict[str, np.ndarray]]: The tokenized MSA features of the bioassembly.
-        """
-        if msa_featurizer is None:
-            return None
-
-        entity_to_asym_id_int = dict(
-            DataPipeline.get_label_entity_id_to_asym_id_int(
-                bioassembly_dict["atom_array"]
-            )
-        )
-
-        msa_feats = msa_featurizer(
-            bioassembly_dict=bioassembly_dict,
-            selected_indices=selected_indices,
-            entity_to_asym_id_int=entity_to_asym_id_int,
-        )
-
-        return msa_feats
-
-    @staticmethod
-    def get_template_raw_features(
-        bioassembly_dict: dict[str, Any],
-        selected_indices: np.ndarray | None,
-        template_featurizer=None,
-    ) -> Optional[dict[str, np.ndarray]]:
-        """
-        Get tokenized template features of the bioassembly.
-
-        Args:
-            bioassembly_dict (dict[str, Any]): The bioassembly dict with sequence, atom_array and token_array.
-            selected_indices (np.ndarray): Cropped token indices.
-            template_featurizer (None): Placeholder for the template featurizer.
-
-        Returns:
-            Optional[dict[str, np.ndarray]]: The tokenized template features of the bioassembly,
-                or None if the template featurizer is not provided.
-        """
-        if template_featurizer is None:
-            return None
-
-        entity_to_asym_id_int = dict(
-            DataPipeline.get_label_entity_id_to_asym_id_int(
-                bioassembly_dict["atom_array"]
-            )
-        )
-
-        template_feats = template_featurizer(
-            bioassembly_dict=bioassembly_dict,
-            selected_indices=selected_indices,
-            entity_to_asym_id_int=entity_to_asym_id_int,
-        )
-        return template_feats
-
-    @staticmethod
     def crop(
         one_sample: pd.Series,
-        bioassembly_dict: dict[str, Any],
+        structure: AnnotatedStructure,
+        pdb_id: str,
         crop_size: int,
-        msa_featurizer: Optional[MSAFeaturizer],
-        template_featurizer: None,
         method_weights: list[float] = [0.0, 0.1, 0.4, 0.5],
         contiguous_crop_complete_lig: bool = False,
         spatial_crop_complete_lig: bool = False,
         drop_last: bool = False,
         remove_metal: bool = False,
-    ) -> tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any], int]:
-        """
-        Crop data based on the crop size and reference chain indices.
-
-        .. deprecated::
-            This method still operates on (TokenArray, AtomArray) via bioassembly_dict.
-            It will be replaced by AnnotatedStructure.select_tokens() in Step B.
+    ) -> tuple[str, AnnotatedStructure]:
+        """Crop structure to *crop_size* tokens.
 
         Args:
-            one_sample (pd.Series): A dict of one chain or interface from indices list.
-            bioassembly_dict (dict[str, Any]): A dict of bioassembly dict with sequence, atom_array and token_array.
-            crop_size (int): the crop size.
-            msa_featurizer (MSAFeaturizer): Default to an empty replacement for msa featurizer.
-            template_featurizer (None): Placeholder for the template featurizer.
-            method_weights (list[float]): The weights corresponding to these three cropping methods:
-                                          ["ContiguousCropping", "SpatialCropping", "SpatialInterfaceCropping", "PocketCropping"].
-            contiguous_crop_complete_lig (bool): Whether to crop the complete ligand in ContiguousCropping method.
-            spatial_crop_complete_lig (bool): Whether to crop the complete ligand in SpatialCropping method.
-            drop_last (bool): Whether to drop the last fragment in ContiguousCropping.
-            remove_metal (bool): Whether to remove metal atoms from the crop.
+            one_sample: A row from the indices CSV with chain_1_id etc.
+            structure: The annotated structure to crop.
+            pdb_id: PDB identifier for error messages.
+            crop_size: Maximum number of tokens to keep.
+            method_weights: Weights for [contiguous, spatial, spatial_interface, pocket].
+            contiguous_crop_complete_lig: Preserve complete molecules in contiguous crop.
+            spatial_crop_complete_lig: Drop incomplete molecules in spatial crops.
+            drop_last: Drop last incomplete molecule in contiguous crop.
+            remove_metal: Skip metal/ion chains in contiguous crop.
 
         Returns:
-            tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any]]:
-                crop_method (str): The crop method.
-                cropped_token_array (TokenArray): TokenArray after cropping.
-                cropped_atom_array (AtomArray): AtomArray after cropping.
-                cropped_msa_features (dict[str, Any]): The cropped msa features.
-                cropped_template_features (dict[str, Any]): The cropped template features.
+            (crop_method, cropped_structure).
         """
         if crop_size <= 0:
-            selected_indices = None
-            # Prepare msa
-            msa_features = DataPipeline.get_msa_raw_features(
-                bioassembly_dict=bioassembly_dict,
-                selected_indices=selected_indices,
-                msa_featurizer=msa_featurizer,
-            )
-            # Prepare template
-            template_features = DataPipeline.get_template_raw_features(
-                bioassembly_dict=bioassembly_dict,
-                selected_indices=selected_indices,
-                template_featurizer=template_featurizer,
-            )
-            return (
-                "no_crop",
-                bioassembly_dict["token_array"],
-                bioassembly_dict["atom_array"],
-                msa_features or {},
-                template_features or {},
-                -1,
-            )
+            return ("no_crop", structure)
 
         ref_chain_indices = DataPipeline._map_ref_chain(
-            one_sample=one_sample, bioassembly_dict=bioassembly_dict
+            one_sample,
+            structure,
+            pdb_id,
         )
 
-        crop = CropData(
+        crop_method, token_indices = cropping_v2.crop(
+            structure=structure,
             crop_size=crop_size,
-            ref_chain_indices=ref_chain_indices,
-            token_array=bioassembly_dict["token_array"],
-            atom_array=bioassembly_dict["atom_array"],
+            ref_chain_ids=ref_chain_indices,
             method_weights=method_weights,
-            contiguous_crop_complete_lig=contiguous_crop_complete_lig,
-            spatial_crop_complete_lig=spatial_crop_complete_lig,
+            contiguous_complete_molecules=contiguous_crop_complete_lig,
+            spatial_complete_molecules=spatial_crop_complete_lig,
             drop_last=drop_last,
             remove_metal=remove_metal,
         )
-        # Get crop method
-        crop_method = crop.random_crop_method()
-        # Get crop indices based crop method
-        selected_indices, reference_token_index = crop.get_crop_indices(
-            crop_method=crop_method
-        )
-        # Prepare msa
-        msa_features = DataPipeline.get_msa_raw_features(
-            bioassembly_dict=bioassembly_dict,
-            selected_indices=selected_indices,
-            msa_featurizer=msa_featurizer,
-        )
-        # Prepare template
-        template_features = DataPipeline.get_template_raw_features(
-            bioassembly_dict=bioassembly_dict,
-            selected_indices=selected_indices,
-            template_featurizer=template_featurizer,
-        )
 
-        (
-            cropped_token_array,
-            cropped_atom_array,
-            cropped_msa_features,
-            cropped_template_features,
-        ) = crop.crop_by_indices(
-            selected_token_indices=selected_indices,
-            msa_features=msa_features,
-            template_features=template_features,
-        )
+        cropped = structure.select_tokens(token_indices)
 
         if crop_method == "ContiguousCropping":
-            resolved = cropped_atom_array.is_resolved.sum()
-            # The criterion of “more than 4 atoms” is chosen arbitrarily.
+            resolved = cropped.training.is_resolved.sum()
             assert resolved > 4, f"{resolved=} <= 4 after ContiguousCropping"
 
-        assert (
-            len(cropped_token_array) >= 10
-        ), f"Only {len(cropped_token_array)} tokens after cropping. Trying again..."
+        n_tokens = cropped.grouping.n_tokens
+        assert n_tokens >= 10, f"Only {n_tokens} tokens after cropping. Trying again..."
 
-        non_lig_attrs = ["is_protein", "is_rna", "is_dna"]
-        num_non_lig_atoms = np.array(
-            [getattr(cropped_atom_array, x) for x in non_lig_attrs]
-        ).sum()
+        tm = cropped.type_masks
+        num_non_lig = int(tm.is_protein.sum() + tm.is_rna.sum() + tm.is_dna.sum())
         assert (
-            num_non_lig_atoms >= 25
-        ), f"Only {num_non_lig_atoms} non ligand atoms in structure. Trying again..."
+            num_non_lig >= 25
+        ), f"Only {num_non_lig} non-ligand atoms in structure. Trying again..."
 
-        return (
-            crop_method,
-            cropped_token_array,
-            cropped_atom_array,
-            cropped_msa_features,
-            cropped_template_features,
-            reference_token_index,
-        )
+        return (crop_method, cropped)
 
     @staticmethod
     def save_atoms_to_cif(

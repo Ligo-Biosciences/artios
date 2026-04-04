@@ -105,8 +105,8 @@ class TestAnnotatedStructure:
         assert len(structure.type_masks.mol_type) == n
         assert structure.reference.ref_pos.shape == (n, 3)
         assert len(structure.grouping.atom_token_index) == n
-        assert len(structure.cano_seq_resname) == n
-        assert len(structure.tokatom_idx) == n
+        assert len(structure.derived.cano_seq_resname) == n
+        assert len(structure.derived.tokatom_idx) == n
 
     def test_resolution_preserved(self, structure):
         assert structure.resolution == pytest.approx(1.3)
@@ -150,18 +150,20 @@ class TestTokenLevelViews:
         assert coords.shape == (structure.grouping.n_tokens, 3)
 
     def test_token_chain_ids_shape(self, structure):
-        chain_ids = structure.token_chain_ids
+        centre = structure.centre_atom_indices
+        chain_ids = structure.entity_ids.asym_id_int[centre]
         assert len(chain_ids) == structure.grouping.n_tokens
 
     def test_token_is_ligand_consistent(self, structure):
         """Token-level ligand mask should reflect atom-level."""
-        token_lig = structure.token_is_ligand
-        # Last 13 tokens are ligand (per-atom), rest are protein
+        centre = structure.centre_atom_indices
+        token_lig = structure.type_masks.is_ligand[centre]
         assert token_lig[-1] == 1
         assert token_lig[0] == 0
 
     def test_token_ref_space_uid_shape(self, structure):
-        uids = structure.token_ref_space_uid
+        centre = structure.centre_atom_indices
+        uids = structure.reference.ref_space_uid[centre]
         assert len(uids) == structure.grouping.n_tokens
 
 
@@ -212,7 +214,9 @@ class TestSelection:
 
     def test_select_tokens_ligand_only(self, structure):
         """Selecting only ligand tokens should give per-atom tokens."""
-        lig_mask = structure.token_is_ligand.astype(bool)
+        lig_mask = structure.type_masks.is_ligand[structure.centre_atom_indices].astype(
+            bool
+        )
         lig_token_indices = np.where(lig_mask)[0]
         cropped = structure.select_tokens(lig_token_indices)
 
@@ -313,8 +317,8 @@ class TestAnnotate:
 
     def test_same_cano_seq_resname(self, annotated_from_cif, annotated_from_npz):
         np.testing.assert_array_equal(
-            annotated_from_cif.cano_seq_resname,
-            annotated_from_npz.cano_seq_resname,
+            annotated_from_cif.derived.cano_seq_resname,
+            annotated_from_npz.derived.cano_seq_resname,
         )
 
     def test_same_resolution(self, annotated_from_cif, annotated_from_npz):

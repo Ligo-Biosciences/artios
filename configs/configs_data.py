@@ -67,7 +67,6 @@ default_weighted_pdb_configs = {
     "shuffle_mols": GlobalConfigValue("train_shuffle_mols"),
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
     "filter_unique_fragment_prob": 0.0,
-    "filter_unique_domain_prob": 0.0,
 }
 
 default_distillation_configs = {
@@ -91,7 +90,6 @@ default_distillation_configs = {
     "shuffle_mols": GlobalConfigValue("train_shuffle_mols"),
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
     "filter_unique_fragment_prob": 1.0,
-    "filter_unique_domain_prob": 0.0,
     "require_pocket_in_fragment": True,
     "max_n_token": 1500,
 }
@@ -189,7 +187,6 @@ data_configs = {
     "train_with_binding_target": False,
     "binding_target_train_rate": 0.0,
     "filter_unique_fragment_prob": 1.0,
-    "filter_unique_domain_prob": 0.0,
     "motif_training": {
         "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,

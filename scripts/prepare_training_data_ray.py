@@ -43,7 +43,6 @@ import ray
 from tqdm import tqdm
 
 from artios.data.data_pipeline import DataPipeline
-from artios.utils.file_io import dump_atomarray_to_npz, dump_gzip_pickle
 
 
 def gen_a_bioassembly_data(
@@ -64,21 +63,15 @@ def gen_a_bioassembly_data(
     Returns:
         Optional[list[dict]]: A list of sample indices if data is successfully generated, otherwise None.
     """
-    if distillation:
-        dataset = "Distillation"
-    else:
-        dataset = "WeightedPDB"
+    dataset = "Distillation" if distillation else "WeightedPDB"
 
-    sample_indices_list, bioassembly_dict = DataPipeline.get_data_from_mmcif(
+    sample_indices_list, structure = DataPipeline.get_data_from_mmcif(
         mmcif, cluster_file, dataset
     )
 
-    if sample_indices_list and bioassembly_dict:
-        pdb_id = bioassembly_dict["pdb_id"]
-        # save to output dir
-        atom_array = bioassembly_dict.pop("atom_array")
-        dump_gzip_pickle(bioassembly_dict, bioassembly_output_dir / f"{pdb_id}.pkl.gz")
-        dump_atomarray_to_npz(atom_array, bioassembly_output_dir / f"{pdb_id}.npz")
+    if sample_indices_list and structure is not None:
+        pdb_id = sample_indices_list[0]["pdb_id"]
+        structure.save(bioassembly_output_dir / f"{pdb_id}.npz")
         return sample_indices_list
 
 

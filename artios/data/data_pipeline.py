@@ -185,7 +185,7 @@ class DataPipeline(object):
         num_non_lig = int(tm.is_protein.sum() + tm.is_rna.sum() + tm.is_dna.sum())
         assert (
             num_non_lig >= 25
-        ), f"Only {num_non_lig} non-ligand atoms in structure. Trying again..."
+        ), f"Only {num_non_lig} non-ligand atoms in structure after cropping with {crop_method}. Trying again..."
 
         return (crop_method, cropped)
 

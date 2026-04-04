@@ -37,6 +37,7 @@ from artios.data.featurizer import ContextGenerator
 from artios.data.filter import Filter
 from artios.data.motif_maker import MotifMaker
 from artios.data.msa_featurizer import MSAFeaturizer
+from artios.data.structure import AnnotatedStructure
 from artios.data.tokenizer import AtomArrayTokenizer, TokenArray
 from artios.utils.cropping import CropData
 from artios.utils.file_io import read_indices_csv
@@ -660,14 +661,13 @@ class BaseSingleDataset(Dataset):
                 "is_motif_related", np.zeros(len(cropped_atom_array), dtype=int)
             )
 
-        cropped_token_array = AtomArrayTokenizer(cropped_atom_array).get_token_array()
         timings["motif"] = time.time() - tmotif
 
         # --- Featurize ---
         t4 = time.time()
+        structure = AnnotatedStructure.from_atom_array(cropped_atom_array)
         context = ContextGenerator(
-            cropped_token_array=cropped_token_array,
-            cropped_atom_array=cropped_atom_array,
+            structure,
             ref_pos_augment=self.ref_pos_augment,
             lig_atom_rename=self.lig_atom_rename,
             bioassembly_dict_fpath=bioassembly_dict_fpath,
@@ -988,9 +988,9 @@ class BaseSingleDataset(Dataset):
         Raises:
             ValueError: If the ligand cannot be found in the data point.
         """
+        structure = AnnotatedStructure.from_atom_array(atom_array)
         context = ContextGenerator(
-            cropped_token_array=token_array,
-            cropped_atom_array=atom_array,
+            structure,
             ref_pos_augment=self.ref_pos_augment,
             lig_atom_rename=self.lig_atom_rename,
             bioassembly_dict_fpath=bioassembly_dict_fpath,

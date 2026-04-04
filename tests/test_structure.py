@@ -299,3 +299,85 @@ class TestAnnotate:
         assert annotated_from_cif.resolution == pytest.approx(
             annotated_from_npz.resolution
         )
+
+
+# ---------------------------------------------------------------------------
+# ContextGenerator with AnnotatedStructure matches legacy (TokenArray, AtomArray)
+# ---------------------------------------------------------------------------
+
+
+class TestContextGenerator:
+    """Verify ContextGenerator(AnnotatedStructure) produces identical output to
+    what the old (TokenArray, AtomArray) interface would produce."""
+
+    @pytest.fixture
+    def full_context(self, structure):
+        from artios.data.featurizer import ContextGenerator
+
+        return ContextGenerator(
+            structure, pdb_id="5s8i", ref_pos_augment=False
+        ).get_full_context(include_arrays=False)
+
+    def test_token_context_shapes(self, full_context):
+        assert full_context.token.token_index.shape == (141,)
+        assert full_context.token.restype.shape == (141, 32)
+
+    def test_atom_to_token_idx_matches_legacy(self, full_context, legacy_data):
+        """atom_to_token_idx must match what legacy Token.atom_indices would produce."""
+        import torch
+
+        legacy_ta = legacy_data["token_array"]
+        legacy_a2t = {}
+        for idx, token in enumerate(legacy_ta.tokens):
+            for atom_idx in token.atom_indices:
+                legacy_a2t[atom_idx] = idx
+        expected = torch.tensor(
+            [legacy_a2t[i] for i in range(len(legacy_a2t))], dtype=torch.long
+        )
+        assert torch.equal(full_context.index.atom_to_token_idx, expected)
+
+    def test_centre_coordinate_matches_legacy(
+        self, full_context, atom_array, legacy_data
+    ):
+        """Centre coordinates must match legacy token centres."""
+        import torch
+
+        legacy_centres = np.array(
+            legacy_data["token_array"].get_annotation("centre_atom_index")
+        )
+        expected = torch.from_numpy(atom_array.coord[legacy_centres].astype(np.float32))
+        assert torch.allclose(full_context.coordinate.centre_coordinate, expected)
+
+    def test_entity_masks_match_legacy(self, full_context, atom_array):
+        import torch
+
+        assert torch.equal(
+            full_context.entity.is_protein,
+            torch.from_numpy(atom_array.is_protein.astype(bool)),
+        )
+        assert torch.equal(
+            full_context.entity.is_ligand,
+            torch.from_numpy(atom_array.is_ligand.astype(bool)),
+        )
+
+    def test_centre_atom_mask_matches_legacy(self, full_context, atom_array):
+        import torch
+
+        expected = torch.from_numpy(atom_array.centre_atom_mask.astype(bool))
+        assert torch.equal(full_context.mask.centre_atom_mask, expected)
+
+    def test_backbone_shape(self, full_context):
+        assert full_context.coordinate.backbone_coordinate.shape == (141, 5, 3)
+        assert full_context.mask.backbone_mask.shape == (141, 5)
+
+    def test_resolution_is_scalar(self, full_context):
+        assert full_context.coordinate.resolution == pytest.approx(1.3)
+
+    def test_motif_zero_when_absent(self, full_context):
+        assert not full_context.motif.is_motif.any()
+        assert not full_context.motif.is_motif_related.any()
+
+    def test_ref_conformer_shapes(self, full_context):
+        assert full_context.reference.ref_pos.shape == (1076, 3)
+        assert full_context.reference.ref_element.shape == (1076, 128)
+        assert full_context.reference.ref_atom_name_chars.shape == (1076, 4, 64)

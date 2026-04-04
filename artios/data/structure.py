@@ -409,14 +409,22 @@ class AnnotatedStructure:
     def from_atom_array(
         cls,
         atom_array: AtomArray,
-        resolution: float = -1.0,
+        resolution: float | None = None,
     ) -> AnnotatedStructure:
         """Construct from a legacy annotated AtomArray.
 
         Reads stringly-typed annotations set by the current pipeline and wraps
         them in typed dataclasses. Used for migration and testing.
+
+        If ``resolution`` is not provided, reads it from the atom_array's
+        ``resolution`` annotation (a per-atom array with a single repeated value).
+        Falls back to -1.0 if the annotation is missing.
         """
         n = len(atom_array)
+
+        if resolution is None:
+            raw_res = getattr(atom_array, "resolution", None)
+            resolution = float(raw_res[0]) if raw_res is not None else -1.0
 
         entity_ids = EntityIds(
             asym_id_int=atom_array.asym_id_int.copy(),

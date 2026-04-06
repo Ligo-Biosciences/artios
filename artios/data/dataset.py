@@ -28,6 +28,7 @@ from biotite.structure.io import save_structure
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import Dataset
 
+from artios.common import ccd_sets
 from artios.common.constants import BACKBONE_DEFS, EvaluationChainInterface
 from artios.data import annotation
 from artios.data.data_pipeline import DataPipeline
@@ -128,6 +129,7 @@ class BaseSingleDataset(Dataset):
         )
         self.require_pocket_in_fragment = kwargs.get("require_pocket_in_fragment", True)
         self.remove_excluded_ligands = kwargs.get("remove_excluded_ligands", True)
+        self.remove_glycans = kwargs.get("remove_glycans", False)
 
         self.error_dir = kwargs.get("error_dir", None)
         if self.error_dir is not None:
@@ -494,6 +496,11 @@ class BaseSingleDataset(Dataset):
         )
         timings["crop"] = time.time() - t2
         del structure  # free pre-crop memory
+
+        # --- De-glycosylate (post-crop to avoid breaking ref chain asserts) ---
+        if self.remove_glycans:
+            keep = ~np.isin(cropped_structure.atoms.res_name, list(ccd_sets.GLYCANS))
+            cropped_structure = cropped_structure.select_atoms(keep)
 
         # Bridge: convert back to fully-annotated AtomArray for post-crop ops
         # that still operate on raw arrays (motif processing, augmentation).

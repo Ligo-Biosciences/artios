@@ -495,8 +495,10 @@ class BaseSingleDataset(Dataset):
         timings["crop"] = time.time() - t2
         del structure  # free pre-crop memory
 
-        # Bridge: extract atom_array for post-crop ops (until Step C).
-        cropped_atom_array = cropped_structure.atoms
+        # Bridge: convert back to fully-annotated AtomArray for post-crop ops
+        # that still operate on raw arrays (motif processing, augmentation).
+        # Reconstructed into AnnotatedStructure at featurize step below.
+        cropped_atom_array = cropped_structure.to_atom_array()
 
         # --- Augment (post-crop) ---
         t_aug = time.time()

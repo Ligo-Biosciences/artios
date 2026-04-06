@@ -148,12 +148,21 @@ def main():
     ray.shutdown()
 
     print("Converting parquet to CSV...")
-    import csv
-
     import pandas as pd
 
     df = pd.read_parquet(parquet_dir)
-    df.to_csv(args.output_csv, index=False, quoting=csv.QUOTE_NONNUMERIC)
+
+    # Ray may serialize string columns as pickled python_object() types
+    # that pandas' CSV writer can't handle. Decode bytes and normalize.
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].apply(
+                lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
+            )
+        elif str(df[col].dtype) == "python_object()":
+            df[col] = df[col].apply(str)
+
+    df.to_csv(args.output_csv, index=False)
     print(f"Done! {len(df)} indices written to {args.output_csv}")
 
 

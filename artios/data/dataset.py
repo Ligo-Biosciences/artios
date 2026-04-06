@@ -1135,6 +1135,7 @@ def get_datasets(
         dataset_param["include_arrays_in_context"] = data_config.get(
             "include_arrays_in_context", False
         )
+        dataset_param["remove_glycans"] = data_config.get("remove_glycans", False)
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
         # Training datasets don't use group_by_pdb_id, so indices_list is a DataFrame
@@ -1169,6 +1170,7 @@ def get_datasets(
         dataset_param["include_arrays_in_context"] = data_config.get(
             "include_arrays_in_context", False
         )
+        dataset_param["remove_glycans"] = data_config.get("remove_glycans", False)
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

@@ -186,6 +186,7 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": False,
     "binding_target_train_rate": 0.0,
+    "remove_glycans": True,
     "filter_unique_fragment_prob": 1.0,
     "motif_training": {
         "motif_train_rate": 0.0,

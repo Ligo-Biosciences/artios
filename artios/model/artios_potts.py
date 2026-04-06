@@ -5,6 +5,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from einops import repeat
 from torch import Tensor
 from torch.nn import functional as F
 from typing_extensions import assert_never
@@ -38,12 +39,68 @@ from artios.model.modules.potts import (
     compute_potts_single_logits,
 )
 from artios.model.output import PottsOutput
-from artios.model.utils import Mode
+from artios.model.utils import Mode, masked_mean
 from artios.utils.casting import disable_autocast
 from artios.utils.ensemble import sample_anm_displacements
 
 ALPHABET_BIAS = 1e4
 logger = logging.getLogger(__name__)
+
+
+# TODO: find a good spot for this
+def build_ligand_proximity_mask(
+    centre_coordinate: Tensor,
+    is_ligand_token: Tensor,
+    is_protein_token: Tensor,
+    token_mask: Tensor,
+    asym_id: Tensor,
+    distance_cutoff: float,
+) -> Tensor:
+    """Identify protein tokens within distance_cutoff of any ligand chain's CoM.
+
+    Computes a separate centre of mass for each unique ligand chain (by asym_id)
+    and marks protein tokens within distance_cutoff of the nearest one.
+
+    Args:
+        centre_coordinate: Per-token centre atom coordinates [B, N, 3].
+        is_ligand_token: Ligand token mask [B, N].
+        is_protein_token: Protein token mask [B, N].
+        token_mask: Valid token mask [B, N].
+        asym_id: Integer chain ID per token [B, N].
+        distance_cutoff: Distance threshold in angstroms.
+
+    Returns:
+        Boolean mask of protein tokens near a ligand CoM [B, N].
+    """
+    B, N = is_ligand_token.shape
+    device = centre_coordinate.device
+    near_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+
+    for b in range(B):
+        lig_mask = is_ligand_token[b] & token_mask[b]
+        if not lig_mask.any():
+            continue
+
+        # CoM per unique ligand chain
+        lig_chain_ids = asym_id[b][lig_mask].unique()
+        coms = torch.stack(
+            [
+                centre_coordinate[b][lig_mask & (asym_id[b] == cid)].mean(dim=0)
+                for cid in lig_chain_ids
+            ]
+        )  # [n_ligands, 3]
+
+        # Distance from each token to nearest ligand CoM
+        dists = torch.cdist(
+            centre_coordinate[b].unsqueeze(0), coms.unsqueeze(0)
+        ).squeeze(0)
+        min_dist = dists.min(dim=-1).values  # [N]
+
+        near_mask[b] = (
+            is_protein_token[b] & token_mask[b] & (min_dist <= distance_cutoff)
+        )
+
+    return near_mask
 
 
 class MaskingSamplerType(str, Enum):
@@ -60,6 +117,8 @@ class PottsLossType(str, Enum):
 class PottsLossConfig:
     loss_type: PottsLossType = PottsLossType.COMPOSITE
     label_smoothing: float = 0.0
+    active_site_upweight: float = 1.0
+    active_site_distance: float = 8.0
 
 
 class ArtiosPotts(nn.Module):
@@ -91,6 +150,8 @@ class ArtiosPotts(nn.Module):
         self.loss_config = PottsLossConfig(
             loss_type=potts_loss_cfg.loss_type,
             label_smoothing=potts_loss_cfg.label_smoothing,
+            active_site_upweight=potts_loss_cfg.active_site_upweight,
+            active_site_distance=potts_loss_cfg.active_site_distance,
         )
 
         masking_sampler_type = MaskingSamplerType(
@@ -568,8 +629,26 @@ class ArtiosPotts(nn.Module):
         is_resolved = context.mask.centre_atom_is_resolved
         mask = output.is_masked & is_resolved
 
-        loss_weight = self.masking_sampler.get_loss_weights(output.timestep)
+        _, N = gt_seq.shape
+
+        # Get loss weights
+        sampler_weight = self.masking_sampler.get_loss_weights(output.timestep)  # [B]
         eps = 1e-6
+
+        if self.loss_config.active_site_upweight > 1.0:
+            active_site = build_ligand_proximity_mask(
+                context.coordinate.centre_coordinate,
+                context.entity.is_ligand_token,
+                context.entity.is_protein_token,
+                context.mask.token_mask,
+                context.token.asym_id,
+                self.loss_config.active_site_distance,
+            )  # [B, N]
+            position_weight = torch.where(
+                active_site, self.loss_config.active_site_upweight, 1.0
+            )  # [B, N]
+        else:
+            position_weight = None
 
         match self.loss_config.loss_type:
             case PottsLossType.PSEUDO:
@@ -614,8 +693,12 @@ class ArtiosPotts(nn.Module):
             case _:
                 assert_never(self.loss_config.loss_type)
 
-        weighted_nll = loss_weight * nll  # [B]
-        loss = weighted_nll.mean()
+        # Get loss weight
+        loss_weight = repeat(sampler_weight, "B -> B N", N=N)
+        if position_weight is not None:
+            loss_weight = loss_weight * position_weight
+
+        loss = masked_mean(loss_weight * per_position_nll, mask, axes=-1).mean()
 
         # Metrics
         metrics: dict[str, Tensor] = {}

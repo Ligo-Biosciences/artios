@@ -1189,6 +1189,11 @@ def _potts_proposal_gibbs(
     color_masks: list[Bool[Tensor, "batch n_token"]],
     generator: torch.Generator | None = None,
     penalty: Callable[[Tensor], Tensor] | None = None,
+    h_uncond=None,
+    J_uncond=None,
+    edge_index_uncond=None,
+    edge_mask_uncond=None,
+    cfg_scale: float = 0.0,
 ) -> ProposalResult:
     """Gibbs proposal with parallel colour sweeps.
 
@@ -1197,8 +1202,13 @@ def _potts_proposal_gibbs(
 
     If penalty is provided, its gradient w.r.t. S is computed via
     autograd and added to the conditional energy (following Chroma).
+
+    If unconditional parameters are provided with cfg_scale > 0,
+    classifier-free guidance is applied by blending conditional and
+    unconditional energies.
     """
     R = S.shape[-1]
+    use_cfg = h_uncond is not None and cfg_scale != 1.0
 
     for color_mask in color_masks:
         S_idx = S.argmax(-1)  # [B, N]
@@ -1206,6 +1216,14 @@ def _potts_proposal_gibbs(
         # Potts conditional energy: U_i(a) = h_i(a) + sum_j J_ij(a, s_j)
         logits = compute_potts_single_logits(S_idx, h, J, edge_index, edge_mask)
         U_i = -logits  # [B, N, R]
+
+        # Classifier-free guidance: blend conditional and unconditional energies
+        if use_cfg:
+            logits_uncond = compute_potts_single_logits(
+                S_idx, h_uncond, J_uncond, edge_index_uncond, edge_mask_uncond
+            )
+            U_i_uncond = -logits_uncond
+            U_i = U_i_uncond + cfg_scale * (U_i - U_i_uncond)
 
         # Add penalty gradient if provided
         if penalty is not None:
@@ -1242,11 +1260,20 @@ def _dlmc_energy_and_log_probs(
     temperature,
     dt=0.1,
     penalty=None,
+    h_uncond=None,
+    J_uncond=None,
+    edge_index_uncond=None,
+    edge_mask_uncond=None,
+    cfg_scale: float = 0.0,
 ):
     """Compute DLMC energy and transition log-probabilities for a given state.
 
     Returns (energy, log_probs) where log_probs includes both off-diagonal
     transition probabilities and the self-transition (remaining mass).
+
+    If unconditional parameters are provided with cfg_scale > 0,
+    classifier-free guidance is applied to per-position energies (E_all)
+    but NOT to total energy (used for MH acceptance).
     """
     S_idx = S.argmax(-1)
 
@@ -1256,7 +1283,15 @@ def _dlmc_energy_and_log_probs(
     )  # [B, N, R]
     E_all = -logits  # [B, N, R]
 
-    # Compute total energy
+    # Classifier-free guidance on per-position energies only
+    if h_uncond is not None and cfg_scale != 1.0:
+        logits_uncond = compute_potts_single_logits(
+            S_idx, h_uncond, J_uncond, edge_index_uncond, edge_mask_uncond
+        )
+        E_all_uncond = -logits_uncond
+        E_all = E_all_uncond + cfg_scale * (E_all - E_all_uncond)
+
+    # Compute total energy (NOT blended — used for MH acceptance)
     energy = compute_potts_energy(S_idx, h, J, edge_index, edge_mask)
 
     # Add penalty gradient if provided
@@ -1311,6 +1346,11 @@ def _potts_proposal_dlmc(
     dt=0.1,
     generator=None,
     penalty=None,
+    h_uncond=None,
+    J_uncond=None,
+    edge_index_uncond=None,
+    edge_mask_uncond=None,
+    cfg_scale: float = 0.0,
 ):
     B, N, R = S.shape
 
@@ -1325,6 +1365,11 @@ def _potts_proposal_dlmc(
         temperature,
         dt,
         penalty,
+        h_uncond=h_uncond,
+        J_uncond=J_uncond,
+        edge_index_uncond=edge_index_uncond,
+        edge_mask_uncond=edge_mask_uncond,
+        cfg_scale=cfg_scale,
     )
 
     # sample from the log probs to get the mutations
@@ -1351,6 +1396,11 @@ def _mh_rejection_step(
     dt: float,
     penalty: Callable[[Tensor], Tensor] | None,
     generator: torch.Generator | None,
+    h_uncond=None,
+    J_uncond=None,
+    edge_index_uncond=None,
+    edge_mask_uncond=None,
+    cfg_scale: float = 0.0,
 ) -> Float[Tensor, "batch n_token num_residue_types"]:
     """Metropolis-Hastings correction for DLMC proposals.
 
@@ -1373,6 +1423,11 @@ def _mh_rejection_step(
         temperature,
         dt,
         penalty,
+        h_uncond=h_uncond,
+        J_uncond=J_uncond,
+        edge_index_uncond=edge_index_uncond,
+        edge_mask_uncond=edge_mask_uncond,
+        cfg_scale=cfg_scale,
     )
 
     # Flux = -U/T + sum_i log P(transition to target)
@@ -1560,6 +1615,10 @@ class PottsSampler:
     u_i_interval: int = 20
     """Save U_i every N sweeps. Initial and final states are always saved."""
 
+    cfg_scale: float = 1.0
+    """Classifier-free guidance scale. 1.0 = standard conditional (no CFG).
+    >1 amplifies ligand conditioning, <1 dampens it."""
+
     @typecheck
     def sample(
         self,
@@ -1573,6 +1632,14 @@ class PottsSampler:
         S_init: Float[Tensor, "batch n_token num_residue_types"] | None = None,
         generator: torch.Generator | None = None,
         penalty: Callable[[Tensor], Tensor] | None = None,
+        h_uncond: Float[Tensor, "batch n_token num_residue_types"] | None = None,
+        J_uncond: Float[
+            Tensor,
+            "batch n_token neighbours_uncond num_residue_types num_residue_types",
+        ]
+        | None = None,
+        edge_index_uncond: Int[Tensor, "batch n_token neighbours_uncond"] | None = None,
+        edge_mask_uncond: Bool[Tensor, "batch n_token neighbours_uncond"] | None = None,
     ) -> PottsSamplingResult:
         """Sample sequences from the Potts energy landscape.
 
@@ -1586,6 +1653,10 @@ class PottsSampler:
             generator: Generator for reproducibility.
             penalty: Optional penalty (callable) mapping S [B, N, R] to energy [B].
                 Its gradient w.r.t. S is added to conditional energies during proposals.
+            h_uncond: Unconditional Potts fields for CFG [B, N, R].
+            J_uncond: Unconditional Potts couplings for CFG [B, N, K', R, R].
+            edge_index_uncond: Unconditional neighbor indices [B, N, K'].
+            edge_mask_uncond: Unconditional edge mask [B, N, K'].
 
         Returns:
             PottsSamplingResult with final sequence (one-hot) and energy.
@@ -1638,6 +1709,14 @@ class PottsSampler:
             else:
                 T = self.temperature
 
+            cfg_kwargs = dict(
+                h_uncond=h_uncond,
+                J_uncond=J_uncond,
+                edge_index_uncond=edge_index_uncond,
+                edge_mask_uncond=edge_mask_uncond,
+                cfg_scale=self.cfg_scale,
+            )
+
             if self.proposal == PottsProposal.GIBBS:
                 result = _potts_proposal_gibbs(
                     S,
@@ -1650,6 +1729,7 @@ class PottsSampler:
                     color_masks,
                     generator,
                     penalty,
+                    **cfg_kwargs,
                 )
                 S = result.S_new
             elif self.proposal == PottsProposal.DLMC:
@@ -1664,6 +1744,7 @@ class PottsSampler:
                     self.dt,
                     generator,
                     penalty,
+                    **cfg_kwargs,
                 )
 
                 if self.rejection_step:
@@ -1679,6 +1760,7 @@ class PottsSampler:
                         self.dt,
                         penalty,
                         generator,
+                        **cfg_kwargs,
                     )
                 else:
                     S = result.S_new

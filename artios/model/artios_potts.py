@@ -105,6 +105,7 @@ class ArtiosPotts(nn.Module):
                 assert_never(masking_sampler_type)
 
         sampling_cfg = configs.artios_mpnn.potts.sampling
+        self.cfg_scale = getattr(sampling_cfg, "cfg_scale", 1.0)
         self.potts_sampler = PottsSampler(
             proposal=PottsProposal(sampling_cfg.proposal),
             n_sweeps=sampling_cfg.n_sweeps,
@@ -117,6 +118,7 @@ class ArtiosPotts(nn.Module):
             trajectory_interval=sampling_cfg.trajectory_interval,
             track_u_i=sampling_cfg.track_u_i,
             u_i_interval=sampling_cfg.u_i_interval,
+            cfg_scale=sampling_cfg.cfg_scale,
         )
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
@@ -258,6 +260,93 @@ class ArtiosPotts(nn.Module):
         h = h_sum / self.ensemble_size
         J = J_sum / self.ensemble_size
 
+        ### Unconditional ensemble for CFG
+        h_uncond = J_uncond = edge_index_uncond = edge_mask_uncond = None
+        if self.cfg_scale != 1.0:
+            logger.info(
+                f"Running unconditional ensemble for CFG (scale={self.cfg_scale})"
+            )
+            uncond_context = context.without_ligand()
+
+            if uncond_context.stitched is not None:
+                uncond_is_masked = (
+                    ~uncond_context.stitched.stitched_mask
+                    & uncond_context.mask.token_mask
+                )
+                uncond_masked_restypes = self.mpnn.pad_and_mask_restypes(
+                    uncond_context.stitched.stitched_restype, uncond_is_masked
+                )
+            else:
+                uncond_is_masked = uncond_context.mask.token_mask
+                uncond_masked_restypes = self.mpnn.pad_and_mask_restypes(
+                    restypes, uncond_is_masked
+                )
+
+            if self.ensemble_dropout and self.mpnn.dropout > 0:
+                for m in self.mpnn.modules():
+                    if isinstance(m, nn.Dropout):
+                        m.train()
+
+            h_uncond_sum = None
+            J_uncond_sum = None
+            for i in range(self.ensemble_size):
+                if anm_displacements is not None:
+                    disp = anm_displacements[:, i, :, :]
+                    bb = uncond_context.coordinate.backbone_coordinate
+                    noised = bb + disp[:, :, None, :]
+                    uncond_ctx = replace(
+                        uncond_context,
+                        coordinate=replace(
+                            uncond_context.coordinate, backbone_coordinate=noised
+                        ),
+                    )
+                elif self.ensemble_noise_scale > 0 and self.ensemble_size > 1:
+                    bb = uncond_context.coordinate.backbone_coordinate
+                    noised = bb + self.ensemble_noise_scale * torch.randn(
+                        bb.shape,
+                        device=bb.device,
+                        dtype=bb.dtype,
+                        generator=generator,
+                    )
+                    uncond_ctx = replace(
+                        uncond_context,
+                        coordinate=replace(
+                            uncond_context.coordinate, backbone_coordinate=noised
+                        ),
+                    )
+                else:
+                    uncond_ctx = uncond_context
+
+                mpnn_out = self.mpnn(
+                    context=uncond_ctx,
+                    masked_restypes=uncond_masked_restypes,
+                    is_masked=uncond_is_masked,
+                )
+
+                h_i, J_i = self.potts(
+                    mpnn_out.node_feats,
+                    mpnn_out.edge_feats,
+                    mpnn_out.edge_index,
+                    mpnn_out.edge_mask,
+                    uncond_ctx.mask.token_mask,
+                )
+
+                if i == 0:
+                    h_uncond_sum, J_uncond_sum = h_i, J_i
+                    edge_index_uncond = mpnn_out.edge_index
+                    edge_mask_uncond = mpnn_out.edge_mask
+                else:
+                    h_uncond_sum = h_uncond_sum + h_i
+                    J_uncond_sum = J_uncond_sum + J_i
+
+            if self.ensemble_dropout and self.mpnn.dropout > 0:
+                for m in self.mpnn.modules():
+                    if isinstance(m, nn.Dropout):
+                        m.eval()
+
+            h_uncond = h_uncond_sum / self.ensemble_size
+            J_uncond = J_uncond_sum / self.ensemble_size
+
         ### Initialiation logic
         stitched_mask = (
             context.stitched.stitched_mask if context.stitched is not None else None
@@ -274,10 +363,14 @@ class ArtiosPotts(nn.Module):
         )
 
         h = h + ~alphabet_mask * ALPHABET_BIAS
+        if h_uncond is not None:
+            h_uncond = h_uncond + ~alphabet_mask * ALPHABET_BIAS
 
         energy_bias = build_energy_bias_vector(self.energy_bias, R, device)
         if energy_bias is not None:
             h = h + energy_bias
+            if h_uncond is not None:
+                h_uncond = h_uncond + energy_bias
 
         S_init = build_s_init(
             h,
@@ -364,6 +457,10 @@ class ArtiosPotts(nn.Module):
             S_init=S_init,
             generator=generator,
             penalty=penalty,
+            h_uncond=h_uncond,
+            J_uncond=J_uncond,
+            edge_index_uncond=edge_index_uncond,
+            edge_mask_uncond=edge_mask_uncond,
         )
 
         return PottsOutput(

@@ -286,6 +286,7 @@ model_configs = {
                 "ensemble_noise_scale": 0.3,
                 "ensemble_dropout": False,
                 "ensemble_anm": False,
+                "cfg_scale": 1.0,
                 "ensemble_anm_gamma": 0.2388,
                 "ensemble_anm_cutoff": 15.0,
                 "track_trajectory": False,

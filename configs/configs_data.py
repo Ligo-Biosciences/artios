@@ -253,7 +253,7 @@ data_configs = {
             "pdb_exclusion_lists": [
                 os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
                 os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
-                # os.path.join(DATA_ROOT_DIR, "excluded_fibril_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_fibril_pdbs.txt"),
             ],
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
@@ -336,7 +336,7 @@ data_configs = {
             "pdb_exclusion_lists": [
                 os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
                 os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
-                # os.path.join(DATA_ROOT_DIR, "excluded_fibril_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_fibril_pdbs.txt"),
             ],
             "exclusion": {
                 "sub_mol_1_type": ListValue(["excluded_ligand"]),

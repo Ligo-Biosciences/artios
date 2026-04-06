@@ -475,6 +475,8 @@ loss_configs = {
         "potts": {
             "loss_type": "pseudo",
             "label_smoothing": 0.0,
+            "active_site_upweight": 1.0,
+            "active_site_distance": 8.0,
         },
         "packing": {
             "mse": {

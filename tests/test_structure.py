@@ -12,6 +12,9 @@ import pytest
 
 from artios.data.structure import (
     AnnotatedStructure,
+    TypeMasks,
+    compute_token_grouping,
+    compute_token_grouping_vectorized,
 )
 from artios.utils.file_io import load_atomarray_from_npz
 
@@ -89,6 +92,18 @@ class TestTokenGrouping:
         ligand_tokens = ati[ligand_mask]
         # Each ligand atom should have a unique token index
         assert len(np.unique(ligand_tokens)) == ligand_mask.sum()
+
+    def test_vectorized_matches_original(self, structure):
+        """Vectorized tokenization must produce identical output to the original."""
+        aa = structure.to_atom_array()
+        type_masks = TypeMasks.from_atom_array(aa)
+
+        g_orig = compute_token_grouping(aa, type_masks, motif=None)
+        g_vec = compute_token_grouping_vectorized(aa, type_masks, motif=None)
+
+        assert g_orig.n_tokens == g_vec.n_tokens
+        np.testing.assert_array_equal(g_orig.atom_token_index, g_vec.atom_token_index)
+        np.testing.assert_array_equal(g_orig.centre_atom_mask, g_vec.centre_atom_mask)
 
 
 # ---------------------------------------------------------------------------

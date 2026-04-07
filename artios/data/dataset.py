@@ -28,7 +28,9 @@ from biotite.structure.io import save_structure
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import Dataset
 
+from artios.common import ccd_sets
 from artios.common.constants import BACKBONE_DEFS, EvaluationChainInterface
+from artios.data import annotation
 from artios.data.data_pipeline import DataPipeline
 from artios.data.data_weights import get_sample_weights
 from artios.data.features import FullContext
@@ -36,9 +38,8 @@ from artios.data.featurizer import ContextGenerator
 from artios.data.filter import Filter
 from artios.data.motif_maker import MotifMaker
 from artios.data.msa_featurizer import MSAFeaturizer
-from artios.data.parser import AddAtomArrayAnnot
-from artios.data.tokenizer import AtomArrayTokenizer, TokenArray
-from artios.utils.cropping import CropData
+from artios.data.structure import AnnotatedStructure
+from artios.data.tokenizer import TokenArray
 from artios.utils.file_io import read_indices_csv
 from artios.utils.geometry import random_transform
 from artios.utils.logger import get_logger
@@ -81,7 +82,8 @@ class BaseSingleDataset(Dataset):
         self.ref_pos_augment = kwargs.get("ref_pos_augment", True)
         self.lig_atom_rename = kwargs.get("lig_atom_rename", False)
         self.reassign_continuous_chain_ids = kwargs.get(
-            "reassign_continuous_chain_ids", False
+            "reassign_continuous_chain_ids",
+            False,  # TODO: needs further investigation
         )
         self.shuffle_mols = kwargs.get("shuffle_mols", False)
         self.shuffle_sym_ids = kwargs.get("shuffle_sym_ids", False)
@@ -125,9 +127,9 @@ class BaseSingleDataset(Dataset):
         self.filter_unique_fragment_prob = kwargs.get(
             "filter_unique_fragment_prob", 0.8
         )
-        self.filter_unique_domain_prob = kwargs.get("filter_unique_domain_prob", 0.1)
-        assert self.filter_unique_fragment_prob + self.filter_unique_domain_prob <= 1
         self.require_pocket_in_fragment = kwargs.get("require_pocket_in_fragment", True)
+        self.remove_excluded_ligands = kwargs.get("remove_excluded_ligands", True)
+        self.remove_glycans = kwargs.get("remove_glycans", False)
 
         self.error_dir = kwargs.get("error_dir", None)
         if self.error_dir is not None:
@@ -282,7 +284,7 @@ class BaseSingleDataset(Dataset):
         if self.find_eval_chain_interface:
             # Remove data that does not contain eval_type in the EvaluationChainInterface list
             indices_list = indices_list[
-                indices_list["eval_type"].apply(lambda x: x in EvaluationChainInterface)
+                indices_list["eval_type"].isin(EvaluationChainInterface)
             ]
 
         if self.limits > 0 and len(indices_list) > self.limits:
@@ -382,274 +384,130 @@ class BaseSingleDataset(Dataset):
         raise RuntimeError(f"Failed to load data after 10 attempts for idx {idx}")
 
     @profile_function("dataset._get_bioassembly_data")
-    def _get_bioassembly_data(self, idx: int) -> tuple[pd.Series, dict[str, Any], str]:
+    def _get_bioassembly_data(
+        self, idx: int
+    ) -> tuple[pd.Series, AnnotatedStructure, str, str]:
+        """Load a bioassembly for sample *idx*.
+
+        Returns:
+            (sample_indice, structure, pdb_id, npz_path).
+        """
         sample_indice = self._get_sample_indice(idx=idx)
         if self.bioassembly_dict_dir is None:
             raise ValueError(
                 "bioassembly_dict_dir must be set to load bioassembly data"
             )
 
-        bioassembly_dict_fpath = os.path.join(
-            self.bioassembly_dict_dir,
-            sample_indice.pdb_id + ".pkl.gz",  # .pkl.gz
-        )
-        bioassembly_dict = DataPipeline.get_data_bioassembly(
-            bioassembly_dict_fpath=bioassembly_dict_fpath
-        )
-        bioassembly_dict["pdb_id"] = sample_indice.pdb_id
-        return sample_indice, bioassembly_dict, bioassembly_dict_fpath
+        pdb_id = sample_indice.pdb_id
+        npz_path = os.path.join(self.bioassembly_dict_dir, pdb_id + ".npz")
+        structure = DataPipeline.get_data_bioassembly(npz_path)
+        return sample_indice, structure, pdb_id, npz_path
 
     @staticmethod
-    def _reassign_atom_array_chain_id(atom_array: AtomArray):
-        """
-        In experiments conducted to observe overfitting effects using training sets,
-        the pre-stored AtomArray in the training set may experience issues with discontinuous chain IDs due to filtering.
-        Consequently, a temporary patch has been implemented to resolve this issue.
-
-        e.g. 3x6u asym_id_int = [0, 1, 2, ... 18, 20] -> reassigned_asym_id_int [0, 1, 2, ..., 18, 19]
-        """
-
-        def _get_contiguous_array(array):
-            array_uniq = np.sort(np.unique(array))
-            map_dict = {i: idx for idx, i in enumerate(array_uniq)}
-            new_array = np.vectorize(map_dict.get)(array)
-            return new_array
-
-        atom_array.asym_id_int = _get_contiguous_array(atom_array.asym_id_int)
-        atom_array.entity_id_int = _get_contiguous_array(atom_array.entity_id_int)
-        atom_array.sym_id_int = _get_contiguous_array(atom_array.sym_id_int)
-        return atom_array
-
-    @staticmethod
-    def _shuffle_array_based_on_mol_id(token_array: TokenArray, atom_array: AtomArray):
-        """
-        Shuffle both token_array and atom_array.
-        Atoms/tokens with the same mol_id will be shuffled as a integrated component.
-        """
-
-        # Get token mol_id
-        centre_atom_indices = token_array.get_annotation("centre_atom_index")
-        token_mol_id = atom_array[centre_atom_indices].mol_id
-
-        # Get unique molecule IDs and shuffle them in place
-        shuffled_mol_ids = np.unique(token_mol_id).copy()
-        np.random.shuffle(shuffled_mol_ids)
-
-        # Get shuffled token indices
-        original_token_indices = np.arange(len(token_mol_id))
-        shuffled_token_indices = []
-        for mol_id in shuffled_mol_ids:
-            mol_token_indices = original_token_indices[token_mol_id == mol_id]
-            shuffled_token_indices.append(mol_token_indices)
-        shuffled_token_indices = np.concatenate(shuffled_token_indices)
-
-        # Get shuffled token and atom array
-        # Use `CropData.select_by_token_indices` to shuffle safely
-        token_array, atom_array, _, _ = CropData.select_by_token_indices(
-            token_array=token_array,
-            atom_array=atom_array,
-            selected_token_indices=shuffled_token_indices,
-        )
-
-        return token_array, atom_array
-
-    @staticmethod
-    def _assign_random_sym_id(atom_array: AtomArray):
-        """
-        Assign random sym_id for chains of the same entity_id
-        e.g.
-        when entity_id = 0
-            sym_id_int = [0, 1, 2] -> random_sym_id_int = [2, 0, 1]
-        when entity_id = 1
-            sym_id_int = [0, 1, 2, 3] -> random_sym_id_int = [3, 0, 1, 2]
-        """
-
-        def _shuffle(x):
-            x_unique = np.sort(np.unique(x))
-            x_shuffled = x_unique.copy()
-            np.random.shuffle(x_shuffled)  # shuffle in-place
-            map_dict = dict(zip(x_unique, x_shuffled))
-            new_x = np.vectorize(map_dict.get)(x)
-            return new_x.copy()
-
-        for entity_id in np.unique(atom_array.label_entity_id):
-            mask = atom_array.label_entity_id == entity_id
-            atom_array.sym_id_int[mask] = _shuffle(atom_array.sym_id_int[mask])
-        return atom_array
-
-    # @staticmethod
-    # def _assign_binding_target(
-    #     atom_array: AtomArray,
-    #     train_with_binding_target: bool,
-    #     binding_target_train_rate: float,
-    # ):
-    #     """
-    #     Assign a random asymmetric unit as the target if train_with_binding_target is True.
-    #     Otherwise, assign all False. If there is only one asym_id, set is_target to False.
-    #     """
-    #     # Pick target chain
-    #     unique_asym_ids = np.unique(atom_array.asym_id_int)
-
-    #     # If there's only one asym_id, set all is_target to False
-    #     if len(unique_asym_ids) == 1:
-    #         atom_array.set_annotation(
-    #             "is_target", np.zeros_like(atom_array.asym_id_int, dtype=bool)
-    #         )
-    #     elif train_with_binding_target and np.random.rand() < binding_target_train_rate:
-    #         target_asym_id = np.random.choice(unique_asym_ids)
-    #         # Add target annotation to atom array
-    #         atom_array.set_annotation(
-    #             "is_target", atom_array.asym_id_int == target_asym_id
-    #         )
-    #     else:
-    #         atom_array.set_annotation(
-    #             "is_target", np.zeros_like(atom_array.asym_id_int, dtype=bool)
-    #         )
-
-    #     return atom_array
-
-    @staticmethod
-    def _filter_for_unique_id(
-        atom_array: AtomArray,
-        id_type: str,
-        require_annotation: str | None = None,
-    ) -> AtomArray:
-        """Filter for a unique id, optionally requiring a non-zero annotation.
+    def _filter_for_unique_fragment(
+        structure: AnnotatedStructure,
+        require_pocket: bool = False,
+    ) -> AnnotatedStructure:
+        """Keep only atoms belonging to a randomly chosen fragment.
 
         Args:
-            atom_array: Input atom array.
-            id_type: Annotation name to select a unique value from (e.g. "fragment_id").
-            require_annotation: If set, only consider ids where at least one atom
-                has this annotation > 0 (e.g. "pocket_id"). Falls back to all ids
-                if none qualify or the annotation is missing.
+            structure: Input structure (must have ``fragment_id`` annotation on atoms).
+            require_pocket: If True, prefer fragments that contain at least one
+                atom with ``pocket_id > 0``. Falls back to all fragments if
+                none qualify or the annotation is missing.
         """
-        ids = np.unique(atom_array.get_annotation(id_type))
-        if (
-            require_annotation is not None
-            and require_annotation in atom_array.get_annotation_categories()
-        ):
-            ann = atom_array.get_annotation(require_annotation)
-            id_ann = atom_array.get_annotation(id_type)
-            has_ann = np.array([np.any(ann[id_ann == uid] > 0) for uid in ids])
-            if has_ann.any():
-                ids = ids[has_ann]
-        id = np.random.choice(ids)
-        return atom_array[atom_array.get_annotation(id_type) == id]
+        frag = structure.training.fragment_id
+        fragment_ids = np.unique(frag)
+
+        if require_pocket and structure.training.pocket_id is not None:
+            has_pocket = np.array(
+                [
+                    np.any(structure.training.pocket_id[frag == fid] > 0)
+                    for fid in fragment_ids
+                ]
+            )
+            if has_pocket.any():
+                fragment_ids = fragment_ids[has_pocket]
+
+        chosen = np.random.choice(fragment_ids)
+        return structure.select_atoms(frag == chosen)
 
     @profile_function("dataset.process_one")
     def process_one(
         self,
         idx: int,
     ) -> FullContext:
-        """
-        Processes a single data sample by retrieving bioassembly data, applying various transformations, and cropping the data.
-        It then extracts features and labels, and optionally returns the processed atom and token arrays.
+        """Process a single data sample into model-ready features.
+
+        Loads an AnnotatedStructure, applies preprocessing/augmentation,
+        crops, and featurizes.
 
         Args:
             idx: The index of the data sample to process.
 
         Returns:
-            A dict containing the input features, labels, basic_info and optionally the processed atom and token arrays.
+            FullContext with all features for this sample.
         """
         import time
 
         timings = {}
         process_start = time.time()
 
+        # --- Load ---
         t0 = time.time()
-        (
-            sample_indice,
-            bioassembly_dict,
-            bioassembly_dict_fpath,
-        ) = self._get_bioassembly_data(idx=idx)
+        sample_indice, structure, pdb_id, npz_path = self._get_bioassembly_data(idx=idx)
         timings["get_bioassembly"] = time.time() - t0
 
+        # --- Select ---
         if self.use_reference_chains_only:
-            # Get the reference chains
             ref_chain_ids = [sample_indice.chain_1_id, sample_indice.chain_2_id]
             if sample_indice.type == "chain":
                 ref_chain_ids.pop(-1)
-            # Remove other chains from the bioassembly_dict
-            # Remove them safely using the crop method
-            token_centre_atom_indices = bioassembly_dict["token_array"].get_annotation(
-                "centre_atom_index"
-            )
-            token_chain_id = bioassembly_dict["atom_array"][
-                token_centre_atom_indices
-            ].chain_id
-            is_ref_chain = np.isin(token_chain_id, ref_chain_ids)
-            (
-                bioassembly_dict["token_array"],
-                bioassembly_dict["atom_array"],
-                _,
-                _,
-            ) = CropData.select_by_token_indices(
-                token_array=bioassembly_dict["token_array"],
-                atom_array=bioassembly_dict["atom_array"],
-                selected_token_indices=np.arange(len(is_ref_chain))[is_ref_chain],
-            )
+            token_chain_str = structure.atoms.chain_id[structure.centre_atom_indices]
+            is_ref = np.isin(token_chain_str, ref_chain_ids)
+            structure = structure.select_tokens(np.where(is_ref)[0])
 
+        # --- Augment (pre-crop) ---
         if self.shuffle_mols:
-            (
-                bioassembly_dict["token_array"],
-                bioassembly_dict["atom_array"],
-            ) = self._shuffle_array_based_on_mol_id(
-                token_array=bioassembly_dict["token_array"],
-                atom_array=bioassembly_dict["atom_array"],
-            )
-
-        if self.shuffle_sym_ids:
-            bioassembly_dict["atom_array"] = self._assign_random_sym_id(
-                bioassembly_dict["atom_array"]
-            )
+            structure = structure.shuffle_by_mol_id()
 
         t1 = time.time()
+        if self.shuffle_sym_ids:
+            structure = structure.with_shuffled_sym_ids()
         if self.reassign_continuous_chain_ids:
-            bioassembly_dict["atom_array"] = self._reassign_atom_array_chain_id(
-                bioassembly_dict["atom_array"]
-            )
+            structure = structure.with_contiguous_ids()
         timings["preprocessing"] = time.time() - t1
 
         t_frag = time.time()
-        p = np.random.rand()
-        # Filter for a unique fragment/domain. Used for Distillation data.
-        if p < self.filter_unique_fragment_prob:
-            # apply fragment filter
-            bioassembly_dict["atom_array"] = self._filter_for_unique_id(
-                atom_array=bioassembly_dict["atom_array"],
-                id_type="fragment_id",
-                require_annotation="pocket_id"
-                if self.require_pocket_in_fragment
-                else None,
+        if np.random.rand() < self.filter_unique_fragment_prob:
+            structure = self._filter_for_unique_fragment(
+                structure,
+                require_pocket=self.require_pocket_in_fragment,
             )
-            tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
-            bioassembly_dict["token_array"] = tokenizer.get_token_array()
-        elif p < self.filter_unique_fragment_prob + self.filter_unique_domain_prob:
-            # apply domain filter
-            bioassembly_dict["atom_array"] = self._filter_for_unique_id(
-                atom_array=bioassembly_dict["atom_array"], id_type="domain_id"
-            )
-            tokenizer = AtomArrayTokenizer(bioassembly_dict["atom_array"])
-            bioassembly_dict["token_array"] = tokenizer.get_token_array()
         timings["fragment_filter"] = time.time() - t_frag
 
-        # Crop
+        # --- Crop ---
         t2 = time.time()
-        (
-            crop_method,
-            cropped_token_array,
-            cropped_atom_array,
-            cropped_msa_features,
-            cropped_template_features,
-            reference_token_index,
-        ) = self.crop(
+        crop_method, cropped_structure = self.crop(
             sample_indice=sample_indice,
-            bioassembly_dict=bioassembly_dict,
+            structure=structure,
+            pdb_id=pdb_id,
             **self.cropping_configs,
         )
         timings["crop"] = time.time() - t2
+        del structure  # free pre-crop memory
 
-        # Centre random augment
+        # --- De-glycosylate (post-crop to avoid breaking ref chain asserts) ---
+        if self.remove_glycans:
+            keep = ~np.isin(cropped_structure.atoms.res_name, list(ccd_sets.GLYCANS))
+            cropped_structure = cropped_structure.select_atoms(keep)
+
+        # Bridge: convert back to fully-annotated AtomArray for post-crop ops
+        # that still operate on raw arrays (motif processing, augmentation).
+        # Reconstructed into AnnotatedStructure at featurize step below.
+        cropped_atom_array = cropped_structure.to_atom_array()
+
+        # --- Augment (post-crop) ---
         t_aug = time.time()
         cropped_atom_array.coord = random_transform(
             points=cropped_atom_array.coord,
@@ -660,21 +518,11 @@ class BaseSingleDataset(Dataset):
         )
         timings["augmentation"] = time.time() - t_aug
 
-        t3 = time.time()
-        # cropped_atom_array = (
-        #     self._assign_binding_target(  # TODO: all references to targets can go
-        #         atom_array=cropped_atom_array,
-        #         train_with_binding_target=self.train_with_binding_target,
-        #         binding_target_train_rate=self.binding_target_train_rate,
-        #     )
-        # )
-        timings["assign_binding_target"] = time.time() - t3
-
-        # Motif handling
+        # --- Motif ---
         tmotif = time.time()
         if self.motif_configs["motif_train_rate"] > 0.0:
             cropped_atom_array = self._apply_motif_processing(
-                cropped_atom_array, pdb_id=bioassembly_dict["pdb_id"]
+                cropped_atom_array, pdb_id=pdb_id
             )
         else:
             cropped_atom_array.set_annotation(
@@ -684,30 +532,24 @@ class BaseSingleDataset(Dataset):
                 "is_motif_related", np.zeros(len(cropped_atom_array), dtype=int)
             )
 
-        tokenizer = AtomArrayTokenizer(cropped_atom_array)
-        cropped_token_array = tokenizer.get_token_array()
-
         timings["motif"] = time.time() - tmotif
 
+        # --- Featurize ---
         t4 = time.time()
-
-        # Get context
+        structure = AnnotatedStructure.from_atom_array(cropped_atom_array)
         context = ContextGenerator(
-            cropped_token_array=cropped_token_array,
-            cropped_atom_array=cropped_atom_array,
+            structure,
             ref_pos_augment=self.ref_pos_augment,
             lig_atom_rename=self.lig_atom_rename,
-            bioassembly_dict_fpath=bioassembly_dict_fpath,
-            pdb_id=bioassembly_dict["pdb_id"],
+            bioassembly_dict_fpath=npz_path,
+            pdb_id=pdb_id,
         ).get_full_context(include_arrays=self.include_arrays_in_context)
-
         timings["get_feature_and_label"] = time.time() - t4
 
-        # Log if process_one took too long
         total_time = time.time() - process_start
-        if total_time > SLOW_STEP_THRESHOLD:  # Log slow processing (> 1 second)
+        if total_time > SLOW_STEP_THRESHOLD:
             logger.warning(
-                f"SLOW process_one for idx={idx}, pdb_id={sample_indice.pdb_id}: "
+                f"SLOW process_one for idx={idx}, pdb_id={pdb_id}: "
                 f"{total_time:.2f}s - "
                 f"bioassembly={timings.get('get_bioassembly', 0):.3f}s, "
                 f"preprocess={timings.get('preprocessing', 0):.3f}s, "
@@ -725,27 +567,25 @@ class BaseSingleDataset(Dataset):
     def crop(
         self,
         sample_indice: pd.Series,
-        bioassembly_dict: dict[str, Any],
+        structure: AnnotatedStructure,
+        pdb_id: str,
         crop_size: int,
         method_weights: list[float],
         contiguous_crop_complete_lig: bool = False,
         spatial_crop_complete_lig: bool = False,
         drop_last: bool = True,
         remove_metal: bool = True,
-    ) -> tuple[str, TokenArray, AtomArray, dict[str, Any], dict[str, Any], int]:
-        """
-        Crops the bioassembly data based on the specified configurations.
+    ) -> tuple[str, AnnotatedStructure]:
+        """Crop structure to *crop_size* tokens.
 
         Returns:
-            A tuple containing the cropping method, cropped token array, cropped atom array,
-                cropped MSA features, and cropped template features.
+            (crop_method, cropped_structure).
         """
         return DataPipeline.crop(
             one_sample=sample_indice,
-            bioassembly_dict=bioassembly_dict,
+            structure=structure,
+            pdb_id=pdb_id,
             crop_size=crop_size,
-            msa_featurizer=self.msa_featurizer,
-            template_featurizer=self.template_featurizer,
             method_weights=method_weights,
             contiguous_crop_complete_lig=contiguous_crop_complete_lig,
             spatial_crop_complete_lig=spatial_crop_complete_lig,
@@ -953,9 +793,7 @@ class BaseSingleDataset(Dataset):
             AtomArray: AtomArray with updated IDs for motif-related residues
         """
         # Discard the mapping for training - only needed for inference RMSD computation
-        atom_array, _ = AddAtomArrayAnnot.update_ids_to_unindex_motif_residues(
-            atom_array
-        )
+        atom_array, _ = annotation.update_ids_to_unindex_motif_residues(atom_array)
         return atom_array
 
     @staticmethod
@@ -965,7 +803,7 @@ class BaseSingleDataset(Dataset):
         related atoms. This is important as the Featurizer looks at the
         centre atom indices to retrieve the correct chain, res IDs etc.
         """
-        return AddAtomArrayAnnot.update_centre_atom_mask_to_include_motif(atom_array)
+        return annotation.update_centre_atom_mask_to_include_motif(atom_array)
 
     @profile_function("dataset.get_feature_and_label")
     def get_context(
@@ -1003,9 +841,9 @@ class BaseSingleDataset(Dataset):
         Raises:
             ValueError: If the ligand cannot be found in the data point.
         """
+        structure = AnnotatedStructure.from_atom_array(atom_array)
         context = ContextGenerator(
-            cropped_token_array=token_array,
-            cropped_atom_array=atom_array,
+            structure,
             ref_pos_augment=self.ref_pos_augment,
             lig_atom_rename=self.lig_atom_rename,
             bioassembly_dict_fpath=bioassembly_dict_fpath,
@@ -1260,9 +1098,6 @@ def get_datasets(
             "filter_unique_fragment_prob": config_dict.get(
                 "filter_unique_fragment_prob", 0
             ),
-            "filter_unique_domain_prob": config_dict.get(
-                "filter_unique_domain_prob", 0
-            ),
             "require_pocket_in_fragment": config_dict.get(
                 "require_pocket_in_fragment", True
             ),
@@ -1300,6 +1135,7 @@ def get_datasets(
         dataset_param["include_arrays_in_context"] = data_config.get(
             "include_arrays_in_context", False
         )
+        dataset_param["remove_glycans"] = data_config.get("remove_glycans", False)
         train_dataset = BaseSingleDataset(**dataset_param)
         train_datasets.append(train_dataset)
         # Training datasets don't use group_by_pdb_id, so indices_list is a DataFrame
@@ -1334,6 +1170,7 @@ def get_datasets(
         dataset_param["include_arrays_in_context"] = data_config.get(
             "include_arrays_in_context", False
         )
+        dataset_param["remove_glycans"] = data_config.get("remove_glycans", False)
         test_dataset = BaseSingleDataset(**dataset_param)
         test_datasets[test_name] = test_dataset
     return train_dataset, test_datasets

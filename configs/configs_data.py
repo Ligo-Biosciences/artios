@@ -52,7 +52,7 @@ default_weighted_pdb_configs = {
         "balance_protein_clusters": True,
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
-        "monomer_pdb_target_fraction": 0.10,
+        "monomer_pdb_target_fraction": 0.00,
         "should_filter_artifact_ligands": False,
     },
     "cropping_configs": {
@@ -67,7 +67,6 @@ default_weighted_pdb_configs = {
     "shuffle_mols": GlobalConfigValue("train_shuffle_mols"),
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
     "filter_unique_fragment_prob": 0.0,
-    "filter_unique_domain_prob": 0.0,
 }
 
 default_distillation_configs = {
@@ -91,7 +90,6 @@ default_distillation_configs = {
     "shuffle_mols": GlobalConfigValue("train_shuffle_mols"),
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
     "filter_unique_fragment_prob": 1.0,
-    "filter_unique_domain_prob": 0.0,
     "require_pocket_in_fragment": True,
     "max_n_token": 1500,
 }
@@ -188,8 +186,8 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": False,
     "binding_target_train_rate": 0.0,
+    "remove_glycans": True,
     "filter_unique_fragment_prob": 1.0,
-    "filter_unique_domain_prob": 0.0,
     "motif_training": {
         "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,
@@ -250,21 +248,22 @@ data_configs = {
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_4.csv.gz",  # .gz
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
             "pdb_exclusion_lists": [
                 os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
                 os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_fibril_pdbs.txt"),
             ],
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
             "max_n_token": -1,
             "max_resolution": -1.0,
             "use_reference_chains_only": False,
-            # "exclusion": {  # do not sample the data based on ions.
-            #     "mol_1_type": ListValue(["ions"]),
-            #     "mol_2_type": ListValue(["ions"]),
-            # },
+            "exclusion": {
+                "sub_mol_1_type": ListValue(["excluded_ligand"]),
+                "sub_mol_2_type": ListValue(["excluded_ligand"]),
+            },
         },
         **deepcopy(default_weighted_pdb_configs),
     },
@@ -337,7 +336,12 @@ data_configs = {
             "pdb_exclusion_lists": [
                 os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
                 os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_fibril_pdbs.txt"),
             ],
+            "exclusion": {
+                "sub_mol_1_type": ListValue(["excluded_ligand"]),
+                "sub_mol_2_type": ListValue(["excluded_ligand"]),
+            },
         },
         **deepcopy(default_test_configs),
     },

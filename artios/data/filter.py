@@ -12,14 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
 from typing import Optional
 
 import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray, get_molecule_indices
+from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist
 
-from artios.common.constants import BACKBONE_DEFS, CRYSTALLIZATION_AIDS
+from artios.common.ccd_sets import (
+    ARTIFACT_LIGANDS,
+    CRYSTALLIZATION_AIDS,
+    EXTRA_CRYSTALLIZATION_AIDS,
+)
+from artios.common.constants import BACKBONE_DEFS
+from artios.common.elements import METALS
 
 
 class Filter(object):
@@ -80,9 +88,55 @@ class Filter(object):
 
         Ref: AlphaFold3 SI Chapter 2.5.4
         """
-        non_aids_mask = ~np.isin(atom_array.res_name, CRYSTALLIZATION_AIDS)
+        all_aids = set(CRYSTALLIZATION_AIDS) | set(EXTRA_CRYSTALLIZATION_AIDS)
+        non_aids_mask = ~np.isin(atom_array.res_name, list(all_aids))
         poly_mask = np.isin(atom_array.label_entity_id, list(entity_poly_type.keys()))
         return atom_array[poly_mask | non_aids_mask]
+
+    @staticmethod
+    def remove_artifact_ligands(
+        atom_array: AtomArray, entity_poly_type: dict
+    ) -> AtomArray:
+        """Remove artifact ligands (ions, buffers, solvents, PEGs, etc.).
+
+        Only removes non-polymer chains. Polymer chains are preserved even if
+        they contain matching residue names (e.g. modified residues).
+        """
+        non_artifact_mask = ~np.isin(atom_array.res_name, list(ARTIFACT_LIGANDS))
+        poly_mask = np.isin(atom_array.label_entity_id, list(entity_poly_type.keys()))
+        return atom_array[poly_mask | non_artifact_mask]
+
+    @staticmethod
+    def remove_unbound_metal_ions(
+        atom_array: AtomArray,
+        radius: float = 3.0,
+        min_contacts: int = 3,
+    ) -> AtomArray:
+        """Remove metal ions that are not coordinated by nearby heavy atoms.
+
+        Detects metal ions as hetero atoms with a metal element, then removes
+        those with fewer than `min_contacts` non-metal heavy atoms within
+        `radius` angstroms.
+        """
+        metal_mask = atom_array.hetero & np.isin(atom_array.element, list(METALS))
+        if not metal_mask.any():
+            return atom_array
+
+        heavy_mask = (atom_array.element != "H") & ~metal_mask
+        if not heavy_mask.any():
+            return atom_array[~metal_mask]
+
+        tree = KDTree(atom_array.coord[heavy_mask])
+        neighbor_counts = tree.query_ball_point(
+            atom_array.coord[metal_mask], radius, return_length=True
+        )
+
+        metal_indices = np.where(metal_mask)[0]
+        remove_indices = metal_indices[neighbor_counts < min_contacts]
+
+        keep_mask = np.ones(len(atom_array), dtype=bool)
+        keep_mask[remove_indices] = False
+        return atom_array[keep_mask]
 
     @staticmethod
     def _get_clashing_chains(
@@ -492,6 +546,12 @@ class Filter(object):
                 (sorted_chain_id[in_core_mask], sorted_chain_id[~in_core_mask])
             )
 
+        # De-duplicate sorted_chain_id while preserving distance order
+        seen = set()
+        sorted_chain_id = np.array(
+            [x for x in sorted_chain_id if not (x in seen or seen.add(x))]
+        )
+
         closest_chain_id = set()
         chain_ids_to_token_num = {}
         if max_tokens_num is None:
@@ -499,12 +559,10 @@ class Filter(object):
 
         tokens = 0
         for chain_id in sorted_chain_id:
-            # get token num
-            if chain_id not in chain_ids_to_token_num:
-                chain_ids_to_token_num[chain_id] = atom_array.centre_atom_mask[
-                    atom_array.mol_id == chain_id
-                ].sum()
-            chain_token_num = chain_ids_to_token_num[chain_id]
+            chain_token_num = chain_ids_to_token_num.setdefault(
+                chain_id,
+                atom_array.centre_atom_mask[atom_array.mol_id == chain_id].sum(),
+            )
 
             if len(closest_chain_id) >= max_chains_num:
                 if tokens + chain_token_num > max_tokens_num:
@@ -676,30 +734,6 @@ class Filter(object):
         return atom_array
 
     @staticmethod
-    def remove_protein_side_chains(atom_array: AtomArray) -> AtomArray:
-        """
-        Removes protein side chains from the input AtomArray and changes every residue name annotation to glycine.
-        Only keeps backbone atoms (N, CA, C, O) and changes all residue names to GLY.
-
-        Args:
-            atom_array (AtomArray): Input atom array containing protein structure
-
-        Returns:
-            AtomArray: Modified atom array with only backbone atoms and all residues labeled as GLY
-        """
-        # Keep only backbone atoms
-        backbone_mask = np.isin(atom_array.atom_name, ["N", "CA", "C", "O", "OXT"]) | (
-            atom_array.mol_type != "protein"
-        )
-        backbone_array = atom_array[backbone_mask]
-
-        # Change residue names to GLY only for proteins
-        protein_mask = backbone_array.mol_type == "protein"
-        backbone_array.res_name[protein_mask] = "GLY"
-
-        return backbone_array
-
-    @staticmethod
     def remove_non_motif_residue_sidechains(atom_array: AtomArray) -> AtomArray:
         """
         Removes side chain atoms only from residues that aren't part of the motif. This is only performed
@@ -759,3 +793,70 @@ class Filter(object):
 
         mask = atom_array.fragment_id != -1
         return atom_array[mask]
+
+
+def clean_structure(
+    atom_array: AtomArray,
+    entity_poly_type: dict[str, str],
+    *,
+    remove_water: bool = True,
+    remove_hydrogens: bool = True,
+    remove_unknown_residues: bool = True,
+    remove_distant_ca_chains: bool = True,
+    remove_crystallization_aids: bool = True,
+    remove_artifact_ligands: bool = True,
+    remove_unbound_metal_ions: bool = True,
+) -> AtomArray | None:
+    """Clean a parsed structure by removing unwanted atoms and chains.
+
+    This is a pure filtering step — no atom additions or residue fixes.
+    MSE→MET conversion, arginine fixes, and add_missing should be called
+    separately after this function.
+
+    Args:
+        atom_array: Parsed structure from mmCIF.
+        entity_poly_type: Mapping of entity_id to polymer type string.
+        remove_water: Remove HOH molecules.
+        remove_hydrogens: Remove H/D atoms.
+        remove_unknown_residues: Remove polymer chains with unknown residues.
+        remove_distant_ca_chains: Remove chains with consecutive CA > 15Å apart.
+        remove_crystallization_aids: Remove crystallization aids (SO4, GOL, etc.).
+        remove_artifact_ligands: Remove artifact ligands (ions, buffers, solvents, PEGs, etc.).
+        remove_unbound_metal_ions: Remove metal ions with <3 heavy atoms within 3Å.
+
+    Returns:
+        Cleaned AtomArray, or None if no atoms survive.
+    """
+    steps: list[Callable[[AtomArray], AtomArray]] = []
+
+    if remove_water:
+        steps.append(Filter.remove_water)
+    if remove_hydrogens:
+        steps.append(Filter.remove_hydrogens)
+    if remove_unknown_residues:
+        steps.append(
+            lambda aa: Filter.remove_polymer_chains_with_unknown_residues(
+                aa, entity_poly_type, condition="any"
+            )
+        )
+    if remove_distant_ca_chains:
+        steps.append(
+            lambda aa: Filter.remove_polymer_chains_with_consecutive_c_alpha_too_far_away(
+                aa, entity_poly_type
+            )
+        )
+    if remove_crystallization_aids:
+        steps.append(
+            lambda aa: Filter.remove_crystallization_aids(aa, entity_poly_type)
+        )
+    if remove_artifact_ligands:
+        steps.append(lambda aa: Filter.remove_artifact_ligands(aa, entity_poly_type))
+    if remove_unbound_metal_ions:
+        steps.append(Filter.remove_unbound_metal_ions)
+
+    for step in steps:
+        atom_array = step(atom_array)
+        if len(atom_array) == 0:
+            return None
+
+    return atom_array

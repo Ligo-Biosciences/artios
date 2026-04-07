@@ -96,7 +96,7 @@ default_distillation_configs = {
     "max_n_token": 1500,
 }
 
-DATA_ROOT_DIR = "/dev/shm/af3-dev/release_data/"
+DATA_ROOT_DIR = "af3-dev/release_data/"
 
 # Use CCD cache created by scripts/gen_ccd_cache.py priority. (without date in filename)
 # See: docs/prepare_data.md
@@ -250,7 +250,7 @@ data_configs = {
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/v3_w_plinder.csv.gz",  # .gz
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv",  # .gz
             ),
             # "pdb_exclusion_lists": [
             #     os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),

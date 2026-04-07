@@ -38,6 +38,10 @@ EXTRA_CRYSTALLIZATION_AIDS = (
     "BU2",  # 1,3-butanediol (cryoprotectant)
     "SDS",  # sodium dodecyl sulfate (detergent)
     "SBT",  # 2-butanol (solvent)
+    "BET",  # trimethyl glycine / betaine (osmolyte/precipitant)
+    "MLT",  # D-malate (precipitant)
+    "JEF",  # Jeffamine (PEG/PPG variant, cryoprotectant)
+    "EMC",  # ethyl mercury ion (phasing reagent)
 )
 
 # =============================================================================

@@ -3,6 +3,75 @@ from dataclasses import dataclass
 
 import biotite.structure as struc
 import numpy as np
+from scipy.spatial.distance import pdist, squareform
+
+from artios.data.engineering.metrics.dssp import compute_dssp
+
+
+def _extract_helix_axes(
+    sse: np.ndarray,
+    atom_array: struc.AtomArray,
+    min_helix_len: int = 5,
+    max_midpoint_dist: float = 20.0,
+) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Extract helix direction vectors and midpoints from SSE annotation.
+
+    Returns (dirs, mids) where dirs[i] is the unit direction vector of helix i
+    and mids[i] is its CA centroid. Only helices with >= min_helix_len residues
+    and >= min_helix_len CA atoms are included.
+    """
+    ca_mask = atom_array.atom_name == "CA"
+    ca_atoms = atom_array[ca_mask]
+    coords = ca_atoms.coord
+
+    is_helix = sse == "a"
+    helix_runs: list[tuple[int, int]] = []
+    start = None
+    for i in range(len(sse)):
+        if is_helix[i]:
+            if start is None:
+                start = i
+        else:
+            if start is not None:
+                helix_runs.append((start, i))
+                start = None
+    if start is not None:
+        helix_runs.append((start, len(sse)))
+
+    ca_res_ids = ca_atoms.res_id
+    sse_res_ids = atom_array.res_id
+
+    dirs: list[np.ndarray] = []
+    mids: list[np.ndarray] = []
+    for s, e in helix_runs:
+        if e - s < min_helix_len:
+            continue
+        helix_res = set(sse_res_ids[s:e].tolist())
+        helix_ca_mask = np.isin(ca_res_ids, list(helix_res))
+        helix_ca = coords[helix_ca_mask]
+        if len(helix_ca) < min_helix_len:
+            continue
+        d = helix_ca[-1] - helix_ca[0]
+        norm = np.linalg.norm(d)
+        if norm > 1e-6:
+            dirs.append(d / norm)
+            mids.append(helix_ca.mean(axis=0))
+
+    return dirs, mids
+
+
+def _pairwise_helix_cosines(
+    dirs: list[np.ndarray],
+    mids: list[np.ndarray],
+    max_midpoint_dist: float = 20.0,
+) -> list[float]:
+    """Compute |cos(angle)| for all helix pairs with midpoints within max_midpoint_dist."""
+    als: list[float] = []
+    for i in range(len(dirs)):
+        for j in range(i + 1, len(dirs)):
+            if np.linalg.norm(mids[i] - mids[j]) < max_midpoint_dist:
+                als.append(float(abs(np.dot(dirs[i], dirs[j]))))
+    return als
 
 
 def compute_mean_sasa(atom_array: struc.AtomArray) -> float:
@@ -83,12 +152,13 @@ def compute_plddt_statistics(atom_array: struc.AtomArray) -> dict[str, float]:
     }
 
 
-def compute_sse(atom_array: struc.AtomArray) -> float:
+def compute_sse(atom_array: struc.AtomArray, sse: np.ndarray | None = None) -> float:
     """
     Calculates the secondary structure splits.
     """
-    sse_array = struc.annotate_sse(atom_array)
-    sse_counter = Counter(sse_array.tolist())
+    if sse is None:
+        sse = compute_dssp(atom_array)
+    sse_counter = Counter(sse.tolist())
 
     total_size = sse_counter.total()
     return {
@@ -135,7 +205,9 @@ class FoldQuality:
         return 1.0 / (1.0 + np.exp(-logit))
 
 
-def compute_fold_quality(atom_array: struc.AtomArray) -> FoldQuality:
+def compute_fold_quality(
+    atom_array: struc.AtomArray, sse: np.ndarray | None = None
+) -> FoldQuality:
     """Compute fold quality metrics for filtering repetitive/simplistic structures.
 
     Three metrics that together capture backbone designability:
@@ -146,12 +218,11 @@ def compute_fold_quality(atom_array: struc.AtomArray) -> FoldQuality:
 
     Args:
         atom_array: Biotite AtomArray structure.
+        sse: Pre-computed SSE array from compute_dssp(). Computed if None.
 
     Returns:
         FoldQuality dataclass with metrics and combined score.
     """
-    from scipy.spatial.distance import pdist, squareform
-
     ca_mask = atom_array.atom_name == "CA"
     ca_atoms = atom_array[ca_mask]
     coords = ca_atoms.coord
@@ -171,53 +242,17 @@ def compute_fold_quality(atom_array: struc.AtomArray) -> FoldQuality:
     lr_cd = float(((dm < 8.0) & (seq_sep >= 12)).sum() / 2 / n)
 
     # DSSP
-    sse = struc.annotate_sse(atom_array)
+    if sse is None:
+        sse = compute_dssp(atom_array)
     dssp_coil = float((sse == "c").sum() / len(sse))
 
     # Helix alignment
-    is_helix = sse == "a"
-    helix_runs: list[tuple[int, int]] = []
-    start = None
-    for i in range(len(sse)):
-        if is_helix[i]:
-            if start is None:
-                start = i
-        else:
-            if start is not None:
-                helix_runs.append((start, i))
-                start = None
-    if start is not None:
-        helix_runs.append((start, len(sse)))
-
+    dirs, mids = _extract_helix_axes(sse, atom_array)
     dssp_helix_align = 0.5
-    if len(helix_runs) >= 3:
-        ca_res_ids = ca_atoms.res_id
-        sse_res_ids = atom_array.res_id
-
-        dirs: list[np.ndarray] = []
-        mids: list[np.ndarray] = []
-        for s, e in helix_runs:
-            if e - s < 5:
-                continue
-            helix_res = set(sse_res_ids[s:e].tolist())
-            helix_ca_mask = np.isin(ca_res_ids, list(helix_res))
-            helix_ca = coords[helix_ca_mask]
-            if len(helix_ca) < 5:
-                continue
-            d = helix_ca[-1] - helix_ca[0]
-            norm = np.linalg.norm(d)
-            if norm > 1e-6:
-                dirs.append(d / norm)
-                mids.append(helix_ca.mean(axis=0))
-
-        if len(dirs) >= 3:
-            als: list[float] = []
-            for i in range(len(dirs)):
-                for j in range(i + 1, len(dirs)):
-                    if np.linalg.norm(mids[i] - mids[j]) < 20.0:
-                        als.append(float(abs(np.dot(dirs[i], dirs[j]))))
-            if als:
-                dssp_helix_align = float(np.mean(als))
+    if len(dirs) >= 3:
+        als = _pairwise_helix_cosines(dirs, mids)
+        if als:
+            dssp_helix_align = float(np.mean(als))
 
     score = FoldQuality.compute_score(lr_cd, dssp_coil, dssp_helix_align)
     return FoldQuality(
@@ -226,3 +261,142 @@ def compute_fold_quality(atom_array: struc.AtomArray) -> FoldQuality:
         dssp_helix_align=dssp_helix_align,
         score=score,
     )
+
+
+def compute_relative_contact_order(
+    atom_array: struc.AtomArray, contact_cutoff: float = 8.0
+) -> float:
+    """Relative contact order: mean sequence separation of contacting CA pairs,
+    normalized by chain length.
+
+    CO = (1 / (L * N)) * sum(|i - j|) for all CA pairs within contact_cutoff
+    where L = number of residues, N = number of contacting pairs.
+
+    High values indicate non-local packing (globular enzymes).
+    Low values indicate local contacts (membrane helical bundles).
+
+    Returns 0.0 for chains with < 10 residues or no contacts.
+    """
+    ca_mask = atom_array.atom_name == "CA"
+    ca_atoms = atom_array[ca_mask]
+    n = len(ca_atoms)
+
+    if n < 10:
+        return 0.0
+
+    dm = squareform(pdist(ca_atoms.coord))
+    seq_sep = np.abs(np.arange(n)[:, None] - np.arange(n)[None, :])
+
+    # Contacts: within cutoff, exclude self and trivial neighbors (|i-j| >= 3)
+    contact_mask = (dm < contact_cutoff) & (seq_sep >= 3)
+    # Upper triangle only to avoid double-counting
+    contact_mask = np.triu(contact_mask, k=1)
+
+    num_contacts = contact_mask.sum()
+    if num_contacts == 0:
+        return 0.0
+
+    total_sep = seq_sep[contact_mask].sum()
+    return float(total_sep / (n * num_contacts))
+
+
+def compute_sse_segment_count(
+    atom_array: struc.AtomArray, sse: np.ndarray | None = None
+) -> dict[str, float]:
+    """Count distinct SSE segments (runs of consecutive same-type residues).
+
+    Returns raw counts and length-normalized counts for helix, sheet, coil.
+    Enzymes with mixed topology have many short segments; simple repeats have few long ones.
+    """
+    if sse is None:
+        sse = compute_dssp(atom_array)
+    n = len(sse)
+
+    if n == 0:
+        return {
+            "helix_segments": 0,
+            "sheet_segments": 0,
+            "coil_segments": 0,
+            "helix_segments_per_100": 0.0,
+            "sheet_segments_per_100": 0.0,
+            "coil_segments_per_100": 0.0,
+            "total_segments": 0,
+            "total_segments_per_100": 0.0,
+        }
+
+    # Count transitions: a new segment starts when sse[i] != sse[i-1]
+    counts = {"a": 0, "b": 0, "c": 0}
+    counts[sse[0]] = 1
+    for i in range(1, n):
+        if sse[i] != sse[i - 1]:
+            counts[sse[i]] += 1
+
+    total = counts["a"] + counts["b"] + counts["c"]
+    per_100 = 100.0 / n
+
+    return {
+        "helix_segments": counts["a"],
+        "sheet_segments": counts["b"],
+        "coil_segments": counts["c"],
+        "helix_segments_per_100": counts["a"] * per_100,
+        "sheet_segments_per_100": counts["b"] * per_100,
+        "coil_segments_per_100": counts["c"] * per_100,
+        "total_segments": total,
+        "total_segments_per_100": total * per_100,
+    }
+
+
+def compute_sse_entropy(
+    atom_array: struc.AtomArray, sse: np.ndarray | None = None
+) -> float:
+    """Shannon entropy over SSE composition {helix, sheet, coil}.
+
+    0.0 for all-helix or all-coil structures.
+    ~1.58 bits for perfectly uniform {1/3, 1/3, 1/3} mix.
+    """
+    if sse is None:
+        sse = compute_dssp(atom_array)
+    n = len(sse)
+
+    if n == 0:
+        return 0.0
+
+    counter = Counter(sse.tolist())
+    entropy = 0.0
+    for count in counter.values():
+        p = count / n
+        if p > 0:
+            entropy -= p * np.log2(p)
+
+    return float(entropy)
+
+
+def compute_longest_coil_run(
+    atom_array: struc.AtomArray, sse: np.ndarray | None = None
+) -> dict[str, float]:
+    """Longest uninterrupted coil run, absolute and as fraction of chain length.
+
+    Pathological predicted structures (compact but unfolded spaghetti) have
+    enormous coil runs (0.30-0.45 of length). Real folded domains stay below ~0.20.
+    """
+    if sse is None:
+        sse = compute_dssp(atom_array)
+    n = len(sse)
+
+    if n == 0:
+        return {"longest_coil_run": 0, "longest_coil_run_fraction": 0.0}
+
+    max_run = 0
+    current_run = 0
+    for s in sse:
+        if s == "c":
+            current_run += 1
+            if current_run > max_run:
+                max_run = current_run
+        else:
+            current_run = 0
+
+    return {
+        "longest_coil_run": max_run,
+        "longest_coil_run_fraction": max_run / n,
+    }

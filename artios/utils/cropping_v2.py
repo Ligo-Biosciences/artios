@@ -57,6 +57,15 @@ def crop(
     Returns:
         (method_name, sorted token indices).
     """
+    # Zero out PocketCropping weight if the structure has no pockets.
+    has_pockets = (
+        structure.training.pocket_id is not None
+        and (structure.training.pocket_id > 0).any()
+    )
+    if not has_pockets:
+        method_weights = list(method_weights)
+        method_weights[3] = 0.0
+
     method = random.choices(METHODS, weights=method_weights, k=1)[0]
 
     centre = structure.centre_atom_indices

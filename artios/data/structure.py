@@ -211,10 +211,10 @@ def compute_token_grouping(
         motif.is_motif_related if motif is not None else np.zeros(n_atoms, dtype=int)
     )
 
+    # Running counter mirrors the old AtomArrayTokenizer.tokenize() pattern.
+    # residue_iter yields sub-arrays in array order, so len(res) advances us.
+    start = 0
     for res in struc.residue_iter(atom_array):
-        # residue_iter yields sub-arrays; we need global indices
-        # We track position via atom_token_index fill state
-        start = np.where(atom_token_index == -1)[0][0]
         stop = start + len(res)
 
         res_name = atom_array.res_name[start]
@@ -236,6 +236,8 @@ def compute_token_grouping(
                 atom_token_index[i] = token_counter
                 centre_atom_mask[i] = True
                 token_counter += 1
+
+        start = stop
 
     assert (atom_token_index >= 0).all(), "Some atoms were not assigned to a token"
 

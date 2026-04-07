@@ -248,6 +248,80 @@ def compute_token_grouping(
     )
 
 
+def compute_token_grouping_vectorized(
+    atom_array: AtomArray,
+    type_masks: TypeMasks,
+    motif: MotifAnnotation | None = None,
+) -> TokenGrouping:
+    """Vectorized version of compute_token_grouping (same logic, no Python loops)."""
+    n_atoms = len(atom_array)
+    is_motif_related = (
+        motif.is_motif_related if motif is not None else np.zeros(n_atoms, dtype=int)
+    )
+
+    # -- Residue-level arrays ------------------------------------------------
+    starts = struc.get_residue_starts(atom_array)
+    n_res = len(starts)
+    sizes = np.diff(np.append(starts, n_atoms))
+    residue_index = np.repeat(np.arange(n_res), sizes)  # [n_atoms]
+
+    # Per-residue properties (sampled from first atom of each residue).
+    res_names = atom_array.res_name[starts]
+    mol_types = type_masks.mol_type[starts]
+
+    is_standard_res = (
+        np.isin(res_names, list(STD_RESIDUES))
+        & (mol_types != "ligand")
+        & ~is_motif_related[starts].astype(bool)
+    )
+
+    # -- Token index ----------------------------------------------------------
+    tokens_per_res = np.where(is_standard_res, 1, sizes)  # [n_res]
+    token_offset = np.zeros(n_res, dtype=np.int64)
+    if n_res > 1:
+        np.cumsum(tokens_per_res[:-1], out=token_offset[1:])
+
+    is_standard_atom = is_standard_res[residue_index]  # [n_atoms]
+    within_res_offset = np.arange(n_atoms) - starts[residue_index]
+    within_res_offset[is_standard_atom] = 0
+
+    atom_token_index = token_offset[residue_index] + within_res_offset
+
+    # -- Centre atom mask -----------------------------------------------------
+    # Non-standard: every atom is its own centre.
+    centre_atom_mask = ~is_standard_atom
+
+    # Standard residues: CA (protein) or C1' (nucleotide), fallback first atom.
+    per_atom_mol = mol_types[residue_index]
+    target_match = is_standard_atom & (
+        ((per_atom_mol == "protein") & (atom_array.atom_name == "CA"))
+        | ((per_atom_mol != "protein") & (atom_array.atom_name == "C1'"))
+    )
+    matched_atoms = np.where(target_match)[0]
+    if len(matched_atoms) > 0:
+        _, first_idx = np.unique(residue_index[matched_atoms], return_index=True)
+        centre_atom_mask[matched_atoms[first_idx]] = True
+
+    # Fallback: standard residues with no name-matched centre use first atom.
+    std_res_indices = np.where(is_standard_res)[0]
+    matched_res = (
+        np.unique(residue_index[matched_atoms])
+        if len(matched_atoms) > 0
+        else np.array([], dtype=int)
+    )
+    fallback_res = np.setdiff1d(std_res_indices, matched_res)
+    if len(fallback_res) > 0:
+        centre_atom_mask[starts[fallback_res]] = True
+
+    assert (atom_token_index >= 0).all(), "Some atoms were not assigned to a token"
+
+    return TokenGrouping(
+        atom_token_index=atom_token_index,
+        centre_atom_mask=centre_atom_mask,
+        n_tokens=int(tokens_per_res.sum()),
+    )
+
+
 # ---------------------------------------------------------------------------
 # AnnotatedStructure
 # ---------------------------------------------------------------------------
@@ -515,7 +589,7 @@ class AnnotatedStructure:
             atoms.set_annotation("is_resolved", np.ones(len(atoms), dtype=bool))
         training = TrainingAnnotations.from_atom_array(atoms)
 
-        grouping = compute_token_grouping(atoms, type_masks, motif)
+        grouping = compute_token_grouping_vectorized(atoms, type_masks, motif)
 
         # Strip all transferred annotations.
         for group in cls._GROUPS:

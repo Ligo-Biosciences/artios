@@ -180,6 +180,7 @@ class ArtiosPotts(nn.Module):
             track_u_i=sampling_cfg.track_u_i,
             u_i_interval=sampling_cfg.u_i_interval,
             cfg_scale=sampling_cfg.cfg_scale,
+            granular_active_site_coloring=sampling_cfg.granular_active_site_coloring,
         )
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
@@ -463,17 +464,13 @@ class ArtiosPotts(nn.Module):
             penalty_dict["lcp"] = lcp_penalty
 
         # Active site mask
-        needs_active_site = (
-            self.aromatic_penalty_weight > 0 or self.charged_penalty_weight > 0
+        active_site_mask = build_active_site_mask(
+            context.coordinate.centre_coordinate,
+            context.entity.is_ligand_token,
+            context.entity.is_protein_token,
+            context.mask.token_mask,
+            self.active_site_distance_cutoff,
         )
-        if needs_active_site:
-            active_site_mask = build_active_site_mask(
-                context.coordinate.centre_coordinate,
-                context.entity.is_ligand_token,
-                context.entity.is_protein_token,
-                context.mask.token_mask,
-                self.active_site_distance_cutoff,
-            )
 
         if self.aromatic_penalty_weight > 0:
 
@@ -522,6 +519,7 @@ class ArtiosPotts(nn.Module):
             J_uncond=J_uncond,
             edge_index_uncond=edge_index_uncond,
             edge_mask_uncond=edge_mask_uncond,
+            active_site_mask=active_site_mask,
         )
 
         return PottsOutput(

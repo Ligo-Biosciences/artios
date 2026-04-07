@@ -1130,11 +1130,21 @@ class PottsSamplingResult:
 def _color_graph(
     edge_index: Int[Tensor, "batch n_token neighbours"],
     edge_mask: Bool[Tensor, "batch n_token neighbours"],
+    *,
+    active_site_mask: Bool[Tensor, "batch n_token"] | None = None,
+    granular_active_site_coloring: bool = False,
 ) -> list[Bool[Tensor, "batch n_token"]]:
     """Greedy graph colouring for parallel Gibbs updates.
 
     Assigns each node a colour such that no two adjacent nodes share a colour.
     Uses first batch element (graph topology is shared across batch).
+
+    If `granular_active_site_coloring` is True and `active_site_mask` is
+    provided, each active-site token is pre-assigned a unique colour
+    (0..n_active-1) so no two active-site tokens can share a colour group.
+    Non-active-site tokens are then greedy-coloured starting from colour 0,
+    and may freely reuse those reserved colours where the standard graph-
+    colouring constraint allows it (no edge to a same-colour neighbour).
 
     Returns:
         List of boolean masks, one per colour, each selecting an independent set.
@@ -1146,7 +1156,16 @@ def _color_graph(
     colors = [-1] * N
     num_colors = 0
 
+    # Reserve a unique colour per active-site token (no two share)
+    if granular_active_site_coloring and active_site_mask is not None:
+        active_indices = torch.where(active_site_mask[0])[0].tolist()
+        for c, i in enumerate(active_indices):
+            colors[i] = c
+        num_colors = len(active_indices)
+
     for i in range(N):
+        if colors[i] >= 0:
+            continue  # already coloured (active site)
         neighbor_colors: set[int] = set()
         for k in range(K):
             if em[i, k]:
@@ -1619,6 +1638,12 @@ class PottsSampler:
     """Classifier-free guidance scale. 1.0 = standard conditional (no CFG).
     >1 amplifies ligand conditioning, <1 dampens it."""
 
+    granular_active_site_coloring: bool = False
+    """If True, each active-site token is assigned a unique colour during
+    Gibbs graph colouring so that no two active-site residues end up in the
+    same colour group (and are therefore never updated simultaneously).
+    Requires active_site_mask to be passed to sample()."""
+
     @typecheck
     def sample(
         self,
@@ -1640,6 +1665,7 @@ class PottsSampler:
         | None = None,
         edge_index_uncond: Int[Tensor, "batch n_token neighbours_uncond"] | None = None,
         edge_mask_uncond: Bool[Tensor, "batch n_token neighbours_uncond"] | None = None,
+        active_site_mask: Bool[Tensor, "batch n_token"] | None = None,
     ) -> PottsSamplingResult:
         """Sample sequences from the Potts energy landscape.
 
@@ -1696,7 +1722,12 @@ class PottsSampler:
         # Pre-compute graph colouring for Gibbs
         color_masks = None
         if self.proposal == PottsProposal.GIBBS:
-            color_masks = _color_graph(edge_index, edge_mask)
+            color_masks = _color_graph(
+                edge_index,
+                edge_mask,
+                active_site_mask=active_site_mask,
+                granular_active_site_coloring=self.granular_active_site_coloring,
+            )
 
         anneal_steps = int(self.annealing_fraction * self.n_sweeps)
 

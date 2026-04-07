@@ -293,6 +293,7 @@ model_configs = {
                 "trajectory_interval": 1,
                 "track_u_i": False,
                 "u_i_interval": 20,
+                "granular_active_site_coloring": False,
             },
         },
         "sampling": {

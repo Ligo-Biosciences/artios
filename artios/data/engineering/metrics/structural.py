@@ -5,6 +5,7 @@ import biotite.structure as struc
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
 
+from artios.common.constants import HYDROPHOBIC_RESIDUES
 from artios.data.engineering.metrics.dssp import compute_dssp
 
 
@@ -399,4 +400,158 @@ def compute_longest_coil_run(
     return {
         "longest_coil_run": max_run,
         "longest_coil_run_fraction": max_run / n,
+    }
+
+
+def compute_repeat_score(
+    atom_array: struc.AtomArray, min_period: int = 15
+) -> dict[str, float]:
+    """Detect structural repetitiveness via CA distance matrix autocorrelation.
+
+    For each sequence separation k, computes mean CA-CA distance d(k).
+    A repeat protein (beta-solenoid, beta-helix) oscillates with period P;
+    a globular protein decays smoothly. The repeat score is the max
+    autocorrelation of the detrended d(k) signal at lags >= min_period.
+
+    Returns repeat_score (0-1, higher = more repetitive) and repeat_period.
+    """
+    ca = atom_array[atom_array.atom_name == "CA"]
+    n = len(ca)
+
+    if n < 2 * min_period:
+        return {"repeat_score": 0.0, "repeat_period": 0}
+
+    dm = squareform(pdist(ca.coord))
+
+    # Mean CA-CA distance at each sequence separation k
+    max_k = n // 2
+    d_k = np.array([np.mean(np.diag(dm, k=k)) for k in range(1, max_k + 1)])
+
+    # Detrend: subtract running average to remove the monotonic rise
+    window = min(min_period, len(d_k) // 3)
+    if window < 3:
+        return {"repeat_score": 0.0, "repeat_period": 0}
+    kernel = np.ones(window) / window
+    smooth = np.convolve(d_k, kernel, mode="same")
+    detrended = d_k - smooth
+
+    # Autocorrelation of detrended signal
+    detrended = detrended - detrended.mean()
+    norm = np.sum(detrended**2)
+    if norm < 1e-10:
+        return {"repeat_score": 0.0, "repeat_period": 0}
+
+    autocorr = np.correlate(detrended, detrended, mode="full")
+    autocorr = autocorr[len(detrended) - 1 :]  # positive lags only
+    autocorr = autocorr / norm
+
+    # Find max autocorrelation at lag >= min_period
+    if len(autocorr) <= min_period:
+        return {"repeat_score": 0.0, "repeat_period": 0}
+
+    search = autocorr[min_period:]
+    best_idx = np.argmax(search)
+
+    return {
+        "repeat_score": float(search[best_idx]),
+        "repeat_period": int(best_idx + min_period),
+    }
+
+
+def compute_hydrophobic_sasa_fraction(atom_array: struc.AtomArray) -> dict[str, float]:
+    """Fraction of solvent-accessible surface area that is hydrophobic.
+
+    A stable monomer buries its hydrophobics in the core (~40-45% hydrophobic SASA).
+    Interface-dependent structures expose large hydrophobic patches (>50%)
+    where the binding partner would sit.
+
+    Also returns the buried hydrophobic fraction: proportion of hydrophobic
+    residues with SASA < 10 A^2. Low values indicate exposed hydrophobics
+    that need a partner.
+    """
+    atom_sasa = struc.sasa(atom_array, vdw_radii="Single")
+
+    # Per-residue SASA and hydrophobic classification
+    res_starts = struc.get_residue_starts(atom_array, add_exclusive_stop=True)
+    total_sasa = 0.0
+    hydrophobic_sasa = 0.0
+    n_hydrophobic = 0
+    n_hydrophobic_buried = 0
+
+    for s, e in zip(res_starts[:-1], res_starts[1:]):
+        res_sasa = float(np.nansum(atom_sasa[s:e]))
+        is_hydrophobic = atom_array.res_name[s] in HYDROPHOBIC_RESIDUES
+        total_sasa += res_sasa
+        if is_hydrophobic:
+            hydrophobic_sasa += res_sasa
+            n_hydrophobic += 1
+            if res_sasa < 10.0:
+                n_hydrophobic_buried += 1
+
+    hydrophobic_fraction = hydrophobic_sasa / total_sasa if total_sasa > 0 else 0.0
+    buried_fraction = n_hydrophobic_buried / n_hydrophobic if n_hydrophobic > 0 else 0.0
+
+    return {
+        "hydrophobic_sasa_fraction": float(hydrophobic_fraction),
+        "buried_hydrophobic_fraction": float(buried_fraction),
+    }
+
+
+def compute_sphericity(atom_array: struc.AtomArray) -> float:
+    """Sphericity from CA coordinate inertia tensor eigenvalues.
+
+    Sphericity = (lambda_min / lambda_max)^(1/2), where lambda are
+    eigenvalues of the gyration tensor. 1.0 = perfect sphere,
+    low values = elongated or flat (common in interface-dependent structures).
+    """
+    ca = atom_array[atom_array.atom_name == "CA"]
+    coords = ca.coord
+    n = len(coords)
+
+    if n < 4:
+        return 0.0
+
+    center = coords.mean(axis=0)
+    centered = coords - center
+
+    # Gyration tensor (mass-weighted inertia, unit masses)
+    gyration = centered.T @ centered / n
+    eigenvalues = np.linalg.eigvalsh(gyration)
+    eigenvalues = np.sort(eigenvalues)
+
+    if eigenvalues[2] < 1e-10:
+        return 0.0
+
+    return float(np.sqrt(eigenvalues[0] / eigenvalues[2]))
+
+
+def compute_local_packing_variance(
+    atom_array: struc.AtomArray, radius: float = 10.0
+) -> dict[str, float]:
+    """Variance of per-residue CA contact counts within a sphere.
+
+    Uniform packing (stable monomer) → low variance.
+    Asymmetric packing (exposed interface on one face) → high variance.
+    The coefficient of variation (CV = std/mean) normalizes for protein size.
+    """
+    ca = atom_array[atom_array.atom_name == "CA"]
+    coords = ca.coord
+    n = len(coords)
+
+    if n < 10:
+        return {"packing_cv": 0.0, "packing_mean": 0.0, "packing_std": 0.0}
+
+    from scipy.spatial import KDTree
+
+    tree = KDTree(coords)
+    counts = np.array([len(tree.query_ball_point(c, r=radius)) for c in coords])
+
+    mean_count = float(np.mean(counts))
+    std_count = float(np.std(counts))
+    cv = std_count / mean_count if mean_count > 0 else 0.0
+
+    return {
+        "packing_cv": float(cv),
+        "packing_mean": mean_count,
+        "packing_std": std_count,
     }

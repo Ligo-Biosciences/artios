@@ -731,7 +731,7 @@ class TestTrajectoryTracking:
         assert output.sequence_trajectory is not None
         assert output.energy_trajectory is not None
         assert output.sequence_trajectory.shape == (B, n_saved, N)
-        assert output.energy_trajectory.shape == (B, n_saved)
+        assert output.energy_trajectory.shape == (B, n_saved, N)
 
     def test_trajectory_interval_reduces_size(self, context, device):
         """trajectory_interval > 1 reduces the number of saved steps."""

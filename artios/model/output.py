@@ -87,7 +87,7 @@ class PottsOutput(ModelOutput):
 
     h and J are required - the Potts fields and couplings.
     sampled_sequence is populated after MCMC sampling at inference.
-    energy is the Potts energy of the sampled sequence.
+    energy is the per-node Potts energy of the sampled sequence
     """
 
     h: Float[Tensor, "batch n_token num_residue_types"]  # type: ignore[assignment]
@@ -97,9 +97,9 @@ class PottsOutput(ModelOutput):
     is_masked: Bool[Tensor, "batch n_token"]  # type: ignore[assignment]
     timestep: Optional[Float[Tensor, "batch"]] = None  # type: ignore[assignment]
     sampled_sequence: Optional[Float[Tensor, "batch n_token num_residue_types"]] = None  # type: ignore[assignment]
-    energy: Optional[Float[Tensor, "batch"]] = None  # type: ignore[assignment]
+    energy: Optional[Float[Tensor, "batch n_token"]] = None  # type: ignore[assignment]
     sequence_trajectory: Optional[Int[Tensor, "batch n_saved n_token"]] = None
-    energy_trajectory: Optional[Float[Tensor, "batch n_saved"]] = None
+    energy_trajectory: Optional[Float[Tensor, "batch n_saved n_token"]] = None
     trajectory_sweep_indices: list[int] | None = None
     u_i_trajectory: Optional[
         Float[Tensor, "batch n_saved_ui n_token num_residue_types"]

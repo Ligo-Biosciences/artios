@@ -1113,9 +1113,9 @@ class PottsSamplingResult:
     """Result of Potts MCMC sampling."""
 
     sequence: Float[Tensor, "batch n_token num_residue_types"]
-    energy: Float[Tensor, "batch"]
+    energy: Float[Tensor, "batch n_token"]
     sequence_trajectory: Int[Tensor, "batch n_saved n_token"] | None = None
-    energy_trajectory: Float[Tensor, "batch n_saved"] | None = None
+    energy_trajectory: Float[Tensor, "batch n_saved n_token"] | None = None
     trajectory_sweep_indices: list[int] | None = None
     u_i_trajectory: (
         Float[Tensor, "batch n_saved_ui n_token num_residue_types"] | None
@@ -1310,8 +1310,10 @@ def _dlmc_energy_and_log_probs(
         E_all_uncond = -logits_uncond
         E_all = E_all_uncond + cfg_scale * (E_all - E_all_uncond)
 
-    # Compute total energy (NOT blended — used for MH acceptance)
-    energy = compute_potts_energy(S_idx, h, J, edge_index, edge_mask)
+    # Compute total energy (NOT blended — used for MH acceptance).
+    energy = compute_potts_energy(
+        S_idx, h, J, edge_index, edge_mask, collate_nodes=True
+    )
 
     # Add penalty gradient if provided
     if penalty is not None:
@@ -1476,7 +1478,7 @@ class TrajectoryTracker:
     save_set: set[int]
     save_list: list[int]
     seq_traj: Int[Tensor, "batch n_saved n_token"]
-    energy_traj: Float[Tensor, "batch n_saved"]
+    energy_traj: Float[Tensor, "batch n_saved n_token"]
     u_i_save_set: set[int] | None = None
     u_i_save_list: list[int] | None = None
     penalty_collection: PenaltyCollection | None = None
@@ -1505,7 +1507,7 @@ class TrajectoryTracker:
         n_saved = len(save_list)
 
         seq_traj = torch.zeros(B, n_saved, N, dtype=torch.long, device=S.device)
-        energy_traj = torch.zeros(B, n_saved, device=S.device)
+        energy_traj = torch.zeros(B, n_saved, N, device=S.device)
 
         S_idx = S.argmax(-1)
 

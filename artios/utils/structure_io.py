@@ -451,6 +451,37 @@ def _save_sequence_to_fasta(output: SequenceOutput, ctx: SaveContext) -> list[Pa
     return [output_path]
 
 
+def _compute_design_token_indices(ctx: SaveContext) -> np.ndarray:
+    """Return the token indices that correspond to designable (non-motif
+    protein) positions for the current Potts batch.
+
+    Matches the filter used by `_save_potts_to_fasta`: a position is kept iff
+    it is a protein token AND not a motif-related token. All samples in a
+    Potts batch share the same conditioning (protein/motif token layout is
+    fixed across the batch), so a single 1-D index array is shared by every
+    sample.
+
+    Returns:
+        indices: int64 [L_design] — token indices to keep.
+    """
+    if ctx.context is None:
+        raise ValueError(
+            "SaveContext.context is required to compute Potts design-mask indices"
+        )
+
+    is_protein = ctx.context.entity.is_protein_token
+    is_motif_related = ctx.context.motif.is_motif_related_token
+    design_mask = (is_protein & ~is_motif_related).cpu().numpy()  # [B, N] bool
+
+    if not (design_mask == design_mask[0]).all():
+        raise ValueError(
+            "Design mask is not uniform across the batch; Potts trajectory NPZ "
+            "save assumes the same conditioning for every sample in a batch."
+        )
+
+    return np.nonzero(design_mask[0])[0]  # [L_design]
+
+
 def _save_potts(output: PottsOutput, ctx: SaveContext) -> list[Path]:
     """Save Potts output to FASTA format, and trajectory NPZ if available."""
     paths = _save_potts_to_fasta(output, ctx)
@@ -466,19 +497,31 @@ def _save_potts(output: PottsOutput, ctx: SaveContext) -> list[Path]:
 def _save_potts_trajectory(output: PottsOutput, ctx: SaveContext) -> Path:
     """Save Potts MCMC trajectory to a single NPZ file.
 
+    Only the designable (non-motif protein) positions are written — the
+    token axis is filtered down to `L_design` so downstream plots do not
+    show motif-fixed or ligand positions. This matches the behaviour of
+    `_save_potts_to_fasta`, which only writes designable residues.
+
     Contents:
-        sequence_trajectory: int32 [batch, n_saved, n_token] — argmax residue indices.
-        energy_trajectory: float32 [batch, n_saved] — Potts energy at each saved sweep.
+        sequence_trajectory: int32 [batch, n_saved, L_design] — argmax residue indices.
+        energy_trajectory: float32 [batch, n_saved, L_design] — per-node Potts
+            energy at each saved sweep. Sum along the last axis to recover the
+            total Potts energy per sample per sweep.
         sweep_indices: int32 [n_saved] — which sweep each snapshot corresponds to.
     """
     output_dir = Path(ctx.sample_dirs[0])
     os.makedirs(output_dir, exist_ok=True)
     output_path = output_dir / f"{ctx.sample_name}_potts_trajectory.npz"
 
+    design_indices = _compute_design_token_indices(ctx)
+
+    seq_np = output.sequence_trajectory.cpu().numpy().astype(np.int32)
+    energy_np = output.energy_trajectory.cpu().numpy().astype(np.float32)
+
     np.savez(
         output_path,
-        sequence_trajectory=output.sequence_trajectory.cpu().numpy().astype(np.int32),
-        energy_trajectory=output.energy_trajectory.cpu().numpy().astype(np.float32),
+        sequence_trajectory=np.take(seq_np, design_indices, axis=2),
+        energy_trajectory=np.take(energy_np, design_indices, axis=2),
         sweep_indices=np.array(output.trajectory_sweep_indices, dtype=np.int32),
     )
     logger.info(f"Saved Potts trajectory to {output_path}")
@@ -488,8 +531,11 @@ def _save_potts_trajectory(output: PottsOutput, ctx: SaveContext) -> Path:
 def _save_potts_penalty_gradients(output: PottsOutput, ctx: SaveContext) -> Path:
     """Save per-penalty gradient trajectories to NPZ.
 
+    Only designable (non-motif protein) positions are kept along the token
+    axis — see `_save_potts_trajectory` for rationale.
+
     Contents:
-        penalty_grad_{name}: float32 [batch, n_saved_ui, n_token, R] per penalty.
+        penalty_grad_{name}: float32 [batch, n_saved_ui, L_design, R] per penalty.
         sweep_indices: int32 [n_saved_ui].
         penalty_names: string array of penalty names.
     """
@@ -497,11 +543,14 @@ def _save_potts_penalty_gradients(output: PottsOutput, ctx: SaveContext) -> Path
     os.makedirs(output_dir, exist_ok=True)
     output_path = output_dir / f"{ctx.sample_name}_potts_penalty_gradients.npz"
 
+    design_indices = _compute_design_token_indices(ctx)
+
     arrays = {}
     for name in output.penalty_names:
-        arrays[f"penalty_grad_{name}"] = (
+        grad_np = (
             output.penalty_grad_trajectories[name].cpu().numpy().astype(np.float32)
         )
+        arrays[f"penalty_grad_{name}"] = np.take(grad_np, design_indices, axis=2)
     arrays["sweep_indices"] = np.array(output.u_i_sweep_indices, dtype=np.int32)
     arrays["penalty_names"] = np.array(output.penalty_names)
 
@@ -513,17 +562,23 @@ def _save_potts_penalty_gradients(output: PottsOutput, ctx: SaveContext) -> Path
 def _save_potts_u_i_trajectory(output: PottsOutput, ctx: SaveContext) -> Path:
     """Save Potts per-node conditional energies U_i to NPZ.
 
+    Only designable (non-motif protein) positions are kept along the token
+    axis — see `_save_potts_trajectory` for rationale.
+
     Contents:
-        u_i_trajectory: float32 [batch, n_saved_ui, n_token, R] — conditional energies.
+        u_i_trajectory: float32 [batch, n_saved_ui, L_design, R] — conditional energies.
         sweep_indices: int32 [n_saved_ui] — which sweep each snapshot corresponds to.
     """
     output_dir = Path(ctx.sample_dirs[0])
     os.makedirs(output_dir, exist_ok=True)
     output_path = output_dir / f"{ctx.sample_name}_potts_u_i_trajectory.npz"
 
+    design_indices = _compute_design_token_indices(ctx)
+    u_i_np = output.u_i_trajectory.cpu().numpy().astype(np.float32)
+
     np.savez(
         output_path,
-        u_i_trajectory=output.u_i_trajectory.cpu().numpy().astype(np.float32),
+        u_i_trajectory=np.take(u_i_np, design_indices, axis=2),
         sweep_indices=np.array(output.u_i_sweep_indices, dtype=np.int32),
     )
     logger.info(f"Saved Potts U_i trajectory to {output_path}")

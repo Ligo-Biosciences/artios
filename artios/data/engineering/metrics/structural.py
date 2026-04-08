@@ -471,22 +471,19 @@ def compute_hydrophobic_sasa_fraction(atom_array: struc.AtomArray) -> dict[str, 
     """
     atom_sasa = struc.sasa(atom_array, vdw_radii="Single")
 
-    # Per-residue SASA and hydrophobic classification
+    # Per-residue SASA via np.add.reduceat (no Python loop)
     res_starts = struc.get_residue_starts(atom_array, add_exclusive_stop=True)
-    total_sasa = 0.0
-    hydrophobic_sasa = 0.0
-    n_hydrophobic = 0
-    n_hydrophobic_buried = 0
+    sasa_safe = np.nan_to_num(atom_sasa, nan=0.0)
+    res_sasa = np.add.reduceat(sasa_safe, res_starts[:-1])
 
-    for s, e in zip(res_starts[:-1], res_starts[1:]):
-        res_sasa = float(np.nansum(atom_sasa[s:e]))
-        is_hydrophobic = atom_array.res_name[s] in HYDROPHOBIC_RESIDUES
-        total_sasa += res_sasa
-        if is_hydrophobic:
-            hydrophobic_sasa += res_sasa
-            n_hydrophobic += 1
-            if res_sasa < 10.0:
-                n_hydrophobic_buried += 1
+    # Hydrophobic mask (one per residue)
+    res_names = atom_array.res_name[res_starts[:-1]]
+    is_hydrophobic = np.isin(res_names, list(HYDROPHOBIC_RESIDUES))
+
+    total_sasa = float(res_sasa.sum())
+    hydrophobic_sasa = float(res_sasa[is_hydrophobic].sum())
+    n_hydrophobic = int(is_hydrophobic.sum())
+    n_hydrophobic_buried = int(np.sum(is_hydrophobic & (res_sasa < 10.0)))
 
     hydrophobic_fraction = hydrophobic_sasa / total_sasa if total_sasa > 0 else 0.0
     buried_fraction = n_hydrophobic_buried / n_hydrophobic if n_hydrophobic > 0 else 0.0

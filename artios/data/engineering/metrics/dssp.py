@@ -22,27 +22,39 @@ def _extract_backbone_coords(atom_array: AtomArray) -> np.ndarray:
     Residues missing any backbone atom are excluded.
     """
     res_starts = get_residue_starts(atom_array, add_exclusive_stop=True)
-    coords = []
+    n_residues = len(res_starts) - 1
+    names = atom_array.atom_name
 
-    for s, e in zip(res_starts[:-1], res_starts[1:]):
-        chunk = atom_array[s:e]
-        names = chunk.atom_name
-        n_idx = np.where(names == "N")[0]
-        ca_idx = np.where(names == "CA")[0]
-        c_idx = np.where(names == "C")[0]
-        o_idx = np.where(names == "O")[0]
-        if len(n_idx) == 0 or len(ca_idx) == 0 or len(c_idx) == 0 or len(o_idx) == 0:
-            continue
-        coords.append(
-            [
-                chunk.coord[n_idx[0]],
-                chunk.coord[ca_idx[0]],
-                chunk.coord[c_idx[0]],
-                chunk.coord[o_idx[0]],
-            ]
-        )
+    # Per-atom residue index (handles multi-chain correctly)
+    res_index = np.repeat(np.arange(n_residues), np.diff(res_starts))
 
-    return np.array(coords)  # (L, 4, 3)
+    # For each backbone atom type, find which residues have it
+    bb_res = {}
+    bb_coords = {}
+    for atom_name in ("N", "CA", "C", "O"):
+        mask = names == atom_name
+        bb_res[atom_name] = res_index[mask]
+        bb_coords[atom_name] = atom_array.coord[mask]
+
+    # Residues with all 4 backbone atoms
+    common = np.intersect1d(
+        np.intersect1d(bb_res["N"], bb_res["CA"]),
+        np.intersect1d(bb_res["C"], bb_res["O"]),
+    )
+    if len(common) == 0:
+        return np.empty((0, 4, 3))
+
+    coords = np.empty((len(common), 4, 3))
+    for i, atom_name in enumerate(("N", "CA", "C", "O")):
+        r_idx = bb_res[atom_name]
+        c = bb_coords[atom_name]
+        keep = np.isin(r_idx, common)
+        r_idx = r_idx[keep]
+        c = c[keep]
+        _, first_idx = np.unique(r_idx, return_index=True)
+        coords[:, i, :] = c[first_idx]
+
+    return coords
 
 
 def _estimate_h_positions(coord: np.ndarray) -> np.ndarray:
@@ -90,20 +102,23 @@ def _compute_hbond_map(coord: np.ndarray) -> np.ndarray:
     h = _estimate_h_positions(coord)
 
     # Pairwise distance maps between donor (i>=1) and acceptor (j<L-1) atoms
-    # donor i: N_i, H_i (i from 1..L-1)
-    # acceptor j: C_j, O_j (j from 0..L-2)
-    n = coord[1:, 0]  # (L-1, 3)
-    c = coord[:-1, 2]  # (L-1, 3)
-    o = coord[:-1, 3]  # (L-1, 3)
+    n = coord[1:, 0]  # (L-1, 3) donor N
+    c = coord[:-1, 2]  # (L-1, 3) acceptor C
+    o = coord[:-1, 3]  # (L-1, 3) acceptor O
 
-    # Broadcast to (L-1, L-1, 3) pairwise grids
-    d_on = np.linalg.norm(o[None, :, :] - n[:, None, :], axis=-1)
-    d_ch = np.linalg.norm(c[None, :, :] - h[:, None, :], axis=-1)
-    d_oh = np.linalg.norm(o[None, :, :] - h[:, None, :], axis=-1)
-    d_cn = np.linalg.norm(c[None, :, :] - n[:, None, :], axis=-1)
+    # Compute reciprocal distances via squared distances (avoids 4x linalg.norm)
+    def _recip_dist(a, b):
+        """1/||a_i - b_j|| for all pairs, shape (len(a), len(b))."""
+        diff = a[:, None, :] - b[None, :, :]
+        return 1.0 / np.sqrt(np.einsum("ijk,ijk->ij", diff, diff))
+
+    r_on = _recip_dist(n, o)
+    r_ch = _recip_dist(h, c)
+    r_oh = _recip_dist(h, o)
+    r_cn = _recip_dist(n, c)
 
     # Kabsch-Sander energy, padded back to (L, L)
-    e = _KS_Q1Q2 * (1.0 / d_on + 1.0 / d_ch - 1.0 / d_oh - 1.0 / d_cn) * _KS_F
+    e = _KS_Q1Q2 * _KS_F * (r_on + r_ch - r_oh - r_cn)
     e = np.pad(e, [[1, 0], [0, 1]])
 
     # Mask local pairs: (i,i), (i,i+1), (i,i+2)

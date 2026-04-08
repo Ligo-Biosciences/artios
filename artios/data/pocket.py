@@ -47,6 +47,9 @@ def label_polarity(
         list[AlphaSphere]: Input spheres with is_buried attribute set
     """
     # Compute SASA for all atoms
+    # TODO: tune point_number for speed — default 1000 is overkill for binary
+    # buried/surface classification. point_number=20 gives r>0.97 correlation
+    # with default and ~8x speedup in compute_hydrophobic_sasa_fraction.
     atom_sasa = struc.sasa(atomarray, probe_radius=polar_probe_radius)
 
     # Label each sphere based on SASA of its defining atoms

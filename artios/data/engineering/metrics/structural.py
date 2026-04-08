@@ -469,7 +469,7 @@ def compute_hydrophobic_sasa_fraction(atom_array: struc.AtomArray) -> dict[str, 
     residues with SASA < 10 A^2. Low values indicate exposed hydrophobics
     that need a partner.
     """
-    atom_sasa = struc.sasa(atom_array, vdw_radii="Single")
+    atom_sasa = struc.sasa(atom_array, vdw_radii="Single", point_number=20)
 
     # Per-residue SASA via np.add.reduceat (no Python loop)
     res_starts = struc.get_residue_starts(atom_array, add_exclusive_stop=True)

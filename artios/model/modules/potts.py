@@ -75,16 +75,21 @@ def build_alphabet_mask(
 ) -> Bool[Tensor, "batch n_token num_residue_types"]:
     """Build mask of allowed residue types per position.
 
-    For mutable positions, allows the 20 standard amino acids (indices 0-19),
-    optionally excluding cysteine (index 4) and/or methionine (index 12).
-    Non-mutable positions are left as all-False (they are protected by
-    token_mask in the sampler).
+    Allows the 20 standard amino acids (indices 0-19) at every position so
+    that h values for non-mutable residues remain interpretable during
+    sampling (their per-node energies and U_i logits are not inflated by
+    the alphabet bias). Non-mutable positions are protected from updates by
+    token_mask in the sampler, so they do not need an alphabet-wide bias.
+
+    CYS (index 4) and MET (index 12) exclusions are scoped to mutable
+    positions only — non-mutable positions whose residue happens to be CYS
+    or MET keep their actual h values.
 
     Args:
         mutable_mask: Mutable position mask [B, N].
         num_residue_types: Total number of residue types R.
-        exclude_cys: If True, disallow cysteine (index 4).
-        exclude_met: If True, disallow methionine (index 12).
+        exclude_cys: If True, disallow cysteine (index 4) at mutable positions.
+        exclude_met: If True, disallow methionine (index 12) at mutable positions.
 
     Returns:
         Boolean mask of allowed residue types [B, N, R].
@@ -94,13 +99,14 @@ def build_alphabet_mask(
     R = num_residue_types
 
     mask = torch.zeros(B, N, R, dtype=torch.bool, device=device)
-    # Allow first 20 amino acids for mutable positions
-    mask[:, :, :20] = mutable_mask.unsqueeze(-1)
+    # Allow only the 20 standard amino acids at every position
+    mask[:, :, :20] = True
 
+    # CYS/MET exclusion only applies where we are actually free to mutate.
     if exclude_cys:
-        mask[:, :, 4] = False
+        mask[:, :, 4] = ~mutable_mask
     if exclude_met:
-        mask[:, :, 12] = False
+        mask[:, :, 12] = ~mutable_mask
 
     return mask
 
@@ -165,12 +171,17 @@ def compute_potts_energy(
     J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
     edge_index: Int[Tensor, "batch n_token neighbours"],
     edge_mask: Bool[Tensor, "batch n_token neighbours"],
-) -> Float[Tensor, "batch"]:
-    """Compute total Potts energy for every sequence in a batch.
+    collate_nodes: bool = False,
+) -> Float[Tensor, "batch n_token"] | Float[Tensor, "batch"]:
+    """Compute per-node Potts energy for every sequence in a batch.
 
-    E = sum_i h_i(s_i) + 0.5 * sum_{i,j} J_ij(s_i, s_j)
+    Per-node energy at position i:
+        E_i(s) = h_i(s_i) + 0.5 * sum_{j in N(i)} J_ij(s_i, s_j)
 
-    The 0.5 factor accounts for edge double counting..
+    The 0.5 factor half-counts each undirected edge so that summing over the
+    node dimension recovers the total Potts energy
+        E(s) = sum_i h_i(s_i) + 0.5 * sum_{i,j} J_ij(s_i, s_j)
+    with each edge counted exactly once.
 
     Args:
         S: Sequence indices [B, N].
@@ -178,17 +189,17 @@ def compute_potts_energy(
         J: Potts couplings [B, N, K, R, R].
         edge_index: Neighbor indices [B, N, K].
         edge_mask: Valid edge mask [B, N, K].
+        collate_nodes: If True, sum over the node dimension and return a
 
     Returns:
-        Per-sample energy [B].
+        Per-node energy [B, N], or per-sample total [B] if collate_nodes.
     """
     B, N, K, R, _ = J.shape
 
-    # Field energy: sum_i h_i(s_i)
+    # Field energy per node: h_i(s_i)
     h_s = torch.gather(h, -1, S.unsqueeze(-1)).squeeze(-1)  # [B, N]
-    field_energy = h_s.sum(-1)  # [B]
 
-    # Coupling energy: sum_{i,j} J_ij(s_i, s_j)
+    # Coupling energy: sum_j J_ij(s_i, s_j) per node
     S_j = (
         gather_nodes(S.unsqueeze(-1).float(), edge_index).long().squeeze(-1)
     )  # [B, N, K]
@@ -205,9 +216,14 @@ def compute_potts_energy(
     not_self = edge_index != ii[None, :, None]
     J_si_sj = J_si_sj * (not_self & edge_mask)
 
-    coupling_energy = 0.5 * J_si_sj.sum(dim=(-1, -2))  # [B]
+    # Per-node half-counted coupling contribution
+    coupling_per_node = 0.5 * J_si_sj.sum(dim=-1)  # [B, N]
 
-    return field_energy + coupling_energy
+    per_node_energy = h_s + coupling_per_node  # [B, N]
+
+    if collate_nodes:
+        return per_node_energy.sum(dim=-1)  # [B]
+    return per_node_energy
 
 
 def _symmetrize_J(

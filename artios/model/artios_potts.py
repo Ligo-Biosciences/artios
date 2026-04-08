@@ -166,7 +166,7 @@ class ArtiosPotts(nn.Module):
                 assert_never(masking_sampler_type)
 
         sampling_cfg = configs.artios_mpnn.potts.sampling
-        self.cfg_scale = getattr(sampling_cfg, "cfg_scale", 1.0)
+        self.cfg_scale = sampling_cfg.cfg_scale
         self.potts_sampler = PottsSampler(
             proposal=PottsProposal(sampling_cfg.proposal),
             n_sweeps=sampling_cfg.n_sweeps,

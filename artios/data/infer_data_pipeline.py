@@ -24,7 +24,7 @@ from artios.data.json_parser import (
     SequenceDesignInput,
     parse_input_dict,
 )
-from artios.data.structure import AnnotatedStructure
+from artios.data.tokenizer import AtomArrayTokenizer
 from artios.utils.distributed import DIST_WRAPPER
 from artios.utils.file_io import load_atomarray_stack
 
@@ -114,9 +114,10 @@ class MotifDataset(Dataset):
             self.backbone_input
         )
 
-        structure = AnnotatedStructure.from_atom_array(atom_array)
+        token_array = AtomArrayTokenizer(atom_array).get_token_array()
         return ContextGenerator(
-            structure,
+            token_array,
+            atom_array,
             pdb_id=sample_name,
             original_motif_mapping=original_motif_mapping,
         ).get_full_context()
@@ -142,12 +143,13 @@ class MPNNDataset(Dataset):  # TODO: need a different name
         logger.info(f"Featurizing {sample_name}...")
 
         atom_array = self.atom_stack[index]
+        token_array = AtomArrayTokenizer(atom_array).get_token_array()
 
         stitched = self.sequence_input.stitched_residues.get(index)
 
-        structure = AnnotatedStructure.from_atom_array(atom_array)
         return ContextGenerator(
-            structure,
+            token_array,
+            atom_array,
             pdb_id=sample_name,
         ).get_full_context(stitched_residues=stitched)
 
@@ -191,8 +193,9 @@ class PackingDataset(Dataset):
         sequence = self.sequences[index]
         atom_array = packing_input_to_atom_array_v2(input_array, sequence)
 
-        structure = AnnotatedStructure.from_atom_array(atom_array)
+        token_array = AtomArrayTokenizer(atom_array).get_token_array()
         return ContextGenerator(
-            structure,
+            token_array,
+            atom_array,
             pdb_id=sample_name,
         ).get_full_context()

@@ -301,6 +301,39 @@ def compute_relative_contact_order(
     return float(total_sep / (n * num_contacts))
 
 
+def compute_corrected_contact_order(
+    atom_array: struc.AtomArray, contact_cutoff: float = 8.0
+) -> float:
+    """Length-corrected contact order: ACO / sqrt(L).
+
+    Absolute contact order (mean sequence separation of contacting CA pairs)
+    scales empirically as L^0.49. Dividing by sqrt(L) removes this dependence,
+    unlike the standard relative contact order which overcorrects by dividing
+    by L.
+
+    Returns 0.0 for chains with < 10 residues or no contacts.
+    """
+    ca_mask = atom_array.atom_name == "CA"
+    ca_atoms = atom_array[ca_mask]
+    n = len(ca_atoms)
+
+    if n < 10:
+        return 0.0
+
+    dm = squareform(pdist(ca_atoms.coord))
+    seq_sep = np.abs(np.arange(n)[:, None] - np.arange(n)[None, :])
+
+    contact_mask = (dm < contact_cutoff) & (seq_sep >= 3)
+    contact_mask = np.triu(contact_mask, k=1)
+
+    num_contacts = contact_mask.sum()
+    if num_contacts == 0:
+        return 0.0
+
+    aco = float(seq_sep[contact_mask].sum() / num_contacts)
+    return aco / np.sqrt(n)
+
+
 def compute_sse_segment_count(
     atom_array: struc.AtomArray, sse: np.ndarray | None = None
 ) -> dict[str, float]:
@@ -551,4 +584,35 @@ def compute_local_packing_variance(
         "packing_cv": float(cv),
         "packing_mean": mean_count,
         "packing_std": std_count,
+    }
+
+
+def compute_packing_efficiency(
+    atom_array: struc.AtomArray,
+) -> dict[str, float]:
+    """Packing efficiency from convex hull of CA coordinates.
+
+    Packing efficiency = N_residues / hull_volume. Lower values indicate
+    more internal void space (cavities/clefts), characteristic of enzymes.
+
+    The corrected version (PE * L^0.3) removes length dependence. The raw
+    exponent is empirically ~L^-0.36 on predicted structures and ~L^-0.27
+    on enzymes; L^0.3 minimizes worst-case correlation across both sets.
+    """
+    from scipy.spatial import ConvexHull
+
+    ca = atom_array[atom_array.atom_name == "CA"]
+    coords = ca.coord
+    n = len(coords)
+
+    if n < 4:
+        return {"packing_efficiency": 0.0, "corrected_packing_efficiency": 0.0}
+
+    hull = ConvexHull(coords)
+    pe = n / hull.volume
+    cpe = pe * (n**0.3)
+
+    return {
+        "packing_efficiency": float(pe),
+        "corrected_packing_efficiency": float(cpe),
     }

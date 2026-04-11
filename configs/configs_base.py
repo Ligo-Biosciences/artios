@@ -287,6 +287,7 @@ model_configs = {
                 "ensemble_dropout": False,
                 "ensemble_anm": False,
                 "cfg_scale": 1.0,
+                "active_site_only_cfg": False,
                 "ensemble_anm_gamma": 0.2388,
                 "ensemble_anm_cutoff": 15.0,
                 "track_trajectory": False,

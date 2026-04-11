@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -15,6 +16,8 @@ from artios.model.modules.potts import (
 from artios.model.utils import beta_function
 from artios.utils.geometry import centre_random_augmentation
 from artios.utils.typing import Bool, Float, Int, typecheck
+
+logger = logging.getLogger(__name__)
 
 
 class TrainingTimestepSampler(ABC):
@@ -1213,18 +1216,29 @@ def _potts_proposal_gibbs(
     edge_index_uncond=None,
     edge_mask_uncond=None,
     cfg_scale: float = 0.0,
+    active_site_mask: Bool[Tensor, "batch n_token"] | None = None,
+    active_site_only_cfg: bool = False,
 ) -> ProposalResult:
     """Gibbs proposal with parallel colour sweeps.
 
-    For each colour group (independent set), computes conditional logits,
-    samples new states, and updates S at those positions.
+    For each colour group (independent set), computes the per-position
+    sampling distribution, samples new states, and updates S at those
+    positions.
 
-    If penalty is provided, its gradient w.r.t. S is computed via
-    autograd and added to the conditional energy (following Chroma).
+    If penalty is provided, its gradient w.r.t. S is computed via autograd
+    and added to the per-position energies of *both* the conditional and
+    unconditional pathways before softmaxing (following Chroma). This way
+    the penalty acts as a shared bias regardless of CFG state.
 
-    If unconditional parameters are provided with cfg_scale > 0,
+    If unconditional parameters are provided with cfg_scale != 1.0,
     classifier-free guidance is applied by blending conditional and
-    unconditional energies.
+    unconditional distributions in probability space:
+
+        p_cfg(a) = p_uncond(a) + cfg_scale * (p_cond(a) - p_uncond(a))
+
+    Negative entries (which can arise for cfg_scale > 1 or < 0) are
+    clamped to zero and the row is renormalised. Reduces to p_cond at
+    cfg_scale=1 and to p_uncond at cfg_scale=0.
     """
     R = S.shape[-1]
     use_cfg = h_uncond is not None and cfg_scale != 1.0
@@ -1236,15 +1250,10 @@ def _potts_proposal_gibbs(
         logits = compute_potts_single_logits(S_idx, h, J, edge_index, edge_mask)
         U_i = -logits  # [B, N, R]
 
-        # Classifier-free guidance: blend conditional and unconditional energies
-        if use_cfg:
-            logits_uncond = compute_potts_single_logits(
-                S_idx, h_uncond, J_uncond, edge_index_uncond, edge_mask_uncond
-            )
-            U_i_uncond = -logits_uncond
-            U_i = U_i_uncond + cfg_scale * (U_i - U_i_uncond)
-
-        # Add penalty gradient if provided
+        # Compute penalty gradient once. We add it to *both* the conditional
+        # and unconditional energies below so the penalty applies as a
+        # shared bias on both pathways.
+        U_i_adjustment = None
         if penalty is not None:
             with torch.enable_grad():
                 S_grad = S.detach().requires_grad_(True)
@@ -1255,6 +1264,24 @@ def _potts_proposal_gibbs(
             U_i = U_i + 0.5 * U_i_adjustment
 
         probs = F.softmax(-U_i / temperature, dim=-1)  # [B, N, R]
+
+        # Classifier-free guidance: blend conditional and unconditional
+        # distributions in probability space.
+        if use_cfg:
+            logits_uncond = compute_potts_single_logits(
+                S_idx, h_uncond, J_uncond, edge_index_uncond, edge_mask_uncond
+            )
+            U_i_uncond = -logits_uncond
+            if U_i_adjustment is not None:
+                U_i_uncond = U_i_uncond + 0.5 * U_i_adjustment
+            probs_uncond = F.softmax(-U_i_uncond / temperature, dim=-1)
+            probs_cfg = probs_uncond + cfg_scale * (probs - probs_uncond)
+            probs_cfg = probs_cfg.clamp(min=0.0)
+            probs_cfg = probs_cfg / probs_cfg.sum(dim=-1, keepdim=True).clamp(min=1e-30)
+            if active_site_only_cfg and active_site_mask is not None:
+                probs = torch.where(active_site_mask.unsqueeze(-1), probs_cfg, probs)
+            else:
+                probs = probs_cfg
 
         B, N, _ = probs.shape
         flat_probs = probs.reshape(B * N, R)
@@ -1284,17 +1311,29 @@ def _dlmc_energy_and_log_probs(
     edge_index_uncond=None,
     edge_mask_uncond=None,
     cfg_scale: float = 0.0,
+    active_site_mask: Bool[Tensor, "batch n_token"] | None = None,
+    active_site_only_cfg: bool = False,
 ):
     """Compute DLMC energy and transition log-probabilities for a given state.
 
     Returns (energy, log_probs) where log_probs includes both off-diagonal
     transition probabilities and the self-transition (remaining mass).
 
-    If unconditional parameters are provided with cfg_scale > 0,
-    classifier-free guidance is applied to per-position energies (E_all)
+    If unconditional parameters are provided with cfg_scale != 1.0,
+    classifier-free guidance is applied to the per-position distribution
+    in probability space (arithmetic mixture, clamped and renormalised),
     but NOT to total energy (used for MH acceptance).
+
+    If active_site_only_cfg is True and active_site_mask is provided,
+    the CFG blend is applied only at active-site positions; non-active
+    positions use the plain conditional distribution.
+
+    If penalty is provided, the same penalty energy bias is added to both
+    the conditional and unconditional per-position energies before
+    softmaxing, and the raw penalty value is added to the total energy.
     """
     S_idx = S.argmax(-1)
+    use_cfg = h_uncond is not None and cfg_scale != 1.0
 
     # Conditional energy for all candidate states
     logits = compute_potts_single_logits(
@@ -1302,20 +1341,15 @@ def _dlmc_energy_and_log_probs(
     )  # [B, N, R]
     E_all = -logits  # [B, N, R]
 
-    # Classifier-free guidance on per-position energies only
-    if h_uncond is not None and cfg_scale != 1.0:
-        logits_uncond = compute_potts_single_logits(
-            S_idx, h_uncond, J_uncond, edge_index_uncond, edge_mask_uncond
-        )
-        E_all_uncond = -logits_uncond
-        E_all = E_all_uncond + cfg_scale * (E_all - E_all_uncond)
-
     # Compute total energy (NOT blended — used for MH acceptance).
     energy = compute_potts_energy(
         S_idx, h, J, edge_index, edge_mask, collate_nodes=True
     )
 
-    # Add penalty gradient if provided
+    # Compute penalty gradient once. We add it to *both* the conditional
+    # and unconditional per-position energies below so the penalty applies
+    # symmetrically. The raw penalty value is added to the total energy.
+    U_i_adjustment = None
     if penalty is not None:
         with torch.enable_grad():
             S_grad = S.detach().requires_grad_(True)
@@ -1327,8 +1361,31 @@ def _dlmc_energy_and_log_probs(
         E_all = E_all + U_i_adjustment
         energy = energy + U_penalty.detach()
 
-    # Convert energies to log probs over all states
-    logP_j = F.log_softmax(-E_all / temperature, dim=-1)  # [B, N, R]
+    probs = F.softmax(-E_all / temperature, dim=-1)  # [B, N, R]
+
+    # Classifier-free guidance: blend conditional and unconditional
+    # distributions in probability space.
+    if use_cfg:
+        logits_uncond = compute_potts_single_logits(
+            S_idx, h_uncond, J_uncond, edge_index_uncond, edge_mask_uncond
+        )
+        E_all_uncond = -logits_uncond
+        if U_i_adjustment is not None:
+            E_all_uncond = E_all_uncond + U_i_adjustment
+        probs_uncond = F.softmax(-E_all_uncond / temperature, dim=-1)
+        probs_cfg = probs_uncond + cfg_scale * (probs - probs_uncond)
+        probs_cfg = probs_cfg.clamp(min=0.0)
+        probs_cfg = probs_cfg / probs_cfg.sum(dim=-1, keepdim=True).clamp(min=1e-30)
+        if active_site_only_cfg and active_site_mask is not None:
+            # Apply CFG only at active-site positions; leave the rest as
+            # plain conditional probs.
+            probs = torch.where(active_site_mask.unsqueeze(-1), probs_cfg, probs)
+        else:
+            probs = probs_cfg
+
+    # Convert per-position probs to log probs for the DLMC transition rate
+    # computation below.
+    logP_j = probs.clamp(min=1e-30).log()  # [B, N, R]
 
     # Get log probs of current state
     logP_i = torch.gather(logP_j, -1, S_idx.unsqueeze(-1))  # [B, N, 1]
@@ -1372,6 +1429,8 @@ def _potts_proposal_dlmc(
     edge_index_uncond=None,
     edge_mask_uncond=None,
     cfg_scale: float = 0.0,
+    active_site_mask: Bool[Tensor, "batch n_token"] | None = None,
+    active_site_only_cfg: bool = False,
 ):
     B, N, R = S.shape
 
@@ -1391,6 +1450,8 @@ def _potts_proposal_dlmc(
         edge_index_uncond=edge_index_uncond,
         edge_mask_uncond=edge_mask_uncond,
         cfg_scale=cfg_scale,
+        active_site_mask=active_site_mask,
+        active_site_only_cfg=active_site_only_cfg,
     )
 
     # sample from the log probs to get the mutations
@@ -1422,6 +1483,8 @@ def _mh_rejection_step(
     edge_index_uncond=None,
     edge_mask_uncond=None,
     cfg_scale: float = 0.0,
+    active_site_mask: Bool[Tensor, "batch n_token"] | None = None,
+    active_site_only_cfg: bool = False,
 ) -> Float[Tensor, "batch n_token num_residue_types"]:
     """Metropolis-Hastings correction for DLMC proposals.
 
@@ -1449,6 +1512,8 @@ def _mh_rejection_step(
         edge_index_uncond=edge_index_uncond,
         edge_mask_uncond=edge_mask_uncond,
         cfg_scale=cfg_scale,
+        active_site_mask=active_site_mask,
+        active_site_only_cfg=active_site_only_cfg,
     )
 
     # Flux = -U/T + sum_i log P(transition to target)
@@ -1640,6 +1705,12 @@ class PottsSampler:
     """Classifier-free guidance scale. 1.0 = standard conditional (no CFG).
     >1 amplifies ligand conditioning, <1 dampens it."""
 
+    active_site_only_cfg: bool = False
+    """If True, classifier-free guidance is applied only at active-site
+    positions (selected by active_site_mask). Non-active-site positions
+    use the plain conditional distribution regardless of cfg_scale.
+    Requires active_site_mask to be passed to sample()."""
+
     granular_active_site_coloring: bool = False
     """If True, each active-site token is assigned a unique colour during
     Gibbs graph colouring so that no two active-site residues end up in the
@@ -1748,6 +1819,8 @@ class PottsSampler:
                 edge_index_uncond=edge_index_uncond,
                 edge_mask_uncond=edge_mask_uncond,
                 cfg_scale=self.cfg_scale,
+                active_site_mask=active_site_mask,
+                active_site_only_cfg=self.active_site_only_cfg,
             )
 
             if self.proposal == PottsProposal.GIBBS:

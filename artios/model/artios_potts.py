@@ -180,6 +180,7 @@ class ArtiosPotts(nn.Module):
             track_u_i=sampling_cfg.track_u_i,
             u_i_interval=sampling_cfg.u_i_interval,
             cfg_scale=sampling_cfg.cfg_scale,
+            active_site_only_cfg=sampling_cfg.active_site_only_cfg,
             granular_active_site_coloring=sampling_cfg.granular_active_site_coloring,
         )
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight

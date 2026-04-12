@@ -294,3 +294,56 @@ TIP_ATOMS: Mapping[str, tuple[str, ...]] = {
     residue_names.TYR: (CG, CD1, CD2, CE1, CE2, CZ, OH),
     residue_names.VAL: (CB, CG1, CG2),
 }  # pyformat: disable
+
+# Atom classifications for pocket chemistry features
+
+# Ring atoms in PHE/TYR/TRP/HIS side chains
+AROMATIC_SIDECHAIN_ATOMS: frozenset[str] = frozenset(
+    {
+        CG,
+        CD1,
+        CD2,
+        CE1,
+        CE2,
+        CZ,
+        CH2,
+        NE1,
+        CE3,
+        CZ2,
+        CZ3,
+    }
+)
+
+HBOND_DONOR_ATOMS: frozenset[str] = frozenset(
+    {
+        N,
+        NE,
+        NH1,
+        NH2,
+        NZ,
+        ND1,
+        ND2,
+        NE1,
+        NE2,
+        OG,
+        OG1,
+        OH,
+        SG,
+    }
+)
+
+HBOND_ACCEPTOR_ATOMS: frozenset[str] = frozenset(
+    {
+        O,
+        OD1,
+        OD2,
+        OE1,
+        OE2,
+        OG,
+        OG1,
+        OH,
+        SD,
+        ND1,
+        NE2,
+    }
+)

@@ -36,12 +36,17 @@ from artios.data.pocket.tessellation import compute_alpha_spheres
 #                         enzyme eval                    holo4k test
 # Mode              Prec   Recall  F1              Prec   Recall  F1
 # high_recall       ~49%   ~86%    0.63            ~58%   ~89%    0.70
-# balanced          ~54%   ~82%    0.65            ~64%   ~84%    0.73
-# high_precision    ~73%   ~63%    0.68            ~75%   ~67%    0.70
+#                              holo4k test set (2,516 pockets, 587 TP)
+# Mode                    Prec    Recall    F1
+# high_recall              51%     94%      0.66
+# balanced                 56%     93%      0.70
+# balanced_precision       67%     85%      0.75
+# high_precision           79%     68%      0.73
 SCORE_THRESHOLDS: dict[str, float] = {
     "high_recall": 0.10,
     "balanced": 0.15,
-    "high_precision": 0.40,
+    "balanced_precision": 0.28,
+    "high_precision": 0.50,
 }
 
 _MODEL_DIR = Path(__file__).parent
@@ -171,7 +176,9 @@ def _compute_sphere_features(
 def find_pockets(
     atomarray: struc.AtomArray,
     *,
-    mode: Literal["high_recall", "balanced", "high_precision"] = "balanced",
+    mode: Literal[
+        "high_recall", "balanced", "balanced_precision", "high_precision"
+    ] = "balanced_precision",
     plddt_cutoff: float | None = None,
     min_atoms_in_radius_15: int = 425,
     min_atoms_in_radius_20: int = 900,
@@ -186,10 +193,11 @@ def find_pockets(
     Args:
         atomarray: Biotite AtomArray. Hetero atoms, hydrogens, and water
             are stripped automatically.
-        mode: Operating point.
-            "high_recall"    — ~86% recall, ~49% precision (more pockets)
-            "balanced"       — ~82% recall, ~54% precision (default)
-            "high_precision" — ~63% recall, ~73% precision (fewer, confident)
+        mode: Operating point (precision/recall on holo4k test set).
+            "high_recall"        — 51% prec, 94% recall
+            "balanced"           — 56% prec, 93% recall
+            "balanced_precision" — 67% prec, 85% recall (default)
+            "high_precision"     — 79% prec, 68% recall
         plddt_cutoff: If set, discard spheres whose defining atoms have
             pLDDT (b_factor) below this value. Useful for AlphaFold models.
         min_atoms_in_radius_15: Minimum protein atoms within 15A of

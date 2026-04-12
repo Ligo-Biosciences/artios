@@ -12,7 +12,6 @@ import numpy as np
 from pocketeer.core import (
     Pocket,
     cluster_spheres,
-    compute_alpha_spheres,
     create_pocket,
     filter_surface_spheres,
     # label_polarity,
@@ -21,6 +20,10 @@ from pocketeer.core.types import AlphaSphere
 from pocketeer.utils.constants import MIN_ATOMS_FOR_TESSELLATION
 from pocketeer.utils.exceptions import ValidationError
 from scipy.spatial import KDTree
+
+from artios.data.pocket.tessellation import (
+    compute_alpha_spheres,
+)
 
 logger = logging.getLogger("pocketeer.api")
 

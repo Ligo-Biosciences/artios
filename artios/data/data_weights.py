@@ -11,6 +11,7 @@ structures. This module provides:
 from enum import Enum
 from typing import Any, Optional, Union
 
+import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 from pandera.typing import Series
@@ -369,40 +370,43 @@ def calc_weights_for_df(
     if should_filter_artifact_ligands:
         indices_df = _filter_artifact_ligands(indices_df)
 
-    # Specific to assembly, and entities (chain or interface)
-    indices_df["pdb_sorted_entity_id"] = indices_df.apply(
-        lambda x: f"{x['pdb_id']}_{x['assembly_id']}_{'_'.join(sorted([str(x['entity_1_id']), str(x['entity_2_id'])]))}",
-        axis=1,
+    # Build entity key: pdb_assembly_sortedEntities
+    e1 = indices_df["entity_1_id"].astype(str)
+    e2 = indices_df["entity_2_id"].astype(str)
+    lo = np.minimum(e1, e2)
+    hi = np.maximum(e1, e2)
+    indices_df["pdb_sorted_entity_id"] = (
+        indices_df["pdb_id"]
+        + "_"
+        + indices_df["assembly_id"].astype(str)
+        + "_"
+        + lo
+        + "_"
+        + hi
     )
 
-    entity_member_num_dict = {}
-    for pdb_sorted_entity_id, sub_df in indices_df.groupby("pdb_sorted_entity_id"):
-        entity_member_num_dict[pdb_sorted_entity_id] = len(sub_df)
-    indices_df["pdb_sorted_entity_id_member_num"] = indices_df.apply(
-        lambda x: entity_member_num_dict[x["pdb_sorted_entity_id"]], axis=1
+    # Rows sharing an entity key (member count)
+    indices_df["pdb_sorted_entity_id_member_num"] = indices_df.groupby(
+        "pdb_sorted_entity_id"
+    )["pdb_sorted_entity_id"].transform("count")
+
+    # Unique entity keys per cluster
+    cluster_sizes = indices_df.groupby("cluster_id")["pdb_sorted_entity_id"].transform(
+        "nunique"
     )
 
-    cluster_size_record = {}
-    for cluster_id, sub_df in indices_df.groupby("cluster_id"):
-        cluster_size_record[cluster_id] = len(set(sub_df["pdb_sorted_entity_id"]))
-
-    weights = []
-    for _, row in indices_df.iterrows():
-        data_type = row["type"]
-        cluster_size = cluster_size_record[row["cluster_id"]]
-        chain_count = {MolType.PROT: 0, MolType.NUC: 0, MolType.LIGAND: 0}
-        for mol_type in [row["mol_1_type"], row["mol_2_type"]]:
-            if mol_type in chain_count:
-                chain_count[mol_type] += 1
-        weight = get_weighted_pdb_weight(
-            data_type=data_type,
-            cluster_size=cluster_size,
-            chain_count=chain_count,
-            beta_dict=beta_dict,
-            alpha_dict=alpha_dict,
-        )
-        weights.append(weight)
-    indices_df["weights"] = weights / indices_df["pdb_sorted_entity_id_member_num"]
+    # Vectorized weight: beta * alpha_sum / cluster_size / member_num
+    beta = indices_df["type"].map(beta_dict)
+    alpha_sum = indices_df["mol_1_type"].map(alpha_dict).fillna(0) + indices_df[
+        "mol_2_type"
+    ].map(alpha_dict).fillna(0)
+    eps = 1e-9
+    indices_df["weights"] = (
+        beta
+        * alpha_sum
+        / (cluster_sizes + eps)
+        / indices_df["pdb_sorted_entity_id_member_num"]
+    )
 
     if balance_protein_clusters:
         indices_df = apply_protein_cluster_balancing(

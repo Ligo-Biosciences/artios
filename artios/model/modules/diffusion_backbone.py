@@ -444,8 +444,6 @@ class DiffusionModule(nn.Module):
         c_z: int = 128,
         transformer: dict[str, int] = {"num_blocks": 24, "num_heads": 16},
         dropout: float = 0.0,
-        blocks_per_ckpt: Optional[int] = None,
-        use_fine_grained_checkpoint: bool = False,
     ) -> None:
         """
         Args:
@@ -456,11 +454,6 @@ class DiffusionModule(nn.Module):
             c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128.
             transformer (dict[str, int], optional): configs in DiffusionTransformer. Defaults to {"n_blocks": 24, "n_heads": 16}.
             dropout (float, optional): dropout probability for attention weights and transition block. Defaults to 0.0.
-            blocks_per_ckpt: number of atom_encoder/transformer/atom_decoder blocks in each activation checkpoint
-                Size of each chunk. A higher value corresponds to fewer
-                checkpoints, and trades memory for speed. If None, no checkpointing is performed.
-            use_fine_grained_checkpoint: whether use fine-gained checkpoint for finetuning stage 2
-                only effective if blocks_per_ckpt is not None.
         """
 
         super(DiffusionModule, self).__init__()
@@ -475,10 +468,6 @@ class DiffusionModule(nn.Module):
             "ref_element": 128,
             "ref_atom_name_chars": 4 * 64,
         }
-
-        # Grad checkpoint setting
-        self.blocks_per_ckpt = blocks_per_ckpt
-        self.use_fine_grained_checkpoint = use_fine_grained_checkpoint
 
         self.linear_no_bias_r_embed = LinearNoBias(3, c_token)
         self.linear_no_bias_prev_pred_embed = LinearNoBias(3, c_token, init="zeros")

@@ -201,19 +201,17 @@ model_configs = {
             "n_blocks": 1,  # default was 3, not much to gain after 1 in design
         },
         "diffusion_module": {
-            "use_fine_grained_checkpoint": False,
             "sigma_coord": GlobalConfigValue("sigma_coord"),
             "c_token": GlobalConfigValue("c_token"),
             "c_atom": GlobalConfigValue("c_atom"),
             "c_z": GlobalConfigValue("c_z"),
             "c_s": GlobalConfigValue("c_s"),
-            # "c_s_inputs": GlobalConfigValue("c_s_inputs"),
             "transformer": {
                 "num_blocks": 24,
                 "num_heads": 16,
+                "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
             },
             "dropout": 0.0,
-            "blocks_per_ckpt": GlobalConfigValue("blocks_per_ckpt"),
         },
     },
     "artios_mpnn": {

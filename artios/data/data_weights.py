@@ -397,18 +397,25 @@ def calc_weights_for_df(
     )
 
     # Vectorized weight: beta * alpha_sum / cluster_size / member_num
-    # .astype(object) converts Arrow-backed strings to plain Python strings
-    # so .map() can match dict keys (str enums or plain strings)
-    beta = indices_df["type"].astype(object).map(beta_dict)
-    alpha_sum = indices_df["mol_1_type"].astype(object).map(alpha_dict).fillna(
-        0
-    ) + indices_df["mol_2_type"].astype(object).map(alpha_dict).fillna(0)
+    # All arithmetic on numpy arrays to avoid Arrow dtype issues on Python 3.12
+    _beta = {(k.value if hasattr(k, "value") else k): v for k, v in beta_dict.items()}
+    _alpha = {(k.value if hasattr(k, "value") else k): v for k, v in alpha_dict.items()}
+    beta = (
+        pd.Series(indices_df["type"].to_numpy(), index=indices_df.index)
+        .map(_beta)
+        .to_numpy(dtype="float64")
+    )
+    alpha_sum = pd.Series(
+        indices_df["mol_1_type"].to_numpy(), index=indices_df.index
+    ).map(_alpha).fillna(0).to_numpy(dtype="float64") + pd.Series(
+        indices_df["mol_2_type"].to_numpy(), index=indices_df.index
+    ).map(_alpha).fillna(0).to_numpy(dtype="float64")
     eps = 1e-9
     indices_df["weights"] = (
         beta
         * alpha_sum
-        / (cluster_sizes + eps)
-        / indices_df["pdb_sorted_entity_id_member_num"]
+        / (cluster_sizes.to_numpy(dtype="float64") + eps)
+        / indices_df["pdb_sorted_entity_id_member_num"].to_numpy(dtype="float64")
     )
 
     if balance_protein_clusters:

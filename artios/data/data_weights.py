@@ -371,8 +371,9 @@ def calc_weights_for_df(
         indices_df = _filter_artifact_ligands(indices_df)
 
     # Build entity key: pdb_assembly_sortedEntities
-    e1 = indices_df["entity_1_id"].astype(str)
-    e2 = indices_df["entity_2_id"].astype(str)
+    # .to_numpy() avoids Arrow-backed Series which break np.minimum
+    e1 = indices_df["entity_1_id"].astype(str).fillna("nan").to_numpy()
+    e2 = indices_df["entity_2_id"].astype(str).fillna("nan").to_numpy()
     lo = np.minimum(e1, e2)
     hi = np.maximum(e1, e2)
     indices_df["pdb_sorted_entity_id"] = (

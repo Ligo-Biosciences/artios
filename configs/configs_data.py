@@ -71,12 +71,8 @@ default_weighted_pdb_configs = {
 
 default_distillation_configs = {
     "sampler_configs": {
-        "sampler_type": "uniform",
+        "sampler_type": "cluster_sqrt",
         "force_recompute_weight": True,
-        # Weight ~ num_tokens^gamma. At gamma=1.5, a 10x longer protein gets
-        # ~31x sampling weight, biasing toward longer sequences with more
-        # interesting geometry. 0 = uniform, 1 = token-proportional.
-        "length_reweight_gamma": 0.0,
     },
     "cropping_configs": {
         "method_weights": ListValue(

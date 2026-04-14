@@ -302,10 +302,16 @@ class BaseSingleDataset(Dataset):
         """
         if self.name:
             logger.info("-" * 10 + f" Dataset {self.name}" + "-" * 10)
-        m1 = df["mol_1_type"].astype(str).fillna("intra")
-        m2 = df["mol_2_type"].astype(str).replace("nan", "intra")
-        lo = np.minimum(m1.to_numpy(), m2.to_numpy())
-        hi = np.maximum(m1.to_numpy(), m2.to_numpy())
+        m1 = df["mol_1_type"].fillna("intra").astype(str).to_numpy()
+        m2 = (
+            df["mol_2_type"]
+            .fillna("intra")
+            .astype(str)
+            .replace("nan", "intra")
+            .to_numpy()
+        )
+        lo = np.minimum(m1, m2)
+        hi = np.maximum(m1, m2)
         df["mol_group_type"] = lo + "_" + hi
 
         group_size_dict = dict(df["mol_group_type"].value_counts())

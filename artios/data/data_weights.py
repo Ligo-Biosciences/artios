@@ -478,6 +478,16 @@ def get_sample_weights(
                 should_filter_artifact_ligands=should_filter_artifact_ligands,
             )
         return indices_df["weights"].astype("float32")
+    elif sampler_type == "cluster_sqrt":
+        assert indices_df is not None
+        cluster_sizes = indices_df.groupby("cluster_id")["pdb_id"].transform("nunique")
+        weights = 1.0 / cluster_sizes.astype("float32").pow(0.5)
+        n_clusters = indices_df["cluster_id"].nunique()
+        logger.info(
+            f"[cluster_sqrt] {len(indices_df)} rows, {n_clusters} clusters, "
+            f"largest cluster weight reduction: {1.0 / cluster_sizes.max() ** 0.5:.4f}"
+        )
+        return weights / weights.sum()
     elif sampler_type == "uniform":
         assert indices_df is not None
         if length_reweight_gamma > 0:

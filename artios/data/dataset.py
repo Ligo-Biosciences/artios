@@ -227,12 +227,11 @@ class BaseSingleDataset(Dataset):
         # Filter by exclusion_dict
         for col_name, exclusion_list in self.exclusion_dict.items():
             cols = col_name.split("|")
-            exclusion_set = {tuple(excl.split("|")) for excl in exclusion_list}
-
-            def is_valid(row):
-                return tuple(row[col] for col in cols) not in exclusion_set
-
-            valid_mask = indices_list.apply(is_valid, axis=1)
+            if len(cols) == 1:
+                valid_mask = ~indices_list[cols[0]].isin(exclusion_list)
+            else:
+                combined = indices_list[cols].astype(str).agg("|".join, axis=1)
+                valid_mask = ~combined.isin(exclusion_list)
             indices_list = indices_list[valid_mask].reset_index(drop=True)
             logger.info(
                 f"[Excluded by {col_name} -- {exclusion_list}] #Rows: {len(indices_list)}"
@@ -303,17 +302,11 @@ class BaseSingleDataset(Dataset):
         """
         if self.name:
             logger.info("-" * 10 + f" Dataset {self.name}" + "-" * 10)
-        df["mol_group_type"] = df.apply(
-            lambda row: "_".join(
-                sorted(
-                    [
-                        str(row["mol_1_type"]),
-                        str(row["mol_2_type"]).replace("nan", "intra"),
-                    ]
-                )
-            ),
-            axis=1,
-        )
+        m1 = df["mol_1_type"].astype(str).fillna("intra")
+        m2 = df["mol_2_type"].astype(str).replace("nan", "intra")
+        lo = np.minimum(m1.to_numpy(), m2.to_numpy())
+        hi = np.maximum(m1.to_numpy(), m2.to_numpy())
+        df["mol_group_type"] = lo + "_" + hi
 
         group_size_dict = dict(df["mol_group_type"].value_counts())
         for i, n_i in group_size_dict.items():

@@ -397,10 +397,12 @@ def calc_weights_for_df(
     )
 
     # Vectorized weight: beta * alpha_sum / cluster_size / member_num
-    beta = indices_df["type"].map(beta_dict)
-    alpha_sum = indices_df["mol_1_type"].map(alpha_dict).fillna(0) + indices_df[
-        "mol_2_type"
-    ].map(alpha_dict).fillna(0)
+    # .astype(object) converts Arrow-backed strings to plain Python strings
+    # so .map() can match dict keys (str enums or plain strings)
+    beta = indices_df["type"].astype(object).map(beta_dict)
+    alpha_sum = indices_df["mol_1_type"].astype(object).map(alpha_dict).fillna(
+        0
+    ) + indices_df["mol_2_type"].astype(object).map(alpha_dict).fillna(0)
     eps = 1e-9
     indices_df["weights"] = (
         beta

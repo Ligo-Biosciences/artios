@@ -225,7 +225,6 @@ class TestDiffusionModule:
             "c_s": 384,
             "transformer": {"num_blocks": 2, "num_heads": 4},  # Minimal transformer
             "dropout": 0.0,
-            "blocks_per_ckpt": None,
         }
         return DiffusionModule(**config).to(device)
 
@@ -490,7 +489,6 @@ class TestSelfConditioning:
             "c_s": 384,
             "transformer": {"num_blocks": 2, "num_heads": 4},
             "dropout": 0.0,
-            "blocks_per_ckpt": None,
         }
         return DiffusionModule(**config).to(device)
 

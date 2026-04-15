@@ -217,6 +217,191 @@ def _sq_dists(
     return np.sum((x - y) ** 2, axis=-1)
 
 
+@njit(cache=True, fastmath=True)
+def _kabsch_inplace(
+    p: NDArray[np.float64], q: NDArray[np.float64], n: int
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Kabsch kernel that takes an explicit row count `n` — lets `get_score_fast`
+    reuse pre-allocated buffers across its 3 rounds without array slicing."""
+    pc = np.zeros(3)
+    qc = np.zeros(3)
+    for i in range(n):
+        pc[0] += p[i, 0]
+        pc[1] += p[i, 1]
+        pc[2] += p[i, 2]
+        qc[0] += q[i, 0]
+        qc[1] += q[i, 1]
+        qc[2] += q[i, 2]
+    inv_n = 1.0 / n
+    pc[0] *= inv_n
+    pc[1] *= inv_n
+    pc[2] *= inv_n
+    qc[0] *= inv_n
+    qc[1] *= inv_n
+    qc[2] *= inv_n
+    h = np.zeros((3, 3))
+    for i in range(n):
+        dp0 = p[i, 0] - pc[0]
+        dp1 = p[i, 1] - pc[1]
+        dp2 = p[i, 2] - pc[2]
+        dq0 = q[i, 0] - qc[0]
+        dq1 = q[i, 1] - qc[1]
+        dq2 = q[i, 2] - qc[2]
+        h[0, 0] += dp0 * dq0
+        h[0, 1] += dp0 * dq1
+        h[0, 2] += dp0 * dq2
+        h[1, 0] += dp1 * dq0
+        h[1, 1] += dp1 * dq1
+        h[1, 2] += dp1 * dq2
+        h[2, 0] += dp2 * dq0
+        h[2, 1] += dp2 * dq1
+        h[2, 2] += dp2 * dq2
+    u, _s, vt = np.linalg.svd(h)
+    vt_ut = vt.T @ u.T
+    det = (
+        vt_ut[0, 0] * (vt_ut[1, 1] * vt_ut[2, 2] - vt_ut[1, 2] * vt_ut[2, 1])
+        - vt_ut[0, 1] * (vt_ut[1, 0] * vt_ut[2, 2] - vt_ut[1, 2] * vt_ut[2, 0])
+        + vt_ut[0, 2] * (vt_ut[1, 0] * vt_ut[2, 1] - vt_ut[1, 1] * vt_ut[2, 0])
+    )
+    d_sign = 1.0 if det >= 0.0 else -1.0
+    r = np.empty((3, 3))
+    for i in range(3):
+        for j in range(3):
+            r[i, j] = (
+                vt[0, i] * u[j, 0] + vt[1, i] * u[j, 1] + d_sign * vt[2, i] * u[j, 2]
+            )
+    t = np.empty(3)
+    t[0] = qc[0] - (r[0, 0] * pc[0] + r[0, 1] * pc[1] + r[0, 2] * pc[2])
+    t[1] = qc[1] - (r[1, 0] * pc[0] + r[1, 1] * pc[1] + r[1, 2] * pc[2])
+    t[2] = qc[2] - (r[2, 0] * pc[0] + r[2, 1] * pc[1] + r[2, 2] * pc[2])
+    return r, t
+
+
+@njit(cache=True, fastmath=True)
+def _get_score_fast_core(
+    p: NDArray[np.float64],
+    q: NDArray[np.float64],
+    d0: float,
+    d0_search: float,
+) -> tuple[float, NDArray[np.float64], NDArray[np.float64]]:
+    """JIT'd 3-round Kabsch refinement.
+
+    Faithful port of the Python `get_score_fast` using pre-allocated scratch
+    buffers so no array slicing / mask-indexing happens at runtime. Called
+    ~1000× per L=800 pair so shaving Python overhead materially helps.
+    """
+    n_ali = p.shape[0]
+    d0_sq = d0 * d0
+    eye = np.eye(3)
+    zero = np.zeros(3)
+    if n_ali < 1:
+        return 0.0, eye, zero
+    if n_ali < 3:
+        # Kabsch degenerates — mimic the Python fallback.
+        return 0.0, eye, zero
+
+    # Scratch buffers reused across rounds.
+    scratch_p = np.empty((n_ali, 3))
+    scratch_q = np.empty((n_ali, 3))
+    d_sq = np.empty(n_ali)
+
+    # Round 1: Kabsch over all pairs, score sum over all.
+    r, t = _kabsch_inplace(p, q, n_ali)
+    score1 = 0.0
+    for i in range(n_ali):
+        ax = r[0, 0] * p[i, 0] + r[0, 1] * p[i, 1] + r[0, 2] * p[i, 2] + t[0]
+        ay = r[1, 0] * p[i, 0] + r[1, 1] * p[i, 1] + r[1, 2] * p[i, 2] + t[1]
+        az = r[2, 0] * p[i, 0] + r[2, 1] * p[i, 1] + r[2, 2] * p[i, 2] + t[2]
+        dx = ax - q[i, 0]
+        dy = ay - q[i, 1]
+        dz = az - q[i, 2]
+        ds = dx * dx + dy * dy + dz * dz
+        d_sq[i] = ds
+        score1 += 1.0 / (1.0 + ds / d0_sq)
+
+    best_score = score1
+    best_r = r.copy()
+    best_t = t.copy()
+
+    # Copy p/q into scratch as the current subset; round-2 filter shrinks it.
+    cur_n = n_ali
+    for i in range(n_ali):
+        scratch_p[i, 0] = p[i, 0]
+        scratch_p[i, 1] = p[i, 1]
+        scratch_p[i, 2] = p[i, 2]
+        scratch_q[i, 0] = q[i, 0]
+        scratch_q[i, 1] = q[i, 1]
+        scratch_q[i, 2] = q[i, 2]
+
+    for round_idx in range(2):
+        # Round 2 cutoff = d0_search, round 3 cutoff = d0_search + 1.
+        cutoff = d0_search if round_idx == 0 else d0_search + 1.0
+
+        # Kabsch on current subset (initially the full set), to compute a
+        # candidate rotation for filtering.
+        r, t = _kabsch_inplace(scratch_p, scratch_q, cur_n)
+        # Recompute d² against the full aligned set under this rotation.
+        for i in range(n_ali):
+            ax = r[0, 0] * p[i, 0] + r[0, 1] * p[i, 1] + r[0, 2] * p[i, 2] + t[0]
+            ay = r[1, 0] * p[i, 0] + r[1, 1] * p[i, 1] + r[1, 2] * p[i, 2] + t[1]
+            az = r[2, 0] * p[i, 0] + r[2, 1] * p[i, 1] + r[2, 2] * p[i, 2] + t[2]
+            dx = ax - q[i, 0]
+            dy = ay - q[i, 1]
+            dz = az - q[i, 2]
+            d_sq[i] = dx * dx + dy * dy + dz * dz
+
+        # Filter: find pairs with d ≤ cutoff, relaxing by +0.5 if <3 survive.
+        relaxed = cutoff
+        keep = 0
+        while True:
+            keep = 0
+            c_sq = relaxed * relaxed
+            for i in range(n_ali):
+                if d_sq[i] <= c_sq:
+                    keep += 1
+            if keep >= 3 or relaxed + 0.5 >= 100.0 or n_ali <= 3:
+                break
+            relaxed += 0.5
+
+        if keep < 3:
+            continue
+
+        # Compact survivors into scratch buffers.
+        k = 0
+        c_sq = relaxed * relaxed
+        for i in range(n_ali):
+            if d_sq[i] <= c_sq:
+                scratch_p[k, 0] = p[i, 0]
+                scratch_p[k, 1] = p[i, 1]
+                scratch_p[k, 2] = p[i, 2]
+                scratch_q[k, 0] = q[i, 0]
+                scratch_q[k, 1] = q[i, 1]
+                scratch_q[k, 2] = q[i, 2]
+                k += 1
+        cur_n = k
+
+        # Kabsch on survivors, score the full aligned set.
+        r, t = _kabsch_inplace(scratch_p, scratch_q, cur_n)
+        score = 0.0
+        for i in range(n_ali):
+            ax = r[0, 0] * p[i, 0] + r[0, 1] * p[i, 1] + r[0, 2] * p[i, 2] + t[0]
+            ay = r[1, 0] * p[i, 0] + r[1, 1] * p[i, 1] + r[1, 2] * p[i, 2] + t[1]
+            az = r[2, 0] * p[i, 0] + r[2, 1] * p[i, 1] + r[2, 2] * p[i, 2] + t[2]
+            dx = ax - q[i, 0]
+            dy = ay - q[i, 1]
+            dz = az - q[i, 2]
+            ds = dx * dx + dy * dy + dz * dz
+            d_sq[i] = ds
+            score += 1.0 / (1.0 + ds / d0_sq)
+
+        if score > best_score:
+            best_score = score
+            best_r = r.copy()
+            best_t = t.copy()
+
+    return best_score, best_r, best_t
+
+
 def get_score_fast(
     ca_a: NDArray[np.floating],
     ca_b: NDArray[np.floating],
@@ -225,56 +410,19 @@ def get_score_fast(
     d0: float,
     d0_search: float,
 ) -> tuple[float, NDArray[np.floating], NDArray[np.floating]]:
-    """Three-round Kabsch refinement used to rank initial alignments.
+    """Three-round Kabsch refinement used to rank initial alignments and as
+    the inner rotation step of `dp_iter`. Port of TMalign's `get_score_fast`.
 
-    Rounds (matching TMalign `get_score_fast`):
-    1. Kabsch over all aligned pairs; score with tm_kernel.
-    2. Filter pairs d ≤ d0_search; Kabsch on survivors; score.
-    3. Filter pairs d ≤ d0_search + 1; Kabsch on survivors; score.
-    If a filter leaves fewer than 3 pairs, the threshold is relaxed by +0.5 Å
-    until at least 3 pairs survive (bounded by the aligned-pair count).
-
-    Returns `(best_score, R, t)` where R and t are the transformation that
-    produced `best_score`. `best_score` is a *sum* over aligned pairs — callers
-    divide by Lnorm to convert to TM-score.
+    Fully JIT'd in `_get_score_fast_core` — the Python wrapper just gathers
+    the aligned coordinate subsets and forwards.
     """
-    p = ca_a[idx_a]
-    q = ca_b[idx_b]
-    n_ali = p.shape[0]
+    n_ali = idx_a.shape[0]
     if n_ali == 0:
         return 0.0, np.eye(3, dtype=np.float64), np.zeros(3, dtype=np.float64)
-
-    best_score = -1.0
-    best_r = np.eye(3, dtype=np.float64)
-    best_t = np.zeros(3, dtype=np.float64)
-
-    thresholds = (None, d0_search, d0_search + 1.0)
-    current_p, current_q = p, q
-    for cutoff in thresholds:
-        if cutoff is not None:
-            # Filter against the current transform.
-            r, t = kabsch(current_p, current_q)
-            rotated = apply_transform(p, r, t)
-            d_sq = _sq_dists(rotated, q)
-            mask = d_sq <= cutoff * cutoff
-            relaxed = cutoff
-            while mask.sum() < 3 and relaxed + 0.5 < 100.0 and n_ali > 3:
-                relaxed += 0.5
-                mask = d_sq <= relaxed * relaxed
-            if mask.sum() < 3:
-                continue
-            current_p = p[mask]
-            current_q = q[mask]
-        r, t = kabsch(current_p, current_q)
-        rotated = apply_transform(p, r, t)
-        d_sq = _sq_dists(rotated, q)
-        score = float(tm_kernel(d_sq, d0).sum())
-        if score > best_score:
-            best_score = score
-            best_r = r
-            best_t = t
-
-    return best_score, best_r, best_t
+    # Gather aligned pairs (contiguous copies fast-path the JIT kernel).
+    p = np.ascontiguousarray(ca_a[idx_a], dtype=np.float64)
+    q = np.ascontiguousarray(ca_b[idx_b], dtype=np.float64)
+    return _get_score_fast_core(p, q, float(d0), float(d0_search))
 
 
 def tm_score_given_rt(

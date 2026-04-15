@@ -10,7 +10,11 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from artios.metrics.alignment.dp import _fast_nw_dp, build_score_matrix
+from artios.metrics.alignment.dp import (
+    _fast_nw_dp,
+    build_score_matrix,
+    nw_dp_fused,
+)
 from artios.metrics.alignment.kernels import (
     SS_HELIX,
     SS_STRAND,
@@ -145,13 +149,15 @@ def _fragment_kabsch_align(
     d0: float,
     gap_open: float,
 ) -> tuple[NDArray[np.int_], NDArray[np.int_]]:
-    """Kabsch-align a fragment pair, then run one NW-DP on the resulting full
-    score matrix to get an alignment."""
+    """Kabsch-align a fragment pair, then run NW-DP with the resulting
+    rotation. Uses the fused kernel so no L×L intermediate is materialised —
+    the dominant cost when L is large and this function is called many times
+    per pair (TMalign's `get_initial5` is the single hottest caller at L>500)."""
     p = ca_a[a_start : a_start + length]
     q = ca_b[b_start : b_start + length]
     r, t = kabsch(p, q)
-    sm = build_score_matrix(ca_a, ca_b, r, t, d0)
-    return _fast_nw_dp(sm, gap_open)
+    rotated = ca_a @ r.T + t
+    return nw_dp_fused(rotated, ca_b, d0, gap_open)
 
 
 def initial_local_superposition(

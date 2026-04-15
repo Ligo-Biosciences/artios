@@ -134,6 +134,81 @@ def nw_dp_jit(
 _fast_nw_dp = nw_dp_jit
 
 
+@njit(cache=True, fastmath=True)
+def _nw_dp_fused_core(
+    rotated: NDArray[np.float64],
+    ca_b: NDArray[np.float64],
+    d0_sq: float,
+    gap_open: float,
+) -> tuple[NDArray[np.int8], NDArray[np.bool_]]:
+    """Fused score-matrix build + Needleman–Wunsch DP.
+
+    Instead of materialising an L_a × L_b score matrix from `(rotated, ca_b)`
+    and then feeding it to DP, this computes `1 / (1 + d² / d0²)` on-the-fly
+    inside the DP's inner double-loop. For L=800 that's ~5 MB and one
+    O(L²) pass saved per call — and cache behaviour is better because the
+    per-cell score goes straight into the running DP state.
+
+    Returns `(path, aligned)` tables that the shared traceback walks.
+    """
+    la = rotated.shape[0]
+    lb = ca_b.shape[0]
+    val = np.zeros((la + 1, lb + 1), dtype=np.float64)
+    path = np.zeros((la + 1, lb + 1), dtype=np.int8)
+    aligned = np.zeros((la + 1, lb + 1), dtype=np.bool_)
+    for i in range(1, la + 1):
+        path[i, 0] = 1
+    for j in range(1, lb + 1):
+        path[0, j] = 2
+
+    for i in range(1, la + 1):
+        ax = rotated[i - 1, 0]
+        ay = rotated[i - 1, 1]
+        az = rotated[i - 1, 2]
+        for j in range(1, lb + 1):
+            dx = ax - ca_b[j - 1, 0]
+            dy = ay - ca_b[j - 1, 1]
+            dz = az - ca_b[j - 1, 2]
+            d_sq = dx * dx + dy * dy + dz * dz
+            s_ij = 1.0 / (1.0 + d_sq / d0_sq)
+
+            d = val[i - 1, j - 1] + s_ij
+            h = val[i - 1, j]
+            if aligned[i - 1, j]:
+                h += gap_open
+            v = val[i, j - 1]
+            if aligned[i, j - 1]:
+                v += gap_open
+            if d >= h and d >= v:
+                val[i, j] = d
+                path[i, j] = 0
+                aligned[i, j] = True
+            elif h >= v:
+                val[i, j] = h
+                path[i, j] = 1
+            else:
+                val[i, j] = v
+                path[i, j] = 2
+    return path, aligned
+
+
+def nw_dp_fused(
+    rotated: NDArray[np.floating],
+    ca_b: NDArray[np.floating],
+    d0: float,
+    gap_open: float,
+) -> tuple[NDArray[np.int_], NDArray[np.int_]]:
+    """Fused build-score-matrix + NW-DP. Equivalent to running
+    `nw_dp_jit(build_score_matrix(ca_a, ca_b, r, t, d0), gap_open)` but
+    skips allocating the L×L intermediate. Caller passes the pre-rotated
+    `rotated = ca_a @ r.T + t` so this kernel only needs CA-B plus the
+    scaling factor."""
+    rot = np.ascontiguousarray(rotated, dtype=np.float64)
+    b = np.ascontiguousarray(ca_b, dtype=np.float64)
+    path, _aligned = _nw_dp_fused_core(rot, b, d0 * d0, float(gap_open))
+    return _traceback(path, rot.shape[0], b.shape[0])
+
+
 def build_score_matrix(
     ca_a: NDArray[np.floating],
     ca_b: NDArray[np.floating],
@@ -207,8 +282,8 @@ def dp_iter(
             if abs(score - score_prev) < 1e-6:
                 break
             score_prev = score
-            sm = build_score_matrix(ca_a, ca_b, r, t, d0)
-            cur_idx_a, cur_idx_b = _fast_nw_dp(sm, gap_open)
+            rotated = ca_a @ r.T + t
+            cur_idx_a, cur_idx_b = nw_dp_fused(rotated, ca_b, d0, gap_open)
             if cur_idx_a.size == 0:
                 break
         cur_idx_a = best_idx_a

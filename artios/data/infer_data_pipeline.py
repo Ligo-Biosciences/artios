@@ -123,29 +123,50 @@ class MotifDataset(Dataset):
         ).get_full_context()
 
 
-class MPNNDataset(Dataset):  # TODO: need a different name
+class MPNNDataset(Dataset):
     """Dataset for MPNN sequence design inference.
 
-    Each item corresponds to one model from the AtomArrayStack.
+    Each item corresponds to one sequence to generate. By default, one sequence
+    per model in the AtomArrayStack (gen0). For redesign generations,
+    ``backbone_index_map`` specifies which NPZ stack position each output
+    sequence should be generated from. Multiple entries can point to the same
+    stack position, and group sizes need not be uniform (supporting gen2+ where
+    filter survival rates vary per backbone).
+
+    The ordering contract: output position ``i`` corresponds to the UID whose
+    ``batch_sample_idx == i`` in uid_df. The task builder in
+    ``get_artios_potts_modal_tasks`` builds the map by reading
+    ``backbone_sample_idx`` from uid_df sorted by ``batch_sample_idx``, so
+    ``map[i]`` = the backbone stack position for the UID at FASTA position ``i``.
     """
 
     def __init__(self, sequence_input: SequenceDesignInput) -> None:
         self.sequence_input = sequence_input
         self.atom_stack = load_atomarray_stack(self.sequence_input.npz_file.path)
         assert len(self.atom_stack.coord.shape) == 3  # (m, n_atoms, 3)
+        stack_len = self.atom_stack.coord.shape[0]
+        self.backbone_index_map: list[int] = (
+            sequence_input.backbone_index_map
+            if sequence_input.backbone_index_map is not None
+            else list(range(stack_len))
+        )
 
     def __len__(self) -> int:
-        # Use coord shape directly as stack_depth() can be unreliable
-        return self.atom_stack.coord.shape[0]
+        return len(self.backbone_index_map)
 
     def __getitem__(self, index: int) -> FullContext:
+        backbone_sample_idx = self.backbone_index_map[index]
         sample_name = f"{self.sequence_input.name}_model_{index}"
-        logger.info(f"Featurizing {sample_name}...")
+        logger.info(
+            f"Featurizing {sample_name} "
+            f"(backbone_sample_idx {backbone_sample_idx})..."
+        )
 
-        atom_array = self.atom_stack[index]
+        atom_array = self.atom_stack[backbone_sample_idx]
         token_array = AtomArrayTokenizer(atom_array).get_token_array()
 
-        stitched = self.sequence_input.stitched_residues.get(index)
+        # stitched_residues keyed by backbone stack position (backbone-dependent)
+        stitched = self.sequence_input.stitched_residues.get(backbone_sample_idx)
 
         return ContextGenerator(
             token_array,

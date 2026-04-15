@@ -447,6 +447,13 @@ class SequenceDesignInput(BaseModel):
         default_factory=dict,
         description="Per-sample stitched motif residues, keyed by sample index.",
     )
+    backbone_index_map: list[int] | None = Field(
+        default=None,
+        description=(
+            "Per-output-position NPZ stack index. Entry i gives the stack "
+            "position that output sequence i should be generated from. "
+        ),
+    )
 
     # TODO: Re-enable validators if we end up using fixed residues again
     # @model_validator(mode="after")

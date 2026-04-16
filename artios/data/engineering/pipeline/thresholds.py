@@ -5,9 +5,15 @@ Two presets:
     FRAGMENT_THRESHOLDS     — broad fragment quality filters (Pass 1).
     PRE_POCKET_THRESHOLDS   — stricter fragment filters applied before pocket detection (Pass 2).
 
+Also exposes ``RG_UPPER_BOUND_COEFF`` — the coefficient for the length-dependent
+radius-of-gyration upper bound ``rg <= coeff * length^0.4`` that is applied
+alongside ``FragmentThresholds`` wherever fragments are filtered.
+
 Import and use directly::
 
-    from artios.data.engineering.pipeline.thresholds import FRAGMENT_THRESHOLDS, PRE_POCKET_THRESHOLDS
+    from artios.data.engineering.pipeline.thresholds import (
+        FRAGMENT_THRESHOLDS, PRE_POCKET_THRESHOLDS, RG_UPPER_BOUND_COEFF,
+    )
 
 Or override individual values::
 
@@ -15,6 +21,12 @@ Or override individual values::
 """
 
 from dataclasses import dataclass, replace
+
+# Length-dependent Rg upper bound: rg <= RG_UPPER_BOUND_COEFF * length^0.4.
+# Fitted to approximate the previous linear bound over lengths 150-500, but
+# follows the physical scaling law for globular proteins (Rg ~ N^0.4).
+# Previous linear bound: rg <= 0.029767441860465118 * length + 14.279069767441861.
+RG_UPPER_BOUND_COEFF = 2.397538
 
 
 @dataclass(frozen=True)
@@ -62,6 +74,16 @@ class FragmentThresholds:
 
 
 # ── Presets ──────────────────────────────────────────────────────────────────
+
+LIGHTWEIGHT_FRAGMENT_THRESHOLDS = FragmentThresholds(
+    max_hydrophobic_sasa=None,
+    min_corrected_contact_order=None,
+    min_corrected_packing_efficiency=None,
+)
+"""Cheap-only fragment filters: min_plddt + min_length (+ the Rg length bound).
+
+Use when fragment detection should be fast and downstream code computes the
+expensive structural metrics separately for analysis."""
 
 FRAGMENT_THRESHOLDS = FragmentThresholds()
 """Broad fragment quality filters (Pass 1)."""

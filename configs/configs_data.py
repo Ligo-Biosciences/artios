@@ -71,7 +71,8 @@ default_weighted_pdb_configs = {
 
 default_distillation_configs = {
     "sampler_configs": {
-        "sampler_type": "cluster_sqrt",
+        "sampler_type": "cluster_balanced",
+        "cluster_size_exponent": 0.75,
         "force_recompute_weight": True,
     },
     "cropping_configs": {

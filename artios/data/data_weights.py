@@ -453,6 +453,7 @@ def get_sample_weights(
     monomer_pdb_target_fraction: float = 0.0,
     should_filter_artifact_ligands: bool = False,
     length_reweight_gamma: float = 0.0,
+    cluster_size_exponent: float = 0.75,
 ) -> Union[pd.Series, list[float]]:
     """Compute sample weights based on the specified sampler type.
 
@@ -471,6 +472,10 @@ def get_sample_weights(
         length_reweight_gamma: Power exponent for length-based reweighting.
             Weight per sample is num_tokens^gamma. 0 = uniform, 0.5 = sqrt,
             1.0 = linear (token-proportional). Only applies to uniform sampler.
+        cluster_size_exponent: Power exponent for the 'cluster_balanced' sampler.
+            Weight per row is 1 / cluster_size^exponent. 0 = uniform across rows,
+            0.5 = sqrt, 0.75 = default, 1.0 = fully cluster-balanced. Only applies
+            to the 'cluster_balanced' sampler.
 
     Returns:
         Sample weights as a Series (weighted) or list (uniform).
@@ -492,14 +497,16 @@ def get_sample_weights(
                 should_filter_artifact_ligands=should_filter_artifact_ligands,
             )
         return indices_df["weights"].astype("float32")
-    elif sampler_type == "cluster_sqrt":
+    elif sampler_type == "cluster_balanced":
         assert indices_df is not None
         cluster_sizes = indices_df.groupby("cluster_id")["pdb_id"].transform("nunique")
-        weights = 1.0 / cluster_sizes.astype("float32").pow(0.5)
+        weights = 1.0 / cluster_sizes.astype("float32").pow(cluster_size_exponent)
         n_clusters = indices_df["cluster_id"].nunique()
         logger.info(
-            f"[cluster_sqrt] {len(indices_df)} rows, {n_clusters} clusters, "
-            f"largest cluster weight reduction: {1.0 / cluster_sizes.max() ** 0.5:.4f}"
+            f"[cluster_balanced] {len(indices_df)} rows, {n_clusters} clusters, "
+            f"exponent={cluster_size_exponent}, "
+            f"largest cluster weight reduction: "
+            f"{1.0 / cluster_sizes.max() ** cluster_size_exponent:.4f}"
         )
         return weights / weights.sum()
     elif sampler_type == "uniform":

@@ -70,5 +70,6 @@ PRE_POCKET_THRESHOLDS = FragmentThresholds(
     min_sse_entropy=1.2,
     min_buried_hydrophobic=0.4,
     max_hydrophobic_sasa=0.4,
+    max_repeat_score=0.15,
 )
 """Stricter fragment filters applied before pocket detection (Pass 2)."""

@@ -238,7 +238,9 @@ data_configs = {
         "train_sample_weights": ListValue([0.00, 0.4, 0.6]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["afdb_trousers_val", "recentPDB_1536_sample384_0925"]),
+    "test_sets": ListValue(
+        ["afdb_trousers_val", "mgnify_trousers_val", "recentPDB_1536_sample384_0925"]
+    ),
     "weightedPDB_before2021_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),

@@ -123,6 +123,7 @@ model_configs = {
     "no_bins": 64,
     "sigma_coord": 12.0,
     "local_sigma_coord": 2.0,
+    "s_noise_entity_trans": 2.0,
     "diffusion_batch_size": 16,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
     "blocks_per_ckpt": ValueMaybeNone(

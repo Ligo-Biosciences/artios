@@ -14,11 +14,6 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from artios.common.residue_names import (
-    PROTEIN_COMMON_ONE_TO_THREE,
-    PROTEIN_COMMON_THREE_TO_ONE,
-)
-
 # from artios.data.ccd import is_valid_ccd_code
 from artios.data.rdkit import is_valid_smiles, parse_smiles
 
@@ -353,53 +348,15 @@ class BackboneInput(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class FixedResidue(BaseModel):
-    """A residue with a fixed (constrained) amino acid identity.
+class FixedResidue(BaseModel, frozen=True):
+    """A residue whose amino-acid identity is fixed at a given position.
 
-    Used to specify catalytic residues, binding site residues, or other
-    positions where the amino acid identity is known/required.
-
-    There are two types of fixed residues:
-    - Identity-fixed only (is_motif_residue=False): The residue type is constrained,
-      but sidechain coordinates are not specified. Example: requiring an ARG near
-      an active site without specific coordinate preferences.
-    - Motif residues (is_motif_residue=True): The residue has full sidechain
-      coordinates from motif scaffolding output. These residues will have their
-      sidechains preserved for MPNN attention.
-
-    Examples:
-        {"chain_id": "A", "res_id": 94, "residue": "HIS", "is_motif_residue": true}
-        {"chain_id": "A", "res_id": 200, "residue": "ARG"}  # identity-fixed only
+    Used anywhere the Potts sequence-design path needs to constrain identity
+    at a position — whether the constraint comes from motif-stitched residues,
+    pocket residues extracted from a successful folded structure, or any
+    future source. A ``FixedResidue`` carries only the minimal information
+    needed to pin identity: the residue id and its three-letter code.
     """
-
-    chain_id: str = Field(..., description="Chain identifier")
-    res_id: int = Field(..., ge=1, description="Residue number (1-based)")
-    residue: str = Field(..., description="Amino acid (1-letter or 3-letter code)")
-    is_motif_residue: bool = Field(
-        default=False,
-        description="True if this residue has sidechain coordinates from motif scaffolding",
-    )
-
-    @field_validator("residue")
-    @classmethod
-    def validate_and_normalize_residue(cls, v: str) -> str:
-        """Validate and normalize residue to 3-letter code."""
-        code_upper = v.upper()
-
-        if code_upper in PROTEIN_COMMON_THREE_TO_ONE:
-            return code_upper
-        elif code_upper in PROTEIN_COMMON_ONE_TO_THREE:
-            return PROTEIN_COMMON_ONE_TO_THREE[code_upper]
-        else:
-            raise ValueError(
-                f"Invalid residue code '{v}'. "
-                f"Must be a standard amino acid (1-letter: {sorted(PROTEIN_COMMON_ONE_TO_THREE.keys())}, "
-                f"3-letter: {sorted(PROTEIN_COMMON_THREE_TO_ONE.keys())})"
-            )
-
-
-class StitchedResidue(BaseModel, frozen=True):
-    """A motif residue stitched into the design chain at a known position."""
 
     res_id: int
     res_name: str
@@ -418,23 +375,19 @@ class SequenceDesignInput(BaseModel):
     - Motif residue annotations (is_motif, is_motif_related)
     - Chain IDs for all entities
 
-    Fixed residues can optionally be provided for additional constraints:
-    - Motif residues (is_motif_residue=True): Have sidechain coordinates from motif
-      scaffolding. Their sidechains are preserved for MPNN attention.
-    - Identity-fixed only (is_motif_residue=False): Residue type is constrained but
-      no coordinate preferences. Used for additional constraints like "put an ARG here".
-
-    Note: Protein chain must always be "0". This is enforced by validation.
+    ``fixed_residues`` optionally pins residue identity at specific positions.
+    Sources of fixed residues may include motif-stitched residues (from the
+    chain tracker), pocket residues (from a successful folded structure), or
+    any other identity constraints. By the time this input hits the sequence
+    design model, all sources have been merged into a single per-sample list.
 
     Example:
         {
             "name": "carbonic_anhydrase_redesign",
             "npz_file": "backbone_output.npz",
-            "fixed_residues": [
-                {"chain_id": "0", "res_id": 94, "residue": "HIS", "is_motif_residue": true},
-                {"chain_id": "0", "res_id": 96, "residue": "HIS", "is_motif_residue": true},
-                {"chain_id": "0", "res_id": 119, "residue": "HIS", "is_motif_residue": true}
-            ]
+            "fixed_residues": {
+                "0": [{"res_id": 94, "res_name": "HIS"}]
+            }
         }
     """
 
@@ -443,9 +396,13 @@ class SequenceDesignInput(BaseModel):
         ...,
         description="NPZ file from backbone inference containing the full AtomArray",
     )
-    stitched_residues: dict[int, list[StitchedResidue]] = Field(
+    fixed_residues: dict[int, list[FixedResidue]] = Field(
         default_factory=dict,
-        description="Per-sample stitched motif residues, keyed by sample index.",
+        description=(
+            "Per-sample fixed residues, keyed by sample index (backbone stack "
+            "position). Union of stitched motif residues and any other "
+            "identity-fixed residues."
+        ),
     )
     backbone_index_map: list[int] | None = Field(
         default=None,
@@ -454,31 +411,6 @@ class SequenceDesignInput(BaseModel):
             "position that output sequence i should be generated from. "
         ),
     )
-
-    # TODO: Re-enable validators if we end up using fixed residues again
-    # @model_validator(mode="after")
-    # def validate_no_duplicate_fixed_residues(self) -> SequenceDesignInput:
-    #     """Ensure no residue is fixed twice."""
-    #     seen: set[tuple[str, int]] = set()
-    #     for fr in self.fixed_residues:
-    #         key = (fr.chain_id, fr.res_id)
-    #         if key in seen:
-    #             raise ValueError(
-    #                 f"Duplicate fixed residue: chain '{fr.chain_id}', res_id {fr.res_id}"
-    #             )
-    #         seen.add(key)
-    #     return self
-
-    # @model_validator(mode="after")
-    # def validate_protein_chain_id(self) -> SequenceDesignInput:
-    #     """Ensure all fixed residues are on protein chain '0'."""
-    #     for fr in self.fixed_residues:
-    #         if fr.chain_id != "0":
-    #             raise ValueError(
-    #                 f"Fixed residue chain_id must be '0' (protein chain), "
-    #                 f"got '{fr.chain_id}' for res_id {fr.res_id}"
-    #             )
-    #     return self
 
 
 # ---------------------------------------------------------------------------

@@ -50,20 +50,20 @@ def _zero_sum_gauge(
 
 def build_mutable_mask(
     token_mask: Bool[Tensor, "batch n_token"],
-    stitched_mask: Bool[Tensor, "batch n_token"] | None,
+    fixed_mask: Bool[Tensor, "batch n_token"] | None,
 ) -> Bool[Tensor, "batch n_token"]:
     """Build mask of positions that are mutable.
-    In practice, this is just the complement of the stitched mask.
+    In practice, this is just the complement of the fixed-residue mask.
 
     Args:
         token_mask: Valid token mask [B, N].
-        stitched_mask: Stitched (fixed) position mask [B, N], or None.
+        fixed_mask: Identity-fixed position mask [B, N], or None.
 
     Returns:
         Boolean mask of mutable positions [B, N].
     """
-    if stitched_mask is not None:
-        return token_mask & ~stitched_mask
+    if fixed_mask is not None:
+        return token_mask & ~fixed_mask
     return token_mask
 
 
@@ -131,27 +131,27 @@ def build_energy_bias_vector(
 def build_s_init(
     h: Float[Tensor, "batch n_token num_residue_types"],
     temperature: float,
-    stitched_mask: Bool[Tensor, "batch n_token"] | None,
-    stitched_restype: Float[Tensor, "batch n_token num_residue_types"] | None,
+    fixed_mask: Bool[Tensor, "batch n_token"] | None,
+    fixed_restype: Float[Tensor, "batch n_token num_residue_types"] | None,
     generator: torch.Generator | None,
 ) -> Float[Tensor, "batch n_token num_residue_types"] | None:
     """Build initial sequence for Potts sampling.
 
-    If stitched_mask is None, returns None (sampler initializes from h internally).
+    If fixed_mask is None, returns None (sampler initializes from h internally).
     Otherwise, samples mutable positions from softmax(-h / temperature) and
-    sets stitched positions to stitched_restype.
+    sets fixed positions to fixed_restype.
 
     Args:
         h: Potts fields (already alphabet-biased) [B, N, R].
         temperature: Initial sampling temperature.
-        stitched_mask: Stitched position mask [B, N], or None.
-        stitched_restype: One-hot stitched residue types [B, N, R], or None.
+        fixed_mask: Identity-fixed position mask [B, N], or None.
+        fixed_restype: One-hot fixed residue types [B, N, R], or None.
         generator: Optional torch Generator for reproducibility.
 
     Returns:
         Initial one-hot sequence [B, N, R], or None.
     """
-    if stitched_mask is None:
+    if fixed_mask is None:
         return None
 
     B, N, R = h.shape
@@ -160,7 +160,7 @@ def build_s_init(
         logits.exp().reshape(B * N, R), 1, generator=generator
     ).reshape(B, N)
     S_init = torch.nn.functional.one_hot(indices, R)
-    S_init = torch.where(stitched_mask.unsqueeze(-1), stitched_restype, S_init).float()
+    S_init = torch.where(fixed_mask.unsqueeze(-1), fixed_restype, S_init).float()
     return S_init
 
 

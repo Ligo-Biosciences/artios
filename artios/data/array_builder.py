@@ -23,7 +23,7 @@ from artios.data.json_parser import (
     SMILESLigand,
 )
 from artios.data.motif_parser import Motif, MotifLigand, MotifResidue
-from artios.data.parser import AddAtomArrayAnnot, MMCIFParser
+from artios.data.parser import AddAtomArrayAnnot
 from artios.data.rdkit import (
     AtomInfo,
     infer_atom_map_from_substructure,
@@ -712,83 +712,6 @@ def build_motif(motif: Motif, start_entity_id: int = 2) -> AtomArray:
     combined = arrays[0]
     for arr in arrays[1:]:
         combined += arr
-
-    return combined
-
-
-def build_structure_from_backbone(
-    input_data: SequenceDesignInput | PackingInput,
-) -> AtomArray:
-    """Build atom array from sequence design input.
-
-    Takes a SequenceDesignInput or PackingInput and:
-    1. Loads backbone CIF via MMCIFParser
-    2. Filters protein residues to backbone atoms only (N, CA, C, O)
-    3. Keeps ligand atoms (HETATM) as-is from CIF
-    4. Adds is_fixed annotation for fixed residues
-    5. Adds standard annotations (reference features)
-
-    Args:
-        input_data: SequenceDesignInput or PackingInput with backbone file and fixed residues
-
-    Returns:
-        AtomArray: Complete structure with is_fixed annotation marking
-            fixed residue atoms
-
-    Raises:
-        FileNotFoundError: If backbone CIF file doesn't exist
-    """
-    cif_path = input_data.cif_file.path
-    if not cif_path.exists():
-        raise FileNotFoundError(f"Backbone CIF file not found: {cif_path}")
-
-    parser = MMCIFParser(cif_path)
-    atoms = parser.get_structure()
-
-    # Group atoms by residue and process
-    res_starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
-    processed_arrays: list[AtomArray] = []
-
-    for start, stop in zip(res_starts[:-1], res_starts[1:]):
-        res_atoms = atoms[start:stop]
-        is_hetero = res_atoms.hetero[0]
-
-        # For protein residues, keep only backbone atoms
-        if not is_hetero:
-            backbone_atoms = BACKBONE_DEFS["protein"]
-            backbone_mask = np.isin(res_atoms.atom_name, backbone_atoms)
-            res_atoms = res_atoms[backbone_mask]
-
-        # Ligands (HETATM) are kept as-is from CIF
-        processed_arrays.append(res_atoms.copy())
-
-    # Combine all arrays
-    if not processed_arrays:
-        raise ValueError("No atoms found in backbone CIF")
-
-    combined = processed_arrays[0]
-    for arr in processed_arrays[1:]:
-        combined += arr
-
-    # Add is_fixed annotation for fixed residues
-    is_fixed = np.zeros(len(combined), dtype=bool)
-    fixed_residues = getattr(input_data, "fixed_residues", [])
-    fixed_residue_map = {(fr.chain_id, fr.res_id): fr.residue for fr in fixed_residues}
-
-    for start, stop in zip(
-        struc.get_residue_starts(combined, add_exclusive_stop=True)[:-1],
-        struc.get_residue_starts(combined, add_exclusive_stop=True)[1:],
-    ):
-        chain_id = combined.chain_id[start]
-        res_id = combined.res_id[start]
-        key = (chain_id, res_id)
-        if key in fixed_residue_map:
-            is_fixed[start:stop] = True
-
-    combined.set_annotation("is_fixed", is_fixed)
-
-    # Add reference features
-    combined = add_reference_features(combined)
 
     return combined
 

@@ -1,7 +1,5 @@
 """Tests for array_builder.py new functions."""
 
-from unittest.mock import MagicMock, patch
-
 import numpy as np
 import pytest
 from biotite.structure import AtomArray
@@ -9,13 +7,9 @@ from biotite.structure import AtomArray
 from artios.data.array_builder import (
     build_motif_ligand,
     build_motif_residue,
-    build_structure_from_backbone,
 )
 from artios.data.json_parser import (
     CCDLigand,
-    CIFFile,
-    FixedResidue,
-    SequenceDesignInput,
     SMILESLigand,
 )
 from artios.data.motif_parser import MotifLigand, MotifResidue
@@ -248,73 +242,6 @@ class TestBuildMotifLigand:
         assert (
             distances.max() < 0.25
         ), f"Max distance too large: {distances.max():.2f} Å"
-
-
-class TestBuildSequenceDesignStructure:
-    """Tests for build_sequence_design_structure function."""
-
-    def test_file_not_found_raises(self, tmp_path):
-        """Test that missing backbone file raises FileNotFoundError."""
-        input_data = SequenceDesignInput(
-            cif_file=CIFFile(path=tmp_path / "nonexistent.cif"),
-        )
-
-        with pytest.raises(FileNotFoundError, match="Backbone CIF file not found"):
-            build_structure_from_backbone(input_data)
-
-    @pytest.fixture
-    def mock_mmcif_parser(self):
-        """Create a mock MMCIFParser that returns a simple structure."""
-        with patch("protenix.data.array_builder.MMCIFParser") as mock:
-            # Create a simple mock structure with backbone + ligand
-            atoms = AtomArray(5)
-            atoms.atom_name = np.array(["N", "CA", "C", "O", "ZN"])
-            atoms.coord = np.array(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.5, 0.0, 0.0],
-                    [2.0, 1.5, 0.0],
-                    [3.0, 1.5, 0.0],
-                    [10.0, 10.0, 10.0],
-                ]
-            )
-            atoms.res_id = np.array([1, 1, 1, 1, 2])
-            atoms.res_name = np.array(["GLY", "GLY", "GLY", "GLY", "ZN"])
-            atoms.chain_id = np.array(["A", "A", "A", "A", "B"])
-            atoms.element = np.array(["N", "C", "C", "O", "ZN"])
-            atoms.hetero = np.array([False, False, False, False, True])
-
-            mock_instance = MagicMock()
-            mock_instance.get_structure.return_value = atoms
-            mock.return_value = mock_instance
-
-            yield mock
-
-    def test_fixed_residue_annotation(self, mock_mmcif_parser, tmp_path):
-        """Test that fixed residues get is_fixed annotation."""
-        # Create a temp CIF file (content doesn't matter since we're mocking)
-        cif_file_path = tmp_path / "backbone.cif"
-        cif_file_path.write_text("# Mock CIF")
-
-        input_data = SequenceDesignInput(
-            cif_file=CIFFile(path=cif_file_path),
-            fixed_residues=[
-                FixedResidue(chain_id="A", res_id=1, residue="GLY"),
-            ],
-        )
-
-        result = build_structure_from_backbone(input_data)
-
-        # Check is_fixed annotation exists
-        assert hasattr(result, "is_fixed")
-
-        # Check fixed residue atoms are marked
-        gly_mask = result.res_name == "GLY"
-        assert result.is_fixed[gly_mask].all()
-
-        # Check ligand atoms are not marked as fixed
-        zn_mask = result.res_name == "ZN"
-        assert not result.is_fixed[zn_mask].any()
 
 
 if __name__ == "__main__":

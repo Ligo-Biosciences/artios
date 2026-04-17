@@ -173,10 +173,10 @@ The parser validates:
 
 ```python
 from artios.data.json_parser import (
-    parse_sequence_design_json,
-    SequenceDesignInput,
     FixedResidue,
-    CIFFile,
+    NPZFile,
+    SequenceDesignInput,
+    parse_sequence_design_json,
 )
 
 # Parse from file
@@ -184,18 +184,18 @@ input_data = parse_sequence_design_json("my_design.json")
 
 # Access fields
 print(input_data.name)
-print(input_data.cif_file.path)
+print(input_data.npz_file.path)
 
-for fr in input_data.fixed_residues:
-    # residue is always normalized to 3-letter code
-    print(f"Chain {fr.chain_id}, Res {fr.res_id}: {fr.residue}")
+for sample_idx, residues in input_data.fixed_residues.items():
+    for fr in residues:
+        print(f"Sample {sample_idx}: res_id {fr.res_id} pinned to {fr.res_name}")
 
 # Create programmatically
 input_data = SequenceDesignInput(
     name="my_design",
-    cif_file=CIFFile(path="backbone.cif"),
-    fixed_residues=[
-        FixedResidue(chain_id="A", res_id=94, residue="H"),  # normalized to "HIS"
-    ],
+    npz_file=NPZFile(path="backbone.npz"),
+    fixed_residues={
+        0: [FixedResidue(res_id=94, res_name="HIS")],
+    },
 )
 ```

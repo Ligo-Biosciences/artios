@@ -165,14 +165,14 @@ class MPNNDataset(Dataset):
         atom_array = self.atom_stack[backbone_sample_idx]
         token_array = AtomArrayTokenizer(atom_array).get_token_array()
 
-        # stitched_residues keyed by backbone stack position (backbone-dependent)
-        stitched = self.sequence_input.stitched_residues.get(backbone_sample_idx)
+        # fixed_residues keyed by backbone stack position (backbone-dependent)
+        fixed = self.sequence_input.fixed_residues.get(backbone_sample_idx)
 
         return ContextGenerator(
             token_array,
             atom_array,
             pdb_id=sample_name,
-        ).get_full_context(stitched_residues=stitched)
+        ).get_full_context(fixed_residues=fixed)
 
 
 class PackingDataset(Dataset):

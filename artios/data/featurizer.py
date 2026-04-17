@@ -20,15 +20,15 @@ from artios.data.features import (
     ChainPermContext,
     CoordinateContext,
     EntityContext,
+    FixedResidueContext,
     FullContext,
     IndexContext,
     MaskContext,
     MotifContext,
     ReferenceConformerContext,
-    StitchedContext,
     TokenContext,
 )
-from artios.data.json_parser import StitchedResidue
+from artios.data.json_parser import FixedResidue
 from artios.data.tokenizer import TokenArray
 from artios.utils.geometry import compute_virtual_cb, random_transform
 
@@ -473,41 +473,41 @@ class ContextGenerator(object):
             original_motif_mapping=self.original_motif_mapping,
         )
 
-    def get_stitched_context(
-        self, stitched_residues: list[StitchedResidue]
-    ) -> StitchedContext:
-        """Build stitched context from a list of stitched residues.
+    def get_fixed_residue_context(
+        self, fixed_residues: list[FixedResidue]
+    ) -> FixedResidueContext:
+        """Build the fixed-residue context from a list of FixedResidue.
 
         Args:
-            stitched_residues: List of StitchedResidue with res_id and res_name.
+            fixed_residues: List of FixedResidue with res_id and res_name.
 
         Returns:
-            StitchedContext with mask and one-hot restypes at stitched positions.
+            FixedResidueContext with mask and one-hot restypes at fixed positions.
         """
         n_token = len(self.cropped_token_array)
         centre_res_ids = self.centre_atoms.res_id.astype(int)
 
-        stitched_map = {sr.res_id: sr.res_name for sr in stitched_residues}
+        fixed_map = {fr.res_id: fr.res_name for fr in fixed_residues}
 
-        stitched_mask = torch.zeros(n_token, dtype=torch.bool)
-        stitched_restype = torch.zeros(n_token, 32)
+        fixed_mask = torch.zeros(n_token, dtype=torch.bool)
+        fixed_restype = torch.zeros(n_token, 32)
 
         for i, res_id in enumerate(centre_res_ids):
-            if int(res_id) in stitched_map:
-                res_name = stitched_map[int(res_id)]
-                stitched_mask[i] = True
+            if int(res_id) in fixed_map:
+                res_name = fixed_map[int(res_id)]
+                fixed_mask[i] = True
                 onehot = self.restype_onehot_encoded([res_name])  # [1, 32]
-                stitched_restype[i] = onehot[0]
+                fixed_restype[i] = onehot[0]
 
-        return StitchedContext(
-            stitched_mask=stitched_mask,
-            stitched_restype=stitched_restype,
+        return FixedResidueContext(
+            fixed_mask=fixed_mask,
+            fixed_restype=fixed_restype,
         )
 
     def get_full_context(
         self,
         include_arrays: bool = True,
-        stitched_residues: list[StitchedResidue] | None = None,
+        fixed_residues: list[FixedResidue] | None = None,
     ) -> FullContext:
         """Get all context required for design pipeline.
 
@@ -515,6 +515,8 @@ class ContextGenerator(object):
             include_arrays: If True, include atom_array and token_array in BasicContext.
                 These are expensive to serialize and can be disabled for training
                 performance. Defaults to True for backward compatibility.
+            fixed_residues: Optional list of FixedResidue to pin identity at
+                specific positions during sequence design.
         """
         return FullContext(
             token=self.get_token_context(),
@@ -528,8 +530,8 @@ class ContextGenerator(object):
             entity=self.get_entity_context(),
             coordinate=self.get_coordinate_context(),
             basic=self.get_basic_context(include_arrays=include_arrays),
-            stitched=self.get_stitched_context(stitched_residues)
-            if stitched_residues
+            fixed_residues=self.get_fixed_residue_context(fixed_residues)
+            if fixed_residues
             else None,
         )
 

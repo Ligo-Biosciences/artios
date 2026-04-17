@@ -429,23 +429,23 @@ class MotifContext(Context):
 
 @typecheck
 @dataclass
-class StitchedContext(Context):
-    """Stitched motif residue information for sequence design.
+class FixedResidueContext(Context):
+    """Identity-fixed residue information for sequence design.
 
-    Populated after motif stitching to indicate which token positions
-    have fixed restypes from the motif.
+    Positions whose amino-acid identity is constrained during
+    sequence design.
     """
 
-    stitched_mask: Mask(
+    fixed_mask: Mask(
         Bool[Tensor, "*batch n_token"],
         type=FeatureType.TOKEN,
-        description="True at positions where a motif residue has been stitched in",
+        description="True at positions whose residue identity is fixed",
     )
-    stitched_restype: Feature(
+    fixed_restype: Feature(
         Float[Tensor, "*batch n_token 32"],
         type=FeatureType.TOKEN,
         encoding=EncodingType.ONE_HOT,
-        description="One-hot restype at stitched positions, zero elsewhere",
+        description="One-hot restype at fixed positions, zero elsewhere",
     )
 
 
@@ -510,7 +510,7 @@ class FullContext:
     basic: BasicContext
     # NOTE: Temporarily optional - expensive to compute, currently unused
     atom_perm: AtomPermContext = field(default_factory=AtomPermContext)
-    stitched: StitchedContext | None = None
+    fixed_residues: FixedResidueContext | None = None
 
     def pad(self, n_max_atoms: int, n_max_tokens: int) -> FullContext:
         """Pad all features to n_max_tokens/n_max_atoms."""
@@ -620,7 +620,7 @@ class FullContext:
             entity=uncond_entity,
             coordinate=self.coordinate,
             basic=self.basic,
-            stitched=self.stitched,
+            fixed_residues=self.fixed_residues,
         )
 
     def without_ligand(self) -> FullContext:
@@ -687,7 +687,7 @@ class FullContext:
             entity=new_entity,
             coordinate=new_coordinate,
             basic=self.basic,
-            stitched=self.stitched,
+            fixed_residues=self.fixed_residues,
         )
 
     @classmethod
@@ -749,10 +749,10 @@ class FullContext:
                 n_atom=[int(n_atom)] * batch_size,
             )
 
-        # Optional: StitchedContext
-        stitched = None
-        if "stitched" in d:
-            stitched = StitchedContext.from_dict(d["stitched"])
+        # Optional: FixedResidueContext
+        fixed_residues = None
+        if "fixed_residues" in d:
+            fixed_residues = FixedResidueContext.from_dict(d["fixed_residues"])
 
         return cls(
             token=token,
@@ -765,5 +765,5 @@ class FullContext:
             entity=entity,
             coordinate=coordinate,
             basic=basic_context,
-            stitched=stitched,
+            fixed_residues=fixed_residues,
         )

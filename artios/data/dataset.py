@@ -34,7 +34,7 @@ from artios.data import annotation
 from artios.data.data_pipeline import DataPipeline
 from artios.data.data_weights import get_sample_weights
 from artios.data.features import FullContext
-from artios.data.featurizer import ContextGenerator
+from artios.data.featurizer_v2 import ContextGenerator
 from artios.data.filter import Filter
 from artios.data.motif_maker import MotifMaker
 from artios.data.msa_featurizer import MSAFeaturizer

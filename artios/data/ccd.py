@@ -28,6 +28,7 @@ from biotite.structure import AtomArray
 from rdkit import Chem
 
 from artios.common.chain_type import ChainType
+from artios.common.residue_names import STANDARD_POLYMER_TYPES_SET
 from artios.data.substructure_perms import get_substructure_perms
 from configs.configs_data import data_configs
 
@@ -105,6 +106,12 @@ def get_component_atom_array(
             f"Warning: get_component_atom_array() can not parse {ccd_code} for {e}"
         )
         return None
+
+    # biotite's get_component sets hetero=True on all atoms. Standard polymer
+    # residues need hetero=False so PDB writers emit ATOM (not HETATM) records,
+    # which is required for PyMOL/other viewers to render backbone connectivity.
+    if ccd_code in STANDARD_POLYMER_TYPES_SET:
+        comp.hetero[:] = False
 
     # Add leaving atom annotation (not provided by biotite's get_component)
     atom_category = ccd_cif[ccd_code]["chem_comp_atom"]

@@ -353,7 +353,7 @@ class TestContextGenerator:
 
     @pytest.fixture
     def full_context(self, structure):
-        from artios.data.featurizer import ContextGenerator
+        from artios.data.featurizer_v2 import ContextGenerator
 
         return ContextGenerator(
             structure, pdb_id="5s8i", ref_pos_augment=False

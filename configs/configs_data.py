@@ -123,10 +123,10 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
     ):
         alt_data_root = "/" + DATA_ROOT_DIR
         CCD_COMPONENTS_FILE_PATH = os.path.join(
-            DATA_ROOT_DIR, "components.v20240608.cif"
+            alt_data_root, "components.v20240608.cif"
         )
         CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
-            DATA_ROOT_DIR, "components.v20240608.cif.rdkit_mol.pkl"
+            alt_data_root, "components.v20240608.cif.rdkit_mol.pkl"
         )
 
 # if still not found, try ccd_files local directory

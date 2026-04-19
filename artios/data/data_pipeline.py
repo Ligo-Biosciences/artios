@@ -22,9 +22,9 @@ import numpy as np
 import pandas as pd
 from biotite.structure import AtomArray
 
+from artios.data import cropping
 from artios.data.parser import DistillationMMCIFParser, MMCIFParser
 from artios.data.structure import AnnotatedStructure
-from artios.utils import cropping_v2
 
 
 class DataPipeline(object):
@@ -161,7 +161,7 @@ class DataPipeline(object):
             pdb_id,
         )
 
-        crop_method, token_indices = cropping_v2.crop(
+        crop_method, token_indices = cropping.crop(
             structure=structure,
             crop_size=crop_size,
             ref_chain_ids=ref_chain_indices,

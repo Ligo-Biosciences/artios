@@ -71,12 +71,9 @@ default_weighted_pdb_configs = {
 
 default_distillation_configs = {
     "sampler_configs": {
-        "sampler_type": "uniform",
+        "sampler_type": "cluster_balanced",
+        "cluster_size_exponent": 0.75,
         "force_recompute_weight": True,
-        # Weight ~ num_tokens^gamma. At gamma=1.5, a 10x longer protein gets
-        # ~31x sampling weight, biasing toward longer sequences with more
-        # interesting geometry. 0 = uniform, 1 = token-proportional.
-        "length_reweight_gamma": 0.0,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -241,7 +238,9 @@ data_configs = {
         "train_sample_weights": ListValue([0.00, 0.4, 0.6]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["mgnify_trousers_val", "recentPDB_1536_sample384_0925"]),
+    "test_sets": ListValue(
+        ["afdb_trousers_val", "mgnify_trousers_val", "recentPDB_1536_sample384_0925"]
+    ),
     "weightedPDB_before2021_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),

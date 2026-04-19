@@ -11,6 +11,7 @@ structures. This module provides:
 from enum import Enum
 from typing import Any, Optional, Union
 
+import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 from pandera.typing import Series
@@ -369,40 +370,53 @@ def calc_weights_for_df(
     if should_filter_artifact_ligands:
         indices_df = _filter_artifact_ligands(indices_df)
 
-    # Specific to assembly, and entities (chain or interface)
-    indices_df["pdb_sorted_entity_id"] = indices_df.apply(
-        lambda x: f"{x['pdb_id']}_{x['assembly_id']}_{'_'.join(sorted([str(x['entity_1_id']), str(x['entity_2_id'])]))}",
-        axis=1,
+    # Build entity key: pdb_assembly_sortedEntities
+    # .to_numpy() avoids Arrow-backed Series which break np.minimum
+    e1 = indices_df["entity_1_id"].astype(str).fillna("nan").to_numpy()
+    e2 = indices_df["entity_2_id"].astype(str).fillna("nan").to_numpy()
+    lo = np.minimum(e1, e2)
+    hi = np.maximum(e1, e2)
+    indices_df["pdb_sorted_entity_id"] = (
+        indices_df["pdb_id"]
+        + "_"
+        + indices_df["assembly_id"].astype(str)
+        + "_"
+        + lo
+        + "_"
+        + hi
     )
 
-    entity_member_num_dict = {}
-    for pdb_sorted_entity_id, sub_df in indices_df.groupby("pdb_sorted_entity_id"):
-        entity_member_num_dict[pdb_sorted_entity_id] = len(sub_df)
-    indices_df["pdb_sorted_entity_id_member_num"] = indices_df.apply(
-        lambda x: entity_member_num_dict[x["pdb_sorted_entity_id"]], axis=1
+    # Rows sharing an entity key (member count)
+    indices_df["pdb_sorted_entity_id_member_num"] = indices_df.groupby(
+        "pdb_sorted_entity_id"
+    )["pdb_sorted_entity_id"].transform("count")
+
+    # Unique entity keys per cluster
+    cluster_sizes = indices_df.groupby("cluster_id")["pdb_sorted_entity_id"].transform(
+        "nunique"
     )
 
-    cluster_size_record = {}
-    for cluster_id, sub_df in indices_df.groupby("cluster_id"):
-        cluster_size_record[cluster_id] = len(set(sub_df["pdb_sorted_entity_id"]))
-
-    weights = []
-    for _, row in indices_df.iterrows():
-        data_type = row["type"]
-        cluster_size = cluster_size_record[row["cluster_id"]]
-        chain_count = {MolType.PROT: 0, MolType.NUC: 0, MolType.LIGAND: 0}
-        for mol_type in [row["mol_1_type"], row["mol_2_type"]]:
-            if mol_type in chain_count:
-                chain_count[mol_type] += 1
-        weight = get_weighted_pdb_weight(
-            data_type=data_type,
-            cluster_size=cluster_size,
-            chain_count=chain_count,
-            beta_dict=beta_dict,
-            alpha_dict=alpha_dict,
-        )
-        weights.append(weight)
-    indices_df["weights"] = weights / indices_df["pdb_sorted_entity_id_member_num"]
+    # Vectorized weight: beta * alpha_sum / cluster_size / member_num
+    # All arithmetic on numpy arrays to avoid Arrow dtype issues on Python 3.12
+    _beta = {(k.value if hasattr(k, "value") else k): v for k, v in beta_dict.items()}
+    _alpha = {(k.value if hasattr(k, "value") else k): v for k, v in alpha_dict.items()}
+    beta = (
+        pd.Series(indices_df["type"].to_numpy(), index=indices_df.index)
+        .map(_beta)
+        .to_numpy(dtype="float64")
+    )
+    alpha_sum = pd.Series(
+        indices_df["mol_1_type"].to_numpy(), index=indices_df.index
+    ).map(_alpha).fillna(0).to_numpy(dtype="float64") + pd.Series(
+        indices_df["mol_2_type"].to_numpy(), index=indices_df.index
+    ).map(_alpha).fillna(0).to_numpy(dtype="float64")
+    eps = 1e-9
+    indices_df["weights"] = (
+        beta
+        * alpha_sum
+        / (cluster_sizes.to_numpy(dtype="float64") + eps)
+        / indices_df["pdb_sorted_entity_id_member_num"].to_numpy(dtype="float64")
+    )
 
     if balance_protein_clusters:
         indices_df = apply_protein_cluster_balancing(
@@ -439,6 +453,7 @@ def get_sample_weights(
     monomer_pdb_target_fraction: float = 0.0,
     should_filter_artifact_ligands: bool = False,
     length_reweight_gamma: float = 0.0,
+    cluster_size_exponent: float = 0.75,
 ) -> Union[pd.Series, list[float]]:
     """Compute sample weights based on the specified sampler type.
 
@@ -457,6 +472,10 @@ def get_sample_weights(
         length_reweight_gamma: Power exponent for length-based reweighting.
             Weight per sample is num_tokens^gamma. 0 = uniform, 0.5 = sqrt,
             1.0 = linear (token-proportional). Only applies to uniform sampler.
+        cluster_size_exponent: Power exponent for the 'cluster_balanced' sampler.
+            Weight per row is 1 / cluster_size^exponent. 0 = uniform across rows,
+            0.5 = sqrt, 0.75 = default, 1.0 = fully cluster-balanced. Only applies
+            to the 'cluster_balanced' sampler.
 
     Returns:
         Sample weights as a Series (weighted) or list (uniform).
@@ -478,6 +497,18 @@ def get_sample_weights(
                 should_filter_artifact_ligands=should_filter_artifact_ligands,
             )
         return indices_df["weights"].astype("float32")
+    elif sampler_type == "cluster_balanced":
+        assert indices_df is not None
+        cluster_sizes = indices_df.groupby("cluster_id")["pdb_id"].transform("nunique")
+        weights = 1.0 / cluster_sizes.astype("float32").pow(cluster_size_exponent)
+        n_clusters = indices_df["cluster_id"].nunique()
+        logger.info(
+            f"[cluster_balanced] {len(indices_df)} rows, {n_clusters} clusters, "
+            f"exponent={cluster_size_exponent}, "
+            f"largest cluster weight reduction: "
+            f"{1.0 / cluster_sizes.max() ** cluster_size_exponent:.4f}"
+        )
+        return weights / weights.sum()
     elif sampler_type == "uniform":
         assert indices_df is not None
         if length_reweight_gamma > 0:

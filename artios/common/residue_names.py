@@ -195,3 +195,24 @@ UNKNOWN_TYPES: tuple[str, ...] = (UNK, UNK_RNA, UNK_DNA, UNL)
 
 # Residues with cationic nitrogens at physiological pH
 CATIONIC_RESIDUES: frozenset[str] = frozenset({ARG, LYS, HIS})
+
+# Residue classifications for pocket chemistry features
+HYDROPHOBIC_RESIDUES: frozenset[str] = frozenset(
+    {ALA, VAL, LEU, ILE, PRO, PHE, TRP, MET}
+)
+HYDROPHILIC_RESIDUES: frozenset[str] = frozenset(
+    {
+        SER,
+        THR,
+        ASN,
+        GLN,
+        TYR,
+        CYS,
+        ASP,
+        GLU,
+        LYS,
+        ARG,
+        HIS,
+    }
+)
+CHARGED_RESIDUES: frozenset[str] = frozenset({ASP, GLU, LYS, ARG, HIS})

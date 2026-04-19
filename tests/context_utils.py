@@ -271,6 +271,7 @@ def create_test_context(
         atom_to_tokatom_idx=torch.zeros(
             batch_size, n_atoms, dtype=torch.long, device=device
         ),
+        atom_asym_id=torch.zeros(batch_size, n_atoms, dtype=torch.long, device=device),
     )
 
     # EntityContext

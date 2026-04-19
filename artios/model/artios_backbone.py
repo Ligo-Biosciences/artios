@@ -58,7 +58,7 @@ class ArtiosBackbone(nn.Module):
 
         self.diffusion_module = DiffusionModule(**configs.model.diffusion_module)
         self.sigma_coord = configs.sigma_coord
-        self.s_noise_entity_trans = 2.0
+        self.s_noise_entity_trans = configs.s_noise_entity_trans
 
     def main_inference_loop(
         self,

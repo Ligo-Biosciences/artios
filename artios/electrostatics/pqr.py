@@ -129,7 +129,7 @@ def compute_mmff94_charges(ligand: AtomArray) -> np.ndarray:
     from rdkit import Chem
     from rdkit.Chem import rdForceFieldHelpers
 
-    from artios.data.ccd import get_component_rdkit_mol
+    from artios.data.chem.ccd import get_component_rdkit_mol
 
     charges = np.zeros(len(ligand), dtype=np.float64)
 

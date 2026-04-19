@@ -28,7 +28,7 @@ from artios.data.features import (
     StitchedContext,
     TokenContext,
 )
-from artios.data.json_parser import StitchedResidue
+from artios.data.parsing.json import StitchedResidue
 from artios.data.structure import AnnotatedStructure
 from artios.utils.geometry import compute_virtual_cb, random_transform
 

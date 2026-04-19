@@ -473,9 +473,11 @@ def get_sample_weights(
             Weight per sample is num_tokens^gamma. 0 = uniform, 0.5 = sqrt,
             1.0 = linear (token-proportional). Only applies to uniform sampler.
         cluster_size_exponent: Power exponent for the 'cluster_balanced' sampler.
-            Weight per row is 1 / cluster_size^exponent. 0 = uniform across rows,
-            0.5 = sqrt, 0.75 = default, 1.0 = fully cluster-balanced. Only applies
-            to the 'cluster_balanced' sampler.
+            Per-cluster aggregate sampling weight scales as cluster_size^exponent.
+            0.0 = fully cluster-balanced (every cluster equally likely),
+            0.5 = sqrt, 0.75 = default (mild down-weighting),
+            1.0 = uniform per row (no balancing). Only applies to the
+            'cluster_balanced' sampler.
 
     Returns:
         Sample weights as a Series (weighted) or list (uniform).
@@ -500,13 +502,15 @@ def get_sample_weights(
     elif sampler_type == "cluster_balanced":
         assert indices_df is not None
         cluster_sizes = indices_df.groupby("cluster_id")["pdb_id"].transform("nunique")
-        weights = 1.0 / cluster_sizes.astype("float32").pow(cluster_size_exponent)
+        # Per-row weight = N^(exp-1)  →  per-cluster aggregate = N * N^(exp-1) = N^exp
+        weights = cluster_sizes.astype("float32").pow(cluster_size_exponent - 1.0)
         n_clusters = indices_df["cluster_id"].nunique()
         logger.info(
             f"[cluster_balanced] {len(indices_df)} rows, {n_clusters} clusters, "
-            f"exponent={cluster_size_exponent}, "
-            f"largest cluster weight reduction: "
-            f"{1.0 / cluster_sizes.max() ** cluster_size_exponent:.4f}"
+            f"exponent={cluster_size_exponent} "
+            f"(per-cluster aggregate weight ∝ N^{cluster_size_exponent}), "
+            f"largest cluster aggregate weight (vs singleton): "
+            f"{cluster_sizes.max() ** cluster_size_exponent:.1f}x"
         )
         return weights / weights.sum()
     elif sampler_type == "uniform":

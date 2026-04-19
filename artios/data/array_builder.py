@@ -14,21 +14,22 @@ from typing_extensions import assert_never
 
 from artios.common.constants import BACKBONE_DEFS
 from artios.common.residue_names import PROTEIN_COMMON_ONE_TO_THREE as PROTEIN_1to3
-from artios.data import annotation, ccd
-from artios.data.json_parser import (
+from artios.data.chem import ccd
+from artios.data.chem.rdkit import (
+    AtomInfo,
+    infer_atom_map_from_substructure,
+    smiles_to_atom_info,
+)
+from artios.data.parsing.cif import MMCIFParser
+from artios.data.parsing.json import (
     BackboneInput,
     CCDLigand,
     PackingInput,
     SequenceDesignInput,
     SMILESLigand,
 )
-from artios.data.motif_parser import Motif, MotifLigand, MotifResidue
-from artios.data.parser import MMCIFParser
-from artios.data.rdkit import (
-    AtomInfo,
-    infer_atom_map_from_substructure,
-    smiles_to_atom_info,
-)
+from artios.data.parsing.motif import Motif, MotifLigand, MotifResidue
+from artios.data.structure import annotation
 from artios.utils.file_io import load_atomarray_from_npz
 from evaluation.utils.constants import DESIGN_CHAIN_ID
 

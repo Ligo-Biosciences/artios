@@ -18,7 +18,6 @@ import pickle
 from pathlib import Path
 from typing import Any, Union
 
-import lz4.frame
 import numpy as np
 import pandas as pd
 from biotite.structure import (  # ty: ignore[unresolved-import]
@@ -232,38 +231,3 @@ def save_json(data: dict, output_fpath: Union[str, Path], indent: int = 4):
             json.dump(data_json, f, indent=indent)
         else:
             json.dump(data_json, f)
-
-
-def load_lz4_pickle(pkl: Union[str, Path]) -> Any:
-    """
-    Load an lz4 compressed pickle file.
-
-    Args:
-        pkl: An lz4 pickle file path.
-
-    Returns:
-        Any: The loaded data.
-    """
-    with lz4.frame.open(pkl, "rb") as f:
-        data = pickle.load(f)
-    return data
-
-
-def dump_lz4_pickle(
-    data: Any, pkl: Union[str, Path], compression_level: int = 0
-) -> None:
-    """
-    Dump an lz4 compressed pickle file.
-
-    Args:
-        data: The data to be dumped.
-        pkl: An lz4 pickle file path.
-        compression_level: LZ4 compression level (0-16, default 0=fast).
-    """
-    with lz4.frame.open(
-        pkl,
-        "wb",
-        compression_level=compression_level,
-        block_size=lz4.frame.BLOCKSIZE_MAX4MB,
-    ) as f:
-        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)

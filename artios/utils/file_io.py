@@ -15,16 +15,8 @@
 import gzip
 import json
 import pickle
-import sys
 from pathlib import Path
 from typing import Any, Union
-
-# TODO: Remove once all pickled data has been re-serialized under "artios"
-# Alias old package name so pickle can resolve "protenix.*" references
-if "protenix" not in sys.modules:
-    import artios
-
-    sys.modules["protenix"] = artios
 
 import lz4.frame
 import numpy as np
@@ -35,13 +27,8 @@ from biotite.structure import (  # ty: ignore[unresolved-import]
     BondList,
 )
 
-import artios
 from artios.utils.logger import get_logger
 from artios.utils.torch_utils import map_values_to_list
-
-sys.modules["protenix"] = (
-    artios  # TODO: this might create an issue in evaluation pipeline.
-)
 
 logger = get_logger(__name__)
 

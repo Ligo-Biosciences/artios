@@ -5,9 +5,9 @@ import torch
 from biotite.structure import AtomArray
 
 from artios.common.atom_types import DENSE_ATOM_NUM
+from artios.data.collate.padding import get_padding_length
 from artios.data.features import Context, FullContext
-from artios.data.padding_utils import get_padding_length
-from artios.data.tokenizer import TokenArray
+from artios.data.structure.tokenizer import TokenArray
 
 
 class CollateContexts:

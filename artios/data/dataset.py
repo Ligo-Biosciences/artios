@@ -30,16 +30,15 @@ from torch.utils.data import Dataset
 
 from artios.common import ccd_sets
 from artios.common.constants import BACKBONE_DEFS, EvaluationChainInterface
-from artios.data import annotation
 from artios.data.data_pipeline import DataPipeline
 from artios.data.data_weights import get_sample_weights
 from artios.data.features import FullContext
-from artios.data.featurizer_v2 import ContextGenerator
+from artios.data.features.featurizer import ContextGenerator
 from artios.data.filter import Filter
 from artios.data.motif_maker import MotifMaker
-from artios.data.msa_featurizer import MSAFeaturizer
-from artios.data.structure import AnnotatedStructure
-from artios.data.tokenizer import TokenArray
+from artios.data.msa.featurizer import MSAFeaturizer
+from artios.data.structure import AnnotatedStructure, annotation
+from artios.data.structure.tokenizer import TokenArray
 from artios.utils.file_io import read_indices_csv
 from artios.utils.geometry import random_transform
 from artios.utils.logger import get_logger

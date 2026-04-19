@@ -28,8 +28,8 @@ from artios.data.features import (
     StitchedContext,
     TokenContext,
 )
-from artios.data.json_parser import StitchedResidue
-from artios.data.tokenizer import TokenArray
+from artios.data.parsing.json import StitchedResidue
+from artios.data.structure.tokenizer import TokenArray
 from artios.utils.geometry import compute_virtual_cb, random_transform
 
 

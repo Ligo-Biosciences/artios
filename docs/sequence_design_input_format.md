@@ -172,7 +172,7 @@ The parser validates:
 ## Python Usage
 
 ```python
-from artios.data.json_parser import (
+from artios.data.parsing.json import (
     parse_sequence_design_json,
     SequenceDesignInput,
     FixedResidue,

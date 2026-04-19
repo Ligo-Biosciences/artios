@@ -22,9 +22,8 @@ import numpy as np
 import pandas as pd
 from biotite.structure import AtomArray
 
-from artios.data import cropping
-from artios.data.parser import DistillationMMCIFParser, MMCIFParser
-from artios.data.structure import AnnotatedStructure
+from artios.data.parsing.cif import DistillationMMCIFParser, MMCIFParser
+from artios.data.structure import AnnotatedStructure, cropping
 
 
 class DataPipeline(object):

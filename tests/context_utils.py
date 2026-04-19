@@ -17,7 +17,7 @@ from artios.data.features import (
     ReferenceConformerContext,
     TokenContext,
 )
-from artios.data.tokenizer import TokenArray
+from artios.data.structure.tokenizer import TokenArray
 
 
 def load_sample_context(device: torch.device | None = None) -> FullContext:

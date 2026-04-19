@@ -7,8 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from artios.data import cropping
-from artios.data.structure import AnnotatedStructure
+from artios.data.structure import AnnotatedStructure, cropping
 from artios.utils.file_io import load_atomarray_from_npz
 
 TESTDATA = Path(__file__).parent / "testdata" / "parsing"

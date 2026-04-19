@@ -23,10 +23,9 @@ artios.pem
 # Generated evaluation outputs
 evaluation/reference_distributions/
 
-# CCD / CIF files
-pdb-samples/**/*.cif
-pdb-samples/**/*.pdb
-pdb-samples/**/*.fasta
+# Ignore everything in pdb-samples directory
+pdb-samples/
+
 notebooks/sample-proteins/
 
 # Generated PDB/CIF outputs
@@ -35,3 +34,6 @@ notebooks/PDBs_noise_*/
 
 # Reference distributions
 reference-dists/
+
+# Pocket detection training cache
+artios/data/pocket/cache/

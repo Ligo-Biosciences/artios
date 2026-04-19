@@ -11,9 +11,106 @@ from biotite.structure import AtomArray
 from scipy.sparse import csr_matrix
 from scipy.spatial import KDTree
 
-from artios.data.engineering.metrics.structural import compute_fold_quality
+from artios.data.engineering.metrics.dssp import compute_dssp
+from artios.data.engineering.metrics.structural import (
+    compute_corrected_contact_order,
+    compute_hydrophobic_sasa_fraction,
+    compute_packing_efficiency,
+    compute_repeat_score,
+    compute_sse_entropy,
+)
+from artios.data.engineering.pipeline.thresholds import (
+    PRE_POCKET_THRESHOLDS,
+    RG_UPPER_BOUND_COEFF,
+    FragmentThresholds,
+)
 
 logger = getLogger(__name__)
+
+
+# Metric keys that require running the structural metric functions
+# (DSSP, SASA, repeat autocorrelation, etc.). Kept separate so filtering
+# can short-circuit for thresholds that only need length/plddt/rg.
+_EXPENSIVE_METRIC_KEYS = frozenset(
+    {
+        "sse_entropy",
+        "repeat_score",
+        "buried_hydrophobic",
+        "hydrophobic_sasa",
+        "contact_order",
+        "corrected_contact_order",
+        "packing_efficiency",
+        "corrected_packing_efficiency",
+    }
+)
+
+
+def compute_fragment_filter_metrics(frag_atoms: AtomArray) -> dict[str, float]:
+    """Compute every metric referenced by ``FragmentThresholds`` + the Rg bound."""
+    sse = compute_dssp(frag_atoms)
+
+    centroid = np.mean(frag_atoms.coord, axis=0)
+    rg = float(np.sqrt(np.mean(np.sum((frag_atoms.coord - centroid) ** 2, axis=1))))
+
+    sasa = compute_hydrophobic_sasa_fraction(frag_atoms)
+    repeat = compute_repeat_score(frag_atoms)
+    packing = compute_packing_efficiency(frag_atoms)
+
+    return {
+        "plddt": float(np.mean(frag_atoms.b_factor)),
+        "length": float(len(np.unique(frag_atoms.res_id))),
+        "rg": rg,
+        "sse_entropy": float(compute_sse_entropy(frag_atoms, sse=sse)),
+        "hydrophobic_sasa": float(sasa["hydrophobic_sasa_fraction"]),
+        "buried_hydrophobic": float(sasa["buried_hydrophobic_fraction"]),
+        "repeat_score": float(repeat["repeat_score"]),
+        "corrected_contact_order": float(compute_corrected_contact_order(frag_atoms)),
+        "packing_efficiency": float(packing["packing_efficiency"]),
+        "corrected_packing_efficiency": float(packing["corrected_packing_efficiency"]),
+    }
+
+
+def fragment_passes_thresholds(
+    metrics: dict[str, float], thresholds: FragmentThresholds
+) -> bool:
+    """True iff ``metrics`` satisfy every non-None threshold AND the Rg length bound.
+
+    Thresholds whose metric key is absent from ``metrics`` are skipped, so the
+    same function handles both cheap-only metric dicts (plddt/length/rg) and
+    full metric dicts (with SSE, SASA, repeat, contact order, packing).
+    """
+    if "rg" in metrics and "length" in metrics:
+        if metrics["rg"] > RG_UPPER_BOUND_COEFF * (metrics["length"] ** 0.4):
+            return False
+
+    for field_name, limit in vars(thresholds).items():
+        if limit is None:
+            continue
+        if field_name.startswith("min_"):
+            metric_key, side = field_name[4:], "min"
+        elif field_name.startswith("max_"):
+            metric_key, side = field_name[4:], "max"
+        else:
+            continue
+        if metric_key not in metrics:
+            continue
+        value = metrics[metric_key]
+        if side == "min" and value < limit:
+            return False
+        if side == "max" and value > limit:
+            return False
+    return True
+
+
+def _thresholds_require_expensive_metrics(thresholds: FragmentThresholds) -> bool:
+    """True if any non-None threshold maps to a metric requiring DSSP/SASA/etc."""
+    for field_name, limit in vars(thresholds).items():
+        if limit is None:
+            continue
+        if field_name.startswith(("min_", "max_")):
+            if field_name[4:] in _EXPENSIVE_METRIC_KEYS:
+                return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -39,9 +136,7 @@ class FragmentMaker:
         plddt_disorder_threshold: float = 65,
         contact_distance_threshold: float = 4.0,
         min_contact_residues: int = 4,
-        min_fragment_length: int = 150,
-        min_fragment_plddt: float = 70,
-        min_fold_quality: float = 0.6477,
+        thresholds: FragmentThresholds | None = None,
         spectral_k: int = 15,
         spectral_sigma: float = 8.0,
         spectral_connectivity_threshold: float = 0.05,
@@ -55,12 +150,12 @@ class FragmentMaker:
             plddt_disorder_threshold (float): Threshold for pLDDT to filter residues. Defaults to 65.
             contact_distance_threshold (float): Distance threshold for atom-atom contacts in spatial clustering. Defaults to 4.0 Angstroms.
             min_contact_residues (int): Minimum number of residues with contacts to merge fragments. Defaults to 4.
-            min_fragment_length (int): Minimum length of a fragment. Defaults to 150.
-            min_fragment_plddt (float): Minimum pLDDT of a fragment. Defaults to 70.
-            min_fold_quality (float): Minimum fold quality score P(good) from the
-                3-feature logistic model. Fragments below this are filtered out.
-                Defaults to 0.6477 (90%-good-retention operating point).
-                Set to ``None`` to disable fold quality filtering.
+            thresholds (FragmentThresholds | None): Quality filters applied in
+                ``filter_fragments``. Defaults to ``PRE_POCKET_THRESHOLDS``
+                (min_plddt=70, min_length=150, SSE entropy, buried hydrophobic,
+                hydrophobic SASA, repeat score, corrected contact order, corrected
+                packing efficiency). The length-dependent Rg bound
+                (rg <= RG_UPPER_BOUND_COEFF * length^0.4) is always applied.
             spectral_k (int): Number of nearest neighbors for kNN graph in spectral bisection. Defaults to 15.
             spectral_sigma (float): Gaussian kernel bandwidth for edge weights. Defaults to 8.0.
             spectral_connectivity_threshold (float): Fiedler value (lambda_2) above which a partition is considered well-connected. Defaults to 0.05.
@@ -70,20 +165,14 @@ class FragmentMaker:
         self.plddt_residue_threshold = plddt_disorder_threshold
         self.contact_distance_threshold = contact_distance_threshold
         self.min_contact_residues = min_contact_residues
-        self.min_fragment_length = min_fragment_length
-        self.min_fragment_plddt = min_fragment_plddt
-        self.min_fold_quality = min_fold_quality
+        self.thresholds = (
+            thresholds if thresholds is not None else PRE_POCKET_THRESHOLDS
+        )
         self.spectral_k = spectral_k
         self.spectral_sigma = spectral_sigma
         self.spectral_connectivity_threshold = spectral_connectivity_threshold
         self.spectral_boundary_size = spectral_boundary_size
         self.spectral_min_partition_size = spectral_min_partition_size
-
-        # Length-dependent Rg upper bound: rg <= rg_upper_bound_coeff * length^0.4
-        # Fitted to approximate the previous linear bound over lengths 150-500,
-        # but follows the physical scaling law for globular proteins (Rg ~ N^0.4).
-        # Previous linear bound: rg <= 0.029767441860465118 * length + 14.279069767441861
-        self.rg_upper_bound_coeff = 2.397538
 
     def filter_low_plddt_residues(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -476,14 +565,13 @@ class FragmentMaker:
 
     def filter_fragments(self, atom_array: AtomArray) -> AtomArray:
         """
-        Filter fragments based on calculated metrics.
+        Filter fragments based on ``self.thresholds`` and the length-dependent Rg bound.
 
-        Fragments that do not meet all criteria are marked with fragment_id = -1.
-        Criteria:
-        - length >= min_fragment_length
-        - avg_plddt >= min_fragment_plddt
-        - rg <= length-dependent upper bound (coeff * length^0.4)
-        - fold quality score >= min_fold_quality (if enabled)
+        Fragments that fail any non-None threshold are marked with
+        ``fragment_id = -1``. Cheap checks (length, pLDDT, Rg bound) run first;
+        expensive structural metrics (SSE entropy, hydrophobic SASA, repeat
+        score, corrected contact order, corrected packing efficiency) are only
+        computed when ``self.thresholds`` actually references them.
 
         Args:
             atom_array (AtomArray): AtomArray with fragment_id annotation.
@@ -493,27 +581,26 @@ class FragmentMaker:
         """
         fragment_ids = atom_array.fragment_id.copy()
         fragments = self.calculate_fragment_metrics(atom_array)
+        needs_expensive = _thresholds_require_expensive_metrics(self.thresholds)
 
         for frag in fragments:
-            passes_length = frag.length >= self.min_fragment_length
-            passes_plddt = frag.avg_plddt >= self.min_fragment_plddt
+            frag_mask = atom_array.fragment_id == frag.fragment_id
 
-            # Calculate length-dependent Rg upper bound: coeff * length^0.4
-            max_rg = self.rg_upper_bound_coeff * (frag.length**0.4)
-            passes_rg = frag.rg <= max_rg
-
-            if not (passes_length and passes_plddt and passes_rg):
-                mask = atom_array.fragment_id == frag.fragment_id
-                fragment_ids[mask] = -1
+            cheap_metrics = {
+                "plddt": frag.avg_plddt,
+                "length": float(frag.length),
+                "rg": frag.rg,
+            }
+            if not fragment_passes_thresholds(cheap_metrics, self.thresholds):
+                fragment_ids[frag_mask] = -1
                 continue
 
-            # Fold quality filter (logistic model on lr_cd, dssp_coil, dssp_helix_align)
-            if self.min_fold_quality is not None:
-                frag_atoms = atom_array[atom_array.fragment_id == frag.fragment_id]
-                quality = compute_fold_quality(frag_atoms)
-                if quality.score < self.min_fold_quality:
-                    mask = atom_array.fragment_id == frag.fragment_id
-                    fragment_ids[mask] = -1
+            if not needs_expensive:
+                continue
+
+            full_metrics = compute_fragment_filter_metrics(atom_array[frag_mask])
+            if not fragment_passes_thresholds(full_metrics, self.thresholds):
+                fragment_ids[frag_mask] = -1
 
         atom_array.set_annotation("fragment_id", fragment_ids)
         return atom_array

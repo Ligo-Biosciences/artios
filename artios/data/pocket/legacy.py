@@ -12,7 +12,6 @@ import numpy as np
 from pocketeer.core import (
     Pocket,
     cluster_spheres,
-    compute_alpha_spheres,
     create_pocket,
     filter_surface_spheres,
     # label_polarity,
@@ -21,6 +20,10 @@ from pocketeer.core.types import AlphaSphere
 from pocketeer.utils.constants import MIN_ATOMS_FOR_TESSELLATION
 from pocketeer.utils.exceptions import ValidationError
 from scipy.spatial import KDTree
+
+from artios.data.pocket.tessellation import (
+    compute_alpha_spheres,
+)
 
 logger = logging.getLogger("pocketeer.api")
 
@@ -47,7 +50,8 @@ def label_polarity(
         list[AlphaSphere]: Input spheres with is_buried attribute set
     """
     # Compute SASA for all atoms
-    atom_sasa = struc.sasa(atomarray, probe_radius=polar_probe_radius)
+    # point_number=200 gives 100% pocket agreement with default 1000 and 1.4x speedup.
+    atom_sasa = struc.sasa(atomarray, probe_radius=polar_probe_radius, point_number=200)
 
     # Label each sphere based on SASA of its defining atoms
     for sphere in spheres:

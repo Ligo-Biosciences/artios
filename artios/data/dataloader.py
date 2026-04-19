@@ -7,7 +7,7 @@ from ml_collections.config_dict import ConfigDict
 from torch.utils.data import DataLoader, DistributedSampler, Sampler
 from torch.utils.data import Dataset as TorchDataset
 
-from artios.data.data_collator import CollateContexts
+from artios.data.collate.collate import CollateContexts
 from artios.data.dataset import Dataset, get_datasets
 from artios.data.features import FullContext
 from artios.utils.logger import get_logger

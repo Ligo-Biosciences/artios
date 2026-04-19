@@ -36,7 +36,7 @@ from tqdm import tqdm
 # Add paths for config imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "configs"))
 
-from artios.data.ccd import res_names_to_sequence
+from artios.data.chem.ccd import res_names_to_sequence
 from artios.utils.file_io import (
     dump_atomarray_stack,
     dump_atomarray_to_npz,

@@ -19,8 +19,8 @@ from artios.common.residue_names import (
     PROTEIN_COMMON_THREE_TO_ONE,
 )
 
-# from artios.data.ccd import is_valid_ccd_code
-from artios.data.rdkit import is_valid_smiles, parse_smiles
+# from artios.data.chem.ccd import is_valid_ccd_code
+from artios.data.chem.rdkit import is_valid_smiles, parse_smiles
 
 # ---------------------------------------------------------------------------
 # Inference input models

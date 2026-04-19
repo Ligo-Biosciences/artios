@@ -253,7 +253,7 @@ class TestAnnotate:
     def annotated_from_cif(self):
         """Clean atom_array (no custom annotations) → annotate() → AnnotatedStructure."""
         from artios.data.filter import Filter, clean_structure
-        from artios.data.parser import MMCIFParser
+        from artios.data.parsing.cif import MMCIFParser
 
         parser = MMCIFParser(TESTDATA / "5s8i.cif")
         atom_array = parser.get_structure()
@@ -353,7 +353,7 @@ class TestContextGenerator:
 
     @pytest.fixture
     def full_context(self, structure):
-        from artios.data.featurizer_v2 import ContextGenerator
+        from artios.data.features.featurizer import ContextGenerator
 
         return ContextGenerator(
             structure, pdb_id="5s8i", ref_pos_augment=False

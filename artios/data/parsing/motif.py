@@ -16,8 +16,8 @@ from dataclasses import dataclass
 import biotite.structure as struc
 import numpy as np
 
-from artios.data.json_parser import CCDLigand, MotifSpec, SMILESLigand
-from artios.data.parser import MMCIFParser
+from artios.data.parsing.cif import MMCIFParser
+from artios.data.parsing.json import CCDLigand, MotifSpec, SMILESLigand
 
 logger = logging.getLogger(__name__)
 

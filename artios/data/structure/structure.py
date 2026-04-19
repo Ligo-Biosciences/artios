@@ -17,7 +17,7 @@ from biotite.structure import AtomArray
 from numpy.typing import NDArray
 
 from artios.common.constants import STD_RESIDUES
-from artios.data import annotation
+from artios.data.structure import annotation
 from artios.utils.file_io import dump_atomarray_to_npz, load_atomarray_from_npz
 
 # Typed array aliases — encode dtype in the type system, shapes in comments.
@@ -342,6 +342,9 @@ def _reindex_grouping(grouping: TokenGrouping, indices: np.ndarray) -> TokenGrou
     )
 
 
+# TODO: rename this class to `Structure`. The "Annotated" prefix is legacy from
+# when it wrapped an AtomArray with string-keyed annotations; now all
+# annotations are typed sub-dataclasses, so the prefix is redundant.
 @dataclass(frozen=True)
 class AnnotatedStructure:
     """Core data object for the pipeline.

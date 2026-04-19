@@ -15,16 +15,16 @@ from artios.data.array_builder import (
     backbone_input_to_atom_array,
     packing_input_to_atom_array_v2,
 )
-from artios.data.data_collator import CollateContexts
+from artios.data.collate.collate import CollateContexts
 from artios.data.features import FullContext
 from artios.data.featurizer import ContextGenerator
-from artios.data.json_parser import (
+from artios.data.parsing.json import (
     BackboneInput,
     PackingInput,
     SequenceDesignInput,
     parse_input_dict,
 )
-from artios.data.tokenizer import AtomArrayTokenizer
+from artios.data.structure.tokenizer import AtomArrayTokenizer
 from artios.utils.distributed import DIST_WRAPPER
 from artios.utils.file_io import load_atomarray_stack
 

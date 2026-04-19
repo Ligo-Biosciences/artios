@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from artios.data.padding_utils import pad_tensor
+from artios.data.collate.padding import pad_tensor
 
 
 class TestPadTensor:

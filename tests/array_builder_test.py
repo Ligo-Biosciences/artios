@@ -8,11 +8,11 @@ from artios.data.array_builder import (
     build_motif_ligand,
     build_motif_residue,
 )
-from artios.data.json_parser import (
+from artios.data.parsing.json import (
     CCDLigand,
     SMILESLigand,
 )
-from artios.data.motif_parser import MotifLigand, MotifResidue
+from artios.data.parsing.motif import MotifLigand, MotifResidue
 
 
 class TestBuildMotifResidue:
@@ -190,7 +190,7 @@ class TestBuildMotifLigand:
         # after alignment (since they're in different reference frames)
         from biotite.structure import superimpose
 
-        from artios.data.rdkit import (
+        from artios.data.chem.rdkit import (
             infer_atom_map_from_substructure,
             smiles_to_atom_info,
         )

@@ -152,6 +152,7 @@ DNA_COMMON_ONE_TO_TWO: Mapping[str, str] = {
 }
 
 STANDARD_POLYMER_TYPES: tuple[str, ...] = PROTEIN_TYPES + NUCLEIC_TYPES
+STANDARD_POLYMER_TYPES_SET: frozenset[str] = frozenset(STANDARD_POLYMER_TYPES)
 POLYMER_TYPES: tuple[str, ...] = PROTEIN_TYPES_WITH_UNKNOWN + NUCLEIC_TYPES
 POLYMER_TYPES_WITH_UNKNOWN: tuple[str, ...] = (
     PROTEIN_TYPES_WITH_UNKNOWN + NUCLEIC_TYPES_WITH_UNKNOWN
@@ -194,3 +195,24 @@ UNKNOWN_TYPES: tuple[str, ...] = (UNK, UNK_RNA, UNK_DNA, UNL)
 
 # Residues with cationic nitrogens at physiological pH
 CATIONIC_RESIDUES: frozenset[str] = frozenset({ARG, LYS, HIS})
+
+# Residue classifications for pocket chemistry features
+HYDROPHOBIC_RESIDUES: frozenset[str] = frozenset(
+    {ALA, VAL, LEU, ILE, PRO, PHE, TRP, MET}
+)
+HYDROPHILIC_RESIDUES: frozenset[str] = frozenset(
+    {
+        SER,
+        THR,
+        ASN,
+        GLN,
+        TYR,
+        CYS,
+        ASP,
+        GLU,
+        LYS,
+        ARG,
+        HIS,
+    }
+)
+CHARGED_RESIDUES: frozenset[str] = frozenset({ASP, GLU, LYS, ARG, HIS})

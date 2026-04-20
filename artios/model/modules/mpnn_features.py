@@ -13,7 +13,10 @@ import artios.model.modules.message_passing as mp
 from artios.data.features import FullContext
 from artios.model.modules.embedders import RelativePositionEncoding
 from artios.model.modules.primitives import LayerNorm, LinearNoBias
-from artios.model.utils import average_atom_to_token
+from artios.model.utils import (
+    average_atom_to_token,
+    build_backbone_ligand_proximity_mask,
+)
 from artios.utils.tensor_utils import cdist
 from artios.utils.typing import typecheck
 
@@ -413,9 +416,21 @@ class MPNNFeaturizer(nn.Module):
 
         # Add coordinate noise during training
         if self.training:
-            backbone_coords = (
-                backbone_coords + torch.randn_like(backbone_coords) * self.coord_noise
-            )
+            noise = torch.randn_like(backbone_coords)
+            near_ligand = build_backbone_ligand_proximity_mask(
+                backbone_coordinate=backbone_coords,
+                centre_coordinate=centre_atom_coord,
+                is_ligand_token=context.entity.is_ligand_token,
+                token_mask=token_mask,
+                backbone_mask=backbone_mask,
+                distance_cutoff=self.coord_noise_distance_cutoff,
+            )  # [B, N]
+            noise_scale = torch.where(
+                near_ligand[..., None, None],
+                self.coord_noise_near_ligand,
+                self.coord_noise_away_from_ligand,
+            )  # [B, N, 1, 1]
+            backbone_coords = backbone_coords + noise * noise_scale
 
         # Compute k-nearest neighbor graph
         _, edge_index = self._compute_neighbour_graph(

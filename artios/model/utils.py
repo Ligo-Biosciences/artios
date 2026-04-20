@@ -272,6 +272,69 @@ def masked_mean(
     return mean
 
 
+def build_backbone_ligand_proximity_mask(
+    backbone_coordinate: Tensor,
+    centre_coordinate: Tensor,
+    is_ligand_token: Tensor,
+    token_mask: Tensor,
+    backbone_mask: Tensor,
+    distance_cutoff: float,
+) -> Tensor:
+    """Identify non-ligand tokens with a backbone atom near any ligand token.
+
+    For each non-ligand token, checks whether any of its valid backbone atoms
+    is within ``distance_cutoff`` of any ligand token's centre coordinate.
+
+    Args:
+        backbone_coordinate: Backbone atom coordinates [B, N, 5, 3].
+        centre_coordinate: Per-token centre atom coordinates [B, N, 3].
+        is_ligand_token: Ligand token indicator [B, N].
+        token_mask: Valid token mask [B, N].
+        backbone_mask: Valid backbone atom mask [B, N, 5].
+        distance_cutoff: Distance threshold in angstroms.
+
+    Returns:
+        Boolean mask [B, N] — True for non-ligand tokens that have at least
+        one backbone atom within *distance_cutoff* of a ligand token.
+    """
+    B, N = is_ligand_token.shape
+    n_bb = backbone_coordinate.shape[2]
+    device = backbone_coordinate.device
+    near_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+
+    for b in range(B):
+        lig_mask = is_ligand_token[b] & token_mask[b]
+        if not lig_mask.any():
+            continue
+
+        lig_centres = centre_coordinate[b][lig_mask]  # [L, 3]
+
+        # Valid backbone atoms for non-ligand tokens only
+        non_lig_bb_mask = backbone_mask[b] & (
+            ~is_ligand_token[b] & token_mask[b]
+        ).unsqueeze(-1)  # [N, 5]
+
+        bb_flat = backbone_coordinate[b].reshape(N * n_bb, 3)  # [N*5, 3]
+        bb_flat_mask = non_lig_bb_mask.reshape(N * n_bb)  # [N*5]
+
+        valid_idx = bb_flat_mask.nonzero(as_tuple=True)[0]
+        if valid_idx.numel() == 0:
+            continue
+
+        valid_bb = bb_flat[valid_idx]  # [V, 3]
+        dists = torch.cdist(valid_bb.unsqueeze(0), lig_centres.unsqueeze(0)).squeeze(
+            0
+        )  # [V, L]
+        is_near = dists.min(dim=-1).values <= distance_cutoff  # [V]
+
+        # Map back to token level: any backbone atom near → token is near
+        near_per_flat = torch.zeros(N * n_bb, dtype=torch.bool, device=device)
+        near_per_flat[valid_idx] = is_near
+        near_mask[b] = near_per_flat.reshape(N, n_bb).any(dim=-1)
+
+    return near_mask
+
+
 class Mode(str, Enum):
     """Supported modes of operation for model forward passes."""
 

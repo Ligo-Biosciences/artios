@@ -23,7 +23,6 @@ from artios.model.modules.mpnn import MPNN
 from artios.model.modules.penalty import (
     PenaltyCollection,
     aromatic_enrichment_penalty,
-    build_active_site_mask,
     charged_enrichment_penalty,
     complexity_lcp,
     composition_chi_squared_penalty,
@@ -39,7 +38,7 @@ from artios.model.modules.potts import (
     compute_potts_single_logits,
 )
 from artios.model.output import PottsOutput
-from artios.model.utils import Mode, masked_mean
+from artios.model.utils import Mode, build_backbone_ligand_proximity_mask, masked_mean
 from artios.utils.casting import disable_autocast
 
 ALPHABET_BIAS = 1e4
@@ -389,12 +388,13 @@ class ArtiosPotts(nn.Module):
             penalty_dict["lcp"] = lcp_penalty
 
         # Active site mask
-        active_site_mask = build_active_site_mask(
-            context.coordinate.centre_coordinate,
-            context.entity.is_ligand_token,
-            context.entity.is_protein_token,
-            context.mask.token_mask,
-            self.active_site_distance_cutoff,
+        active_site_mask = build_backbone_ligand_proximity_mask(
+            backbone_coordinate=context.coordinate.backbone_coordinate,
+            centre_coordinate=context.coordinate.centre_coordinate,
+            is_ligand_token=context.entity.is_ligand_token,
+            token_mask=context.mask.token_mask,
+            backbone_mask=context.mask.backbone_mask,
+            distance_cutoff=self.active_site_distance_cutoff,
         )
 
         if self.aromatic_penalty_weight > 0:
@@ -559,13 +559,13 @@ class ArtiosPotts(nn.Module):
         eps = 1e-6
 
         if self.loss_config.active_site_upweight > 1.0:
-            active_site = build_ligand_proximity_mask(
-                context.coordinate.centre_coordinate,
-                context.entity.is_ligand_token,
-                context.entity.is_protein_token,
-                context.mask.token_mask,
-                context.token.asym_id,
-                self.loss_config.active_site_distance,
+            active_site = build_backbone_ligand_proximity_mask(
+                backbone_coordinate=context.coordinate.backbone_coordinate,
+                centre_coordinate=context.coordinate.centre_coordinate,
+                is_ligand_token=context.entity.is_ligand_token,
+                token_mask=context.mask.token_mask,
+                backbone_mask=context.mask.backbone_mask,
+                distance_cutoff=self.loss_config.active_site_distance,
             )  # [B, N]
             position_weight = torch.where(
                 active_site, self.loss_config.active_site_upweight, 1.0

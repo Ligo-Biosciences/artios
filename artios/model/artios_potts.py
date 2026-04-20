@@ -45,62 +45,6 @@ ALPHABET_BIAS = 1e4
 logger = logging.getLogger(__name__)
 
 
-# TODO: find a good spot for this
-def build_ligand_proximity_mask(
-    centre_coordinate: Tensor,
-    is_ligand_token: Tensor,
-    is_protein_token: Tensor,
-    token_mask: Tensor,
-    asym_id: Tensor,
-    distance_cutoff: float,
-) -> Tensor:
-    """Identify protein tokens within distance_cutoff of any ligand chain's CoM.
-
-    Computes a separate centre of mass for each unique ligand chain (by asym_id)
-    and marks protein tokens within distance_cutoff of the nearest one.
-
-    Args:
-        centre_coordinate: Per-token centre atom coordinates [B, N, 3].
-        is_ligand_token: Ligand token mask [B, N].
-        is_protein_token: Protein token mask [B, N].
-        token_mask: Valid token mask [B, N].
-        asym_id: Integer chain ID per token [B, N].
-        distance_cutoff: Distance threshold in angstroms.
-
-    Returns:
-        Boolean mask of protein tokens near a ligand CoM [B, N].
-    """
-    B, N = is_ligand_token.shape
-    device = centre_coordinate.device
-    near_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
-
-    for b in range(B):
-        lig_mask = is_ligand_token[b] & token_mask[b]
-        if not lig_mask.any():
-            continue
-
-        # CoM per unique ligand chain
-        lig_chain_ids = asym_id[b][lig_mask].unique()
-        coms = torch.stack(
-            [
-                centre_coordinate[b][lig_mask & (asym_id[b] == cid)].mean(dim=0)
-                for cid in lig_chain_ids
-            ]
-        )  # [n_ligands, 3]
-
-        # Distance from each token to nearest ligand CoM
-        dists = torch.cdist(
-            centre_coordinate[b].unsqueeze(0), coms.unsqueeze(0)
-        ).squeeze(0)
-        min_dist = dists.min(dim=-1).values  # [N]
-
-        near_mask[b] = (
-            is_protein_token[b] & token_mask[b] & (min_dist <= distance_cutoff)
-        )
-
-    return near_mask
-
-
 class MaskingSamplerType(str, Enum):
     LINEAR = "linear"
     EXPONENTIAL = "exponential"

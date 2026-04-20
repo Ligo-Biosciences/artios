@@ -142,21 +142,8 @@ class ArtiosPotts(nn.Module):
         self.composition_organism = Organism(sampling_cfg.composition_organism)
         self.composition_tolerance_k = sampling_cfg.composition_tolerance_k
 
-    # TODO: this guy needs a lot of tidying before merging to main.
-    def main_inference_loop(
-        self,
-        context: FullContext,
-        seed: Optional[int] = None,
-    ) -> PottsOutput:
-        device = context.token.restype.device
-        restypes = context.token.restype
-        _, _, R = restypes.shape
-
-        generator = (
-            torch.Generator(device).manual_seed(seed) if seed is not None else None
-        )
-
-        ### Fixed-residue logic (pinned identity at subset of positions)
+    def _build_masked_inputs(self, context: FullContext) -> tuple[Tensor, Tensor]:
+        """Build masked restypes and is_masked from the context's fixed residues."""
         if context.fixed_residues is not None:
             is_masked = ~context.fixed_residues.fixed_mask & context.mask.token_mask
             masked_restypes = self.mpnn.pad_and_mask_restypes(
@@ -164,11 +151,25 @@ class ArtiosPotts(nn.Module):
             )
         else:
             is_masked = context.mask.token_mask
-            masked_restypes = self.mpnn.pad_and_mask_restypes(restypes, is_masked)
+            masked_restypes = self.mpnn.pad_and_mask_restypes(
+                context.token.restype, is_masked
+            )
+        return masked_restypes, is_masked
 
-        ### Ensemble logic
-        h_sum = None
-        J_sum = None
+    def _run_ensemble(
+        self,
+        context: FullContext,
+        masked_restypes: Tensor,
+        is_masked: Tensor,
+        generator: Optional[torch.Generator],
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Run MPNN+Potts across ensemble members
+
+        Returns:
+            Averaged Potts fields (h, J) and the shared MPNN graph topoly (edge_index, edge_mask)
+        """
+        h_sum = J_sum = None
+        edge_index = edge_mask = None
         for i in range(self.ensemble_size):
             if self.ensemble_noise_scale > 0 and self.ensemble_size > 1:
                 bb = context.coordinate.backbone_coordinate
@@ -188,7 +189,6 @@ class ArtiosPotts(nn.Module):
             mpnn_out = self.mpnn(
                 context=ctx, masked_restypes=masked_restypes, is_masked=is_masked
             )
-
             h_i, J_i = self.potts(
                 mpnn_out.node_feats,
                 mpnn_out.edge_feats,
@@ -205,84 +205,61 @@ class ArtiosPotts(nn.Module):
                 h_sum = h_sum + h_i
                 J_sum = J_sum + J_i
 
-        h = h_sum / self.ensemble_size
-        J = J_sum / self.ensemble_size
+        return (
+            h_sum / self.ensemble_size,
+            J_sum / self.ensemble_size,
+            edge_index,
+            edge_mask,
+        )
 
-        ### Unconditional ensemble for CFG
+    def main_inference_loop(
+        self,
+        context: FullContext,
+        seed: Optional[int] = None,
+    ) -> PottsOutput:
+        device = context.token.restype.device
+        _, _, R = context.token.restype.shape
+
+        generator = (
+            torch.Generator(device).manual_seed(seed) if seed is not None else None
+        )
+
+        ### Conditional ensemble
+        masked_restypes, is_masked = self._build_masked_inputs(context)
+        h, J, edge_index, edge_mask = self._run_ensemble(
+            context, masked_restypes, is_masked, generator
+        )
+
+        ### Unconditional ensemble
         h_uncond = J_uncond = edge_index_uncond = edge_mask_uncond = None
         if self.cfg_scale != 1.0:
             logger.info(
                 f"Running unconditional ensemble for CFG (scale={self.cfg_scale})"
             )
             uncond_context = context.without_ligand()
-
-            if uncond_context.fixed_residues is not None:
-                uncond_is_masked = (
-                    ~uncond_context.fixed_residues.fixed_mask
-                    & uncond_context.mask.token_mask
+            uncond_masked, uncond_is_masked = self._build_masked_inputs(uncond_context)
+            h_uncond, J_uncond, edge_index_uncond, edge_mask_uncond = (
+                self._run_ensemble(
+                    uncond_context, uncond_masked, uncond_is_masked, generator
                 )
-                uncond_masked_restypes = self.mpnn.pad_and_mask_restypes(
-                    uncond_context.fixed_residues.fixed_restype, uncond_is_masked
-                )
-            else:
-                uncond_is_masked = uncond_context.mask.token_mask
-                uncond_masked_restypes = self.mpnn.pad_and_mask_restypes(
-                    restypes, uncond_is_masked
-                )
-
-            h_uncond_sum = None
-            J_uncond_sum = None
-            for i in range(self.ensemble_size):
-                if self.ensemble_noise_scale > 0 and self.ensemble_size > 1:
-                    bb = uncond_context.coordinate.backbone_coordinate
-                    noised = bb + self.ensemble_noise_scale * torch.randn(
-                        bb.shape,
-                        device=bb.device,
-                        dtype=bb.dtype,
-                        generator=generator,
-                    )
-                    uncond_ctx = replace(
-                        uncond_context,
-                        coordinate=replace(
-                            uncond_context.coordinate, backbone_coordinate=noised
-                        ),
-                    )
-                else:
-                    uncond_ctx = uncond_context
-
-                mpnn_out = self.mpnn(
-                    context=uncond_ctx,
-                    masked_restypes=uncond_masked_restypes,
-                    is_masked=uncond_is_masked,
-                )
-
-                h_i, J_i = self.potts(
-                    mpnn_out.node_feats,
-                    mpnn_out.edge_feats,
-                    mpnn_out.edge_index,
-                    mpnn_out.edge_mask,
-                    uncond_ctx.mask.token_mask,
-                )
-
-                if i == 0:
-                    h_uncond_sum, J_uncond_sum = h_i, J_i
-                    edge_index_uncond = mpnn_out.edge_index
-                    edge_mask_uncond = mpnn_out.edge_mask
-                else:
-                    h_uncond_sum = h_uncond_sum + h_i
-                    J_uncond_sum = J_uncond_sum + J_i
-
-            h_uncond = h_uncond_sum / self.ensemble_size
-            J_uncond = J_uncond_sum / self.ensemble_size
+            )
 
         ### Initialisation logic
+        active_site_mask = build_backbone_ligand_proximity_mask(
+            backbone_coordinate=context.coordinate.backbone_coordinate,
+            centre_coordinate=context.coordinate.centre_coordinate,
+            is_ligand_token=context.entity.is_ligand_token,
+            token_mask=context.mask.token_mask,
+            backbone_mask=context.mask.backbone_mask,
+            distance_cutoff=self.active_site_distance_cutoff,
+        )
         fixed_mask = (
             context.fixed_residues.fixed_mask
             if context.fixed_residues is not None
             else None
         )
         fixed_restype = (
-            context.fixed_residues.fixed_restype[..., :R]
+            context.fixed_residues.fixed_restype
             if context.fixed_residues is not None
             else None
         )
@@ -291,17 +268,7 @@ class ArtiosPotts(nn.Module):
         alphabet_mask = build_alphabet_mask(
             mutable_mask, R, self.exclude_cys, self.exclude_met
         )
-
-        h = h + ~alphabet_mask * ALPHABET_BIAS
-        if h_uncond is not None:
-            h_uncond = h_uncond + ~alphabet_mask * ALPHABET_BIAS
-
         energy_bias = build_energy_bias_vector(self.energy_bias, R, device)
-        if energy_bias is not None:
-            h = h + energy_bias
-            if h_uncond is not None:
-                h_uncond = h_uncond + energy_bias
-
         S_init = build_s_init(
             h,
             self.potts_sampler.temperature_init,
@@ -309,6 +276,16 @@ class ArtiosPotts(nn.Module):
             fixed_restype,
             generator,
         )
+
+        ### Apply masks and biases
+        h = h + ~alphabet_mask * ALPHABET_BIAS
+        if h_uncond is not None:
+            h_uncond = h_uncond + ~alphabet_mask * ALPHABET_BIAS
+
+        if energy_bias is not None:
+            h = h + energy_bias
+            if h_uncond is not None:
+                h_uncond = h_uncond + energy_bias
 
         ### Penalty logic
         penalty_dict: dict[str, callable] = {}
@@ -330,16 +307,6 @@ class ArtiosPotts(nn.Module):
                 )
 
             penalty_dict["lcp"] = lcp_penalty
-
-        # Active site mask
-        active_site_mask = build_backbone_ligand_proximity_mask(
-            backbone_coordinate=context.coordinate.backbone_coordinate,
-            centre_coordinate=context.coordinate.centre_coordinate,
-            is_ligand_token=context.entity.is_ligand_token,
-            token_mask=context.mask.token_mask,
-            backbone_mask=context.mask.backbone_mask,
-            distance_cutoff=self.active_site_distance_cutoff,
-        )
 
         if self.aromatic_penalty_weight > 0:
 

@@ -28,8 +28,8 @@ from artios.data.features import (
     ReferenceConformerContext,
     TokenContext,
 )
-from artios.data.json_parser import FixedResidue
-from artios.data.tokenizer import TokenArray
+from artios.data.parsing.json import FixedResidue
+from artios.data.structure.tokenizer import TokenArray
 from artios.utils.geometry import compute_virtual_cb, random_transform
 
 

@@ -21,7 +21,7 @@ import pandas as pd
 import ray
 from tqdm import tqdm
 
-from artios.data.parser import MMCIFParser
+from artios.data.parsing.cif import MMCIFParser
 from artios.utils.file_io import load_gzip_pickle
 
 

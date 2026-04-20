@@ -26,8 +26,8 @@ import torch
 from biotite.structure import AtomArray
 from torch import Tensor
 
-from artios.data.padding_utils import pad_tensor
-from artios.data.tokenizer import TokenArray
+from artios.data.collate.padding import pad_tensor
+from artios.data.structure.tokenizer import TokenArray
 from artios.utils.typing import Bool, Float, Int, typecheck
 
 logger = logging.getLogger(__name__)

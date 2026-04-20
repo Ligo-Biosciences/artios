@@ -17,7 +17,7 @@ from artios.data.features import (
     ReferenceConformerContext,
     TokenContext,
 )
-from artios.data.tokenizer import TokenArray
+from artios.data.structure.tokenizer import TokenArray
 
 
 def load_sample_context(device: torch.device | None = None) -> FullContext:
@@ -271,6 +271,7 @@ def create_test_context(
         atom_to_tokatom_idx=torch.zeros(
             batch_size, n_atoms, dtype=torch.long, device=device
         ),
+        atom_asym_id=torch.zeros(batch_size, n_atoms, dtype=torch.long, device=device),
     )
 
     # EntityContext

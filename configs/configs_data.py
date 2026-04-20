@@ -52,7 +52,7 @@ default_weighted_pdb_configs = {
         "balance_protein_clusters": False,
         "balance_percentile": 0.9,
         "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
-        "monomer_pdb_target_fraction": 0.10,
+        "monomer_pdb_target_fraction": 0.00,
         "should_filter_artifact_ligands": False,
     },
     "cropping_configs": {
@@ -67,17 +67,13 @@ default_weighted_pdb_configs = {
     "shuffle_mols": GlobalConfigValue("train_shuffle_mols"),
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
     "filter_unique_fragment_prob": 0.0,
-    "filter_unique_domain_prob": 0.0,
 }
 
 default_distillation_configs = {
     "sampler_configs": {
-        "sampler_type": "uniform",
+        "sampler_type": "cluster_balanced",
+        "cluster_size_exponent": 0.75,
         "force_recompute_weight": True,
-        # Weight ~ num_tokens^gamma. At gamma=1.5, a 10x longer protein gets
-        # ~31x sampling weight, biasing toward longer sequences with more
-        # interesting geometry. 0 = uniform, 1 = token-proportional.
-        "length_reweight_gamma": 0.0,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -91,7 +87,6 @@ default_distillation_configs = {
     "shuffle_mols": GlobalConfigValue("train_shuffle_mols"),
     "shuffle_sym_ids": GlobalConfigValue("train_shuffle_sym_ids"),
     "filter_unique_fragment_prob": 1.0,
-    "filter_unique_domain_prob": 0.0,
     "require_pocket_in_fragment": True,
     "max_n_token": 1500,
 }
@@ -128,10 +123,10 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
     ):
         alt_data_root = "/" + DATA_ROOT_DIR
         CCD_COMPONENTS_FILE_PATH = os.path.join(
-            DATA_ROOT_DIR, "components.v20240608.cif"
+            alt_data_root, "components.v20240608.cif"
         )
         CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
-            DATA_ROOT_DIR, "components.v20240608.cif.rdkit_mol.pkl"
+            alt_data_root, "components.v20240608.cif.rdkit_mol.pkl"
         )
 
 # if still not found, try ccd_files local directory
@@ -188,8 +183,8 @@ data_configs = {
     "test_ref_pos_augment": True,
     "train_with_binding_target": False,
     "binding_target_train_rate": 0.0,
+    "remove_glycans": True,
     "filter_unique_fragment_prob": 1.0,
-    "filter_unique_domain_prob": 0.0,
     "motif_training": {
         "motif_train_rate": 0.0,
         "ligand_motif_prob": 0.8,
@@ -243,28 +238,31 @@ data_configs = {
         "train_sample_weights": ListValue([0.00, 0.4, 0.6]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(["mgnify_trousers_val", "recentPDB_1536_sample384_0925"]),
+    "test_sets": ListValue(
+        ["afdb_trousers_val", "mgnify_trousers_val", "recentPDB_1536_sample384_0925"]
+    ),
     "weightedPDB_before2021_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
             "bioassembly_dict_dir": os.path.join(DATA_ROOT_DIR, "mmcif_bioassembly"),
             "indices_fpath": os.path.join(
                 DATA_ROOT_DIR,
-                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv",  # .gz
+                "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            # "pdb_exclusion_lists": [
-            #     os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
-            #     os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
-            # ],
+            "pdb_exclusion_lists": [
+                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_fibril_pdbs.txt"),
+            ],
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
             "max_n_token": -1,
             "max_resolution": -1.0,
             "use_reference_chains_only": False,
-            # "exclusion": {  # do not sample the data based on ions.
-            #     "mol_1_type": ListValue(["ions"]),
-            #     "mol_2_type": ListValue(["ions"]),
-            # },
+            "exclusion": {
+                "sub_mol_1_type": ListValue(["excluded_ligand"]),
+                "sub_mol_2_type": ListValue(["excluded_ligand"]),
+            },
         },
         **deepcopy(default_weighted_pdb_configs),
     },
@@ -337,7 +335,12 @@ data_configs = {
             "pdb_exclusion_lists": [
                 os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
                 os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_fibril_pdbs.txt"),
             ],
+            "exclusion": {
+                "sub_mol_1_type": ListValue(["excluded_ligand"]),
+                "sub_mol_2_type": ListValue(["excluded_ligand"]),
+            },
         },
         **deepcopy(default_test_configs),
     },

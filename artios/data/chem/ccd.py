@@ -20,21 +20,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Union
 
+import biotite
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
-from atomworks.enums import ChainType
-from atomworks.io.tools.rdkit import ccd_code_to_rdkit
-from atomworks.io.utils.ccd import (
-    atom_array_from_ccd_code,
-    chem_comp_to_one_letter,
-    get_available_ccd_codes,
-    get_chain_type_from_ccd_code,
-)
 from biotite.structure import AtomArray
 from rdkit import Chem
 
-from artios.data.substructure_perms import get_substructure_perms
+from artios.common.chain_type import ChainType
+from artios.common.residue_names import STANDARD_POLYMER_TYPES_SET
+from artios.data.features.perms import get_substructure_perms
 from configs.configs_data import data_configs
 
 logger = logging.getLogger(__name__)
@@ -100,7 +95,28 @@ def get_component_atom_array(
         AtomArray: Biotite AtomArray of CCD component
             with additional attribute: is_leaving_atom (bool)
     """
-    comp = atom_array_from_ccd_code(ccd_code)
+    ccd_cif = biotite_load_ccd_cif()
+    if ccd_code not in ccd_cif:
+        logger.warning(f"Warning: get_component_atom_array() can not parse {ccd_code}")
+        return None
+    try:
+        comp = pdbx.get_component(ccd_cif, data_block=ccd_code, use_ideal_coord=True)
+    except biotite.InvalidFileError as e:
+        logger.warning(
+            f"Warning: get_component_atom_array() can not parse {ccd_code} for {e}"
+        )
+        return None
+
+    # biotite's get_component sets hetero=True on all atoms. Standard polymer
+    # residues need hetero=False so PDB writers emit ATOM (not HETATM) records,
+    # which is required for PyMOL/other viewers to render backbone connectivity.
+    if ccd_code in STANDARD_POLYMER_TYPES_SET:
+        comp.hetero[:] = False
+
+    # Add leaving atom annotation (not provided by biotite's get_component)
+    atom_category = ccd_cif[ccd_code]["chem_comp_atom"]
+    leaving_atom_flag = atom_category["pdbx_leaving_atom_flag"].as_array()
+    comp.set_annotation("is_leaving_atom", leaving_atom_flag == "Y")
 
     if not keep_leaving_atoms:
         comp = comp[~comp.is_leaving_atom]
@@ -135,12 +151,21 @@ def get_one_letter_code(ccd_code: str) -> Union[str, None]:
     Returns:
         str: one letter code
     """
-    return chem_comp_to_one_letter().get(ccd_code, None)
+    ccd_cif = biotite_load_ccd_cif()
+    if ccd_code not in ccd_cif:
+        return None
+    one = ccd_cif[ccd_code]["chem_comp"]["one_letter_code"].as_item()
+    if one == "?":
+        return None
+    return one
 
 
 @functools.lru_cache(maxsize=None)
-def get_mol_type_str(ccd_code: str) -> str:
-    """Get mol_type as string from CCD components file.
+def get_mol_type(ccd_code: str) -> str:
+    """Get mol_type from CCD components file.
+
+    Based on _chem_comp.type:
+    http://mmcif.rcsb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_chem_comp.type.html
 
     Args:
         ccd_code (str): ccd code
@@ -148,15 +173,52 @@ def get_mol_type_str(ccd_code: str) -> str:
     Returns:
         str: mol_type, one of "protein", "rna", "dna", "ligand"
     """
-    chain_type: ChainType = get_chain_type_from_ccd_code(ccd_code)
+    ccd_cif = biotite_load_ccd_cif()
+    if ccd_code not in ccd_cif:
+        return "ligand"
 
-    if chain_type.is_protein():
+    link_type = ccd_cif[ccd_code]["chem_comp"]["type"].as_item().upper()
+
+    if "PEPTIDE" in link_type and link_type != "PEPTIDE-LIKE":
         return "protein"
-    if chain_type in (ChainType.DNA, ChainType.DNA_RNA_HYBRID):
-        "dna"
-    if chain_type == ChainType.RNA:
-        "rna"
+    if "DNA" in link_type:
+        return "dna"
+    if "RNA" in link_type:
+        return "rna"
     return "ligand"
+
+
+@functools.lru_cache(maxsize=None)
+def get_chain_type_from_ccd_code(ccd_code: str) -> ChainType:
+    """Get the ChainType enum for a CCD code.
+
+    Uses _chem_comp.type from the CCD components file.
+
+    Args:
+        ccd_code: CCD code (e.g., "ALA", "DA", "ATP")
+
+    Returns:
+        ChainType enum value
+    """
+    ccd_cif = biotite_load_ccd_cif()
+    if ccd_code not in ccd_cif:
+        return ChainType.NON_POLYMER
+
+    link_type = ccd_cif[ccd_code]["chem_comp"]["type"].as_item().upper()
+
+    if "PEPTIDE" in link_type and link_type != "PEPTIDE-LIKE":
+        if "D-PEPTIDE" in link_type or "D-BETA" in link_type or "D-GAMMA" in link_type:
+            return ChainType.POLYPEPTIDE_D
+        return ChainType.POLYPEPTIDE_L
+    if "DNA" in link_type:
+        if "RNA" in link_type:
+            return ChainType.DNA_RNA_HYBRID
+        return ChainType.DNA
+    if "RNA" in link_type:
+        return ChainType.RNA
+    if "SACCHARIDE" in link_type:
+        return ChainType.BRANCHED
+    return ChainType.NON_POLYMER
 
 
 @functools.lru_cache(maxsize=None)
@@ -189,11 +251,10 @@ def get_smiles_str(ccd_code: str) -> str | None:
     return matching_smiles[0] if len(matching_smiles) > 0 else None
 
 
-def get_all_ccd_code() -> list:
+def get_all_ccd_code() -> list[str]:
     """get all ccd code from components file"""
-    # ccd_cif = biotite_load_ccd_cif()
-    # return list(ccd_cif.keys())
-    return list(get_available_ccd_codes())
+    ccd_cif = biotite_load_ccd_cif()
+    return list(ccd_cif.keys())
 
 
 @functools.lru_cache(maxsize=None)
@@ -206,7 +267,8 @@ def is_valid_ccd_code(ccd_code: str) -> bool:
     Returns:
         True if the code exists, False otherwise
     """
-    return ccd_code in get_available_ccd_codes()
+    ccd_cif = biotite_load_ccd_cif()
+    return ccd_code in ccd_cif
 
 
 _ccd_rdkit_mols: dict[str, Chem.Mol] = {}
@@ -496,6 +558,3 @@ def res_names_to_sequence(res_names: list[str]) -> str:
         one = "X" if len(one) > 1 else one
         seq += one
     return seq
-
-
-__all__ = ["get_chain_type_from_ccd_code", "ccd_code_to_rdkit"]

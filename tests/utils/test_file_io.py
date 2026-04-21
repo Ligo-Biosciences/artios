@@ -12,13 +12,13 @@ from artios.utils.file_io import (
     load_atomarray_stack,
 )
 
-TESTDATA_DIR = Path(__file__).parent / "testdata"
+FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "cif"
 
 
 @pytest.fixture
 def atom_array() -> AtomArray:
     """Load a single AtomArray from a CIF file with bonds."""
-    cif_file = pdbx.CIFFile.read(TESTDATA_DIR / "1bn1.cif")
+    cif_file = pdbx.CIFFile.read(FIXTURES_DIR / "1bn1.cif")
     return pdbx.get_structure(cif_file, model=1, include_bonds=True)
 
 

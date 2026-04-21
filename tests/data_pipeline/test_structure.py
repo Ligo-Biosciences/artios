@@ -1,8 +1,11 @@
 """Tests for AnnotatedStructure and TokenGrouping against real pipeline output.
 
 Uses 5s8i test data: protein (128 residues, 1063 atoms) + ligand (13 atoms) = 141 tokens.
+Contract tests at the bottom of this file parametrize over the golden fixtures
+in ``tests/fixtures/structures/`` to catch silent serialization breakage.
 """
 
+import dataclasses
 import gzip
 import pickle
 from pathlib import Path
@@ -18,17 +21,17 @@ from artios.data.structure import (
 )
 from artios.utils.file_io import load_atomarray_from_npz
 
-TESTDATA = Path(__file__).parent / "testdata" / "parsing"
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "parsing"
 
 
 @pytest.fixture
 def atom_array():
-    return load_atomarray_from_npz(TESTDATA / "5s8i.npz")
+    return load_atomarray_from_npz(FIXTURES / "5s8i.npz")
 
 
 @pytest.fixture
 def legacy_data():
-    with gzip.open(TESTDATA / "5s8i.pkl.gz", "rb") as f:
+    with gzip.open(FIXTURES / "5s8i.pkl.gz", "rb") as f:
         return pickle.load(f)
 
 
@@ -255,7 +258,7 @@ class TestAnnotate:
         from artios.data.filter import Filter, clean_structure
         from artios.data.parsing.cif import MMCIFParser
 
-        parser = MMCIFParser(TESTDATA / "5s8i.cif")
+        parser = MMCIFParser(FIXTURES / "5s8i.cif")
         atom_array = parser.get_structure()
         sequences = parser.get_sequences(atom_array)
 
@@ -422,3 +425,112 @@ class TestContextGenerator:
         assert full_context.reference.ref_pos.shape == (1076, 3)
         assert full_context.reference.ref_element.shape == (1076, 128)
         assert full_context.reference.ref_atom_name_chars.shape == (1076, 4, 64)
+
+
+# ---------------------------------------------------------------------------
+# Contract tests: golden-fixture round-trips
+#
+# These pin the AnnotatedStructure serialization contract. If a typed field is
+# ever silently dropped by save/load — or a from/to_atom_array method stops
+# being invertible — these tests catch it before it lands. They use the
+# parametrized ``load_structure`` fixture from conftest.py; a missing golden
+# fixture will skip its parametrized instance rather than error.
+# ---------------------------------------------------------------------------
+
+GOLDEN_FIXTURES = ["2g1k", "1m2g", "3iwd", "1dai", "4lbp"]
+
+_ANNOTATION_GROUP_FIELDS = (
+    "entity_ids",
+    "molecule_ids",
+    "type_masks",
+    "reference",
+    "grouping",
+    "derived",
+    "training",
+)
+
+
+def _assert_annotation_group_equal(a, b, path: str) -> None:
+    """Compare two frozen-dataclass annotation groups field-by-field."""
+    assert type(a) is type(b), f"{path}: type mismatch {type(a)} vs {type(b)}"
+    for f in dataclasses.fields(a):
+        va, vb = getattr(a, f.name), getattr(b, f.name)
+        if va is None and vb is None:
+            continue
+        if va is None or vb is None:
+            raise AssertionError(f"{path}.{f.name}: one is None, other isn't")
+        np.testing.assert_array_equal(va, vb, err_msg=f"{path}.{f.name}")
+
+
+def _assert_structures_equal(a: AnnotatedStructure, b: AnnotatedStructure) -> None:
+    """Deep-compare two AnnotatedStructures.
+
+    Frozen dataclass ``__eq__`` is unreliable with numpy arrays, so we walk
+    every typed field and the underlying AtomArray explicitly.
+    """
+    assert len(a.atoms) == len(b.atoms), "atom count differs"
+    assert a.resolution == b.resolution, "resolution differs"
+
+    # Typed annotation groups (required).
+    for name in _ANNOTATION_GROUP_FIELDS:
+        _assert_annotation_group_equal(getattr(a, name), getattr(b, name), name)
+
+    # Optional motif.
+    if (a.motif is None) != (b.motif is None):
+        raise AssertionError("motif: one is None, other isn't")
+    if a.motif is not None:
+        _assert_annotation_group_equal(a.motif, b.motif, "motif")
+
+    # AtomArray: coords + every remaining biotite-native annotation.
+    np.testing.assert_array_equal(a.atoms.coord, b.atoms.coord, err_msg="atoms.coord")
+    cats_a = set(a.atoms.get_annotation_categories())
+    cats_b = set(b.atoms.get_annotation_categories())
+    assert cats_a == cats_b, f"AtomArray annotation set differs: {cats_a ^ cats_b}"
+    for cat in cats_a:
+        np.testing.assert_array_equal(
+            a.atoms.get_annotation(cat),
+            b.atoms.get_annotation(cat),
+            err_msg=f"atoms.{cat}",
+        )
+
+
+@pytest.mark.parametrize("name", GOLDEN_FIXTURES)
+class TestGoldenRoundTrip:
+    def test_save_load_preserves_structure(self, load_structure, name, tmp_path):
+        """save(path) → load(path) must yield an equal structure."""
+        original = load_structure(name)
+        out = tmp_path / f"{name}.npz"
+        original.save(out)
+        reloaded = AnnotatedStructure.load(out)
+        _assert_structures_equal(original, reloaded)
+
+    def test_atom_array_roundtrip(self, load_structure, name):
+        """from_atom_array(to_atom_array(s)) must yield an equal structure.
+
+        Catches asymmetry between the _AnnotationGroup read/write paths — a
+        field added to to_atom_array but not restored by from_atom_array will
+        fail this test.
+        """
+        original = load_structure(name)
+        aa = original.to_atom_array()
+        rebuilt = AnnotatedStructure.from_atom_array(aa, resolution=original.resolution)
+        _assert_structures_equal(original, rebuilt)
+
+
+@pytest.mark.parametrize("name", GOLDEN_FIXTURES)
+def test_to_atom_array_does_not_mutate_source(load_structure, name):
+    """to_atom_array() must not mutate the source AnnotatedStructure's AtomArray.
+
+    Frozen dataclass on its own doesn't protect mutable numpy arrays — if
+    to_atom_array ever starts writing to ``self.atoms`` instead of a copy,
+    repeated calls from a model step would silently corrupt the fixture.
+    """
+    s = load_structure(name)
+    before_cats = set(s.atoms.get_annotation_categories())
+    before_n = len(s.atoms)
+    _ = s.to_atom_array()
+    after_cats = set(s.atoms.get_annotation_categories())
+    assert (
+        before_cats == after_cats
+    ), f"atoms annotations changed: {before_cats ^ after_cats}"
+    assert len(s.atoms) == before_n

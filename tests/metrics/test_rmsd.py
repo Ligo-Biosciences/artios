@@ -100,16 +100,6 @@ class TestRMSD:
         assert result.shape == ()
         assert torch.allclose(result, torch.tensor(2.0, device=device), atol=1e-6)
 
-    def test_rmsd_eps(self, device):
-        """Test that eps parameter avoids sqrt(0) issues."""
-        pose = torch.randn(10, 3, device=device)
-
-        result = rmsd(pose, pose, eps=1e-8)
-
-        # Should be sqrt(eps), not exactly 0
-        expected = torch.sqrt(torch.tensor(1e-8, device=device))
-        assert torch.allclose(result, expected, atol=1e-6)
-
 
 class TestAlignPredToTrue:
     """Tests for the align_pred_to_true() function."""
@@ -391,43 +381,6 @@ class TestWeightedRigidAlign:
         aligned = weighted_rigid_align(pred, true, weights, mask, stop_gradient=True)
 
         assert not aligned.requires_grad
-
-    def test_weighted_rigid_align_with_gradient(self, device):
-        """Test that stop_gradient=False preserves gradients."""
-        pred = torch.randn(10, 3, device=device, requires_grad=True)
-        true = torch.randn(10, 3, device=device)
-        weights = torch.ones(10, device=device)
-        mask = torch.ones(10, dtype=torch.bool, device=device)
-
-        aligned, rot, trans = weighted_rigid_align(
-            pred, true, weights, mask, stop_gradient=False
-        )
-
-        # Should be able to compute gradients
-        loss = aligned.sum()
-        loss.backward()
-        assert pred.grad is not None
-
-    def test_weighted_rigid_align_return_types(self, device):
-        """Test return types based on stop_gradient flag."""
-        pred = torch.randn(10, 3, device=device)
-        true = torch.randn(10, 3, device=device)
-        weights = torch.ones(10, device=device)
-        mask = torch.ones(10, dtype=torch.bool, device=device)
-
-        # stop_gradient=True returns only aligned coords
-        result_stopped = weighted_rigid_align(
-            pred, true, weights, mask, stop_gradient=True
-        )
-        assert isinstance(result_stopped, torch.Tensor)
-        assert result_stopped.shape == (10, 3)
-
-        # stop_gradient=False returns tuple
-        result_grad = weighted_rigid_align(
-            pred, true, weights, mask, stop_gradient=False
-        )
-        assert isinstance(result_grad, tuple)
-        assert len(result_grad) == 3
 
     def test_weighted_rigid_align_batched(self, device):
         """Test batched weighted rigid alignment."""

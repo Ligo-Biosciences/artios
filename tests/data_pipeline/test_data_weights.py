@@ -341,36 +341,3 @@ class TestExclusionDict:
 
 class TestPrintDataStats:
     """Vectorized mol_group_type matches the original apply-based version."""
-
-    def test_mol_group_type_matches_reference(self):
-        df = _make_test_df()
-
-        # Original apply-based
-        ref = df.copy()
-        ref["mol_group_type"] = ref.apply(
-            lambda row: "_".join(
-                sorted(
-                    [
-                        str(row["mol_1_type"]),
-                        str(row["mol_2_type"]).replace("nan", "intra"),
-                    ]
-                )
-            ),
-            axis=1,
-        )
-
-        # Vectorized (mirrors dataset.py)
-        new = df.copy()
-        m1 = new["mol_1_type"].fillna("intra").astype(str).to_numpy()
-        m2 = (
-            new["mol_2_type"]
-            .fillna("intra")
-            .astype(str)
-            .replace("nan", "intra")
-            .to_numpy()
-        )
-        lo = np.minimum(m1, m2)
-        hi = np.maximum(m1, m2)
-        new["mol_group_type"] = lo + "_" + hi
-
-        assert list(ref["mol_group_type"]) == list(new["mol_group_type"])

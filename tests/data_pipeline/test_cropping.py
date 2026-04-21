@@ -10,7 +10,7 @@ import pytest
 from artios.data.structure import AnnotatedStructure, cropping
 from artios.utils.file_io import load_atomarray_from_npz
 
-TESTDATA = Path(__file__).parent / "testdata" / "parsing"
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "parsing"
 
 
 # -- Fixtures -----------------------------------------------------------------
@@ -18,8 +18,8 @@ TESTDATA = Path(__file__).parent / "testdata" / "parsing"
 
 @pytest.fixture
 def structure():
-    atom_array = load_atomarray_from_npz(TESTDATA / "5s8i.npz")
-    with gzip.open(TESTDATA / "5s8i.pkl.gz", "rb") as f:
+    atom_array = load_atomarray_from_npz(FIXTURES / "5s8i.npz")
+    with gzip.open(FIXTURES / "5s8i.pkl.gz", "rb") as f:
         legacy = pickle.load(f)
     return AnnotatedStructure.from_atom_array(
         atom_array, resolution=float(legacy["resolution"])

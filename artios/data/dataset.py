@@ -16,9 +16,8 @@ import json
 import os
 import random
 import traceback
-from copy import deepcopy
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -36,9 +35,7 @@ from artios.data.features import FullContext
 from artios.data.features.featurizer import ContextGenerator
 from artios.data.filter import Filter
 from artios.data.motif_maker import MotifMaker
-from artios.data.msa.featurizer import MSAFeaturizer
 from artios.data.structure import AnnotatedStructure, annotation
-from artios.data.structure.tokenizer import TokenArray
 from artios.utils.file_io import read_indices_csv
 from artios.utils.geometry import random_transform
 from artios.utils.logger import get_logger
@@ -63,7 +60,6 @@ class BaseSingleDataset(Dataset):
         bioassembly_dict_dir: Optional[Union[str, Path]],
         indices_fpath: Union[str, Path],
         cropping_configs: dict[str, Any],
-        msa_featurizer: Optional[MSAFeaturizer] = None,
         template_featurizer: Optional[Any] = None,
         motif_maker: Optional[MotifMaker] = None,
         name: Optional[str] = None,
@@ -134,7 +130,6 @@ class BaseSingleDataset(Dataset):
         if self.error_dir is not None:
             os.makedirs(self.error_dir, exist_ok=True)
 
-        self.msa_featurizer = msa_featurizer
         self.template_featurizer = template_featurizer
         self.motif_maker = motif_maker
 
@@ -803,171 +798,6 @@ class BaseSingleDataset(Dataset):
         """
         return annotation.update_centre_atom_mask_to_include_motif(atom_array)
 
-    @profile_function("dataset.get_feature_and_label")
-    def get_context(
-        self,
-        idx: int,
-        token_array: TokenArray,
-        atom_array: AtomArray,
-        pdb_id: str,
-        bioassembly_dict_fpath: str,
-        msa_features: dict[str, Any],
-        template_features: dict[str, Any],
-        full_atom_array: AtomArray,
-        is_spatial_crop: bool = True,
-    ) -> FullContext:
-        """
-        Get feature and label information for a given data point.
-        It uses a Featurizer object to obtain input features and labels, and applies several
-        steps to add other features and labels. Finally, it returns the feature dictionary, label
-        dictionary, and a full label dictionary.
-
-        Args:
-            idx: Index of the data point.
-            token_array: Token array representing the amino acid sequence.
-            atom_array: Atom array containing atomic information.
-            pdb_id: PDB ID of the sample.
-            bioassembly_dict_fpath: Path to the bioassembly dictionary.
-            msa_features: Dictionary of MSA features.
-            template_features: Dictionary of template features.
-            full_atom_array: Full atom array containing all atoms.
-            is_spatial_crop: Flag indicating whether spatial cropping is applied, by default True.
-
-        Returns:
-            A tuple containing the feature dictionary and the label dictionary.
-
-        Raises:
-            ValueError: If the ligand cannot be found in the data point.
-        """
-        structure = AnnotatedStructure.from_atom_array(atom_array)
-        context = ContextGenerator(
-            structure,
-            ref_pos_augment=self.ref_pos_augment,
-            lig_atom_rename=self.lig_atom_rename,
-            bioassembly_dict_fpath=bioassembly_dict_fpath,
-            pdb_id=pdb_id,
-        ).get_full_context(include_arrays=self.include_arrays_in_context)
-
-        # labels_dict = feat.get_labels()
-
-        # Permutation list for atom permutation
-        # TODO: for symmetric permutation, this will be required.
-        # features_dict["atom_perm_list"] = feat.get_atom_permutation_list()
-
-        # Masks for Pocket Metrics
-        # if self.find_pocket:
-        #     # Get entity_id of the interested ligand
-        #     sample_indice = self._get_sample_indice(idx=idx)
-        #     if sample_indice.mol_1_type == "ligand":
-        #         lig_entity_id = str(sample_indice.entity_1_id)
-        #         lig_chain_id = str(sample_indice.chain_1_id)
-        #     elif sample_indice.mol_2_type == "ligand":
-        #         lig_entity_id = str(sample_indice.entity_2_id)
-        #         lig_chain_id = str(sample_indice.chain_2_id)
-        #     else:
-        #         raise ValueError("Cannot find ligand from this data point.")
-        #     # Make sure the cropped array contains interested ligand
-        #     assert lig_entity_id in set(atom_array.label_entity_id)
-        #     assert lig_chain_id in set(atom_array.chain_id)
-
-        #     # Get asym ID of the specific ligand in the `main` pocket
-        #     lig_asym_id = atom_array.label_asym_id[atom_array.chain_id == lig_chain_id]
-        #     assert len(np.unique(lig_asym_id)) == 1
-        #     lig_asym_id = lig_asym_id[0]
-        #     ligands = [lig_asym_id]
-
-        #     if self.find_all_pockets:
-        #         # Get asym ID of other ligands with the same entity_id
-        #         all_lig_asym_ids = set(
-        #             full_atom_array[
-        #                 full_atom_array.label_entity_id == lig_entity_id
-        #             ].label_asym_id
-        #         )
-        #         ligands.extend(list(all_lig_asym_ids - set([lig_asym_id])))
-
-        #     # Note: the `main` pocket is the 0-indexed one.
-        #     # [N_pocket, N_atom], [N_pocket, N_atom].
-        #     # If not find_all_pockets, then N_pocket = 1.
-        #     interested_ligand_mask, pocket_mask = feat.get_lig_pocket_mask(
-        #         atom_array=full_atom_array, lig_label_asym_id=ligands
-        #     )
-
-        #     label_full_dict["pocket_mask"] = pocket_mask
-        #     label_full_dict["interested_ligand_mask"] = interested_ligand_mask
-
-        # Masks for Chain/Interface Metrics
-        # TODO: not needed.
-        # if self.find_eval_chain_interface:
-        #     (
-        #         eval_type,
-        #         cluster_id,
-        #         chain_1_mask,
-        #         chain_2_mask,
-        #     ) = self._get_eval_chain_interface_mask(
-        #         idx=idx, atom_array_chain_id=full_atom_array.chain_id
-        #     )
-        #     labels_dict["eval_type"] = eval_type  # [N_eval]
-        #     labels_dict["cluster_id"] = cluster_id  # [N_eval]
-        #     labels_dict["chain_1_mask"] = chain_1_mask  # [N_eval, N_atom]
-        #     labels_dict["chain_2_mask"] = chain_2_mask  # [N_eval, N_atom]
-
-        # Transform to right data type TODO: work out if required
-        # context = data_type_transform(feat_or_label_dict=context)
-
-        return context
-
-
-def get_msa_featurizer(configs, dataset_name: str, stage: str) -> Optional[Callable]:
-    """
-    Creates and returns an MSAFeaturizer object based on the provided configurations.
-
-    Args:
-        configs: A dictionary containing the configurations for the MSAFeaturizer.
-        dataset_name: The name of the dataset.
-        stage: The stage of the dataset (e.g., 'train', 'test').
-
-    Returns:
-        An MSAFeaturizer object if MSA is enabled in the configurations, otherwise None.
-    """
-    if "msa" in configs["data"] and configs["data"]["msa"]["enable"]:
-        msa_info = configs["data"]["msa"]
-        msa_args = deepcopy(msa_info)
-
-        if "msa" in (dataset_config := configs["data"][dataset_name]):
-            for k, v in dataset_config["msa"].items():
-                if k not in ["prot", "rna"]:
-                    msa_args[k] = v
-                else:
-                    for kk, vv in dataset_config["msa"][k].items():
-                        msa_args[k][kk] = vv
-
-        prot_msa_args = msa_args["prot"]
-        prot_msa_args.update(
-            {
-                "dataset_name": dataset_name,
-                "merge_method": msa_args["merge_method"],
-                "max_size": msa_args["max_size"][stage],
-            }
-        )
-
-        rna_msa_args = msa_args["rna"]
-        rna_msa_args.update(
-            {
-                "dataset_name": dataset_name,
-                "merge_method": msa_args["merge_method"],
-                "max_size": msa_args["max_size"][stage],
-            }
-        )
-
-        return MSAFeaturizer(
-            prot_msa_args=prot_msa_args,
-            rna_msa_args=rna_msa_args,
-            enable_rna_msa=configs.data.msa.enable_rna_msa,
-        )
-
-    else:
-        return None
-
 
 def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMaker]:
     """
@@ -1087,7 +917,6 @@ def get_datasets(
             **config_dict["base_info"],
             "cropping_configs": config_dict["cropping_configs"],
             "error_dir": error_dir,
-            "msa_featurizer": get_msa_featurizer(configs, dataset_name, stage),
             "motif_maker": get_motif_maker(configs, dataset_name),
             "template_featurizer": None,
             "lig_atom_rename": config_dict.get("lig_atom_rename", False),

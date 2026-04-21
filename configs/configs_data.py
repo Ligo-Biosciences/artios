@@ -217,7 +217,6 @@ data_configs = {
         "save_motifs_for_debugging": False,
     },
     "padding": {
-        "max_n_msa": 1,
         "max_n_template": 4,
         "max_n_pocket": 16,
         # all-atom mpnn training:
@@ -361,36 +360,6 @@ data_configs = {
             "find_eval_chain_interface": True,
         },
         **deepcopy(default_test_configs),
-    },
-    "msa": {
-        "enable": False,  # True
-        "enable_rna_msa": False,
-        "prot": {
-            "pairing_db": "uniref100",
-            "non_pairing_db": "mmseqs_other",
-            "pdb_mmseqs_dir": os.path.join(DATA_ROOT_DIR, "mmcif_msa"),
-            "seq_to_pdb_idx_path": os.path.join(DATA_ROOT_DIR, "seq_to_pdb_index.json"),
-            "indexing_method": "sequence",
-        },
-        "rna": {
-            "seq_to_pdb_idx_path": "",
-            "rna_msa_dir": "",
-            "indexing_method": "sequence",
-        },
-        "strategy": "random",
-        "merge_method": "dense_max",
-        "min_size": {
-            "train": 1,
-            "test": 2048,
-        },
-        "max_size": {
-            "train": 16384,
-            "test": 16384,
-        },
-        "sample_cutoff": {
-            "train": 2048,
-            "test": 2048,
-        },
     },
     "template": {
         "enable": False,

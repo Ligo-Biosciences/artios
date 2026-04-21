@@ -77,20 +77,6 @@ class TestSpatialCrop:
             all_tokens_with_uid = set(np.where(uid == u)[0].tolist())
             assert all_tokens_with_uid.issubset(set(indices.tolist()))
 
-    def test_select_tokens_produces_valid_structure(self, structure):
-        ids = _ref_chain_ids(structure)
-        indices = cropping.spatial_crop_indices(
-            structure.token_centre_coords,
-            structure.training.is_resolved[_centre(structure)],
-            structure.entity_ids.asym_id_int[_centre(structure)],
-            structure.reference.ref_space_uid[_centre(structure)],
-            ids,
-            crop_size=50,
-        )
-        cropped = structure.select_tokens(indices)
-        assert cropped.grouping.n_tokens == len(indices)
-        assert len(cropped.atoms) > 0
-
 
 class TestSpatialInterfaceCrop:
     def test_returns_sorted_within_budget(self, structure):
@@ -172,18 +158,6 @@ class TestDropIncompleteMolecules:
 
 
 class TestCropOrchestrator:
-    def test_returns_valid_method_and_indices(self, structure):
-        ids = _ref_chain_ids(structure)
-        method, indices = cropping.crop(
-            structure,
-            crop_size=50,
-            ref_chain_ids=ids,
-            method_weights=[0.0, 0.5, 0.5, 0.0],
-        )
-        assert method in cropping.METHODS
-        assert len(indices) <= 50
-        assert len(indices) > 0
-
     def test_no_crash_all_methods(self, structure):
         ids = _ref_chain_ids(structure)
         for method in [

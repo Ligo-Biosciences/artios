@@ -1,34 +1,14 @@
-"""Tests for motif_parser.py."""
+"""Tests for ``artios.data.parsing.motif``.
 
-from pathlib import Path
+TODO: motif parsing is currently untested. The old coverage (a single
+``FileNotFoundError`` smoke + unused fixtures) was removed during the
+trivial-test pass. Fill in real tests before the next refactor of the motif
+pipeline — candidates worth pinning:
 
-import pytest
-
-from artios.data.parsing.motif import Motif
-
-FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "motifs"
-
-
-class TestMotif:
-    """Tests for Motif dataclass."""
-
-    @pytest.fixture
-    def ccd_input_path(self):
-        return FIXTURES_DIR / "motif_input.json"
-
-    @pytest.fixture
-    def smiles_input_path(self):
-        return FIXTURES_DIR / "motif_input_smiles.json"
-
-    def test_from_spec_file_not_found(self, tmp_path):
-        """Test that missing CIF file raises FileNotFoundError."""
-        from artios.data.parsing.json import CIFFile, MotifSpec
-
-        motif_spec = MotifSpec(cif_file=CIFFile(path=tmp_path / "nonexistent.cif"))
-
-        with pytest.raises(FileNotFoundError):
-            Motif.from_spec(motif_spec)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+- parsing a CCD-based motif spec (``tests/fixtures/motifs/motif_input.json``)
+  produces a ``Motif`` with the expected residues / ligands.
+- parsing a SMILES-based motif spec
+  (``tests/fixtures/motifs/motif_input_smiles.json``) handles substructure
+  matching correctly and populates atom maps.
+- round-trip: ``Motif`` → spec dict → ``Motif`` (if that path exists).
+"""

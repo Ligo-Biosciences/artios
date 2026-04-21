@@ -3,188 +3,63 @@ import torch
 
 from artios.data.collate.padding import pad_tensor
 
-
-class TestPadTensor:
-    """Test pad_tensor function for Context tensor padding."""
-
-    # Typical dimensions during training
-    N_TOKEN = 128
-    N_ATOM = 512
-    BATCH_SIZE = 4
-    PAD_TOKEN = 16
-    PAD_ATOM = 32
-
-    # ==========================================================================
-    # Unbatched tests (num_batch_dims=0)
-    # ==========================================================================
-
-    def test_pad_token_1d_unbatched(self):
-        """Test padding 1D token tensor [n_token] without batch."""
-        tensor = torch.randn(self.N_TOKEN)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_TOKEN,), num_batch_dims=0)
-
-        assert padded.shape == (self.N_TOKEN + self.PAD_TOKEN,)
-        assert torch.equal(padded[: self.N_TOKEN], tensor)
-        assert torch.all(padded[self.N_TOKEN :] == 0)
-
-    def test_pad_token_2d_unbatched(self):
-        """Test padding 2D token tensor [n_token, 32] (restype) without batch."""
-        tensor = torch.randn(self.N_TOKEN, 32)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_TOKEN,), num_batch_dims=0)
-
-        assert padded.shape == (self.N_TOKEN + self.PAD_TOKEN, 32)
-        assert torch.equal(padded[: self.N_TOKEN], tensor)
-        assert torch.all(padded[self.N_TOKEN :] == 0)
-
-    def test_pad_token_pair_unbatched(self):
-        """Test padding token pair tensor [n_token, n_token] (token_bonds) without batch."""
-        tensor = torch.randn(self.N_TOKEN, self.N_TOKEN)
-        padded = pad_tensor(
-            tensor, pad_sizes=(self.PAD_TOKEN, self.PAD_TOKEN), num_batch_dims=0
-        )
-
-        expected_size = self.N_TOKEN + self.PAD_TOKEN
-        assert padded.shape == (expected_size, expected_size)
-        assert torch.equal(padded[: self.N_TOKEN, : self.N_TOKEN], tensor)
-        # Check padding regions are zeros
-        assert torch.all(padded[self.N_TOKEN :, :] == 0)
-        assert torch.all(padded[:, self.N_TOKEN :] == 0)
-
-    def test_pad_atom_1d_unbatched(self):
-        """Test padding 1D atom tensor [n_atom] without batch."""
-        tensor = torch.randn(self.N_ATOM)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_ATOM,), num_batch_dims=0)
-
-        assert padded.shape == (self.N_ATOM + self.PAD_ATOM,)
-        assert torch.equal(padded[: self.N_ATOM], tensor)
-        assert torch.all(padded[self.N_ATOM :] == 0)
-
-    def test_pad_atom_2d_unbatched(self):
-        """Test padding 2D atom tensor [n_atom, 3] (ref_pos, coordinate) without batch."""
-        tensor = torch.randn(self.N_ATOM, 3)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_ATOM,), num_batch_dims=0)
-
-        assert padded.shape == (self.N_ATOM + self.PAD_ATOM, 3)
-        assert torch.equal(padded[: self.N_ATOM], tensor)
-        assert torch.all(padded[self.N_ATOM :] == 0)
-
-    def test_pad_atom_3d_unbatched(self):
-        """Test padding 3D atom tensor [n_atom, 4, 64] (ref_atom_name_chars) without batch."""
-        tensor = torch.randn(self.N_ATOM, 4, 64)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_ATOM,), num_batch_dims=0)
-
-        assert padded.shape == (self.N_ATOM + self.PAD_ATOM, 4, 64)
-        assert torch.equal(padded[: self.N_ATOM], tensor)
-        assert torch.all(padded[self.N_ATOM :] == 0)
-
-    def test_pad_backbone_coords_unbatched(self):
-        """Test padding backbone coords [n_token, 5, 3] without batch."""
-        tensor = torch.randn(self.N_TOKEN, 5, 3)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_TOKEN,), num_batch_dims=0)
-
-        assert padded.shape == (self.N_TOKEN + self.PAD_TOKEN, 5, 3)
-        assert torch.equal(padded[: self.N_TOKEN], tensor)
-        assert torch.all(padded[self.N_TOKEN :] == 0)
-
-    # ==========================================================================
-    # Batched tests (num_batch_dims=1)
-    # ==========================================================================
-
-    def test_pad_token_1d_batched(self):
-        """Test padding 1D token tensor [batch, n_token] with batch dim."""
-        tensor = torch.randn(self.BATCH_SIZE, self.N_TOKEN)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_TOKEN,), num_batch_dims=1)
-
-        assert padded.shape == (self.BATCH_SIZE, self.N_TOKEN + self.PAD_TOKEN)
-        assert torch.equal(padded[:, : self.N_TOKEN], tensor)
-        assert torch.all(padded[:, self.N_TOKEN :] == 0)
-
-    def test_pad_token_2d_batched(self):
-        """Test padding 2D token tensor [batch, n_token, 32] (restype) with batch dim."""
-        tensor = torch.randn(self.BATCH_SIZE, self.N_TOKEN, 32)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_TOKEN,), num_batch_dims=1)
-
-        assert padded.shape == (self.BATCH_SIZE, self.N_TOKEN + self.PAD_TOKEN, 32)
-        assert torch.equal(padded[:, : self.N_TOKEN, :], tensor)
-        assert torch.all(padded[:, self.N_TOKEN :, :] == 0)
-
-    def test_pad_token_pair_batched(self):
-        """Test padding token pair [batch, n_token, n_token] (token_bonds) with batch dim."""
-        tensor = torch.randn(self.BATCH_SIZE, self.N_TOKEN, self.N_TOKEN)
-        padded = pad_tensor(
-            tensor, pad_sizes=(self.PAD_TOKEN, self.PAD_TOKEN), num_batch_dims=1
-        )
-
-        expected_size = self.N_TOKEN + self.PAD_TOKEN
-        assert padded.shape == (self.BATCH_SIZE, expected_size, expected_size)
-        assert torch.equal(padded[:, : self.N_TOKEN, : self.N_TOKEN], tensor)
-        assert torch.all(padded[:, self.N_TOKEN :, :] == 0)
-        assert torch.all(padded[:, :, self.N_TOKEN :] == 0)
-
-    def test_pad_atom_1d_batched(self):
-        """Test padding 1D atom tensor [batch, n_atom] with batch dim."""
-        tensor = torch.randn(self.BATCH_SIZE, self.N_ATOM)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_ATOM,), num_batch_dims=1)
-
-        assert padded.shape == (self.BATCH_SIZE, self.N_ATOM + self.PAD_ATOM)
-        assert torch.equal(padded[:, : self.N_ATOM], tensor)
-        assert torch.all(padded[:, self.N_ATOM :] == 0)
-
-    def test_pad_atom_2d_batched(self):
-        """Test padding 2D atom tensor [batch, n_atom, 3] (ref_pos) with batch dim."""
-        tensor = torch.randn(self.BATCH_SIZE, self.N_ATOM, 3)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_ATOM,), num_batch_dims=1)
-
-        assert padded.shape == (self.BATCH_SIZE, self.N_ATOM + self.PAD_ATOM, 3)
-        assert torch.equal(padded[:, : self.N_ATOM, :], tensor)
-        assert torch.all(padded[:, self.N_ATOM :, :] == 0)
-
-    def test_pad_atom_3d_batched(self):
-        """Test padding 3D atom tensor [batch, n_atom, 4, 64] (ref_atom_name_chars) with batch dim."""
-        tensor = torch.randn(self.BATCH_SIZE, self.N_ATOM, 4, 64)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_ATOM,), num_batch_dims=1)
-
-        assert padded.shape == (self.BATCH_SIZE, self.N_ATOM + self.PAD_ATOM, 4, 64)
-        assert torch.equal(padded[:, : self.N_ATOM, :, :], tensor)
-        assert torch.all(padded[:, self.N_ATOM :, :, :] == 0)
-
-    def test_pad_backbone_coords_batched(self):
-        """Test padding backbone coords [batch, n_token, 5, 3] with batch dim."""
-        tensor = torch.randn(self.BATCH_SIZE, self.N_TOKEN, 5, 3)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_TOKEN,), num_batch_dims=1)
-
-        assert padded.shape == (self.BATCH_SIZE, self.N_TOKEN + self.PAD_TOKEN, 5, 3)
-        assert torch.equal(padded[:, : self.N_TOKEN, :, :], tensor)
-        assert torch.all(padded[:, self.N_TOKEN :, :, :] == 0)
-
-    # ==========================================================================
-    # Edge cases
-    # ==========================================================================
-
-    def test_pad_assertion_on_insufficient_dims(self):
-        """Test that assertion fires when pad_sizes exceeds available dims."""
-        tensor = torch.randn(self.BATCH_SIZE, self.N_TOKEN)  # 2D tensor
-
-        with pytest.raises(AssertionError, match="pad_sizes .* exceed available"):
-            # Trying to pad 3 dims but only 1 non-batch dim available
-            pad_tensor(tensor, pad_sizes=(10, 10, 10), num_batch_dims=1)
-
-    def test_pad_ref_element_128_unbatched(self):
-        """Test padding ref_element [n_atom, 128] without batch."""
-        tensor = torch.randn(self.N_ATOM, 128)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_ATOM,), num_batch_dims=0)
-
-        assert padded.shape == (self.N_ATOM + self.PAD_ATOM, 128)
-        assert torch.equal(padded[: self.N_ATOM], tensor)
-
-    def test_pad_ref_element_128_batched(self):
-        """Test padding ref_element [batch, n_atom, 128] with batch dim."""
-        tensor = torch.randn(self.BATCH_SIZE, self.N_ATOM, 128)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_ATOM,), num_batch_dims=1)
-
-        assert padded.shape == (self.BATCH_SIZE, self.N_ATOM + self.PAD_ATOM, 128)
-        assert torch.equal(padded[:, : self.N_ATOM, :], tensor)
+# Covers: rank 1-4 tensors, batched and unbatched, single-dim and two-dim pad.
+_SHAPE_CASES = [
+    # Unbatched (num_batch_dims=0)
+    ((128,), (16,), 0),  # 1D token
+    ((128, 32), (16,), 0),  # 2D token, restype-shaped
+    ((128, 128), (16, 16), 0),  # Token pair (two-dim pad)
+    ((512,), (32,), 0),  # 1D atom
+    ((512, 3), (32,), 0),  # 2D atom, coord-shaped
+    ((512, 4, 64), (32,), 0),  # 3D atom, ref_atom_name_chars
+    ((128, 5, 3), (16,), 0),  # Backbone coords
+    ((512, 128), (32,), 0),  # ref_element-shaped
+    # Batched (num_batch_dims=1)
+    ((4, 128), (16,), 1),
+    ((4, 128, 32), (16,), 1),
+    ((4, 128, 128), (16, 16), 1),
+    ((4, 512), (32,), 1),
+    ((4, 512, 3), (32,), 1),
+    ((4, 512, 4, 64), (32,), 1),
+    ((4, 128, 5, 3), (16,), 1),
+    ((4, 512, 128), (32,), 1),
+]
 
 
-if __name__ == "__main__":
-    pytest.main([__file__])
+@pytest.mark.parametrize("shape, pad_sizes, num_batch_dims", _SHAPE_CASES)
+def test_pad_tensor_preserves_values_and_zero_fills(
+    shape: tuple[int, ...], pad_sizes: tuple[int, ...], num_batch_dims: int
+) -> None:
+    """pad_tensor must: (1) grow each target dim by its pad amount, (2) leave
+    the original slice untouched, (3) fill the pad region with zeros."""
+    tensor = torch.randn(*shape)
+    padded = pad_tensor(tensor, pad_sizes=pad_sizes, num_batch_dims=num_batch_dims)
+
+    # (1) shape: only the `len(pad_sizes)` dims after the batch dims grow.
+    expected_shape = list(shape)
+    for i, pad in enumerate(pad_sizes):
+        expected_shape[num_batch_dims + i] += pad
+    assert padded.shape == tuple(expected_shape)
+
+    # (2) original slice equals input.
+    slicer = [slice(None)] * padded.ndim
+    for i, _ in enumerate(pad_sizes):
+        slicer[num_batch_dims + i] = slice(0, shape[num_batch_dims + i])
+    assert torch.equal(padded[tuple(slicer)], tensor)
+
+    # (3) each pad region is zero-filled.
+    for i, _ in enumerate(pad_sizes):
+        pad_dim = num_batch_dims + i
+        pad_slicer = [slice(None)] * padded.ndim
+        pad_slicer[pad_dim] = slice(shape[pad_dim], None)
+        assert torch.all(
+            padded[tuple(pad_slicer)] == 0
+        ), f"pad region along dim {pad_dim} was not zero-filled"
+
+
+def test_pad_tensor_raises_when_pad_sizes_exceed_available_dims() -> None:
+    """Passing more pad_sizes than non-batch dims must fail loudly at the
+    assertion rather than silently truncating."""
+    tensor = torch.randn(4, 128)  # 2D: one batch dim, one non-batch dim
+    with pytest.raises(AssertionError, match="pad_sizes .* exceed available"):
+        pad_tensor(tensor, pad_sizes=(10, 10, 10), num_batch_dims=1)

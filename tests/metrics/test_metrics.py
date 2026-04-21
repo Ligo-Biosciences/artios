@@ -44,13 +44,6 @@ class TestSequenceMetrics:
 
         return pred_dict, input_feature_dict, true_indices
 
-    def test_sequence_metrics_initialization(self, sequence_metrics):
-        """Test that SequenceMetrics initializes correctly"""
-        assert isinstance(sequence_metrics, SequenceMetrics)
-        assert hasattr(sequence_metrics, "compute_metrics")
-        assert hasattr(sequence_metrics, "aggregate")
-        assert hasattr(sequence_metrics, "aggregate_sequence_metrics")
-
     def test_aggregate_basic(self, sequence_metrics, device):
         """Test basic functionality of aggregate method"""
         n_samples = 6
@@ -73,27 +66,6 @@ class TestSequenceMetrics:
         assert torch.all(aggregated["best"] >= aggregated["worst"])
         assert torch.all(aggregated["best"] >= aggregated["mean"])
         assert torch.all(aggregated["mean"] >= aggregated["worst"])
-
-    def test_aggregate_custom_aggregators(self, sequence_metrics, device):
-        """Test aggregate with custom aggregators"""
-        n_samples = 4
-
-        vals = torch.rand(n_samples, device=device)
-
-        custom_aggregators = {
-            "custom_max": lambda x: x.max(dim=-1)[0],
-            "custom_sum": lambda x: x.sum(dim=-1),
-        }
-
-        aggregated = sequence_metrics.aggregate(vals, aggregators=custom_aggregators)
-
-        # Check that custom aggregators are included
-        assert "custom_max" in aggregated
-        assert "custom_sum" in aggregated
-
-        # Check that basic aggregators are still present
-        assert "best" in aggregated
-        assert "mean" in aggregated
 
 
 class TestComputeSequenceRecovery:

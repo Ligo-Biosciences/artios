@@ -739,7 +739,7 @@ def add_pocket_annotation(
         atom_array.set_annotation("pocket_id", np.zeros(len(atom_array), dtype=int))
         return atom_array
 
-    pockets = find_realistic_pockets(
+    pockets = find_pockets(
         atom_array,
         plddt_cutoff=plddt_cutoff,
     )
@@ -760,7 +760,7 @@ def add_pocket_annotation_per_fragment(
     """
     Compute pockets per-fragment and add pocket_id annotation.
 
-    Runs find_realistic_pockets independently on each fragment
+    Runs find_pockets independently on each fragment
     (fragment_id != -1). This ensures the atom density filter operates
     on the fragment's local environment rather than the full structure.
 

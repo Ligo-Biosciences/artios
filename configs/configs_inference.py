@@ -226,5 +226,4 @@ inference_configs = {
     "sorted_by_ranking_score": False,
     "input_json_path": "",
     "num_workers": 16,
-    "use_msa": False,
 }

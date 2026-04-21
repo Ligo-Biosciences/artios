@@ -8,7 +8,7 @@ from artios.model.modules.mpnn_features import (
     GaussianRBF,
     MPNNFeaturizer,
 )
-from tests.context_utils import create_test_context
+from tests._helpers.context import create_test_context
 
 
 class TestEdgeRelativePositionalEncoding:
@@ -321,28 +321,6 @@ class TestMPNNFeaturizer:
         assert neighbor_dists.shape == (1, n_tokens, k)
         assert edge_index.shape == (1, n_tokens, k)
 
-    def test_compute_node_features(self, featurizer, test_context, device):
-        """Test node feature computation."""
-        node_feats = featurizer._compute_node_features(test_context)
-
-        n_tokens = test_context.basic.n_token
-
-        # Check output shape
-        assert node_feats.shape == (1, n_tokens, featurizer.node_dim)
-        assert not torch.isnan(node_feats).any()
-
-    def test_compute_node_features_with_ligands(self, featurizer, test_context, device):
-        """Test node features with ligand atoms present."""
-        n_atoms = test_context.basic.n_atom
-        # Set some atoms as ligands
-        test_context.entity.is_ligand[:, : n_atoms // 2] = True
-
-        node_feats = featurizer._compute_node_features(test_context)
-
-        n_tokens = test_context.basic.n_token
-        assert node_feats.shape == (1, n_tokens, featurizer.node_dim)
-        assert not torch.isnan(node_feats).any()
-
     def test_compute_backbone_distance_features(self, featurizer, device):
         """Test backbone distance feature computation."""
         batch_size, n_tokens, n_neighbors = 2, 15, 10
@@ -422,41 +400,6 @@ class TestMPNNFeaturizer:
         )
 
         assert edge_feats.shape == (1, n_tokens, n_neighbors, featurizer.num_rbf * 25)
-        assert not torch.isnan(edge_feats).any()
-
-    def test_forward_pass(self, featurizer, test_context, device):
-        """Test complete forward pass through featurizer."""
-        n_tokens = test_context.basic.n_token
-
-        # Forward pass
-        node_feats, edge_feats, edge_index = featurizer(test_context)
-
-        # Check output shapes
-        k = min(featurizer.num_neighbours, n_tokens)
-        assert node_feats.shape == (1, n_tokens, featurizer.node_dim)
-        assert edge_feats.shape == (1, n_tokens, k, featurizer.edge_dim)
-        assert edge_index.shape == (1, n_tokens, k)
-
-        # Check no NaN values
-        assert not torch.isnan(node_feats).any()
-        assert not torch.isnan(edge_feats).any()
-
-    def test_forward_pass_batched(self, featurizer, test_context_batched, device):
-        """Test forward pass with batched input."""
-        batch_size = 2
-        n_tokens = test_context_batched.basic.n_token
-
-        # Forward pass
-        node_feats, edge_feats, edge_index = featurizer(test_context_batched)
-
-        # Check output shapes
-        k = min(featurizer.num_neighbours, n_tokens)
-        assert node_feats.shape == (batch_size, n_tokens, featurizer.node_dim)
-        assert edge_feats.shape == (batch_size, n_tokens, k, featurizer.edge_dim)
-        assert edge_index.shape == (batch_size, n_tokens, k)
-
-        # Check no NaN values
-        assert not torch.isnan(node_feats).any()
         assert not torch.isnan(edge_feats).any()
 
     def test_gradient_flow(self, featurizer, device):

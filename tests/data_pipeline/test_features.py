@@ -11,7 +11,7 @@ from artios.data.features import (
     MaskContext,
     TokenContext,
 )
-from tests.context_utils import create_test_context
+from tests._helpers.context import create_test_context
 
 
 class TestContextToFromDict:
@@ -47,11 +47,6 @@ class TestContextToFromDict:
         restored = AtomPermContext.from_dict(d)
 
         assert restored.perms == perms
-
-    def test_atom_perm_context_empty_default(self) -> None:
-        """AtomPermContext.from_dict with empty dict should use default."""
-        restored = AtomPermContext.from_dict({})
-        assert restored.perms == []
 
     def test_coordinate_context_roundtrip(self) -> None:
         """CoordinateContext should roundtrip, preserving resolution."""
@@ -172,89 +167,6 @@ class TestFullContextToFromDict:
             context.coordinate.coordinate, restored.coordinate.coordinate
         )
 
-    def test_roundtrip_preserves_atom_perm(self, context: FullContext) -> None:
-        """Roundtrip should preserve AtomPermContext perms list."""
-        # Create context with non-empty perms
-        context.atom_perm.perms.extend([[0, 1, 2], [2, 1, 0]])
-
-        d = context.to_dict()
-        restored = FullContext.from_dict(d, resolution=context.coordinate.resolution)
-
-        assert restored.atom_perm.perms == [[0, 1, 2], [2, 1, 0]]
-
-    def test_from_dict_with_missing_atom_perm(self) -> None:
-        """from_dict should handle missing atom_perm gracefully."""
-        # Minimal dict without atom_perm
-        n_tokens = 5
-        n_atoms = 10
-
-        d = {
-            "token": {
-                "token_index": torch.arange(n_tokens),
-                "residue_index": torch.arange(n_tokens),
-                "asym_id": torch.zeros(n_tokens, dtype=torch.long),
-                "entity_id": torch.zeros(n_tokens, dtype=torch.long),
-                "sym_id": torch.zeros(n_tokens, dtype=torch.long),
-                "restype": torch.zeros(n_tokens, 32, dtype=torch.long),
-                "token_bonds": torch.zeros(n_tokens, n_tokens, dtype=torch.long),
-            },
-            "reference": {
-                "ref_pos": torch.randn(n_atoms, 3),
-                "ref_mask": torch.ones(n_atoms, dtype=torch.long),
-                "ref_element": torch.zeros(n_atoms, 128, dtype=torch.long),
-                "ref_charge": torch.zeros(n_atoms, dtype=torch.long),
-                "ref_atom_name_chars": torch.zeros(n_atoms, 4, 64, dtype=torch.long),
-                "ref_space_uid": torch.zeros(n_atoms, dtype=torch.long),
-            },
-            "chain_perm": {
-                "mol_id": torch.zeros(n_atoms, dtype=torch.long),
-                "mol_atom_index": torch.arange(n_atoms),
-                "entity_mol_id": torch.zeros(n_atoms, dtype=torch.long),
-            },
-            # atom_perm intentionally missing
-            "mask": {
-                "centre_atom_mask": torch.zeros(n_atoms, dtype=torch.bool),
-                "atom_mask": torch.ones(n_atoms, dtype=torch.bool),
-                "is_resolved": torch.ones(n_atoms, dtype=torch.bool),
-                "centre_atom_is_resolved": torch.ones(n_tokens, dtype=torch.bool),
-                "backbone_mask": torch.ones(n_tokens, 5, dtype=torch.bool),
-                "atom_loss_mask": torch.ones(n_atoms, dtype=torch.bool),
-                "token_mask": torch.ones(n_tokens, dtype=torch.bool),
-            },
-            "motif": {
-                "is_motif": torch.zeros(n_atoms, dtype=torch.bool),
-                "is_motif_related": torch.zeros(n_atoms, dtype=torch.bool),
-                "is_motif_token": torch.zeros(n_tokens, dtype=torch.bool),
-                "is_motif_related_token": torch.zeros(n_tokens, dtype=torch.bool),
-                "motif_restype": torch.zeros(n_tokens, 32),
-                "motif_coordinate": torch.zeros(n_tokens, 3),
-            },
-            "index": {
-                "atom_to_token_idx": torch.zeros(n_atoms, dtype=torch.long),
-                "atom_to_tokatom_idx": torch.zeros(n_atoms, dtype=torch.long),
-            },
-            "entity": {
-                "is_protein": torch.ones(n_atoms, dtype=torch.bool),
-                "is_ligand": torch.zeros(n_atoms, dtype=torch.bool),
-                "is_dna": torch.zeros(n_atoms, dtype=torch.bool),
-                "is_rna": torch.zeros(n_atoms, dtype=torch.bool),
-                "is_protein_token": torch.ones(n_tokens, dtype=torch.bool),
-                "is_ligand_token": torch.zeros(n_tokens, dtype=torch.bool),
-                "is_dna_token": torch.zeros(n_tokens, dtype=torch.bool),
-                "is_rna_token": torch.zeros(n_tokens, dtype=torch.bool),
-            },
-            "coordinate": {
-                "coordinate": torch.randn(n_atoms, 3),
-                "centre_coordinate": torch.randn(n_tokens, 3),
-                "backbone_coordinate": torch.randn(n_tokens, 5, 3),
-            },
-        }
-
-        restored = FullContext.from_dict(d, resolution=1.5)
-
-        # Should create with empty perms
-        assert restored.atom_perm.perms == []
-
     def test_from_dict_infers_basic_context(self) -> None:
         """from_dict should infer BasicContext when not provided."""
         context = create_test_context(
@@ -292,20 +204,3 @@ class TestBatchedContext:
         assert restored.token.token_index.shape == (8, 20)
         assert restored.mask.atom_mask.shape == (8, 60)
         assert restored.coordinate.coordinate.shape == (8, 60, 3)
-
-    def test_batched_atom_perm_with_perms(self) -> None:
-        """Batched context with non-empty perms should roundtrip."""
-        context = create_test_context(
-            batch_size=2,
-            n_tokens=5,
-            n_atoms=15,
-            device=torch.device("cpu"),
-        )
-
-        # Add some permutations
-        context.atom_perm.perms.extend([[0, 1, 2, 3, 4], [4, 3, 2, 1, 0]])
-
-        d = context.to_dict()
-        restored = FullContext.from_dict(d, resolution=context.coordinate.resolution)
-
-        assert restored.atom_perm.perms == [[0, 1, 2, 3, 4], [4, 3, 2, 1, 0]]

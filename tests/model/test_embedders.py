@@ -1,8 +1,7 @@
-import os
-
 import pytest
 import torch
 
+from artios.data.features.featurizer import ContextGenerator
 from artios.model.modules.embedders import (
     FourierEmbedding,
     RelativePositionEncoding,
@@ -15,39 +14,25 @@ class TestRelativePositionEncoding:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @pytest.fixture
-    def sample_data(self):
-        data_path = os.path.join(
-            os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
-        )
-        if not os.path.exists(data_path):
-            pytest.skip(f"Test data not found at {data_path}")
-        return torch.load(data_path, weights_only=False)["input_feature_dict"]
+    def token_context(self, load_structure, device):
+        """Token-level IDs from a real featurized structure."""
+        structure = load_structure("2g1k")
+        ctx = ContextGenerator(structure, pdb_id="2g1k").get_full_context().to(device)
+        return ctx.token
 
-    def test_relative_position_encoding(self, device, sample_data):
-        r_max = 32
-        s_max = 2
+    def test_relative_position_encoding(self, device, token_context):
         c_z = 128
-
-        encoder = RelativePositionEncoding(r_max=r_max, s_max=s_max, c_z=c_z).to(device)
-
-        # Move sample data to device
-        input_dict = {
-            k: v.to(device) if torch.is_tensor(v) else v for k, v in sample_data.items()
-        }
-
-        # Call with keyword arguments as expected by the new signature
+        encoder = RelativePositionEncoding(r_max=32, s_max=2, c_z=c_z).to(device)
         out = encoder(
-            asym_id=input_dict["asym_id"],
-            residue_index=input_dict["residue_index"],
-            entity_id=input_dict["entity_id"],
-            sym_id=input_dict["sym_id"],
-            token_index=input_dict["token_index"],
+            asym_id=token_context.asym_id,
+            residue_index=token_context.residue_index,
+            entity_id=token_context.entity_id,
+            sym_id=token_context.sym_id,
+            token_index=token_context.token_index,
         )
-
-        # Check output shape
-        n_tokens = input_dict["asym_id"].shape[-1]
+        n_tokens = token_context.asym_id.shape[-1]
         assert out.shape[-3:] == (n_tokens, n_tokens, c_z)
-        assert out.shape[:-3] == input_dict["asym_id"].shape[:-1]
+        assert out.shape[:-3] == token_context.asym_id.shape[:-1]
         assert not torch.isnan(out).any()
 
 

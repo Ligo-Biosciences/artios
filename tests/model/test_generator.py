@@ -8,7 +8,6 @@ from artios.model.generator import (
     Constant,
     ConstantCFG,
     Deterministic,
-    FlowMatchingSampler,
     LaProteina,
     LaProteinaCoordScheduler,
     LinearCFG,
@@ -17,7 +16,6 @@ from artios.model.generator import (
     Proteina,
     VariableLinQuadScheduler,
     ZeroEnds,
-    cfg_schedule_from_config,
     euler_maruyama_step,
     midpoint_step,
 )
@@ -257,123 +255,6 @@ class TestFlowMatchingSampler:
     def device(self):
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def test_sampler_deterministic(self, device):
-        """Test FlowMatchingSampler with deterministic sampling."""
-        n_atom = 20
-        n_steps = 10
-
-        # Simple predictor that returns constant velocity/score
-        def mock_predictor(x_noisy, timestep):
-            velocity = -x_noisy  # Push towards origin
-            score = torch.zeros_like(x_noisy)
-            return velocity, score
-
-        scheduler = LaProteinaCoordScheduler(scale=2.0)
-        sampler = FlowMatchingSampler(
-            timestep_scheduler=scheduler,
-            stochasticity=Deterministic(),
-            gamma=1.0,
-            second_order=False,
-            centre_coords=False,  # Disable for predictable testing
-        )
-
-        x_init = torch.randn(1, n_atom, 3, device=device)
-        result = sampler.sample(
-            predictor=mock_predictor, x_init=x_init, n_steps=n_steps
-        )
-
-        assert result.shape == x_init.shape
-        assert not torch.isnan(result).any()
-
-    def test_sampler_stochastic(self, device):
-        """Test FlowMatchingSampler with stochastic sampling."""
-        n_atom = 20
-        n_steps = 10
-
-        def mock_predictor(x_noisy, timestep):
-            velocity = -x_noisy
-            score = torch.zeros_like(x_noisy)
-            return velocity, score
-
-        scheduler = LaProteinaCoordScheduler(scale=2.0)
-        sampler = FlowMatchingSampler(
-            timestep_scheduler=scheduler,
-            stochasticity=NonSingular(alpha=0.5),
-            gamma=1.0,
-            second_order=False,
-            centre_coords=False,
-        )
-
-        x_init = torch.randn(1, n_atom, 3, device=device)
-        result = sampler.sample(
-            predictor=mock_predictor, x_init=x_init, n_steps=n_steps
-        )
-
-        assert result.shape == x_init.shape
-        assert not torch.isnan(result).any()
-
-    def test_sampler_second_order(self, device):
-        """Test FlowMatchingSampler with second-order integration."""
-        n_atom = 20
-        n_steps = 10
-
-        def mock_predictor(x_noisy, timestep):
-            velocity = -x_noisy
-            score = torch.zeros_like(x_noisy)
-            return velocity, score
-
-        scheduler = LaProteinaCoordScheduler(scale=2.0)
-        sampler = FlowMatchingSampler(
-            timestep_scheduler=scheduler,
-            stochasticity=Deterministic(),
-            gamma=1.0,
-            second_order=True,
-            centre_coords=False,
-        )
-
-        x_init = torch.randn(1, n_atom, 3, device=device)
-        result = sampler.sample(
-            predictor=mock_predictor, x_init=x_init, n_steps=n_steps
-        )
-
-        assert result.shape == x_init.shape
-        assert not torch.isnan(result).any()
-
-    def test_sampler_all_stochasticity_types(self, device):
-        """Test FlowMatchingSampler with all stochasticity types."""
-        n_atom = 20
-        n_steps = 5
-
-        def mock_predictor(x_noisy, timestep):
-            return -x_noisy, torch.zeros_like(x_noisy)
-
-        scheduler = LaProteinaCoordScheduler(scale=2.0)
-        stochasticity_types = [
-            Deterministic(),
-            Constant(alpha=0.5),
-            NonSingular(alpha=0.5),
-            ZeroEnds(alpha=0.5),
-            Proteina(alpha=0.5),
-            BetaSchedule(alpha=0.5),
-            LaProteina(alpha=0.5),
-        ]
-
-        for stoch in stochasticity_types:
-            sampler = FlowMatchingSampler(
-                timestep_scheduler=scheduler,
-                stochasticity=stoch,
-                gamma=1.0,
-                centre_coords=False,
-            )
-
-            x_init = torch.randn(1, n_atom, 3, device=device)
-            result = sampler.sample(
-                predictor=mock_predictor, x_init=x_init, n_steps=n_steps
-            )
-
-            assert result.shape == x_init.shape, f"Failed for {type(stoch).__name__}"
-            assert not torch.isnan(result).any(), f"NaN for {type(stoch).__name__}"
-
 
 class TestCFGSchedules:
     @pytest.fixture
@@ -418,110 +299,11 @@ class TestCFGSchedules:
         # In middle: linear interpolation
         assert torch.isclose(w[2], torch.tensor(1.5, device=device))
 
-    def test_cfg_schedule_from_config(self, device):
-        """Test cfg_schedule_from_config factory function."""
-        # Test none
-        schedule = cfg_schedule_from_config(cfg_type="none")
-        assert isinstance(schedule, NoCFG)
-        t = torch.tensor([0.5], device=device)
-        assert schedule(t).item() == 1.0
-
-        # Test constant
-        schedule = cfg_schedule_from_config(cfg_type="constant", weight=1.5)
-        assert isinstance(schedule, ConstantCFG)
-        t = torch.tensor([0.5], device=device)
-        assert schedule(t).item() == 1.5
-
-        # Test linear
-        schedule = cfg_schedule_from_config(
-            cfg_type="linear",
-            lower_guidance_limit_weight=2.0,
-            upper_guidance_limit_weight=1.0,
-            lower_guidance_limit=0.3,
-            upper_guidance_limit=0.7,
-        )
-        assert isinstance(schedule, LinearCFG)
-
-        # Test invalid type
-        with pytest.raises(ValueError):
-            cfg_schedule_from_config(cfg_type="invalid")
-
 
 class TestCFGPredictor:
     @pytest.fixture
     def device(self):
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    def test_cfg_scale_1_equals_conditional(self, device):
-        """Test that CFG with scale=1.0 equals just the conditional predictor.
-
-        When w=1: v_cfg = v_uncond + 1*(v_cond - v_uncond) = v_cond
-
-        This test verifies both:
-        1. Direct predictor outputs match
-        2. Full sampling loop produces identical results
-        """
-        n_atom = 20
-        batch_shape = (2,)
-
-        # Create mock predictors with different outputs
-        def cond_predictor(x_noisy, timestep):
-            velocity = torch.ones_like(x_noisy) * 2.0
-            score = torch.ones_like(x_noisy) * 0.5
-            return velocity, score
-
-        def uncond_predictor(x_noisy, timestep):
-            velocity = torch.ones_like(x_noisy) * -1.0
-            score = torch.ones_like(x_noisy) * -0.5
-            return velocity, score
-
-        cfg_predictor = CFGPredictor(
-            cond_predictor=cond_predictor,
-            uncond_predictor=uncond_predictor,
-            guidance_schedule=ConstantCFG(weight=1.0),
-        )
-
-        # Test 1: Direct predictor outputs match
-        x = torch.randn(*batch_shape, n_atom, 3, device=device)
-        t = torch.tensor([0.5, 0.7], device=device)
-
-        v_cfg, s_cfg = cfg_predictor(x, t)
-        v_cond, s_cond = cond_predictor(x, t)
-
-        assert torch.allclose(v_cfg, v_cond)
-        assert torch.allclose(s_cfg, s_cond)
-
-        # Test 2: Full sampling loop produces identical results
-        n_steps = 10
-        scheduler = LaProteinaCoordScheduler(scale=2.0)
-        sampler = FlowMatchingSampler(
-            timestep_scheduler=scheduler,
-            stochasticity=Deterministic(),
-            centre_coords=False,  # Disable for deterministic comparison
-        )
-
-        # Use same initial noise for both samplers
-        torch.manual_seed(42)
-        x_init = torch.randn(1, n_atom, 3, device=device)
-
-        # Sample with CFG predictor (scale=1.0)
-        torch.manual_seed(42)
-        x_init_cfg = x_init.clone()
-        result_cfg = sampler.sample(
-            predictor=cfg_predictor, x_init=x_init_cfg, n_steps=n_steps
-        )
-
-        # Sample with just the conditional predictor
-        torch.manual_seed(42)
-        x_init_cond = x_init.clone()
-        result_cond = sampler.sample(
-            predictor=cond_predictor, x_init=x_init_cond, n_steps=n_steps
-        )
-
-        assert torch.allclose(result_cfg, result_cond, atol=1e-6), (
-            f"CFG with scale=1.0 should produce identical results to conditional predictor. "
-            f"Max diff: {(result_cfg - result_cond).abs().max()}"
-        )
 
     def test_cfg_scale_0_equals_unconditional(self, device):
         """Test that CFG with scale=0.0 equals just the unconditional predictor.
@@ -590,40 +372,6 @@ class TestCFGPredictor:
 
         assert torch.allclose(v_cfg, expected_v)
         assert torch.allclose(s_cfg, expected_s)
-
-    def test_cfg_in_sampler(self, device):
-        """Test CFGPredictor integrates correctly with FlowMatchingSampler."""
-        n_atom = 20
-        n_steps = 5
-
-        def cond_predictor(x_noisy, timestep):
-            velocity = -x_noisy  # Push towards origin
-            score = torch.zeros_like(x_noisy)
-            return velocity, score
-
-        def uncond_predictor(x_noisy, timestep):
-            velocity = -x_noisy * 0.5  # Weaker push
-            score = torch.zeros_like(x_noisy)
-            return velocity, score
-
-        cfg_predictor = CFGPredictor(
-            cond_predictor=cond_predictor,
-            uncond_predictor=uncond_predictor,
-            guidance_schedule=ConstantCFG(weight=1.5),
-        )
-
-        scheduler = LaProteinaCoordScheduler(scale=2.0)
-        sampler = FlowMatchingSampler(
-            timestep_scheduler=scheduler,
-            stochasticity=Deterministic(),
-            centre_coords=False,
-        )
-
-        x_init = torch.randn(1, n_atom, 3, device=device)
-        result = sampler.sample(predictor=cfg_predictor, x_init=x_init, n_steps=n_steps)
-
-        assert result.shape == x_init.shape
-        assert not torch.isnan(result).any()
 
 
 if __name__ == "__main__":

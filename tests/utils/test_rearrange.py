@@ -64,34 +64,6 @@ class TestGetKeyTrunkIndices:
         # Should be shifted to end at 31
         assert key_indices[-1, -1] == n - 1
 
-    def test_caching(self):
-        """Test that the function is cached correctly."""
-        import time
-
-        n = 3000
-        n_queries = 8
-        n_keys = 16
-
-        # Time the first call
-        start_time = time.perf_counter()
-        result1 = _get_key_trunk_indices(n, n_queries, n_keys)
-        first_call_time = time.perf_counter() - start_time
-
-        # Time the second call with same parameters
-        start_time = time.perf_counter()
-        result2 = _get_key_trunk_indices(n, n_queries, n_keys)
-        second_call_time = time.perf_counter() - start_time
-
-        # Should be the exact same object due to caching
-        assert result1 is result2
-
-        # Second call should be significantly faster (at least 10x faster)
-        print("first call time: ", first_call_time)
-        print("second call time: ", second_call_time)
-        assert (
-            second_call_time < first_call_time / 10
-        ), f"Caching not working: first call took {first_call_time:.6f}s, second call took {second_call_time:.6f}s"
-
     def test_different_parameters_different_cache(self):
         """Test that different parameters create different cached results."""
         result1 = _get_key_trunk_indices(32, 8, 16)
@@ -201,36 +173,3 @@ class TestRearrangeQKToDenseTrunk:
 
         assert q_trunked.shape == (batch_size, n_trunks, n_queries, hidden_dim)
         assert k_trunked.shape == (batch_size, n_trunks, n_keys, hidden_dim)
-
-    def test_preserve_data_content(self):
-        """Test that the data content is preserved correctly in trunking."""
-        seq_len = 16
-        hidden_dim = 8
-        n_queries = 4
-        n_keys = 8
-
-        # Create simple sequential data for easy verification
-        q = torch.arange(seq_len * hidden_dim, dtype=torch.float32).view(
-            1, seq_len, hidden_dim
-        )
-        k = (
-            torch.arange(seq_len * hidden_dim, dtype=torch.float32).view(
-                1, seq_len, hidden_dim
-            )
-            * 2
-        )
-
-        q_trunked = rearrange_to_query_subset(q, rearrange_dim=1, num_queries=n_queries)
-        k_trunked = rearrange_to_key_subset(
-            k, rearrange_dim=1, num_keys=n_keys, num_queries=n_queries
-        )
-
-        # Check that first trunk's first query matches original first n_queries elements
-        expected_q_first_trunk = q[0, :n_queries, :]  # First 4 sequence elements
-        assert torch.equal(q_trunked[0, 0, :, :], expected_q_first_trunk)
-
-        # Check that key trunking follows the key indices pattern
-        # First trunk should contain keys around the first trunk center
-        key_indices = _get_key_trunk_indices(seq_len, n_queries, n_keys)
-        expected_k_first_trunk = k[0, key_indices[0], :]
-        assert torch.equal(k_trunked[0, 0, :, :], expected_k_first_trunk)

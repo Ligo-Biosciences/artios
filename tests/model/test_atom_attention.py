@@ -1,7 +1,10 @@
+import math
+
 import pytest
 import torch
 
 from artios.data.features import FullContext
+from artios.data.features.featurizer import ContextGenerator
 from artios.model.modules.atom_attention import (
     AtomAttentionDecoder,
     AtomAttentionEncoder,
@@ -11,7 +14,32 @@ from artios.model.modules.layout import (
     rearrange_to_key_subset,
     rearrange_to_query_subset,
 )
-from tests.context_utils import load_sample_context
+
+FIXTURE_NAME = "2g1k"
+NUM_QUERIES = 32  # local-attention block size; atom count must be a multiple
+
+
+def _build_context(load_structure, device: torch.device) -> FullContext:
+    """Build a padded, device-mapped FullContext from the golden fixture.
+
+    Atom attention uses a local-attention kernel that requires `n_atom` to
+    be a multiple of `num_queries` (32). Real structures rarely satisfy
+    this, so we pad (same path the collator takes) before feeding the
+    model.
+    """
+    structure = load_structure(FIXTURE_NAME)
+    ctx = ContextGenerator(structure, pdb_id=FIXTURE_NAME).get_full_context()
+    n_atom_padded = math.ceil(ctx.basic.n_atom / NUM_QUERIES) * NUM_QUERIES
+    n_token_padded = math.ceil(ctx.basic.n_token / NUM_QUERIES) * NUM_QUERIES
+    return ctx.pad(n_max_atoms=n_atom_padded, n_max_tokens=n_token_padded).to(device)
+
+
+def _shapes(context: FullContext) -> tuple[int, int]:
+    """Return (n_atom, n_token) from the context tensors (post-padding)."""
+    return (
+        context.reference.ref_pos.shape[0],
+        context.token.token_index.shape[0],
+    )
 
 
 class TestAtomAttentionEncoder:
@@ -20,9 +48,8 @@ class TestAtomAttentionEncoder:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @pytest.fixture
-    def context(self, device) -> FullContext:
-        """Load sample data as FullContext."""
-        return load_sample_context(device=device)
+    def context(self, load_structure, device) -> FullContext:
+        return _build_context(load_structure, device)
 
     @pytest.fixture
     def atom_attention_encoder(self, device):
@@ -47,7 +74,7 @@ class TestAtomAttentionEncoder:
         self, atom_attention_encoder, context, device
     ):
         """Test that _per_atom_conditioning produces correct output shapes."""
-        n_atoms = context.basic.n_atom
+        n_atoms, _ = _shapes(context)
 
         # Call the method with ReferenceConformerContext
         c_l, p_lm = atom_attention_encoder._per_atom_conditioning(context.reference)
@@ -106,8 +133,7 @@ class TestAtomAttentionEncoder:
         self, atom_attention_encoder, context, device
     ):
         """Test the complete forward pass of AtomAttentionEncoder."""
-        n_atoms = context.basic.n_atom
-        n_tokens = context.basic.n_token
+        n_atoms, n_tokens = _shapes(context)
         n_samples = 2
 
         # Create optional inputs for testing different branches
@@ -146,8 +172,7 @@ class TestAtomAttentionEncoder:
 
     def test_atom_attention_encoder_without_optional_inputs(self, context, device):
         """Test forward pass without optional inputs (r_l, s, z)."""
-        n_atoms = context.basic.n_atom
-        n_tokens = context.basic.n_token
+        n_atoms, n_tokens = _shapes(context)
 
         atom_attention_encoder = AtomAttentionEncoder(
             c_token=384,
@@ -185,9 +210,8 @@ class TestAtomAttentionDecoder:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @pytest.fixture
-    def context(self, device) -> FullContext:
-        """Load sample data as FullContext."""
-        return load_sample_context(device=device)
+    def context(self, load_structure, device) -> FullContext:
+        return _build_context(load_structure, device)
 
     @pytest.fixture
     def atom_attention_decoder(self, device):
@@ -225,8 +249,7 @@ class TestAtomAttentionDecoder:
         self, atom_attention_decoder, context, device
     ):
         """Test the complete forward pass of AtomAttentionDecoder."""
-        n_atoms = context.basic.n_atom
-        n_tokens = context.basic.n_token
+        n_atoms, n_tokens = _shapes(context)
         N_sample = 2
 
         # Create input tensors
@@ -288,8 +311,7 @@ class TestAtomAttentionDecoder:
         self, atom_attention_decoder, context, device
     ):
         """Test AtomAttentionDecoder with batch dimensions."""
-        n_atoms = context.basic.n_atom
-        n_tokens = context.basic.n_token
+        n_atoms, n_tokens = _shapes(context)
         n_sample = 1
         batch_size = 2
 

@@ -1,11 +1,15 @@
-"""Utilities for creating test contexts."""
+"""Utilities for creating test contexts.
+
+`load_sample_context` / `load_batched_context` previously read frozen
+`.pt` snapshots from the old training pipeline. Those were deleted; the
+tests that depended on them are marked skipped pending golden
+`AnnotatedStructure` fixtures — see `plans/testing_strategy.md`.
+"""
 
 import torch
 from biotite.structure import AtomArray
-from torch import Tensor
 
 from artios.data.features import (
-    AtomPermContext,
     BasicContext,
     ChainPermContext,
     CoordinateContext,
@@ -18,156 +22,6 @@ from artios.data.features import (
     TokenContext,
 )
 from artios.data.structure.tokenizer import TokenArray
-
-
-def load_sample_context(device: torch.device | None = None) -> FullContext:
-    """Load the sample test data and construct a FullContext.
-
-    Args:
-        device: Device to move tensors to. If None, keeps on CPU.
-
-    Returns:
-        FullContext constructed from sample_data_dict.pt
-    """
-    import os
-
-    test_data_path = os.path.join(
-        os.path.dirname(__file__), "testdata", "sample_data_dict.pt"
-    )
-    sample_data = torch.load(test_data_path, weights_only=False)
-
-    input_dict = sample_data["input_feature_dict"]
-    basic_dict = sample_data["basic"]
-
-    n_tokens = int(basic_dict["N_token"].item())
-    n_atoms = int(basic_dict["N_atom"].item())
-
-    def to_device(t: Tensor) -> Tensor:
-        return t.to(device) if device is not None else t
-
-    # TokenContext
-    token = TokenContext(
-        token_index=to_device(input_dict["token_index"]),
-        residue_index=to_device(input_dict["residue_index"]),
-        asym_id=to_device(input_dict["asym_id"]),
-        entity_id=to_device(input_dict["entity_id"]),
-        sym_id=to_device(input_dict["sym_id"]),
-        restype=to_device(input_dict["restype"].to(torch.int64)),
-        token_bonds=to_device(input_dict["token_bonds"].to(torch.int64)),
-    )
-
-    # ReferenceConformerContext
-    reference = ReferenceConformerContext(
-        ref_pos=to_device(input_dict["ref_pos"]),
-        ref_mask=to_device(input_dict["ref_mask"]),
-        ref_element=to_device(input_dict["ref_element"]),
-        ref_charge=to_device(input_dict["ref_charge"]),
-        ref_atom_name_chars=to_device(input_dict["ref_atom_name_chars"]),
-        ref_space_uid=to_device(input_dict["ref_space_uid"]),
-    )
-
-    # ChainPermContext
-    chain_perm = ChainPermContext(
-        mol_id=to_device(input_dict["mol_id"]),
-        mol_atom_index=to_device(input_dict["mol_atom_index"]),
-        entity_mol_id=to_device(input_dict["entity_mol_id"]),
-    )
-
-    # MaskContext - atom_mask needs to be created (not in original data)
-    atom_mask = to_device(input_dict["ref_mask"].bool())
-    mask = MaskContext(
-        centre_atom_mask=torch.zeros(n_atoms, dtype=torch.bool, device=device),
-        atom_mask=atom_mask,
-        is_resolved=atom_mask.clone(),
-        centre_atom_is_resolved=torch.ones(n_tokens, dtype=torch.bool, device=device),
-        backbone_mask=torch.ones(n_tokens, 5, dtype=torch.bool, device=device),
-        atom_loss_mask=atom_mask.clone(),
-        token_mask=torch.ones(n_tokens, dtype=torch.bool, device=device),
-    )
-
-    # MotifContext
-    motif = MotifContext(
-        is_motif=torch.zeros(n_atoms, dtype=torch.bool, device=device),
-        is_motif_related=torch.zeros(n_atoms, dtype=torch.bool, device=device),
-        is_motif_token=torch.zeros(n_tokens, dtype=torch.bool, device=device),
-        is_motif_related_token=torch.zeros(n_tokens, dtype=torch.bool, device=device),
-        motif_restype=torch.zeros(n_tokens, 32, device=device),
-        motif_coordinate=torch.zeros(n_tokens, 3, device=device),
-    )
-
-    # IndexContext
-    index = IndexContext(
-        atom_to_token_idx=to_device(input_dict["atom_to_token_idx"]),
-        atom_to_tokatom_idx=to_device(input_dict["atom_to_tokatom_idx"]),
-    )
-
-    # EntityContext
-    entity = EntityContext(
-        is_protein=to_device(input_dict["is_protein"].bool()),
-        is_ligand=to_device(input_dict["is_ligand"].bool()),
-        is_dna=to_device(input_dict["is_dna"].bool()),
-        is_rna=to_device(input_dict["is_rna"].bool()),
-        # Token-level: derive from atom-level using atom_to_token_idx
-        is_protein_token=torch.ones(n_tokens, dtype=torch.bool, device=device),
-        is_ligand_token=torch.zeros(n_tokens, dtype=torch.bool, device=device),
-        is_dna_token=torch.zeros(n_tokens, dtype=torch.bool, device=device),
-        is_rna_token=torch.zeros(n_tokens, dtype=torch.bool, device=device),
-    )
-
-    # CoordinateContext - use label_dict for coordinates
-    label_dict = sample_data["label_dict"]
-    coordinate = CoordinateContext(
-        coordinate=to_device(label_dict["coordinate"]),
-        centre_coordinate=torch.zeros(n_tokens, 3, device=device),
-        backbone_coordinate=torch.zeros(n_tokens, 5, 3, device=device),
-        resolution=float(input_dict["resolution"].item()),
-    )
-
-    # AtomPermContext
-    atom_perm = AtomPermContext(perms=[])
-
-    # BasicContext
-    basic = BasicContext(
-        atom_array=AtomArray(0),
-        token_array=TokenArray([]),
-        pdb_id=basic_dict["pdb_id"],
-        bioassembly_dict_fpath=basic_dict["bioassembly_dict_fpath"],
-        n_asym=int(basic_dict["N_asym"].item()),
-        n_token=n_tokens,
-        n_atom=n_atoms,
-    )
-
-    return FullContext(
-        token=token,
-        reference=reference,
-        chain_perm=chain_perm,
-        atom_perm=atom_perm,
-        mask=mask,
-        motif=motif,
-        index=index,
-        entity=entity,
-        coordinate=coordinate,
-        basic=basic,
-    )
-
-
-def load_batched_context() -> FullContext:
-    """Load the batched sample test data and construct a FullContext.
-
-    This loads real batched data from sample_batch_full_context.pt which contains
-    a batch of 8 samples with n_tokens=440 and n_atoms=1728.
-
-    Returns:
-        FullContext constructed from sample_batch_full_context.pt
-    """
-    import os
-
-    test_data_path = os.path.join(
-        os.path.dirname(__file__), "testdata", "sample_batch_full_context.pt"
-    )
-    data = torch.load(test_data_path, weights_only=False)
-
-    return FullContext.from_dict(data)
 
 
 def create_test_context(

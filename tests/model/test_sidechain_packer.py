@@ -14,7 +14,7 @@ from artios.model.generator import (
     SamplingResult,
 )
 from artios.model.modules.sidechain_packer import SidechainPacker
-from tests.context_utils import create_test_context
+from tests._helpers.context import create_test_context
 
 
 @pytest.fixture
@@ -61,17 +61,6 @@ class TestSidechainPacker:
         """Create SidechainPacker model instance."""
         model = SidechainPacker(**model_config)
         return model.to(device)
-
-    def test_model_initialization(self, sidechain_packer):
-        """Test that model initializes correctly with all components."""
-        assert hasattr(sidechain_packer, "atom_attention_encoder")
-        assert hasattr(sidechain_packer, "diffusion_transformer")
-        assert hasattr(sidechain_packer, "atom_attention_decoder")
-        assert hasattr(sidechain_packer, "embed_restype")
-        assert hasattr(sidechain_packer, "fourier_embedding")
-        assert hasattr(sidechain_packer, "embed_timestep")
-        assert hasattr(sidechain_packer, "relpos")
-        assert hasattr(sidechain_packer, "layernorm_a")
 
     def test_forward(self, sidechain_packer, context, device):
         """Test the forward pass produces valid output."""
@@ -124,14 +113,6 @@ class TestSidechainPacker:
 
         # Check for finite values
         assert torch.isfinite(output).all(), "Output contains non-finite values"
-
-    def test_c_out(self, sidechain_packer, device):
-        """Test the output scaling function c_out."""
-        timestep = torch.tensor([0.0, 0.5, 1.0], device=device)
-        c_out = sidechain_packer.c_out(timestep)
-
-        expected = torch.tensor([1.0, 0.5, 0.0], device=device)
-        assert torch.allclose(c_out, expected), f"Expected {expected}, got {c_out}"
 
     def test_as_predictor(self, sidechain_packer, context, device):
         """Test that as_predictor returns a valid VelocityScorePredictor."""

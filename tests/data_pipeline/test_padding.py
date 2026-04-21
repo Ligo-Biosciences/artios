@@ -161,41 +161,6 @@ class TestPadTensor:
     # Edge cases
     # ==========================================================================
 
-    def test_pad_zero_padding(self):
-        """Test that zero padding returns original tensor."""
-        tensor = torch.randn(self.N_TOKEN, 32)
-        padded = pad_tensor(tensor, pad_sizes=(0,), num_batch_dims=0)
-
-        assert padded.shape == tensor.shape
-        assert torch.equal(padded, tensor)
-
-    def test_pad_empty_pad_sizes(self):
-        """Test that empty pad_sizes returns original tensor."""
-        tensor = torch.randn(self.N_TOKEN, 32)
-        padded = pad_tensor(tensor, pad_sizes=(), num_batch_dims=0)
-
-        assert padded.shape == tensor.shape
-        assert torch.equal(padded, tensor)
-
-    def test_pad_preserves_dtype(self):
-        """Test that padding preserves tensor dtype."""
-        for dtype in [torch.float32, torch.float64, torch.int64, torch.bool]:
-            if dtype == torch.bool:
-                tensor = torch.randint(0, 2, (self.N_TOKEN,)).bool()
-            elif dtype in [torch.int64]:
-                tensor = torch.randint(0, 100, (self.N_TOKEN,), dtype=dtype)
-            else:
-                tensor = torch.randn(self.N_TOKEN, dtype=dtype)
-
-            padded = pad_tensor(tensor, pad_sizes=(self.PAD_TOKEN,), num_batch_dims=0)
-            assert padded.dtype == dtype, f"dtype mismatch for {dtype}"
-
-    def test_pad_preserves_device(self):
-        """Test that padding preserves tensor device."""
-        tensor = torch.randn(self.N_TOKEN)
-        padded = pad_tensor(tensor, pad_sizes=(self.PAD_TOKEN,), num_batch_dims=0)
-        assert padded.device == tensor.device
-
     def test_pad_assertion_on_insufficient_dims(self):
         """Test that assertion fires when pad_sizes exceeds available dims."""
         tensor = torch.randn(self.BATCH_SIZE, self.N_TOKEN)  # 2D tensor

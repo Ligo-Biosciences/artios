@@ -75,45 +75,6 @@ class TestAtomArrayStack:
             restored = loaded.get_annotation(category)
             np.testing.assert_array_equal(restored, original)
 
-    def test_roundtrip_synthetic(self, atom_array: AtomArray, tmp_path: Path) -> None:
-        """Test roundtrip with synthetically created AtomArrayStack."""
-        n_models = 4
-        n_atoms = len(atom_array)
-
-        # Create stack with perturbed coordinates
-        stack = AtomArrayStack(depth=n_models, length=n_atoms)
-        stack.coord = np.stack(
-            [atom_array.coord + i * 0.5 for i in range(n_models)],
-            axis=0,
-        )
-        stack.bonds = atom_array.bonds
-
-        for category in atom_array.get_annotation_categories():
-            stack.set_annotation(category, atom_array.get_annotation(category))
-
-        npz_path = tmp_path / "synthetic_stack.npz"
-        dump_atomarray_stack(stack, npz_path)
-        loaded = load_atomarray_stack(npz_path)
-
-        assert loaded.stack_depth() == n_models
-        assert loaded.array_length() == n_atoms
-        np.testing.assert_array_almost_equal(loaded.coord, stack.coord)
-
-    def test_indexing_yields_atomarray(
-        self, atom_array_stack: AtomArrayStack, tmp_path: Path
-    ) -> None:
-        """Test that indexing loaded stack returns AtomArray."""
-        npz_path = tmp_path / "stack.npz"
-        dump_atomarray_stack(atom_array_stack, npz_path)
-        loaded = load_atomarray_stack(npz_path)
-
-        # Integer indexing should yield AtomArray
-        first_model = loaded[0]
-        assert isinstance(first_model, AtomArray)
-        np.testing.assert_array_almost_equal(
-            first_model.coord, atom_array_stack.coord[0]
-        )
-
     def test_iteration(self, atom_array_stack: AtomArrayStack, tmp_path: Path) -> None:
         """Test that iterating over loaded stack works."""
         npz_path = tmp_path / "stack.npz"

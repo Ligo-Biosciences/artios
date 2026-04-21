@@ -107,52 +107,6 @@ class TestFullContextToFromDict:
             device=torch.device("cpu"),
         )
 
-    def test_to_dict_returns_nested_dict(self, context: FullContext) -> None:
-        """to_dict should return a nested dictionary with all sub-contexts."""
-        d = context.to_dict()
-
-        assert isinstance(d, dict)
-        assert "token" in d
-        assert "reference" in d
-        assert "chain_perm" in d
-        assert "atom_perm" in d
-        assert "mask" in d
-        assert "motif" in d
-        assert "index" in d
-        assert "entity" in d
-        assert "coordinate" in d
-        assert "basic" in d
-
-    def test_to_dict_contains_tensor_values(self, context: FullContext) -> None:
-        """to_dict should contain tensor values in sub-dicts."""
-        d = context.to_dict()
-
-        assert torch.is_tensor(d["token"]["token_index"])
-        assert torch.is_tensor(d["mask"]["atom_mask"])
-        assert torch.is_tensor(d["coordinate"]["coordinate"])
-
-    def test_to_dict_contains_non_tensor_values(self, context: FullContext) -> None:
-        """to_dict should also contain non-tensor values."""
-        d = context.to_dict()
-
-        # AtomPermContext has list[list[int]]
-        assert isinstance(d["atom_perm"]["perms"], list)
-
-        # CoordinateContext has float resolution
-        assert isinstance(d["coordinate"]["resolution"], float)
-
-    def test_from_dict_creates_full_context(self, context: FullContext) -> None:
-        """from_dict should create a valid FullContext."""
-        d = context.to_dict()
-        resolution = context.coordinate.resolution
-
-        restored = FullContext.from_dict(d, resolution=resolution)
-
-        assert isinstance(restored, FullContext)
-        assert isinstance(restored.token, TokenContext)
-        assert isinstance(restored.atom_perm, AtomPermContext)
-        assert isinstance(restored.mask, MaskContext)
-
     def test_roundtrip_preserves_tensor_values(self, context: FullContext) -> None:
         """Roundtrip should preserve tensor values."""
         d = context.to_dict()

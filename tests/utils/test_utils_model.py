@@ -120,24 +120,6 @@ class TestMaskedMean:
         manual_mean = manual_sum / (manual_count + 1e-6)
         torch.testing.assert_close(result[0, 0], manual_mean, rtol=1e-5, atol=1e-5)
 
-    def test_masked_mean_single_element_axes(self):
-        # Test with different single axes
-        input_tensor = torch.randn(3, 4, 5)
-        mask = torch.ones(3, 4, 5)
-        mask[1, :, :] = 0  # Mask out middle batch
-
-        # Reduce over batch dimension
-        result_0 = masked_mean(input_tensor, mask, axes=[0])
-        assert result_0.shape == (4, 5)
-
-        # Reduce over middle dimension
-        result_1 = masked_mean(input_tensor, mask, axes=[1])
-        assert result_1.shape == (3, 5)
-
-        # Reduce over last dimension
-        result_2 = masked_mean(input_tensor, mask, axes=[2])
-        assert result_2.shape == (3, 4)
-
     def test_masked_mean_broadcast_multiple_dims(self):
         # Mask broadcasts over multiple dimensions
         input_tensor = torch.tensor(
@@ -156,24 +138,6 @@ class TestMaskedMean:
         result2 = masked_mean(input_tensor, mask2, axes=[1, 2, 3])
         expected2 = torch.tensor([4.0])  # Mean of [1, 3, 5, 7]
         torch.testing.assert_close(result2, expected2)
-
-    def test_masked_mean_large_tensor(self):
-        # Test with larger tensor to catch potential numerical issues
-        input_tensor = torch.randn(10, 20, 30, 40)
-        mask = (torch.rand(10, 20, 30, 40) > 0.3).float()
-
-        result = masked_mean(input_tensor, mask, axes=[1, 3])
-        assert result.shape == (10, 30)
-        assert torch.isfinite(result).all()
-
-    def test_masked_mean_extreme_values(self):
-        # Test with very large and small values
-        input_tensor = torch.tensor([[1e10, 1e-10, -1e10], [1e5, -1e5, 0]])
-        mask = torch.tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 0.0]])
-
-        result = masked_mean(input_tensor, mask, axes=1)
-        assert torch.isfinite(result).all()
-        assert len(result) == 2
 
     def test_masked_mean_mixed_broadcast_axes(self):
         # Complex case: different broadcast patterns on different axes

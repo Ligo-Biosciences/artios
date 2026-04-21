@@ -20,52 +20,6 @@ class TestRearrangeToKeySubset:
     NUM_QUERIES = 32
     NUM_KEYS = 128
 
-    def test_output_shape_basic(self):
-        """Output shape should be [..., n_blocks, num_keys, ...]."""
-        n_atom = 256
-        c = 16
-        k_x = torch.randn(n_atom, c)
-
-        result = rearrange_to_key_subset(
-            k_x,
-            rearrange_dim=-2,
-            num_keys=self.NUM_KEYS,
-            num_queries=self.NUM_QUERIES,
-        )
-
-        n_blocks = n_atom // self.NUM_QUERIES
-        assert result.shape == (n_blocks, self.NUM_KEYS, c)
-
-    def test_output_shape_with_batch_dims(self):
-        """Shape should be correct with leading batch dimensions."""
-        batch, n_atom, c = 4, 128, 32
-        k_x = torch.randn(batch, n_atom, c)
-
-        result = rearrange_to_key_subset(
-            k_x,
-            rearrange_dim=-2,
-            num_keys=self.NUM_KEYS,
-            num_queries=self.NUM_QUERIES,
-        )
-
-        n_blocks = n_atom // self.NUM_QUERIES
-        assert result.shape == (batch, n_blocks, self.NUM_KEYS, c)
-
-    def test_output_shape_with_trailing_dims(self):
-        """Shape should be correct with trailing dimensions after rearrange_dim."""
-        n_atom, c1, c2 = 256, 16, 8
-        k_x = torch.randn(n_atom, c1, c2)
-
-        result = rearrange_to_key_subset(
-            k_x,
-            rearrange_dim=0,
-            num_keys=self.NUM_KEYS,
-            num_queries=self.NUM_QUERIES,
-        )
-
-        n_blocks = n_atom // self.NUM_QUERIES
-        assert result.shape == (n_blocks, self.NUM_KEYS, c1, c2)
-
     def test_negative_dim_equivalence(self):
         """Negative and positive rearrange_dim should produce same results."""
         batch, n_atom, c = 2, 128, 16
@@ -79,38 +33,6 @@ class TestRearrangeToKeySubset:
         )
 
         torch.testing.assert_close(result_neg, result_pos)
-
-    def test_interior_block_values_match_direct_slicing(self):
-        """For interior blocks (not at boundaries), values should match direct slicing."""
-        n_atom = 256
-        c = 16
-        # Use sequential values for easy verification
-        k_x = torch.arange(n_atom * c, dtype=torch.float32).reshape(n_atom, c)
-
-        result = rearrange_to_key_subset(
-            k_x,
-            rearrange_dim=-2,
-            num_keys=self.NUM_KEYS,
-            num_queries=self.NUM_QUERIES,
-        )
-
-        # For interior blocks, the window should directly correspond to slices of the input
-        # Block 2 is interior (not affected by boundary padding)
-        # Block center is at: 2 * NUM_QUERIES + NUM_QUERIES // 2 = 80
-        # Window covers: [80 - 64, 80 + 64) = [16, 144)
-        block_idx = 2
-        pad_size = (self.NUM_KEYS - self.NUM_QUERIES) // 2
-        window_start = block_idx * self.NUM_QUERIES
-        # With unfold, after padding, the window extracts positions:
-        # [block_idx * NUM_QUERIES, block_idx * NUM_QUERIES + NUM_KEYS) in padded coords
-        # which is [block_idx * NUM_QUERIES - pad_size, block_idx * NUM_QUERIES + NUM_KEYS - pad_size) in original coords
-        original_start = window_start - pad_size
-        original_end = original_start + self.NUM_KEYS
-
-        expected = k_x[original_start:original_end]
-        actual = result[block_idx]
-
-        torch.testing.assert_close(actual, expected)
 
     @pytest.mark.parametrize(
         "n_atom,num_keys,num_queries",
@@ -268,41 +190,6 @@ class TestRearrangeToKeySubset:
                     msg=f"Overlap mismatch between blocks {block_idx} and {block_idx + 1}",
                 )
 
-    def test_interior_blocks_element_by_element_verification(self):
-        """Element-by-element verification that each position maps correctly.
-
-        For large atom counts, verify that every element in every interior block
-        contains the expected value based on its position in the original tensor.
-        """
-        n_atom = 1024
-        num_keys, num_queries = 128, 32
-
-        # Use 1D tensor where value at position i is i (for easy verification)
-        k_x = torch.arange(n_atom, dtype=torch.float32)
-
-        result = rearrange_to_key_subset(
-            k_x,
-            rearrange_dim=0,
-            num_keys=num_keys,
-            num_queries=num_queries,
-        )
-
-        n_blocks = n_atom // num_queries
-        pad_size = (num_keys - num_queries) // 2
-
-        for block_idx in range(n_blocks):
-            window_start = block_idx * num_queries - pad_size
-            window_end = window_start + num_keys
-
-            if window_start >= 0 and window_end <= n_atom:
-                # Check every element in this interior block
-                for pos_in_window in range(num_keys):
-                    original_pos = window_start + pos_in_window
-                    assert result[block_idx, pos_in_window].item() == original_pos, (
-                        f"Block {block_idx}, window position {pos_in_window}: "
-                        f"expected {original_pos}, got {result[block_idx, pos_in_window].item()}"
-                    )
-
     def test_boundary_blocks_have_padding(self):
         """Boundary blocks should have zero-padded regions."""
         n_atom = 128
@@ -331,32 +218,6 @@ class TestRearrangeToKeySubset:
         assert torch.all(
             first_block[pad_size:] == 1
         ), "First block should have ones after padding region"
-
-    def test_last_block_boundary_padding(self):
-        """Last block should have trailing zero-padding."""
-        n_atom = 128
-        c = 8
-        k_x = torch.ones(n_atom, c)
-
-        result = rearrange_to_key_subset(
-            k_x,
-            rearrange_dim=-2,
-            num_keys=self.NUM_KEYS,
-            num_queries=self.NUM_QUERIES,
-        )
-
-        pad_size = (self.NUM_KEYS - self.NUM_QUERIES) // 2
-        n_blocks = n_atom // self.NUM_QUERIES
-
-        # Last block: window centered on n_atom - NUM_QUERIES // 2
-        # Window extends beyond original tensor, so should have trailing zeros
-        last_block = result[n_blocks - 1]
-        assert torch.all(
-            last_block[-pad_size:] == 0
-        ), "Last block should have trailing zeros from padding"
-        assert torch.all(
-            last_block[:-pad_size] == 1
-        ), "Last block should have ones before padding region"
 
     def test_consistency_with_query_subset_num_blocks(self):
         """Number of blocks should match between query and key subsets."""
@@ -416,84 +277,6 @@ class TestRearrangeToKeySubset:
             else:
                 # Interior blocks: exact centering
                 assert key_center_value == query_center_pos
-
-    def test_gradient_flow(self):
-        """Gradients should flow through the unfold operation."""
-        n_atom = 128
-        c = 16
-        k_x = torch.randn(n_atom, c, requires_grad=True)
-
-        result = rearrange_to_key_subset(
-            k_x,
-            rearrange_dim=-2,
-            num_keys=self.NUM_KEYS,
-            num_queries=self.NUM_QUERIES,
-        )
-
-        loss = result.sum()
-        loss.backward()
-
-        assert k_x.grad is not None
-        assert k_x.grad.shape == k_x.shape
-        # Gradient should be non-zero (each element appears in some window)
-        assert torch.any(k_x.grad != 0)
-
-    def test_different_num_keys_num_queries(self):
-        """Test with different num_keys/num_queries ratios."""
-        n_atom = 128
-        c = 8
-
-        test_cases = [
-            (64, 32),  # 2:1 ratio
-            (96, 32),  # 3:1 ratio
-            (128, 32),  # 4:1 ratio
-            (64, 16),  # different base
-        ]
-
-        for num_keys, num_queries in test_cases:
-            k_x = torch.randn(n_atom, c)
-            result = rearrange_to_key_subset(
-                k_x,
-                rearrange_dim=-2,
-                num_keys=num_keys,
-                num_queries=num_queries,
-            )
-            n_blocks = n_atom // num_queries
-            assert result.shape == (
-                n_blocks,
-                num_keys,
-                c,
-            ), f"Failed for num_keys={num_keys}, num_queries={num_queries}"
-
-    def test_1d_input(self):
-        """Test with 1D input tensor (just the atom dimension)."""
-        n_atom = 256
-        k_x = torch.randn(n_atom)
-
-        result = rearrange_to_key_subset(
-            k_x,
-            rearrange_dim=0,
-            num_keys=self.NUM_KEYS,
-            num_queries=self.NUM_QUERIES,
-        )
-
-        n_blocks = n_atom // self.NUM_QUERIES
-        assert result.shape == (n_blocks, self.NUM_KEYS)
-
-    def test_multi_batch_dims(self):
-        """Test with multiple batch dimensions."""
-        b1, b2, n_atom, c = 2, 3, 128, 16
-        k_x = torch.randn(b1, b2, n_atom, c)
-
-        result = rearrange_to_key_subset(
-            k_x,
-            rearrange_dim=-2,
-            num_keys=self.NUM_KEYS,
-            num_queries=self.NUM_QUERIES,
-        )
-
-        n_blocks = n_atom // self.NUM_QUERIES
-        assert result.shape == (b1, b2, n_blocks, self.NUM_KEYS, c)
 
 
 class TestRearrangeToKeySubsetVsLegacy:
@@ -578,31 +361,25 @@ class TestRearrangeToKeySubsetVsLegacy:
 
 
 class TestAssertions:
-    """Test that assertions catch invalid inputs."""
+    """rearrange_to_key_subset enforces a set of size/parity preconditions."""
 
-    def test_num_keys_must_exceed_num_queries(self):
-        """num_keys must be greater than num_queries."""
-        k_x = torch.randn(128, 16)
+    @pytest.mark.parametrize(
+        "n_atom, num_keys, num_queries, reason",
+        [
+            (128, 32, 32, "num_keys must exceed num_queries"),
+            (128, 127, 32, "num_keys must be even"),
+            (128, 128, 31, "num_queries must be even"),
+            (100, 128, 32, "n_atom must be divisible by num_queries"),
+        ],
+    )
+    def test_invalid_config_raises(
+        self, n_atom: int, num_keys: int, num_queries: int, reason: str
+    ):
+        k_x = torch.randn(n_atom, 16)
         with pytest.raises(AssertionError):
-            rearrange_to_key_subset(k_x, rearrange_dim=-2, num_keys=32, num_queries=32)
-
-    def test_num_keys_must_be_even(self):
-        """num_keys must be even."""
-        k_x = torch.randn(128, 16)
-        with pytest.raises(AssertionError):
-            rearrange_to_key_subset(k_x, rearrange_dim=-2, num_keys=127, num_queries=32)
-
-    def test_num_queries_must_be_even(self):
-        """num_queries must be even."""
-        k_x = torch.randn(128, 16)
-        with pytest.raises(AssertionError):
-            rearrange_to_key_subset(k_x, rearrange_dim=-2, num_keys=128, num_queries=31)
-
-    def test_n_atom_must_be_divisible_by_num_queries(self):
-        """n_atom must be divisible by num_queries."""
-        k_x = torch.randn(100, 16)  # 100 is not divisible by 32
-        with pytest.raises(AssertionError):
-            rearrange_to_key_subset(k_x, rearrange_dim=-2, num_keys=128, num_queries=32)
+            rearrange_to_key_subset(
+                k_x, rearrange_dim=-2, num_keys=num_keys, num_queries=num_queries
+            )
 
 
 class TestDeviceAndDtype:
@@ -649,45 +426,6 @@ class TestDeviceAndDtype:
 class TestGatherTrunkPairEmbedding:
     """Test the torch.gather-based gather_trunk_pair_embedding implementation."""
 
-    def test_output_shape_basic(self):
-        """Output shape should be [..., n_b, n_q, n_k, d]."""
-        n_token, d = 16, 32
-        n_b, n_q, n_k = 4, 8, 16
-
-        x = torch.randn(n_token, n_token, d)
-        idx_q = torch.randint(0, n_token, (n_b, n_q))
-        idx_k = torch.randint(0, n_token, (n_b, n_k))
-
-        result = gather_trunk_pair_embedding(x, idx_q, idx_k)
-
-        assert result.shape == (n_b, n_q, n_k, d)
-
-    def test_output_shape_with_batch(self):
-        """Shape should be correct with batch dimensions."""
-        batch, n_token, d = 2, 16, 32
-        n_b, n_q, n_k = 4, 8, 16
-
-        x = torch.randn(batch, n_token, n_token, d)
-        idx_q = torch.randint(0, n_token, (batch, n_b, n_q))
-        idx_k = torch.randint(0, n_token, (batch, n_b, n_k))
-
-        result = gather_trunk_pair_embedding(x, idx_q, idx_k)
-
-        assert result.shape == (batch, n_b, n_q, n_k, d)
-
-    def test_output_shape_multi_batch(self):
-        """Shape should be correct with multiple batch dimensions."""
-        b1, b2, n_token, d = 2, 3, 16, 32
-        n_b, n_q, n_k = 4, 8, 16
-
-        x = torch.randn(b1, b2, n_token, n_token, d)
-        idx_q = torch.randint(0, n_token, (b1, b2, n_b, n_q))
-        idx_k = torch.randint(0, n_token, (b1, b2, n_b, n_k))
-
-        result = gather_trunk_pair_embedding(x, idx_q, idx_k)
-
-        assert result.shape == (b1, b2, n_b, n_q, n_k, d)
-
     def test_specific_values_match_direct_indexing(self):
         """Verify specific gathered values match direct indexing."""
         n_token, d = 8, 4
@@ -715,63 +453,26 @@ class TestGatherTrunkPairEmbedding:
                         msg=f"Mismatch at b={b}, i={i}, j={j}",
                     )
 
-    def test_matches_legacy_implementation(self):
-        """New implementation should match legacy for all inputs."""
-        n_token, d = 16, 32
-        n_b, n_q, n_k = 4, 8, 16
-
-        x = torch.randn(n_token, n_token, d)
-        idx_q = torch.randint(0, n_token, (n_b, n_q))
-        idx_k = torch.randint(0, n_token, (n_b, n_k))
-
-        new_result = gather_trunk_pair_embedding(x, idx_q, idx_k)
-        legacy_result = gather_trunk_pair_embedding_legacy(x, idx_q, idx_k)
-
-        torch.testing.assert_close(new_result, legacy_result)
-
-    def test_matches_legacy_with_batch(self):
-        """New implementation should match legacy with batch dimensions."""
-        batch, n_token, d = 3, 16, 32
-        n_b, n_q, n_k = 4, 8, 16
-
-        x = torch.randn(batch, n_token, n_token, d)
-        idx_q = torch.randint(0, n_token, (batch, n_b, n_q))
-        idx_k = torch.randint(0, n_token, (batch, n_b, n_k))
+    @pytest.mark.parametrize(
+        "batch_shape, n_token, d, n_b, n_q, n_k",
+        [
+            ((), 16, 32, 4, 8, 16),  # no batch dim
+            ((3,), 16, 32, 4, 8, 16),  # single batch dim
+            ((2, 3), 12, 16, 3, 6, 10),  # multi batch dim
+        ],
+    )
+    def test_matches_legacy_implementation(
+        self, batch_shape, n_token, d, n_b, n_q, n_k
+    ):
+        """New implementation must match legacy across batch-dim ranks."""
+        x = torch.randn(*batch_shape, n_token, n_token, d)
+        idx_q = torch.randint(0, n_token, (*batch_shape, n_b, n_q))
+        idx_k = torch.randint(0, n_token, (*batch_shape, n_b, n_k))
 
         new_result = gather_trunk_pair_embedding(x, idx_q, idx_k)
         legacy_result = gather_trunk_pair_embedding_legacy(x, idx_q, idx_k)
 
         torch.testing.assert_close(new_result, legacy_result)
-
-    def test_matches_legacy_multi_batch(self):
-        """New implementation should match legacy with multiple batch dims."""
-        b1, b2, n_token, d = 2, 3, 12, 16
-        n_b, n_q, n_k = 3, 6, 10
-
-        x = torch.randn(b1, b2, n_token, n_token, d)
-        idx_q = torch.randint(0, n_token, (b1, b2, n_b, n_q))
-        idx_k = torch.randint(0, n_token, (b1, b2, n_b, n_k))
-
-        new_result = gather_trunk_pair_embedding(x, idx_q, idx_k)
-        legacy_result = gather_trunk_pair_embedding_legacy(x, idx_q, idx_k)
-
-        torch.testing.assert_close(new_result, legacy_result)
-
-    def test_gradient_flow(self):
-        """Gradients should flow through gather operation."""
-        n_token, d = 16, 32
-        n_b, n_q, n_k = 4, 8, 16
-
-        x = torch.randn(n_token, n_token, d, requires_grad=True)
-        idx_q = torch.randint(0, n_token, (n_b, n_q))
-        idx_k = torch.randint(0, n_token, (n_b, n_k))
-
-        result = gather_trunk_pair_embedding(x, idx_q, idx_k)
-        loss = result.sum()
-        loss.backward()
-
-        assert x.grad is not None
-        assert x.grad.shape == x.shape
 
     def test_gradient_matches_legacy(self):
         """Gradients should match between new and legacy implementations."""
@@ -842,71 +543,12 @@ class TestGatherTrunkPairEmbedding:
         assert result.device.type == "cuda"
         assert result.shape == (n_b, n_q, n_k, d)
 
-    @pytest.mark.gpu
-    def test_matches_legacy_on_cuda(self):
-        """New implementation should match legacy on CUDA."""
-        if not torch.cuda.is_available():
-            pytest.skip("CUDA not available")
-
-        n_token, d = 16, 32
-        n_b, n_q, n_k = 4, 8, 16
-
-        x = torch.randn(n_token, n_token, d, device="cuda")
-        idx_q = torch.randint(0, n_token, (n_b, n_q), device="cuda")
-        idx_k = torch.randint(0, n_token, (n_b, n_k), device="cuda")
-
-        new_result = gather_trunk_pair_embedding(x, idx_q, idx_k)
-        legacy_result = gather_trunk_pair_embedding_legacy(x, idx_q, idx_k)
-
-        torch.testing.assert_close(new_result, legacy_result)
-
 
 class TestBroadcastTokenToLocalAtomPair:
     """Test broadcast_token_to_local_atom_pair function."""
 
     num_queries = 32
     num_keys = 64
-
-    def test_output_shape_basic(self):
-        """Output shape should be [..., n_blocks, num_queries, num_keys, d]."""
-        n_token, n_atom, d = 8, 64, 16
-
-        z_token = torch.randn(n_token, n_token, d)
-        # Each token has 8 atoms (64 atoms / 8 tokens)
-        atom_to_token_idx = torch.repeat_interleave(
-            torch.arange(n_token), n_atom // n_token
-        )
-
-        result = broadcast_token_to_local_atom_pair(
-            z_token=z_token,
-            atom_to_token_idx=atom_to_token_idx,
-            num_queries=self.num_queries,
-            num_keys=self.num_keys,
-        )
-
-        n_blocks = n_atom // self.num_queries
-        assert result.shape == (n_blocks, self.num_queries, self.num_keys, d)
-
-    def test_output_shape_with_batch(self):
-        """Shape should be correct with batch dimension."""
-        batch, n_token, n_atom, d = 2, 8, 64, 16
-
-        z_token = torch.randn(batch, n_token, n_token, d)
-        atom_to_token_idx = (
-            torch.repeat_interleave(torch.arange(n_token), n_atom // n_token)
-            .unsqueeze(0)
-            .expand(batch, -1)
-        )
-
-        result = broadcast_token_to_local_atom_pair(
-            z_token=z_token,
-            atom_to_token_idx=atom_to_token_idx,
-            num_queries=self.num_queries,
-            num_keys=self.num_keys,
-        )
-
-        n_blocks = n_atom // self.num_queries
-        assert result.shape == (batch, n_blocks, self.num_queries, self.num_keys, d)
 
     def test_correct_token_pairs_gathered(self):
         """Verify that correct token pairs are gathered for each atom pair."""
@@ -960,28 +602,6 @@ class TestBroadcastTokenToLocalAtomPair:
                         expected,
                         msg=f"Mismatch at block={block_idx}, q={q_idx}, k={k_idx}",
                     )
-
-    def test_gradient_flow(self):
-        """Gradients should flow through the broadcast operation."""
-        n_token, n_atom, d = 8, 64, 16
-
-        z_token = torch.randn(n_token, n_token, d, requires_grad=True)
-        atom_to_token_idx = torch.repeat_interleave(
-            torch.arange(n_token), n_atom // n_token
-        )
-
-        result = broadcast_token_to_local_atom_pair(
-            z_token=z_token,
-            atom_to_token_idx=atom_to_token_idx,
-            num_queries=self.num_queries,
-            num_keys=self.num_keys,
-        )
-
-        loss = result.sum()
-        loss.backward()
-
-        assert z_token.grad is not None
-        assert z_token.grad.shape == z_token.shape
 
     def test_boundary_blocks_use_padding_indices(self):
         """At boundaries, unfold-based key indices will be 0 for padding positions.

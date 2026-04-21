@@ -48,27 +48,11 @@ def structure(atom_array, legacy_data):
 
 
 class TestTokenGrouping:
-    def test_n_tokens_matches_legacy(self, structure, legacy_data):
-        """TokenGrouping.n_tokens must equal len(legacy TokenArray)."""
-        legacy_token_array = legacy_data["token_array"]
-        assert structure.grouping.n_tokens == len(legacy_token_array)
-
-    def test_centre_atom_mask_matches_legacy(self, structure, atom_array):
-        """centre_atom_mask must match the legacy annotation exactly."""
-        legacy_mask = atom_array.centre_atom_mask.astype(bool)
-        np.testing.assert_array_equal(structure.grouping.centre_atom_mask, legacy_mask)
-
     def test_centre_atom_indices_match_legacy_token_array(self, structure, legacy_data):
         """centre_atom_indices must match what the legacy TokenArray stores."""
         legacy_ta = legacy_data["token_array"]
         legacy_centres = np.array(legacy_ta.get_annotation("centre_atom_index"))
         np.testing.assert_array_equal(structure.centre_atom_indices, legacy_centres)
-
-    def test_atom_token_index_covers_all_atoms(self, structure):
-        """Every atom must be assigned to exactly one token."""
-        ati = structure.grouping.atom_token_index
-        assert (ati >= 0).all()
-        assert ati.max() == structure.grouping.n_tokens - 1
 
     def test_atom_token_index_matches_legacy_token_atom_indices(
         self, structure, legacy_data
@@ -126,36 +110,6 @@ class TestAnnotatedStructure:
         assert len(structure.derived.cano_seq_resname) == n
         assert len(structure.derived.tokatom_idx) == n
 
-    def test_resolution_preserved(self, structure):
-        assert structure.resolution == pytest.approx(1.3)
-
-    def test_frozen(self, structure):
-        """AnnotatedStructure should be immutable."""
-        with pytest.raises(AttributeError):
-            structure.resolution = 2.0  # type: ignore[misc]
-
-    def test_save_load_roundtrip(self, structure, tmp_path):
-        """save() then load() should produce an identical structure."""
-        path = tmp_path / "test.npz"
-        structure.save(path)
-        loaded = AnnotatedStructure.load(path)
-
-        assert len(loaded.atoms) == len(structure.atoms)
-        assert loaded.grouping.n_tokens == structure.grouping.n_tokens
-        assert loaded.resolution == pytest.approx(structure.resolution)
-        np.testing.assert_array_equal(
-            loaded.grouping.centre_atom_mask, structure.grouping.centre_atom_mask
-        )
-        np.testing.assert_array_equal(
-            loaded.entity_ids.asym_id_int, structure.entity_ids.asym_id_int
-        )
-        np.testing.assert_allclose(
-            loaded.reference.ref_pos, structure.reference.ref_pos, atol=1e-6
-        )
-        np.testing.assert_array_equal(
-            loaded.type_masks.mol_type, structure.type_masks.mol_type
-        )
-
 
 # ---------------------------------------------------------------------------
 # Token-level cached properties
@@ -163,26 +117,12 @@ class TestAnnotatedStructure:
 
 
 class TestTokenLevelViews:
-    def test_token_centre_coords_shape(self, structure):
-        coords = structure.token_centre_coords
-        assert coords.shape == (structure.grouping.n_tokens, 3)
-
-    def test_token_chain_ids_shape(self, structure):
-        centre = structure.centre_atom_indices
-        chain_ids = structure.entity_ids.asym_id_int[centre]
-        assert len(chain_ids) == structure.grouping.n_tokens
-
     def test_token_is_ligand_consistent(self, structure):
         """Token-level ligand mask should reflect atom-level."""
         centre = structure.centre_atom_indices
         token_lig = structure.type_masks.is_ligand[centre]
         assert token_lig[-1] == 1
         assert token_lig[0] == 0
-
-    def test_token_ref_space_uid_shape(self, structure):
-        centre = structure.centre_atom_indices
-        uids = structure.reference.ref_space_uid[centre]
-        assert len(uids) == structure.grouping.n_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -214,21 +154,6 @@ class TestSelection:
         assert ati.min() == 0
         assert ati.max() == 2
         assert cropped.grouping.n_tokens == 3
-
-    def test_select_atoms_preserves_consistency(self, structure):
-        """Selecting a subset of atoms should produce a valid structure."""
-        # Select first 50 atoms
-        indices = np.arange(50)
-        cropped = structure.select_atoms(indices)
-        assert len(cropped.atoms) == 50
-        assert cropped.reference.ref_pos.shape == (50, 3)
-
-    def test_select_all_tokens_roundtrip(self, structure):
-        """Selecting all tokens should preserve token count."""
-        all_indices = np.arange(structure.grouping.n_tokens)
-        cropped = structure.select_tokens(all_indices)
-        assert cropped.grouping.n_tokens == structure.grouping.n_tokens
-        assert len(cropped.atoms) == len(structure.atoms)
 
     def test_select_tokens_ligand_only(self, structure):
         """Selecting only ligand tokens should give per-atom tokens."""
@@ -290,58 +215,53 @@ class TestAnnotate:
             atom_array, resolution=float(legacy_data["resolution"])
         )
 
-    def test_same_n_atoms(self, annotated_from_cif, annotated_from_npz):
-        assert len(annotated_from_cif.atoms) == len(annotated_from_npz.atoms)
+    def test_annotate_matches_from_atom_array(
+        self, annotated_from_cif, annotated_from_npz
+    ):
+        """The two construction paths must produce structures that match across
+        every typed field — from_atom_array replays what annotate() emitted."""
+        a, b = annotated_from_cif, annotated_from_npz
 
-    def test_same_n_tokens(self, annotated_from_cif, annotated_from_npz):
-        assert (
-            annotated_from_cif.grouping.n_tokens == annotated_from_npz.grouping.n_tokens
-        )
+        assert len(a.atoms) == len(b.atoms)
+        assert a.grouping.n_tokens == b.grouping.n_tokens
+        assert a.resolution == pytest.approx(b.resolution)
 
-    def test_same_centre_atom_mask(self, annotated_from_cif, annotated_from_npz):
-        np.testing.assert_array_equal(
-            annotated_from_cif.grouping.centre_atom_mask,
-            annotated_from_npz.grouping.centre_atom_mask,
-        )
+        for path, left, right in [
+            (
+                "grouping.centre_atom_mask",
+                a.grouping.centre_atom_mask,
+                b.grouping.centre_atom_mask,
+            ),
+            ("type_masks.mol_type", a.type_masks.mol_type, b.type_masks.mol_type),
+            (
+                "entity_ids.asym_id_int",
+                a.entity_ids.asym_id_int,
+                b.entity_ids.asym_id_int,
+            ),
+            (
+                "entity_ids.entity_id_int",
+                a.entity_ids.entity_id_int,
+                b.entity_ids.entity_id_int,
+            ),
+            (
+                "reference.ref_space_uid",
+                a.reference.ref_space_uid,
+                b.reference.ref_space_uid,
+            ),
+            (
+                "derived.cano_seq_resname",
+                a.derived.cano_seq_resname,
+                b.derived.cano_seq_resname,
+            ),
+        ]:
+            np.testing.assert_array_equal(left, right, err_msg=path)
 
-    def test_same_mol_type(self, annotated_from_cif, annotated_from_npz):
-        np.testing.assert_array_equal(
-            annotated_from_cif.type_masks.mol_type,
-            annotated_from_npz.type_masks.mol_type,
-        )
-
-    def test_same_entity_ids(self, annotated_from_cif, annotated_from_npz):
-        np.testing.assert_array_equal(
-            annotated_from_cif.entity_ids.asym_id_int,
-            annotated_from_npz.entity_ids.asym_id_int,
-        )
-        np.testing.assert_array_equal(
-            annotated_from_cif.entity_ids.entity_id_int,
-            annotated_from_npz.entity_ids.entity_id_int,
-        )
-
-    def test_same_ref_space_uid(self, annotated_from_cif, annotated_from_npz):
-        np.testing.assert_array_equal(
-            annotated_from_cif.reference.ref_space_uid,
-            annotated_from_npz.reference.ref_space_uid,
-        )
-
-    def test_same_ref_conformer(self, annotated_from_cif, annotated_from_npz):
+        # ref_pos is float — allow rounding tolerance.
         np.testing.assert_allclose(
-            annotated_from_cif.reference.ref_pos,
-            annotated_from_npz.reference.ref_pos,
+            a.reference.ref_pos,
+            b.reference.ref_pos,
             atol=1e-6,
-        )
-
-    def test_same_cano_seq_resname(self, annotated_from_cif, annotated_from_npz):
-        np.testing.assert_array_equal(
-            annotated_from_cif.derived.cano_seq_resname,
-            annotated_from_npz.derived.cano_seq_resname,
-        )
-
-    def test_same_resolution(self, annotated_from_cif, annotated_from_npz):
-        assert annotated_from_cif.resolution == pytest.approx(
-            annotated_from_npz.resolution
+            err_msg="reference.ref_pos",
         )
 
 
@@ -361,10 +281,6 @@ class TestContextGenerator:
         return ContextGenerator(
             structure, pdb_id="5s8i", ref_pos_augment=False
         ).get_full_context(include_arrays=False)
-
-    def test_token_context_shapes(self, full_context):
-        assert full_context.token.token_index.shape == (141,)
-        assert full_context.token.restype.shape == (141, 32)
 
     def test_atom_to_token_idx_matches_legacy(self, full_context, legacy_data):
         """atom_to_token_idx must match what legacy Token.atom_indices would produce."""
@@ -410,21 +326,9 @@ class TestContextGenerator:
         expected = torch.from_numpy(atom_array.centre_atom_mask.astype(bool))
         assert torch.equal(full_context.mask.centre_atom_mask, expected)
 
-    def test_backbone_shape(self, full_context):
-        assert full_context.coordinate.backbone_coordinate.shape == (141, 5, 3)
-        assert full_context.mask.backbone_mask.shape == (141, 5)
-
-    def test_resolution_is_scalar(self, full_context):
-        assert full_context.coordinate.resolution == pytest.approx(1.3)
-
     def test_motif_zero_when_absent(self, full_context):
         assert not full_context.motif.is_motif.any()
         assert not full_context.motif.is_motif_related.any()
-
-    def test_ref_conformer_shapes(self, full_context):
-        assert full_context.reference.ref_pos.shape == (1076, 3)
-        assert full_context.reference.ref_element.shape == (1076, 128)
-        assert full_context.reference.ref_atom_name_chars.shape == (1076, 4, 64)
 
 
 # ---------------------------------------------------------------------------

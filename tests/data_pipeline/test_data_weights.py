@@ -337,7 +337,3 @@ class TestExclusionDict:
         new = self._apply_exclusion_new(df.copy(), exclusion_dict)
         assert len(ref) == len(new)
         assert list(ref["pdb_id"]) == list(new["pdb_id"])
-
-
-class TestPrintDataStats:
-    """Vectorized mol_group_type matches the original apply-based version."""

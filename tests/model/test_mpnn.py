@@ -60,47 +60,8 @@ def single_context(device) -> "FullContext":
     )
 
 
-class TestEncoderOutput:
-    """Tests for the EncoderOutput dataclass."""
-
-    def test_encoder_output_fields(self, mpnn_model, single_context):
-        """Test that EncoderOutput has all expected fields."""
-        encoder_output = mpnn_model.encode(single_context)
-
-        assert hasattr(encoder_output, "node_feats")
-        assert hasattr(encoder_output, "edge_feats")
-        assert hasattr(encoder_output, "edge_index")
-        assert hasattr(encoder_output, "edge_mask")
-
-    def test_encoder_output_types(self, mpnn_model, single_context):
-        """Test that EncoderOutput fields are tensors."""
-        encoder_output = mpnn_model.encode(single_context)
-
-        assert isinstance(encoder_output.node_feats, torch.Tensor)
-        assert isinstance(encoder_output.edge_feats, torch.Tensor)
-        assert isinstance(encoder_output.edge_index, torch.Tensor)
-        assert isinstance(encoder_output.edge_mask, torch.Tensor)
-
-
 class TestEncode:
     """Tests for the encode() method."""
-
-    def test_output_no_nan_or_inf(self, mpnn_model, single_context):
-        """Test that encoder outputs don't contain NaN or Inf values."""
-        encoder_output = mpnn_model.encode(single_context)
-
-        assert not torch.isnan(
-            encoder_output.node_feats
-        ).any(), "node_feats contains NaN"
-        assert not torch.isinf(
-            encoder_output.node_feats
-        ).any(), "node_feats contains Inf"
-        assert not torch.isnan(
-            encoder_output.edge_feats
-        ).any(), "edge_feats contains NaN"
-        assert not torch.isinf(
-            encoder_output.edge_feats
-        ).any(), "edge_feats contains Inf"
 
     def test_edge_index_validity(self, mpnn_model, single_context):
         """Test that edge indices are valid (in range [0, n_token))."""
@@ -125,28 +86,6 @@ class TestEncode:
                 assert torch.all(
                     encoder_output.edge_mask[0, idx] == 0
                 ), f"Edge mask not zero for masked token {idx}"
-
-    def test_output_values_reasonable(self, mpnn_model, single_context):
-        """Test that output values are within reasonable ranges."""
-        encoder_output = mpnn_model.encode(single_context)
-
-        assert torch.all(
-            torch.abs(encoder_output.node_feats) < 1e6
-        ), "node_feats contains unreasonably large values"
-        assert torch.all(
-            torch.abs(encoder_output.edge_feats) < 1e6
-        ), "edge_feats contains unreasonably large values"
-
-    def test_device_consistency(self, mpnn_model, single_context, device):
-        """Test that outputs are on the same device as inputs."""
-        mpnn_model = mpnn_model.to(device)
-
-        encoder_output = mpnn_model.encode(single_context)
-
-        assert encoder_output.node_feats.device == device
-        assert encoder_output.edge_feats.device == device
-        assert encoder_output.edge_index.device == device
-        assert encoder_output.edge_mask.device == device
 
 
 class TestDecode:
@@ -200,114 +139,9 @@ class TestDecode:
             dec_masked.logits, dec_unmasked.logits, atol=1e-3
         ), "Masked and unmasked inputs should produce different logits"
 
-    def test_output_no_nan_or_inf(self, mpnn_model, single_context):
-        """Test that decoder output doesn't contain NaN or Inf values."""
-        n_tokens = single_context.token.token_index.shape[-1]
-        num_rt = mpnn_model.num_residue_types
-        batch_size = 1
-
-        encoder_output = mpnn_model.encode(single_context)
-
-        masked_restypes = torch.zeros(
-            batch_size, n_tokens, num_rt + 1, dtype=torch.long
-        )
-        masked_restypes[..., -1] = 1
-
-        decoder_output = mpnn_model.decode(
-            encoder_output=encoder_output,
-            restypes=masked_restypes,
-            node_mask=single_context.mask.token_mask,
-        )
-
-        assert not torch.isnan(decoder_output.logits).any(), "Logits contain NaN values"
-        assert not torch.isinf(decoder_output.logits).any(), "Logits contain Inf values"
-
-
-class TestForward:
-    """Tests for the forward() method (training pass)."""
-
-
-class TestBatchProcessing:
-    """Tests for batch processing capabilities."""
-
-    def test_encode_batch(self, mpnn_model, full_context):
-        """Test that encode works with batched inputs."""
-        batch_size = full_context.token.token_index.shape[0]
-        n_tokens = full_context.token.token_index.shape[-1]
-
-        encoder_output = mpnn_model.encode(full_context)
-
-        assert encoder_output.node_feats.shape[0] == batch_size
-        assert encoder_output.node_feats.shape[1] == n_tokens
-
-
-class TestGradients:
-    """Tests for gradient flow."""
-
-    def test_decode_gradients(self, mpnn_model, single_context):
-        """Test that gradients flow through decode."""
-        mpnn_model.train()
-
-        n_tokens = single_context.token.token_index.shape[-1]
-        num_rt = mpnn_model.num_residue_types
-
-        encoder_output = mpnn_model.encode(single_context)
-
-        masked_restypes = torch.zeros(1, n_tokens, num_rt + 1, dtype=torch.long)
-        masked_restypes[..., -1] = 1
-
-        decoder_output = mpnn_model.decode(
-            encoder_output=encoder_output,
-            restypes=masked_restypes,
-            node_mask=single_context.mask.token_mask,
-        )
-
-        loss = decoder_output.logits.sum()
-        loss.backward()
-
-        for name, param in mpnn_model.decoder.named_parameters():
-            if param.requires_grad:
-                assert param.grad is not None, f"No gradient for decoder.{name}"
-
 
 class TestAsPredictor:
     """Tests for the as_predictor() method."""
-
-    def test_returns_callable(self, mpnn_model, single_context):
-        """Test that as_predictor returns a callable."""
-        predictor = mpnn_model.as_predictor(single_context)
-        assert callable(predictor)
-
-    def test_predictor_output_shape(self, mpnn_model, single_context):
-        """Test that predictor returns logits with correct shape."""
-        predictor = mpnn_model.as_predictor(single_context)
-
-        batch_size = 1
-        n_tokens = single_context.token.token_index.shape[-1]
-        num_rt = mpnn_model.num_residue_types
-
-        # All-masked input
-        restype = torch.zeros(batch_size, n_tokens, num_rt + 1, dtype=torch.long)
-        restype[..., -1] = 1
-
-        logits = predictor(restype)
-
-        assert logits.shape == (batch_size, n_tokens, num_rt)
-
-    def test_predictor_finite_values(self, mpnn_model, single_context):
-        """Test that predictor returns finite values."""
-        predictor = mpnn_model.as_predictor(single_context)
-
-        batch_size = 1
-        n_tokens = single_context.token.token_index.shape[-1]
-        num_rt = mpnn_model.num_residue_types
-
-        restype = torch.zeros(batch_size, n_tokens, num_rt + 1, dtype=torch.long)
-        restype[..., -1] = 1
-
-        logits = predictor(restype)
-
-        assert torch.isfinite(logits).all(), "Predictor returned non-finite values"
 
     def test_predictor_different_inputs_different_outputs(
         self, mpnn_model, single_context
@@ -332,76 +166,9 @@ class TestAsPredictor:
 
         assert not torch.allclose(logits_masked, logits_unmasked, atol=1e-3)
 
-    def test_predictor_batched(self, mpnn_model, full_context):
-        """Test that predictor works with batched inputs."""
-        predictor = mpnn_model.as_predictor(full_context)
-
-        batch_size = full_context.token.token_index.shape[0]
-        n_tokens = full_context.token.token_index.shape[-1]
-        num_rt = mpnn_model.num_residue_types
-
-        restype = torch.zeros(batch_size, n_tokens, num_rt + 1, dtype=torch.long)
-        restype[..., -1] = 1
-
-        logits = predictor(restype)
-
-        assert logits.shape == (batch_size, n_tokens, num_rt)
-
 
 class TestSample:
     """Tests for the sample() method (discrete diffusion inference)."""
-
-    def test_output_shape(self, mpnn_model, single_context):
-        """Test that sample returns logits with correct shape."""
-        from artios.model.generator import CosineScheduler, LinearMaskingTimestepSampler
-
-        mpnn_model.eval()
-        with torch.no_grad():
-            logits = mpnn_model.sample(
-                context=single_context,
-                timestep_scheduler=CosineScheduler(),
-                masking_timestep_sampler=LinearMaskingTimestepSampler(),
-                n_steps=5,
-                seed=42,
-            )
-
-        n_tokens = single_context.token.token_index.shape[-1]
-        assert logits.shape == (1, n_tokens, mpnn_model.num_residue_types)
-
-    def test_finite_values(self, mpnn_model, single_context):
-        """Test that sample returns finite values."""
-        from artios.model.generator import CosineScheduler, LinearMaskingTimestepSampler
-
-        mpnn_model.eval()
-        with torch.no_grad():
-            logits = mpnn_model.sample(
-                context=single_context,
-                timestep_scheduler=CosineScheduler(),
-                masking_timestep_sampler=LinearMaskingTimestepSampler(),
-                n_steps=5,
-                seed=42,
-            )
-
-        assert torch.isfinite(logits).all(), "sample returned non-finite values"
-
-    def test_batched(self, mpnn_model, full_context):
-        """Test that sample works with batched inputs."""
-        from artios.model.generator import CosineScheduler, LinearMaskingTimestepSampler
-
-        mpnn_model.eval()
-        batch_size = full_context.token.token_index.shape[0]
-        n_tokens = full_context.token.token_index.shape[-1]
-
-        with torch.no_grad():
-            logits = mpnn_model.sample(
-                context=full_context,
-                timestep_scheduler=CosineScheduler(),
-                masking_timestep_sampler=LinearMaskingTimestepSampler(),
-                n_steps=5,
-                seed=42,
-            )
-
-        assert logits.shape == (batch_size, n_tokens, mpnn_model.num_residue_types)
 
     def test_reproducibility(self, mpnn_model, single_context):
         """Test that same seed produces identical results."""

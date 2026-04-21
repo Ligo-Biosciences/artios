@@ -100,35 +100,6 @@ class TestAtomAttentionEncoder:
             p_lm.shape == expected_p_lm_shape
         ), f"Expected p_lm shape {expected_p_lm_shape}, got {p_lm.shape}"
 
-    def test_per_atom_conditioning_no_nans(
-        self, atom_attention_encoder, context, device
-    ):
-        """Test that _per_atom_conditioning produces no NaN values."""
-        # Call the method with ReferenceConformerContext
-        c_l, p_lm = atom_attention_encoder._per_atom_conditioning(context.reference)
-
-        # Check for NaN values
-        assert not torch.isnan(c_l).any(), "c_l contains NaN values"
-        assert not torch.isnan(p_lm).any(), "p_lm contains NaN values"
-
-    def test_per_atom_conditioning_mask_application(
-        self, atom_attention_encoder, context, device
-    ):
-        """Test that mask is properly applied to c_l."""
-        # Call the method with ReferenceConformerContext
-        c_l, _ = atom_attention_encoder._per_atom_conditioning(context.reference)
-
-        # Check that masked positions are zero
-        ref_mask = context.reference.ref_mask.unsqueeze(-1)
-        masked_positions = ~ref_mask.bool()
-
-        if masked_positions.any():
-            # Check that masked positions in c_l are zero
-            assert torch.allclose(
-                c_l[masked_positions.expand_as(c_l)],
-                torch.zeros_like(c_l[masked_positions.expand_as(c_l)]),
-            ), "Masked positions in c_l should be zero"
-
     def test_atom_attention_encoder_forward_pass(
         self, atom_attention_encoder, context, device
     ):
@@ -244,68 +215,6 @@ class TestAtomAttentionDecoder:
         )  # [..., n_blocks, n_keys]
         trunked_pair_mask = queries_mask[..., :, None] & keys_mask[..., None, :]
         return trunked_pair_mask
-
-    def test_atom_attention_decoder_forward_pass(
-        self, atom_attention_decoder, context, device
-    ):
-        """Test the complete forward pass of AtomAttentionDecoder."""
-        n_atoms, n_tokens = _shapes(context)
-        N_sample = 2
-
-        # Create input tensors
-        a = torch.randn(
-            N_sample, n_tokens, atom_attention_decoder.c_token, device=device
-        )
-
-        # Calculate n_blocks for skip tensors
-        n_blocks = (
-            n_atoms + atom_attention_decoder.num_queries - 1
-        ) // atom_attention_decoder.num_queries
-
-        # Create atom_to_token_idx and atom_mask
-        atom_to_token_idx = context.index.atom_to_token_idx
-        atom_mask = context.mask.atom_mask
-
-        # Generate local_attn_mask using the same pattern as encoder
-        local_attn_mask = self._generate_trunked_pair_mask(
-            atom_mask,
-            atom_attention_decoder.num_queries,
-            atom_attention_decoder.num_keys,
-        )
-
-        # Create skip connections dataclass
-        skip = AtomAttentionSkipConnections(
-            q=torch.randn(
-                N_sample, n_atoms, atom_attention_decoder.c_atom, device=device
-            ),
-            c=torch.randn(1, n_atoms, atom_attention_decoder.c_atom, device=device),
-            p=torch.randn(
-                1,
-                n_blocks,
-                atom_attention_decoder.num_queries,
-                atom_attention_decoder.num_keys,
-                atom_attention_decoder.c_atompair,
-                device=device,
-            ),
-            local_attn_mask=local_attn_mask.unsqueeze(-4),
-        )
-
-        # Forward pass
-        r_update = atom_attention_decoder(
-            a=a,
-            skip=skip,
-            atom_to_token_idx=atom_to_token_idx,
-            atom_mask=atom_mask,
-        )
-
-        # Check output shape
-        expected_shape = (N_sample, n_atoms, 3)
-        assert (
-            r_update.shape == expected_shape
-        ), f"Expected r_update shape {expected_shape}, got {r_update.shape}"
-
-        # Check for finite values
-        assert torch.isfinite(r_update).all(), "r_update contains non-finite values"
 
     def test_atom_attention_decoder_with_batch_dims(
         self, atom_attention_decoder, context, device

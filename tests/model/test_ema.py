@@ -1,102 +1,104 @@
+"""EMA update — correctness vs the reference Python-loop formula, and
+speedup from the batched ``torch._foreach_lerp_`` implementation.
+
+The production ``EMAWrapper.update`` uses ``_foreach_lerp_`` to update all
+shadow parameters in a single fused kernel call instead of a per-parameter
+Python loop. These tests pin:
+
+1. Batched output matches the reference ``(1-decay)*param + decay*shadow``
+   formula within float32 rounding tolerance.
+2. Batched is strictly faster than the old loop. The test prints the
+   measured speedup so the regression shows up in CI logs.
+"""
+
+from __future__ import annotations
+
+import copy
+import time
+
 import pytest
 import torch
 import torch.nn as nn
 
-from runner.ema import PowerLawEMAWrapper
+from runner.ema import EMAWrapper
 
 
-class TestPowerLawEMAWrapper:
-    @pytest.fixture
-    def simple_model(self):
-        """Create a simple test model."""
-        model = nn.Sequential(nn.Linear(10, 20), nn.ReLU(), nn.Linear(20, 10))
-        return model
+def _reference_update(wrapper: EMAWrapper) -> None:
+    """Per-parameter Python-loop reference. Mirrors the formula that lived
+    in EMAWrapper before the ``_foreach_lerp_`` rewrite."""
+    for name, param in wrapper.model.named_parameters():
+        if not wrapper._mutable(name):
+            continue
+        new_avg = (1.0 - wrapper.decay) * param.data + wrapper.decay * wrapper.shadow[
+            name
+        ]
+        wrapper.shadow[name] = new_avg.clone()
 
-    @pytest.fixture
-    def device(self):
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def test_update_single_step(self, simple_model):
-        """Test single update step."""
-        wrapper = PowerLawEMAWrapper(
-            simple_model,
-            sigma=10.0,
-            mutable_param_keywords=["0.weight", "0.bias", "2.weight", "2.bias"],
+def _paired_wrappers(decay: float, seed: int = 0) -> tuple[EMAWrapper, EMAWrapper]:
+    """Two wrappers around identically-initialised copies of the same model."""
+    torch.manual_seed(seed)
+    model = nn.Sequential(nn.Linear(10, 20), nn.ReLU(), nn.Linear(20, 5))
+    new_ema = EMAWrapper(copy.deepcopy(model), decay=decay, mutable_param_keywords=[""])
+    old_ema = EMAWrapper(copy.deepcopy(model), decay=decay, mutable_param_keywords=[""])
+    for (_, p_new), (_, p_old) in zip(
+        new_ema.model.named_parameters(), old_ema.model.named_parameters()
+    ):
+        p_old.data.copy_(p_new.data)
+    new_ema.register()
+    old_ema.register()
+    return new_ema, old_ema
+
+
+@pytest.mark.parametrize("decay", [0.999, 0.99, 0.9999, 0.5])
+def test_update_matches_reference_formula(decay: float) -> None:
+    """Batched update must match ``(1-decay)*param + decay*shadow`` across
+    50 steps, within float32 rounding tolerance."""
+    new_ema, old_ema = _paired_wrappers(decay)
+    for _ in range(50):
+        # Apply the same random perturbation to both models so their parameter
+        # trajectories stay aligned before the shadow updates diverge on math.
+        for (_, p_new), (_, p_old) in zip(
+            new_ema.model.named_parameters(), old_ema.model.named_parameters()
+        ):
+            delta = torch.randn_like(p_new.data) * 0.01
+            p_new.data += delta
+            p_old.data += delta
+        new_ema.update()
+        _reference_update(old_ema)
+    torch.testing.assert_close(new_ema.shadow, old_ema.shadow, rtol=1e-5, atol=1e-6)
+
+
+def test_update_is_faster_than_python_loop(capsys: pytest.CaptureFixture) -> None:
+    """Batched ``_foreach_lerp_`` update must beat the per-param Python loop."""
+    big = nn.Sequential(*[nn.Linear(512, 512) for _ in range(20)])
+    w_new = EMAWrapper(copy.deepcopy(big), decay=0.999, mutable_param_keywords=[""])
+    w_old = EMAWrapper(copy.deepcopy(big), decay=0.999, mutable_param_keywords=[""])
+    w_new.register()
+    w_old.register()
+
+    # Warmup to stabilise timing.
+    for _ in range(5):
+        w_new.update()
+        _reference_update(w_old)
+
+    n_steps = 200
+
+    t0 = time.perf_counter()
+    for _ in range(n_steps):
+        w_new.update()
+    dt_new = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    for _ in range(n_steps):
+        _reference_update(w_old)
+    dt_old = time.perf_counter() - t0
+
+    speedup = dt_old / dt_new
+    with capsys.disabled():
+        print(
+            f"\n  EMA update: {speedup:.2f}x faster "
+            f"(loop {dt_old * 1000:.0f} ms, _foreach_lerp_ {dt_new * 1000:.0f} ms, "
+            f"{n_steps} steps, 40 params of 512x512)"
         )
-        wrapper.register()
-
-        # Store initial weights
-        initial_weights = {
-            name: param.data.clone() for name, param in simple_model.named_parameters()
-        }
-
-        # Modify model weights
-        for param in simple_model.parameters():
-            param.data += 0.1
-
-        # Update EMA
-        wrapper.update(t=2)
-
-        # Check that shadow weights have been updated
-        for name in wrapper.shadow:
-            assert not torch.equal(wrapper.shadow[name], initial_weights[name])
-
-    def test_update_multiple_steps(self, simple_model):
-        """Test multiple update steps."""
-        wrapper = PowerLawEMAWrapper(
-            simple_model,
-            sigma=5.0,
-            mutable_param_keywords=["0.weight", "0.bias", "2.weight", "2.bias"],
-        )
-        wrapper.register()
-
-        # Perform multiple updates
-        for t in range(1, 101):
-            # Slightly modify weights
-            for param in simple_model.parameters():
-                param.data += torch.randn_like(param.data) * 0.01
-
-            # Update EMA
-            wrapper.update(t=t)
-
-        # Verify shadow weights exist and are finite
-        for name in wrapper.shadow:
-            assert torch.isfinite(wrapper.shadow[name]).all()
-
-    def test_apply_shadow_and_restore(self, simple_model):
-        """Test applying shadow weights and restoring original."""
-        wrapper = PowerLawEMAWrapper(
-            simple_model,
-            sigma=10.0,
-            mutable_param_keywords=["0.weight", "0.bias", "2.weight", "2.bias"],
-        )
-        wrapper.register()
-
-        # Store original weights
-        original_weights = {
-            name: param.data.clone() for name, param in simple_model.named_parameters()
-        }
-
-        # Modify shadow weights
-        for name in wrapper.shadow:
-            wrapper.shadow[name] += 0.5
-
-        # Apply shadow weights
-        wrapper.apply_shadow()
-
-        # Check that model weights now match shadow weights
-        for name, param in simple_model.named_parameters():
-            assert torch.equal(param.data, wrapper.shadow[name])
-            assert name in wrapper.backup
-
-        # Restore original weights
-        wrapper.restore()
-
-        # Check that weights are restored
-        for name, param in simple_model.named_parameters():
-            assert torch.equal(param.data, original_weights[name])
-        assert wrapper.backup == {}
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
+    assert speedup > 1.0, f"batched update should be faster; got {speedup:.2f}x"

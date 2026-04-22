@@ -1,0 +1,31 @@
+{
+  "name": "cutinase",
+  "task": "backbone",
+  "spec": {
+    "design": [
+      {
+        "length": ""
+      }
+    ],
+    "motif": {
+      "cif_file": "evaluation/inputs/motifs/cutinase/cutinase_motif.cif",
+      "ligands": [
+        {
+          "cif_res_name": "UNK",
+          "chain_id": "1",
+          "full_ligand": {
+            "type": "smiles",
+            "smiles": "CCCCCCC[C:1](=[O:2])[O:3]C1=CC2=C([C:4]=C1)C(=[C:5]C(=O)O2)C",
+            "atom_map": {
+              "C1": 1,
+              "O1": 2,
+              "O": 3,
+              "C2": 4,
+              "C3": 5
+            }
+          }
+        }
+      ]
+    }
+  }
+}

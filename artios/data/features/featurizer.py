@@ -25,10 +25,8 @@ from artios.data.features import (
     MaskContext,
     MotifContext,
     ReferenceConformerContext,
-    StitchedContext,
     TokenContext,
 )
-from artios.data.parsing.json import StitchedResidue
 from artios.data.structure import AnnotatedStructure
 from artios.utils.geometry import compute_virtual_cb, random_transform
 
@@ -442,42 +440,7 @@ class ContextGenerator:
             original_motif_mapping=self.original_motif_mapping,
         )
 
-    def get_stitched_context(
-        self, stitched_residues: list[StitchedResidue]
-    ) -> StitchedContext:
-        """Build stitched context from a list of stitched residues.
-
-        Args:
-            stitched_residues: List of StitchedResidue with res_id and res_name.
-
-        Returns:
-            StitchedContext with mask and one-hot restypes at stitched positions.
-        """
-        n_token = self.s.grouping.n_tokens
-        centre_res_ids = self.s.atoms.res_id[self.centre_atom_indices].astype(int)
-
-        stitched_map = {sr.res_id: sr.res_name for sr in stitched_residues}
-
-        stitched_mask = torch.zeros(n_token, dtype=torch.bool)
-        stitched_restype = torch.zeros(n_token, 32)
-
-        for i, res_id in enumerate(centre_res_ids):
-            if int(res_id) in stitched_map:
-                res_name = stitched_map[int(res_id)]
-                stitched_mask[i] = True
-                onehot = self.restype_onehot_encoded([res_name])  # [1, 32]
-                stitched_restype[i] = onehot[0]
-
-        return StitchedContext(
-            stitched_mask=stitched_mask,
-            stitched_restype=stitched_restype,
-        )
-
-    def get_full_context(
-        self,
-        include_arrays: bool = True,
-        stitched_residues: list[StitchedResidue] | None = None,
-    ) -> FullContext:
+    def get_full_context(self, include_arrays: bool = True) -> FullContext:
         """Get all context required for design pipeline.
 
         Args:
@@ -497,9 +460,6 @@ class ContextGenerator:
             entity=self.get_entity_context(),
             coordinate=self.get_coordinate_context(),
             basic=self.get_basic_context(include_arrays=include_arrays),
-            stitched=self.get_stitched_context(stitched_residues)
-            if stitched_residues
-            else None,
         )
 
     def get_atom_permutation_list(

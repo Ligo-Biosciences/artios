@@ -13,6 +13,7 @@ from artios.model.modules.penalty import (
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
+    compute_potts_energy,
     symmetrize_J,
 )
 from artios.model.output import PottsOutput
@@ -431,6 +432,58 @@ class TestParameterisationEnum:
         """GraphPotts should reject invalid parameterisation values."""
         with pytest.raises(ValueError):
             GraphPottsParameterisation("not_a_param")
+
+
+# ---------------------------------------------------------------------------
+# compute_potts_energy tests
+# ---------------------------------------------------------------------------
+
+
+class TestComputePottsEnergy:
+    """Tests for the compute_potts_energy function."""
+
+    def test_default_returns_per_node(self, device):
+        """Default (collate_nodes=False) returns per-node energy [B, N]."""
+        B, N, K, R = 2, 16, 6, 8
+        S = torch.randint(0, R, (B, N), device=device)
+        h = torch.randn(B, N, R, device=device)
+        J = torch.randn(B, N, K, R, R, device=device)
+        edge_index = torch.randint(0, N, (B, N, K), device=device)
+        edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
+
+        per_node = compute_potts_energy(S, h, J, edge_index, edge_mask)
+        assert per_node.shape == (B, N)
+
+    def test_collate_nodes_returns_batch(self, device):
+        """collate_nodes=True returns the per-sample scalar [B]."""
+        B, N, K, R = 2, 16, 6, 8
+        S = torch.randint(0, R, (B, N), device=device)
+        h = torch.randn(B, N, R, device=device)
+        J = torch.randn(B, N, K, R, R, device=device)
+        edge_index = torch.randint(0, N, (B, N, K), device=device)
+        edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
+
+        total = compute_potts_energy(S, h, J, edge_index, edge_mask, collate_nodes=True)
+        assert total.shape == (B,)
+
+    def test_collate_equivalent_to_sum(self, device):
+        """collate_nodes=True must equal collate_nodes=False summed over nodes.
+
+        This is the load-bearing invariant: the per-node 0.5-coupling tensor
+        sums over the node axis to the total Potts energy with each undirected
+        edge counted exactly once.
+        """
+        B, N, K, R = 2, 16, 6, 8
+        S = torch.randint(0, R, (B, N), device=device)
+        h = torch.randn(B, N, R, device=device)
+        J = torch.randn(B, N, K, R, R, device=device)
+        edge_index = torch.randint(0, N, (B, N, K), device=device)
+        edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
+
+        per_node = compute_potts_energy(S, h, J, edge_index, edge_mask)
+        total = compute_potts_energy(S, h, J, edge_index, edge_mask, collate_nodes=True)
+
+        assert torch.allclose(per_node.sum(-1), total, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------

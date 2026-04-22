@@ -210,3 +210,63 @@ def test_full_context_to_dict_omits_msa_when_none(load_structure):
     s = load_structure("2g1k")
     ctx = _build_full_context(s)
     assert "msa" not in ctx.to_dict()
+
+
+def test_context_generator_build_msa_context_expands_and_gap_fills(load_structure):
+    """_build_msa_context turns [n_msa, l_chain] MSA into a token-wide
+    MSAContext: scatter chain columns into their token positions, gap-fill
+    elsewhere. This is the Option A expansion test."""
+    s = load_structure("2g1k")
+    n_token = s.grouping.n_tokens
+
+    # Hand-build an MSA covering 3 tokens on the reference chain with a
+    # known pattern so we can assert the scatter.
+    chain_a_centre = s.grouping.centre_atom_mask & (s.atoms.chain_id == "A")
+    chain_a_token_indices = s.grouping.atom_token_index[np.where(chain_a_centre)[0]]
+    # Pick 3 arbitrary token positions of chain A for the MSA columns.
+    token_positions = np.array(
+        [
+            int(chain_a_token_indices[0]),
+            int(chain_a_token_indices[5]),
+            int(chain_a_token_indices[10]),
+        ],
+        dtype=np.int32,
+    )
+    tokens = np.array(
+        [
+            [0, 1, 2],  # row 0 (query): ALA, ARG, ASN
+            [3, _GAP, 5],  # row 1: ASP, gap, GLN
+        ],
+        dtype=np.int8,
+    )
+    gap_mask = tokens == _GAP
+    msa = MSA(
+        tokens=tokens,
+        gap_mask=gap_mask,
+        msa_chain_asym_id=int(
+            np.unique(s.entity_ids.asym_id_int[s.atoms.chain_id == "A"])[0]
+        ),
+        chain_token_indices=token_positions,
+    )
+
+    ctx = ContextGenerator(s, msa=msa, pdb_id="2g1k").get_full_context(
+        include_arrays=False
+    )
+
+    assert ctx.msa is not None
+    assert ctx.msa.tokens.shape == (n_token, 2)
+    assert ctx.msa.gap_mask.shape == (n_token, 2)
+    assert ctx.msa.msa_chain_mask.shape == (n_token,)
+
+    # All non-chain positions are gap (31) in both rows.
+    non_chain = torch.ones(n_token, dtype=torch.bool)
+    non_chain[torch.from_numpy(token_positions).long()] = False
+    assert (ctx.msa.tokens[non_chain] == _GAP).all()
+    # msa_chain_mask is True exactly on chain_token_indices.
+    assert ctx.msa.msa_chain_mask.sum().item() == 3
+    for pos in token_positions:
+        assert ctx.msa.msa_chain_mask[int(pos)]
+    # Chain columns carry the original values (transposed).
+    assert ctx.msa.tokens[int(token_positions[0]), 0] == 0  # row 0, col 0
+    assert ctx.msa.tokens[int(token_positions[1]), 0] == 1  # row 0, col 1
+    assert ctx.msa.tokens[int(token_positions[1]), 1] == _GAP  # row 1, col 1

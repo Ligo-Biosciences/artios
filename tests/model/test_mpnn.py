@@ -28,7 +28,6 @@ def mpnn_model():
         positional_encoding_max_relative_feats=32,
         num_rbf_kernels=16,
         dropout=0.0,
-        coord_noise=0.1,
     )
 
 

@@ -108,7 +108,8 @@ class TestMPNNFeaturizer:
             positional_encoding_dim=16,
             num_rbf=16,
             num_neighbours=32,
-            coord_noise=0.0,  # Disable noise for testing
+            coord_noise_near_ligand=0.0,
+            coord_noise_away_from_ligand=0.0,
         ).to(device)
 
     @pytest.fixture

@@ -12,14 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
 import torch
 
-from artios.utils.ema_utils import sigma_to_gamma
+from artios.utils.casting import disable_autocast
 
 
 class EMAWrapper(object):
-    """A wrapper class for exponential moving average of model weights."""
+    """Exponential moving average of model weights, with fp32 shadow.
+
+    The shadow is always held in float32 for numerical stability — EMA at lower
+    precision drops too many low-magnitude updates near the decay boundary. The
+    model itself can be in any dtype (fp16, bf16, fp32); casts happen at the
+    boundaries of ``update()`` (param → fp32 for the lerp) and
+    ``apply_shadow()`` (shadow fp32 → param.dtype when writing back).
+    """
 
     def __init__(
         self, model: torch.nn.Module, decay: float = 0.999, mutable_param_keywords=None
@@ -38,116 +44,37 @@ class EMAWrapper(object):
         self.backup = {}
 
     def register(self):
+        """Snapshot current params into the shadow, cast to fp32."""
         for name, param in self.model.named_parameters():
-            self.shadow[name] = param.data.clone()
+            self.shadow[name] = param.data.detach().clone().to(torch.float32)
 
+    def _mutable(self, name: str) -> bool:
+        return not self.mutable_param_keywords or any(
+            kw in name for kw in self.mutable_param_keywords
+        )
+
+    @disable_autocast
     def update(self):
+        """Batched in-place EMA update: ``shadow = decay*shadow + (1-decay)*param``.
+
+        Shadow is fp32; params are upcast to fp32 (no-op when already fp32) for
+        the lerp. Uses ``torch._foreach_lerp_`` so the whole parameter set
+        updates in a single fused kernel call rather than a per-parameter Python
+        loop. ``@disable_autocast`` prevents a surrounding autocast block from
+        silently re-downcasting the arithmetic.
+        """
+        shadow_list = []
+        param_list = []
         for name, param in self.model.named_parameters():
-            if self.mutable_param_keywords and not any(
-                [keyword in name for keyword in self.mutable_param_keywords]
-            ):
+            if not self._mutable(name):
                 continue
             assert name in self.shadow
-            new_average = (1.0 - self.decay) * param.data + self.decay * self.shadow[
-                name
-            ]
-            self.shadow[name] = new_average.clone()
+            shadow_list.append(self.shadow[name])
+            param_list.append(param.data.to(torch.float32))
+        torch._foreach_lerp_(shadow_list, param_list, 1 - self.decay)
 
     def apply_shadow(self):
-        for name, param in self.model.named_parameters():
-            assert name in self.shadow
-            self.backup[name] = param.data
-            param.data = self.shadow[name]
-
-    def restore(self):
-        for name, param in self.model.named_parameters():
-            assert name in self.backup
-            param.data = self.backup[name]
-        self.backup = {}
-
-
-class PowerLawEMAWrapper(EMAWrapper):
-    """ "
-    A wrapper class for EMA that uses a power law decay.
-
-    A power law decay has two favourable properties over traditional EMA:
-     1. It puts zero weight on the random initialization of the model, allowing longer averaging
-        without contribution from the initial random weights.
-     2. It is self-similar, so stretching the training time by a factor of k will stretch the
-        averaging profile by a factor of k.
-
-    See equation (119) and (127) of Karras et al. "Analyzing and Improving the Training Dynamics of Diffusion Models"
-    for more details.
-    """
-
-    def __init__(
-        self,
-        model: torch.nn.Module,
-        sigma: float = 10.0,  # TODO: change to sigma
-        mutable_param_keywords=None,
-    ):
-        """
-        model: (torch.nn.Module) a pytorch model to apply power law EMA
-        sigma: (float) standard deviation of our power law decay (larger sigma => slower decay)
-        mutable_param_keywords: (list[str]) keywords of parameters to apply EMA decay, other params will stay untouched
-        """
-        self.model = model
-        self.sigma = sigma
-        self.gamma = sigma_to_gamma(sigma)
-
-        self.mutable_param_keywords = [
-            s.strip() for s in mutable_param_keywords if s.strip()
-        ]
-        self.shadow = {}
-        self.backup = {}
-
-    def beta_power_law(self, t):
-        """Calculate the timestep-dependent power law beta parameter."""
-        return 0 if t == 1 else (1 - 1 / t) ** (self.gamma + 1)
-
-    def update(self, t):
-        """
-        Update the EMA weights using the power law decay.
-
-        Args:
-            t (int): The current training step.
-        """
-        beta = self.beta_power_law(t)
-
-        if isinstance(beta, complex) or (
-            isinstance(beta, float) and not np.isreal(beta)
-        ):
-            raise ValueError(
-                f"Beta value {beta} is complex at step {t}. This should not happen with valid gamma={self.gamma} and delta_t={self.delta_t}"
-            )
-
-        update_params = []
-        shadow_params = []
-        for name, param in self.model.named_parameters():
-            if self.mutable_param_keywords and not any(
-                [keyword in name for keyword in self.mutable_param_keywords]
-            ):
-                continue
-            assert name in self.shadow
-            update_params.append(param)
-            shadow_params.append(self.shadow[name])
-
-            # new_average = (1.0 - beta) * param.data + beta * self.shadow[name]
-            # self.shadow[name] = new_average.to(param.dtype)  # Ensure same dtype as parameter
-
-        # Fast interpolation
-        torch._foreach_lerp_(shadow_params, update_params, 1 - beta)
-
-        # Reassign
-        for i, (name, param) in enumerate(self.model.named_parameters()):
-            if self.mutable_param_keywords and not any(
-                [keyword in name for keyword in self.mutable_param_keywords]
-            ):
-                continue
-            assert name in self.shadow
-            self.shadow[name] = shadow_params[i].to(update_params[i].dtype)
-
-    def apply_shadow(self):
+        """Swap live params for the fp32 shadow, casting down to param dtype."""
         for name, param in self.model.named_parameters():
             assert name in self.shadow
             self.backup[name] = param.data

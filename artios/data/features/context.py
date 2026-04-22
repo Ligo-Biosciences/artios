@@ -429,23 +429,23 @@ class MotifContext(Context):
 
 @typecheck
 @dataclass
-class StitchedContext(Context):
-    """Stitched motif residue information for sequence design.
+class FixedResidueContext(Context):
+    """Identity-fixed residue information for sequence design.
 
-    Populated after motif stitching to indicate which token positions
-    have fixed restypes from the motif.
+    Positions whose amino-acid identity is constrained during
+    sequence design.
     """
 
-    stitched_mask: Mask(
+    fixed_mask: Mask(
         Bool[Tensor, "*batch n_token"],
         type=FeatureType.TOKEN,
-        description="True at positions where a motif residue has been stitched in",
+        description="True at positions whose residue identity is fixed",
     )
-    stitched_restype: Feature(
+    fixed_restype: Feature(
         Float[Tensor, "*batch n_token 32"],
         type=FeatureType.TOKEN,
         encoding=EncodingType.ONE_HOT,
-        description="One-hot restype at stitched positions, zero elsewhere",
+        description="One-hot restype at fixed positions, zero elsewhere",
     )
 
 
@@ -510,7 +510,7 @@ class FullContext:
     basic: BasicContext
     # NOTE: Temporarily optional - expensive to compute, currently unused
     atom_perm: AtomPermContext = field(default_factory=AtomPermContext)
-    stitched: StitchedContext | None = None
+    fixed_residues: FixedResidueContext | None = None
 
     def pad(self, n_max_atoms: int, n_max_tokens: int) -> FullContext:
         """Pad all features to n_max_tokens/n_max_atoms."""
@@ -620,7 +620,74 @@ class FullContext:
             entity=uncond_entity,
             coordinate=self.coordinate,
             basic=self.basic,
-            stitched=self.stitched,
+            fixed_residues=self.fixed_residues,
+        )
+
+    def without_ligand(self) -> FullContext:
+        """Create a context with all ligand influence removed.
+
+        Unlike to_unconditional() which only zeros entity flags, this method
+        also removes ligand tokens from token_mask (excluding them from the
+        neighbor graph and attention) and zeroes all ligand-related features
+        in motif and coordinate contexts.
+
+        Used for classifier-free guidance in Potts sampling.
+        """
+        is_lig = self.entity.is_ligand
+        is_lig_tok = self.entity.is_ligand_token
+
+        not_lig = ~is_lig
+        not_lig_tok = ~is_lig_tok
+
+        new_mask = MaskContext(
+            centre_atom_mask=self.mask.centre_atom_mask & not_lig,
+            atom_mask=self.mask.atom_mask & not_lig,
+            is_resolved=self.mask.is_resolved,
+            centre_atom_is_resolved=self.mask.centre_atom_is_resolved,
+            atom_loss_mask=self.mask.atom_loss_mask,
+            token_mask=self.mask.token_mask & not_lig_tok,
+            backbone_mask=self.mask.backbone_mask,
+        )
+
+        new_entity = EntityContext(
+            is_protein=self.entity.is_protein,
+            is_ligand=torch.zeros_like(is_lig),
+            is_dna=self.entity.is_dna,
+            is_rna=self.entity.is_rna,
+            is_protein_token=self.entity.is_protein_token,
+            is_ligand_token=torch.zeros_like(is_lig_tok),
+            is_dna_token=self.entity.is_dna_token,
+            is_rna_token=self.entity.is_rna_token,
+        )
+
+        new_motif = MotifContext(
+            is_motif=self.motif.is_motif & not_lig,
+            is_motif_related=self.motif.is_motif_related & not_lig,
+            is_motif_token=self.motif.is_motif_token & not_lig_tok,
+            is_motif_related_token=self.motif.is_motif_related_token & not_lig_tok,
+            motif_restype=self.motif.motif_restype * not_lig_tok.unsqueeze(-1),
+            motif_coordinate=self.motif.motif_coordinate * not_lig_tok.unsqueeze(-1),
+        )
+
+        new_coordinate = CoordinateContext(
+            coordinate=self.coordinate.coordinate * not_lig.unsqueeze(-1),
+            centre_coordinate=self.coordinate.centre_coordinate
+            * not_lig_tok.unsqueeze(-1),
+            resolution=self.coordinate.resolution,
+            backbone_coordinate=self.coordinate.backbone_coordinate,
+        )
+
+        return FullContext(
+            token=self.token,
+            reference=self.reference,
+            chain_perm=self.chain_perm,
+            mask=new_mask,
+            motif=new_motif,
+            index=self.index,
+            entity=new_entity,
+            coordinate=new_coordinate,
+            basic=self.basic,
+            fixed_residues=self.fixed_residues,
         )
 
     @classmethod
@@ -682,10 +749,10 @@ class FullContext:
                 n_atom=[int(n_atom)] * batch_size,
             )
 
-        # Optional: StitchedContext
-        stitched = None
-        if "stitched" in d:
-            stitched = StitchedContext.from_dict(d["stitched"])
+        # Optional: FixedResidueContext
+        fixed_residues = None
+        if "fixed_residues" in d:
+            fixed_residues = FixedResidueContext.from_dict(d["fixed_residues"])
 
         return cls(
             token=token,
@@ -698,5 +765,5 @@ class FullContext:
             entity=entity,
             coordinate=coordinate,
             basic=basic_context,
-            stitched=stitched,
+            fixed_residues=fixed_residues,
         )

@@ -283,13 +283,13 @@ model_configs = {
                 "composition_tolerance_k": 1.0,
                 "ensemble_size": 1,
                 "ensemble_noise_scale": 0.3,
-                "ensemble_dropout": False,
-                "ensemble_anm": False,
-                "ensemble_anm_gamma": 0.2388,
+                "cfg_scale": 1.0,
+                "active_site_only_cfg": False,
                 "track_trajectory": False,
                 "trajectory_interval": 1,
                 "track_u_i": False,
                 "u_i_interval": 20,
+                "granular_active_site_coloring": False,
             },
         },
         "sampling": {
@@ -472,6 +472,8 @@ loss_configs = {
         "potts": {
             "loss_type": "pseudo",
             "label_smoothing": 0.0,
+            "active_site_upweight": 1.0,
+            "active_site_distance": 8.0,
         },
         "packing": {
             "mse": {

@@ -544,10 +544,10 @@ def build_motif_residue(motif_residue: MotifResidue, entity_id: int) -> AtomArra
         keep_hydrogens=False,
     )
 
-    full_residue = full_residue.copy()
-
     if full_residue is None:
         raise ValueError(f"Could not find CCD component for {motif_residue.res_name}")
+
+    full_residue = full_residue.copy()
 
     is_motif = np.zeros(len(full_residue), dtype=bool)
 

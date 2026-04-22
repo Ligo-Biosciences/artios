@@ -393,6 +393,7 @@ class TestScoreBackground:
             num_residue_types=8,
             parameterisation=GraphPottsParameterisation.SCORE,
             symmetric_J=False,
+            zero_sum_gauge=False,
         ).to(device)
 
         B, N, K = 2, 16, 6

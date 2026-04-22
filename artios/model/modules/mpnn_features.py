@@ -155,19 +155,31 @@ class MPNNFeaturizer(nn.Module):
         positional_encoding_dim: int,
         num_rbf: int,
         num_neighbours: int,
-        coord_noise: float = 0.1,
+        coord_noise_near_ligand: float = 0.1,
+        coord_noise_away_from_ligand: float = 0.1,
+        coord_noise_distance_cutoff: float = 8.0,
     ):
         """MPNN featurizer for general biomolecular graphs."""
         super().__init__()
 
-        assert coord_noise >= 0, f"coord_noise must be non-negative, got {coord_noise}"
+        assert (
+            coord_noise_near_ligand >= 0
+        ), f"coord_noise_near_ligand must be non-negative, got {coord_noise_near_ligand}"
+        assert (
+            coord_noise_away_from_ligand >= 0
+        ), f"coord_noise_away_from_ligand must be non-negative, got {coord_noise_away_from_ligand}"
+        assert (
+            coord_noise_distance_cutoff > 0
+        ), f"coord_noise_distance_cutoff must be positive, got {coord_noise_distance_cutoff}"
 
         self.node_dim = node_dim
         self.edge_dim = edge_dim
         self.positional_encoding_dim = positional_encoding_dim
         self.num_rbf = num_rbf
         self.num_neighbours = num_neighbours
-        self.coord_noise = coord_noise
+        self.coord_noise_near_ligand = coord_noise_near_ligand
+        self.coord_noise_away_from_ligand = coord_noise_away_from_ligand
+        self.coord_noise_distance_cutoff = coord_noise_distance_cutoff
 
         # Entity features
         self.entity_features = {

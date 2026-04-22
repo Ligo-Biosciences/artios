@@ -1,0 +1,64 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Cache CCD data
+        id: ccd-cache
+        uses: actions/cache@v4
+        with:
+          path: ccd_files/
+          key: ccd-20241126
+
+      - name: Download CCD data
+        if: steps.ccd-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ccd_files
+          gh release download ccd-20241126 \
+            --repo ${{ github.repository }} \
+            --pattern 'components.cif.gz' \
+            --pattern 'components.cif.rdkit_mol.pkl.gz' \
+            --dir ccd_files/
+          gunzip ccd_files/components.cif.gz
+          gunzip ccd_files/components.cif.rdkit_mol.pkl.gz
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build CI image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.artios
+          target: artios-ci
+          load: true
+          tags: artios:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run fast tests
+        run: docker run --rm artios:ci pytest -m "not slow"

@@ -228,7 +228,9 @@ model_configs = {
             "positional_encoding_max_relative_feats": 32,
             "num_rbf_kernels": 16,
             "dropout": 0.0,
-            "coord_noise": 0.3,
+            "coord_noise_near_ligand": 0.3,
+            "coord_noise_away_from_ligand": 0.3,
+            "coord_noise_distance_cutoff": 8.0,
             "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
         },
         "potts": {

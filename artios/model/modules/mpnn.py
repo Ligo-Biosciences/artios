@@ -113,7 +113,12 @@ class MPNN(nn.Module):
         positional_encoding_max_relative_feats: Max relative features. Defaults to 32.
         num_rbf_kernels: Number of RBF kernels for distance encoding. Defaults to 16.
         dropout: Dropout probability for regularization. Defaults to 0.0
-        coord_noise: Noise scale for coordinate perturbation during training. Defaults to 0.1
+        coord_noise_near_ligand: Noise scale applied to non-ligand token backbone
+            coordinates within ``coord_noise_distance_cutoff`` of any ligand token.
+        coord_noise_away_from_ligand: Noise scale applied to backbone coordinates
+            further than ``coord_noise_distance_cutoff`` from any ligand token.
+        coord_noise_distance_cutoff: Distance (angstroms) separating "near" from
+            "away" for coordinate noise scaling.
     """
 
     def __init__(
@@ -128,7 +133,9 @@ class MPNN(nn.Module):
         positional_encoding_max_relative_feats: int = 32,
         num_rbf_kernels: int = 16,
         dropout: float = 0.0,
-        coord_noise: float = 0.1,
+        coord_noise_near_ligand: float = 0.1,
+        coord_noise_away_from_ligand: float = 0.1,
+        coord_noise_distance_cutoff: float = 8.0,
         checkpoint_grads: bool = True,
     ):
         super().__init__()
@@ -141,7 +148,6 @@ class MPNN(nn.Module):
         self.positional_encoding_dim = positional_encoding_dim
         self.num_rbf_kernels = num_rbf_kernels
         self.dropout = dropout
-        self.coord_noise = coord_noise
         self.num_encoder_layers = num_encoder_layers
         self.num_decoder_layers = num_decoder_layers
         self.checkpoint_grads = checkpoint_grads
@@ -153,7 +159,9 @@ class MPNN(nn.Module):
             positional_encoding_dim=positional_encoding_dim,
             num_rbf=num_rbf_kernels,
             num_neighbours=num_neighbours,
-            coord_noise=coord_noise,
+            coord_noise_near_ligand=coord_noise_near_ligand,
+            coord_noise_away_from_ligand=coord_noise_away_from_ligand,
+            coord_noise_distance_cutoff=coord_noise_distance_cutoff,
         )
 
         # Encoder layers

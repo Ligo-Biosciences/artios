@@ -13,8 +13,8 @@ from artios.model.modules.penalty import (
 from artios.model.modules.potts import (
     GraphPotts,
     GraphPottsParameterisation,
+    _symmetrize_J,
     compute_potts_energy,
-    symmetrize_J,
 )
 from artios.model.output import PottsOutput
 
@@ -84,7 +84,7 @@ def reciprocal_edge_index(device):
 
     Uses a simple chain graph: each node connects to its two neighbors.
     This guarantees all reverse edges exist, which is needed for
-    symmetrize_J to produce fully symmetric results.
+    _symmetrize_J to produce fully symmetric results.
     """
     B, N, K = 2, 8, 3
     edge_index = torch.zeros(B, N, K, dtype=torch.long, device=device)
@@ -166,12 +166,12 @@ class TestGraphPottsGradients:
 
 
 # ---------------------------------------------------------------------------
-# symmetrize_J tests
+# _symmetrize_J tests
 # ---------------------------------------------------------------------------
 
 
 class TestSymmetrizeJ:
-    """Tests for the symmetrize_J function."""
+    """Tests for the _symmetrize_J function."""
 
     def test_output_shape(self, device):
         """Test that symmetrized J has the same shape as input."""
@@ -180,7 +180,7 @@ class TestSymmetrizeJ:
         edge_index = torch.randint(0, N, (B, N, K), device=device)
         edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
 
-        J_symm = symmetrize_J(J, edge_index, edge_mask)
+        J_symm = _symmetrize_J(J, edge_index, edge_mask)
 
         assert J_symm.shape == J.shape
 
@@ -191,7 +191,7 @@ class TestSymmetrizeJ:
         edge_index = torch.randint(0, N, (B, N, K), device=device)
         edge_mask = torch.ones(B, N, K, dtype=torch.bool, device=device)
 
-        J_symm = symmetrize_J(J, edge_index, edge_mask)
+        J_symm = _symmetrize_J(J, edge_index, edge_mask)
 
         assert torch.isfinite(J_symm).all()
 
@@ -205,7 +205,7 @@ class TestSymmetrizeJ:
         R = 4
         J = torch.randn(B, N, K, R, R, device=device)
 
-        J_symm = symmetrize_J(J, edge_index, edge_mask)
+        J_symm = _symmetrize_J(J, edge_index, edge_mask)
 
         # For each non-self edge (i, k) -> j, find the reverse edge at j
         # and verify J_ij(a,b) == J_ji(b,a)
@@ -236,8 +236,8 @@ class TestSymmetrizeJ:
         R = 4
         J = torch.randn(B, N, K, R, R, device=device)
 
-        J_symm1 = symmetrize_J(J, edge_index, edge_mask)
-        J_symm2 = symmetrize_J(J_symm1, edge_index, edge_mask)
+        J_symm1 = _symmetrize_J(J, edge_index, edge_mask)
+        J_symm2 = _symmetrize_J(J_symm1, edge_index, edge_mask)
 
         assert torch.allclose(
             J_symm1, J_symm2, atol=1e-5
@@ -259,7 +259,7 @@ class TestSymmetrizeJ:
         # Mask out the last edge slot for all nodes
         edge_mask[:, :, 2] = False
 
-        J_symm = symmetrize_J(J, edge_index, edge_mask)
+        J_symm = _symmetrize_J(J, edge_index, edge_mask)
 
         assert (J_symm[:, :, 2] == 0).all(), "Masked edges should remain zero"
 
@@ -270,7 +270,7 @@ class TestSymmetrizeJ:
         J = torch.randn(B, N, K, R, R, device=device)
 
         # Slot 0 is self-edge in our fixture
-        J_symm = symmetrize_J(J, edge_index, edge_mask)
+        J_symm = _symmetrize_J(J, edge_index, edge_mask)
 
         # Self-edges should be symmetric with themselves (J_ii = J_ii^T averaged)
         for b in range(B):
@@ -281,12 +281,12 @@ class TestSymmetrizeJ:
                 ), f"Self-edge J[{b},{i},0] should be symmetric"
 
     def test_gradient_flows(self, reciprocal_edge_index, device):
-        """Test that gradients flow through symmetrize_J."""
+        """Test that gradients flow through _symmetrize_J."""
         edge_index, edge_mask, B, N, K = reciprocal_edge_index
         R = 4
         J = torch.randn(B, N, K, R, R, device=device, requires_grad=True)
 
-        J_symm = symmetrize_J(J, edge_index, edge_mask)
+        J_symm = _symmetrize_J(J, edge_index, edge_mask)
         loss = J_symm.sum()
         loss.backward()
 
@@ -393,6 +393,7 @@ class TestScoreBackground:
             num_residue_types=8,
             parameterisation=GraphPottsParameterisation.SCORE,
             symmetric_J=False,
+            zero_sum_gauge=False,
         ).to(device)
 
         B, N, K = 2, 16, 6

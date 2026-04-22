@@ -10,6 +10,7 @@ import dataclasses
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
+from typing import ClassVar
 
 import biotite.structure as struc
 import numpy as np
@@ -35,9 +36,15 @@ class _AnnotationGroup:
     mapping between typed fields and stringly-typed annotations is defined once
     — by the field names on the dataclass.
 
+    Subclasses declare ``FIELD_NAME`` (attribute name on ``AnnotatedStructure``)
+    and may override ``REQUIRED`` to ``False`` for optional groups.
+
     Fields with a default value (e.g. ``None``) are treated as optional:
     missing annotations use the default instead of raising.
     """
+
+    FIELD_NAME: ClassVar[str]
+    REQUIRED: ClassVar[bool] = True
 
     @classmethod
     def from_atom_array(cls, atom_array: AtomArray):
@@ -55,6 +62,24 @@ class _AnnotationGroup:
                 )
             kwargs[f.name] = val
         return cls(**kwargs)
+
+    @classmethod
+    def maybe_from_atom_array(cls, atom_array: AtomArray):
+        """Like ``from_atom_array``, but returns ``None`` if all fields are absent.
+
+        Raises ``ValueError`` on partial presence — either all fields or none.
+        """
+        names = [f.name for f in dataclasses.fields(cls)]
+        cats = atom_array.get_annotation_categories()
+        present = [n in cats for n in names]
+        if not any(present):
+            return None
+        if not all(present):
+            missing = [n for n, p in zip(names, present) if not p]
+            raise ValueError(
+                f"{cls.__name__} partially present on atom_array: " f"missing {missing}"
+            )
+        return cls.from_atom_array(atom_array)
 
     def to_atom_array(self, atom_array: AtomArray) -> None:
         """Write typed fields back as annotations (mutates *atom_array*).
@@ -91,6 +116,8 @@ class _AnnotationGroup:
 class EntityIds(_AnnotationGroup):
     """Per-atom entity identification."""
 
+    FIELD_NAME: ClassVar[str] = "entity_ids"
+
     asym_id_int: IntArray  # [n_atom]
     entity_id_int: IntArray  # [n_atom]
     sym_id_int: IntArray  # [n_atom]
@@ -100,6 +127,8 @@ class EntityIds(_AnnotationGroup):
 class MoleculeIds(_AnnotationGroup):
     """Per-atom molecule identification (covalently connected units)."""
 
+    FIELD_NAME: ClassVar[str] = "molecule_ids"
+
     mol_id: Int32Array  # [n_atom]
     entity_mol_id: Int32Array  # [n_atom]
     mol_atom_index: Int32Array  # [n_atom]
@@ -108,6 +137,8 @@ class MoleculeIds(_AnnotationGroup):
 @dataclass(frozen=True)
 class TypeMasks(_AnnotationGroup):
     """Per-atom molecular type classification."""
+
+    FIELD_NAME: ClassVar[str] = "type_masks"
 
     mol_type: StrArray  # [n_atom] "protein"|"rna"|"dna"|"ligand"
     is_protein: IntArray  # [n_atom]
@@ -120,6 +151,8 @@ class TypeMasks(_AnnotationGroup):
 class ReferenceConformer(_AnnotationGroup):
     """Per-atom reference conformer data from CCD."""
 
+    FIELD_NAME: ClassVar[str] = "reference"
+
     ref_pos: FloatArray  # [n_atom, 3]
     ref_charge: IntArray  # [n_atom]
     ref_mask: IntArray  # [n_atom]
@@ -130,6 +163,8 @@ class ReferenceConformer(_AnnotationGroup):
 class DerivedAnnotations(_AnnotationGroup):
     """Per-atom annotations computed during the annotation pipeline."""
 
+    FIELD_NAME: ClassVar[str] = "derived"
+
     cano_seq_resname: StrArray  # [n_atom]
     tokatom_idx: IntArray  # [n_atom]
     modified_res_mask: IntArray  # [n_atom]
@@ -138,6 +173,8 @@ class DerivedAnnotations(_AnnotationGroup):
 @dataclass(frozen=True)
 class TrainingAnnotations(_AnnotationGroup):
     """Optional per-atom annotations for training. Fields default to None."""
+
+    FIELD_NAME: ClassVar[str] = "training"
 
     is_resolved: BoolArray | None = None
     plddt_m_rep_atom_mask: IntArray | None = None
@@ -148,6 +185,9 @@ class TrainingAnnotations(_AnnotationGroup):
 @dataclass(frozen=True)
 class MotifAnnotation(_AnnotationGroup):
     """Per-atom motif masks. Only present when motif is active."""
+
+    FIELD_NAME: ClassVar[str] = "motif"
+    REQUIRED: ClassVar[bool] = False
 
     is_motif: IntArray  # [n_atom]
     is_motif_related: IntArray  # [n_atom]
@@ -538,21 +578,7 @@ class AnnotatedStructure:
             ),
         )
 
-    def with_motif_masks(
-        self, is_motif: np.ndarray, is_motif_related: np.ndarray
-    ) -> AnnotatedStructure:
-        """Return new structure with motif masks set."""
-        return dataclasses.replace(
-            self,
-            motif=MotifAnnotation(is_motif=is_motif, is_motif_related=is_motif_related),
-        )
-
     # -- AtomArray conversion -------------------------------------------------
-    #
-    # Annotation names are derived from field names on the sub-dataclasses
-    # via the _AnnotationGroup protocol. No separate constant needed.
-
-    _GROUPS = (EntityIds, MoleculeIds, TypeMasks, ReferenceConformer)
 
     @classmethod
     def from_atom_array(
@@ -562,9 +588,11 @@ class AnnotatedStructure:
     ) -> AnnotatedStructure:
         """Construct from an annotated AtomArray.
 
-        Reads custom annotations into typed fields, then strips them from
-        the AtomArray so it only keeps biotite-native fields. This ensures
-        a single source of truth.
+        Each ``_AnnotationGroup`` subclass contributes one field to the result
+        via its ``FIELD_NAME``. Required groups use ``from_atom_array``;
+        optional groups use ``maybe_from_atom_array`` and yield ``None`` when
+        absent. Transferred annotations are stripped so ``atoms`` retains only
+        biotite-native fields — single source of truth.
         """
         atoms = atom_array.copy()
 
@@ -572,69 +600,46 @@ class AnnotatedStructure:
             raw_res = getattr(atoms, "resolution", None)
             resolution = float(raw_res[0]) if raw_res is not None else -1.0
 
-        # Required annotation groups.
-        entity_ids = EntityIds.from_atom_array(atoms)
-        molecule_ids = MoleculeIds.from_atom_array(atoms)
-        type_masks = TypeMasks.from_atom_array(atoms)
-        reference = ReferenceConformer.from_atom_array(atoms)
-        derived = DerivedAnnotations.from_atom_array(atoms)
-
-        # Optional groups — from_atom_array returns None when all fields missing.
-        motif: MotifAnnotation | None = None
-        if (
-            getattr(atoms, "is_motif", None) is not None
-            and getattr(atoms, "is_motif_related", None) is not None
-        ):
-            motif = MotifAnnotation.from_atom_array(atoms)
-
-        # Default is_resolved to all-True (inference case).
+        # Default is_resolved for inference-time AtomArrays that lack it.
         if "is_resolved" not in atoms.get_annotation_categories():
             atoms.set_annotation("is_resolved", np.ones(len(atoms), dtype=bool))
-        training = TrainingAnnotations.from_atom_array(atoms)
 
-        grouping = compute_token_grouping_vectorized(atoms, type_masks, motif)
+        groups: dict[str, _AnnotationGroup | None] = {
+            g.FIELD_NAME: (
+                g.from_atom_array(atoms)
+                if g.REQUIRED
+                else g.maybe_from_atom_array(atoms)
+            )
+            for g in _AnnotationGroup.__subclasses__()
+        }
 
-        # Strip all transferred annotations.
-        for group in cls._GROUPS:
-            group.strip_from(atoms)
-        DerivedAnnotations.strip_from(atoms)
-        TrainingAnnotations.strip_from(atoms)
-        if motif is not None:
-            MotifAnnotation.strip_from(atoms)
+        # grouping isn't a group — fishing type_masks/motif out by key is
+        # awkward but localised.
+        grouping = compute_token_grouping_vectorized(
+            atoms, groups["type_masks"], groups["motif"]
+        )
+
+        for g in _AnnotationGroup.__subclasses__():
+            g.strip_from(atoms)
         for name in ("centre_atom_mask", "resolution"):
             if name in atoms.get_annotation_categories():
                 atoms.del_annotation(name)
 
         return cls(
             atoms=atoms,
-            entity_ids=entity_ids,
-            molecule_ids=molecule_ids,
-            type_masks=type_masks,
-            reference=reference,
             grouping=grouping,
-            derived=derived,
             resolution=resolution,
-            motif=motif,
-            training=training,
+            **groups,
         )
 
     def to_atom_array(self) -> AtomArray:
         """Create a fully-annotated AtomArray. Reverse of ``from_atom_array``."""
         aa = self.atoms.copy()
 
-        for group in (
-            self.entity_ids,
-            self.molecule_ids,
-            self.type_masks,
-            self.reference,
-            self.derived,
-        ):
-            group.to_atom_array(aa)
-
-        if self.motif is not None:
-            self.motif.to_atom_array(aa)
-        if self.training is not None:
-            self.training.to_atom_array(aa)
+        for f in dataclasses.fields(self):
+            val = getattr(self, f.name)
+            if isinstance(val, _AnnotationGroup):
+                val.to_atom_array(aa)
 
         aa.set_annotation("centre_atom_mask", self.grouping.centre_atom_mask)
         aa.set_annotation("resolution", np.full(len(aa), self.resolution))

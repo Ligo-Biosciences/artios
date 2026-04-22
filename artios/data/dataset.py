@@ -850,6 +850,31 @@ def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMak
     return MotifMaker(**motif_config)
 
 
+def get_msa_sampler(configs: ConfigDict, dataset_name: str) -> Optional[MSASampler]:
+    """Construct an MSASampler if msa.enabled is True, else None.
+
+    Allows per-dataset overrides under `data.<dataset_name>.msa`.
+    """
+    data_config = configs.data
+    if "msa" not in data_config:
+        return None
+
+    msa_config = dict(data_config["msa"])
+    # Dataset-specific overrides.
+    if dataset_name in data_config and "msa" in data_config[dataset_name]:
+        msa_config = {**msa_config, **dict(data_config[dataset_name]["msa"])}
+
+    if not msa_config.get("enabled", False):
+        return None
+
+    return MSASampler(
+        msa_root=msa_config["root"],
+        seq_to_idx_path=msa_config["seq_to_idx_path"],
+        n_msa=msa_config.get("n_msa", 64),
+        seed=msa_config.get("seed", None),
+    )
+
+
 class WeightedMultiDataset(Dataset):
     """
     A weighted dataset composed of multiple datasets with weights.
@@ -938,6 +963,7 @@ def get_datasets(
             "cropping_configs": config_dict["cropping_configs"],
             "error_dir": error_dir,
             "motif_maker": get_motif_maker(configs, dataset_name),
+            "msa_sampler": get_msa_sampler(configs, dataset_name),
             "template_featurizer": None,
             "lig_atom_rename": config_dict.get("lig_atom_rename", False),
             "shuffle_mols": config_dict.get("shuffle_mols", False),

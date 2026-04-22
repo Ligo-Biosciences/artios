@@ -226,6 +226,15 @@ data_configs = {
         "atom_bin_ends": ListValue([1536, 1728]),
         "token_bin_ends": ListValue([440, 600]),
     },
+    # v1 MSA pipeline. Default disabled — existing runs unchanged. See
+    # artios/data/msa/CLAUDE.md for the design contract.
+    "msa": {
+        "enabled": False,
+        "root": os.path.join(DATA_ROOT_DIR, "mmcif_msa_template"),
+        "seq_to_idx_path": os.path.join(DATA_ROOT_DIR, "common/seq_to_pdb_index.json"),
+        "n_msa": 64,
+        "seed": None,
+    },
     "train_sets": ListValue(
         [
             "weightedPDB_before2021_wopb_nometalc_0925",

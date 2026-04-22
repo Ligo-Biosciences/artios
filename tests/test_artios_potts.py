@@ -15,7 +15,7 @@ from artios.model.modules.potts import (
 )
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode
-from tests.context_utils import create_test_context
+from tests._helpers.context import create_test_context
 
 # ---------------------------------------------------------------------------
 # Fixtures

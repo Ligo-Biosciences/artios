@@ -34,9 +34,10 @@ class TestBuildMotifResidue:
             res_name="HIS",
             atom_names=("CG", "CD2", "ND1", "CE1", "NE2"),
             coords=coords,
+            chain_id="A",
         )
 
-        atom_array = build_motif_residue(motif_residue)
+        atom_array = build_motif_residue(motif_residue, entity_id=1)
 
         # Check basic properties
         assert len(atom_array) > len(coords)  # Full residue has more atoms
@@ -68,11 +69,12 @@ class TestBuildMotifResidue:
             res_name="INVALID",
             atom_names=("CA",),
             coords=np.array([[0.0, 0.0, 0.0]]),
+            chain_id="A",
         )
 
         # Error can come from CCD lookup or our code
         with pytest.raises(ValueError):
-            build_motif_residue(motif_residue)
+            build_motif_residue(motif_residue, entity_id=1)
 
 
 class TestBuildMotifLigand:
@@ -87,10 +89,11 @@ class TestBuildMotifLigand:
             atom_names=("ZN",),
             coords=coords,
             elements=("ZN",),
+            chain_id="A",
             full_ligand=CCDLigand(codes=["ZN"]),
         )
 
-        atom_array = build_motif_ligand(motif_ligand)
+        atom_array = build_motif_ligand(motif_ligand, entity_id=2)
 
         assert len(atom_array) == 1
         assert atom_array.atom_name[0] == "ZN"
@@ -109,10 +112,11 @@ class TestBuildMotifLigand:
             atom_names=("O1",),
             coords=coords,
             elements=("O",),
+            chain_id="A",
             full_ligand=SMILESLigand(smiles=smiles, atom_map=atom_map),
         )
 
-        atom_array = build_motif_ligand(motif_ligand)
+        atom_array = build_motif_ligand(motif_ligand, entity_id=2)
 
         assert hasattr(atom_array, "is_motif")
         assert atom_array.is_motif.sum() == 1
@@ -127,11 +131,12 @@ class TestBuildMotifLigand:
             atom_names=("S1",),
             coords=np.array([[0.0, 0.0, 0.0]]),
             elements=("S",),
+            chain_id="A",
             full_ligand=SMILESLigand(smiles="C"),
         )
 
         with pytest.raises(ValueError, match="Substructure match failed"):
-            build_motif_ligand(motif_ligand)
+            build_motif_ligand(motif_ligand, entity_id=2)
 
     def test_build_smiles_without_atom_map_substructure_match(self):
         """Test building a SMILES ligand using automatic substructure matching.
@@ -169,11 +174,12 @@ class TestBuildMotifLigand:
             atom_names=atom_names,
             coords=coords,
             elements=elements,
+            chain_id="A",
             full_ligand=SMILESLigand(smiles=dtz_smiles),  # No atom_map!
         )
 
         # This should work via substructure matching
-        atom_array = build_motif_ligand(motif_ligand)
+        atom_array = build_motif_ligand(motif_ligand, entity_id=2)
 
         # Verify is_motif annotation
         assert hasattr(atom_array, "is_motif")

@@ -6,7 +6,6 @@ __pycache__/
 *.egg-info/
 *.egg
 
-uv.lock
 .venv/
 
 .DS_Store

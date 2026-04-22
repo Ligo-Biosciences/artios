@@ -408,7 +408,6 @@ class AnnotatedStructure:
     reference: ReferenceConformer
     grouping: TokenGrouping
     derived: DerivedAnnotations
-    resolution: float
     motif: MotifAnnotation | None = None
     training: TrainingAnnotations = dataclasses.field(
         default_factory=TrainingAnnotations
@@ -441,7 +440,6 @@ class AnnotatedStructure:
         atom_array: AtomArray,
         sequences: dict[str, str],
         entity_poly_type: dict[str, str] | None = None,
-        resolution: float = -1.0,
         include_ref_conformer: bool = True,
         include_training_masks: bool = False,
     ) -> AnnotatedStructure:
@@ -453,7 +451,6 @@ class AnnotatedStructure:
                 ``unique_chain_and_add_ids`` or ``find_equiv_mol`` yet.
             sequences: ``{label_entity_id: canonical_sequence}``.
             entity_poly_type: ``{label_entity_id: poly_type}`` from mmCIF.
-            resolution: Structure resolution in Angstroms.
             include_ref_conformer: Compute reference conformer.
             include_training_masks: Compute plddt_m_rep_atom_mask.
         """
@@ -490,7 +487,7 @@ class AnnotatedStructure:
         if include_training_masks:
             atom_array = annotation.add_plddt_m_rep_atom_mask(atom_array)
 
-        return cls.from_atom_array(atom_array, resolution=resolution)
+        return cls.from_atom_array(atom_array)
 
     # -- Selection ------------------------------------------------------------
 
@@ -518,7 +515,6 @@ class AnnotatedStructure:
             reference=self.reference.select(indices),
             grouping=_reindex_grouping(self.grouping, indices),
             derived=self.derived.select(indices),
-            resolution=self.resolution,
             motif=self.motif.select(indices) if self.motif else None,
             training=self.training.select(indices),
         )
@@ -581,11 +577,7 @@ class AnnotatedStructure:
     # -- AtomArray conversion -------------------------------------------------
 
     @classmethod
-    def from_atom_array(
-        cls,
-        atom_array: AtomArray,
-        resolution: float | None = None,
-    ) -> AnnotatedStructure:
+    def from_atom_array(cls, atom_array: AtomArray) -> AnnotatedStructure:
         """Construct from an annotated AtomArray.
 
         Each ``_AnnotationGroup`` subclass contributes one field to the result
@@ -595,10 +587,6 @@ class AnnotatedStructure:
         biotite-native fields — single source of truth.
         """
         atoms = atom_array.copy()
-
-        if resolution is None:
-            raw_res = getattr(atoms, "resolution", None)
-            resolution = float(raw_res[0]) if raw_res is not None else -1.0
 
         # Default is_resolved for inference-time AtomArrays that lack it.
         if "is_resolved" not in atoms.get_annotation_categories():
@@ -621,14 +609,16 @@ class AnnotatedStructure:
 
         for g in _AnnotationGroup.__subclasses__():
             g.strip_from(atoms)
-        for name in ("centre_atom_mask", "resolution"):
-            if name in atoms.get_annotation_categories():
-                atoms.del_annotation(name)
+        # centre_atom_mask is recomputed via compute_token_grouping — strip if
+        # present on the input so the AtomArray stays a single source of truth.
+        # TODO(PR C): fold the centre_atom_mask write in to_atom_array away once
+        # legacy ContextGenerator and dataset.process_one's motif zigzag are gone.
+        if "centre_atom_mask" in atoms.get_annotation_categories():
+            atoms.del_annotation("centre_atom_mask")
 
         return cls(
             atoms=atoms,
             grouping=grouping,
-            resolution=resolution,
             **groups,
         )
 
@@ -642,7 +632,6 @@ class AnnotatedStructure:
                 val.to_atom_array(aa)
 
         aa.set_annotation("centre_atom_mask", self.grouping.centre_atom_mask)
-        aa.set_annotation("resolution", np.full(len(aa), self.resolution))
         return aa
 
     # -- Serialization --------------------------------------------------------

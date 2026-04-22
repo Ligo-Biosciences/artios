@@ -36,10 +36,8 @@ def legacy_data():
 
 
 @pytest.fixture
-def structure(atom_array, legacy_data):
-    return AnnotatedStructure.from_atom_array(
-        atom_array, resolution=float(legacy_data["resolution"])
-    )
+def structure(atom_array):
+    return AnnotatedStructure.from_atom_array(atom_array)
 
 
 # ---------------------------------------------------------------------------
@@ -203,17 +201,14 @@ class TestAnnotate:
             atom_array,
             sequences,
             parser.entity_poly_type,
-            resolution=parser.resolution,
             include_ref_conformer=True,
             include_training_masks=True,
         )
 
     @pytest.fixture
-    def annotated_from_npz(self, atom_array, legacy_data):
+    def annotated_from_npz(self, atom_array):
         """Legacy pipeline output (npz) → from_atom_array() → AnnotatedStructure."""
-        return AnnotatedStructure.from_atom_array(
-            atom_array, resolution=float(legacy_data["resolution"])
-        )
+        return AnnotatedStructure.from_atom_array(atom_array)
 
     def test_annotate_matches_from_atom_array(
         self, annotated_from_cif, annotated_from_npz
@@ -224,7 +219,6 @@ class TestAnnotate:
 
         assert len(a.atoms) == len(b.atoms)
         assert a.grouping.n_tokens == b.grouping.n_tokens
-        assert a.resolution == pytest.approx(b.resolution)
 
         for path, left, right in [
             (
@@ -373,7 +367,6 @@ def _assert_structures_equal(a: AnnotatedStructure, b: AnnotatedStructure) -> No
     every typed field and the underlying AtomArray explicitly.
     """
     assert len(a.atoms) == len(b.atoms), "atom count differs"
-    assert a.resolution == b.resolution, "resolution differs"
 
     # Typed annotation groups (required).
     for name in _ANNOTATION_GROUP_FIELDS:
@@ -417,7 +410,7 @@ class TestGoldenRoundTrip:
         """
         original = load_structure(name)
         aa = original.to_atom_array()
-        rebuilt = AnnotatedStructure.from_atom_array(aa, resolution=original.resolution)
+        rebuilt = AnnotatedStructure.from_atom_array(aa)
         _assert_structures_equal(original, rebuilt)
 
 

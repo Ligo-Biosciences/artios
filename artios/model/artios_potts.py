@@ -5,6 +5,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from einops import repeat
 from torch import Tensor
 from torch.nn import functional as F
 from typing_extensions import assert_never
@@ -22,7 +23,6 @@ from artios.model.modules.mpnn import MPNN
 from artios.model.modules.penalty import (
     PenaltyCollection,
     aromatic_enrichment_penalty,
-    build_active_site_mask,
     charged_enrichment_penalty,
     complexity_lcp,
     composition_chi_squared_penalty,
@@ -38,9 +38,8 @@ from artios.model.modules.potts import (
     compute_potts_single_logits,
 )
 from artios.model.output import PottsOutput
-from artios.model.utils import Mode
+from artios.model.utils import Mode, build_backbone_ligand_proximity_mask, masked_mean
 from artios.utils.casting import disable_autocast
-from artios.utils.ensemble import sample_anm_displacements
 
 ALPHABET_BIAS = 1e4
 logger = logging.getLogger(__name__)
@@ -60,6 +59,8 @@ class PottsLossType(str, Enum):
 class PottsLossConfig:
     loss_type: PottsLossType = PottsLossType.COMPOSITE
     label_smoothing: float = 0.0
+    active_site_upweight: float = 1.0
+    active_site_distance: float = 8.0
 
 
 class ArtiosPotts(nn.Module):
@@ -91,6 +92,8 @@ class ArtiosPotts(nn.Module):
         self.loss_config = PottsLossConfig(
             loss_type=potts_loss_cfg.loss_type,
             label_smoothing=potts_loss_cfg.label_smoothing,
+            active_site_upweight=potts_loss_cfg.active_site_upweight,
+            active_site_distance=potts_loss_cfg.active_site_distance,
         )
 
         masking_sampler_type = MaskingSamplerType(
@@ -105,6 +108,7 @@ class ArtiosPotts(nn.Module):
                 assert_never(masking_sampler_type)
 
         sampling_cfg = configs.artios_mpnn.potts.sampling
+        self.cfg_scale = sampling_cfg.cfg_scale
         self.potts_sampler = PottsSampler(
             proposal=PottsProposal(sampling_cfg.proposal),
             n_sweeps=sampling_cfg.n_sweeps,
@@ -117,6 +121,9 @@ class ArtiosPotts(nn.Module):
             trajectory_interval=sampling_cfg.trajectory_interval,
             track_u_i=sampling_cfg.track_u_i,
             u_i_interval=sampling_cfg.u_i_interval,
+            cfg_scale=sampling_cfg.cfg_scale,
+            active_site_only_cfg=sampling_cfg.active_site_only_cfg,
+            granular_active_site_coloring=sampling_cfg.granular_active_site_coloring,
         )
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
@@ -126,9 +133,6 @@ class ArtiosPotts(nn.Module):
         self.energy_bias = dict(sampling_cfg.energy_bias)
         self.ensemble_size = sampling_cfg.ensemble_size
         self.ensemble_noise_scale = sampling_cfg.ensemble_noise_scale
-        self.ensemble_dropout = sampling_cfg.ensemble_dropout
-        self.ensemble_anm = sampling_cfg.ensemble_anm
-        self.ensemble_anm_gamma = sampling_cfg.ensemble_anm_gamma
         self.aromatic_penalty_weight = sampling_cfg.aromatic_penalty_weight
         self.aromatic_target_fraction = sampling_cfg.aromatic_target_fraction
         self.active_site_distance_cutoff = sampling_cfg.active_site_distance_cutoff
@@ -138,82 +142,36 @@ class ArtiosPotts(nn.Module):
         self.composition_organism = Organism(sampling_cfg.composition_organism)
         self.composition_tolerance_k = sampling_cfg.composition_tolerance_k
 
-    # TODO: this guy needs a lot of tidying before merging to main.
-    def main_inference_loop(
-        self,
-        context: FullContext,
-        seed: Optional[int] = None,
-    ) -> PottsOutput:
-        device = context.token.restype.device
-        restypes = context.token.restype
-        _, _, R = restypes.shape
-
-        generator = (
-            torch.Generator(device).manual_seed(seed) if seed is not None else None
-        )
-
-        ### Stitching logic
-        if context.stitched is not None:
-            is_masked = ~context.stitched.stitched_mask & context.mask.token_mask
+    def _build_masked_inputs(self, context: FullContext) -> tuple[Tensor, Tensor]:
+        """Build masked restypes and is_masked from the context's fixed residues."""
+        if context.fixed_residues is not None:
+            is_masked = ~context.fixed_residues.fixed_mask & context.mask.token_mask
             masked_restypes = self.mpnn.pad_and_mask_restypes(
-                context.stitched.stitched_restype, is_masked
+                context.fixed_residues.fixed_restype, is_masked
             )
         else:
             is_masked = context.mask.token_mask
-            masked_restypes = self.mpnn.pad_and_mask_restypes(restypes, is_masked)
+            masked_restypes = self.mpnn.pad_and_mask_restypes(
+                context.token.restype, is_masked
+            )
+        return masked_restypes, is_masked
 
-        ### Ensemble logic
-        if self.ensemble_dropout and self.mpnn.dropout > 0:
-            for m in self.mpnn.modules():
-                if isinstance(m, nn.Dropout):
-                    m.train()
+    def _run_ensemble(
+        self,
+        context: FullContext,
+        masked_restypes: Tensor,
+        is_masked: Tensor,
+        generator: Optional[torch.Generator],
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Run MPNN+Potts across ensemble members
 
-        # Pre-compute ANM displacements
-        anm_displacements = None
-        if self.ensemble_anm and self.ensemble_size > 1:
-            logger.info("Computing ANM displacements")
-            bb_coord = context.coordinate.backbone_coordinate
-            B, n_token = bb_coord.shape[0], bb_coord.shape[1]
-            device, dtype = bb_coord.device, bb_coord.dtype
-
-            anm_list = []
-            for b in range(B):
-                logger.info(f"Computing ANM displacements for batch {b}")
-                valid_protein = (
-                    context.entity.is_protein_token[b] & context.mask.token_mask[b]
-                )
-                ca_coords = bb_coord[b, :, 1, :]  # [n_token, 3], index 1 = CA
-                ca_protein = ca_coords[valid_protein]
-
-                disps = sample_anm_displacements(
-                    ca_coords=ca_protein.float(),
-                    n_conformations=self.ensemble_size,
-                    gamma=self.ensemble_anm_gamma,
-                    generator=generator,
-                )
-                full_disps = torch.zeros(
-                    self.ensemble_size, n_token, 3, device=device, dtype=dtype
-                )
-                full_disps[:, valid_protein, :] = disps.to(dtype)
-
-                anm_list.append(full_disps)
-
-            anm_displacements = torch.stack(
-                anm_list, dim=0
-            )  # [B, ensemble_size, n_token, 3]
-
-        h_sum = None
-        J_sum = None
+        Returns:
+            Averaged Potts fields (h, J) and the shared MPNN graph topoly (edge_index, edge_mask)
+        """
+        h_sum = J_sum = None
+        edge_index = edge_mask = None
         for i in range(self.ensemble_size):
-            if anm_displacements is not None:
-                disp = anm_displacements[:, i, :, :]  # [B, n_token, 3]
-                bb = context.coordinate.backbone_coordinate
-                noised = bb + disp[:, :, None, :]  # broadcast over 5 backbone atoms
-                ctx = replace(
-                    context,
-                    coordinate=replace(context.coordinate, backbone_coordinate=noised),
-                )
-            elif self.ensemble_noise_scale > 0 and self.ensemble_size > 1:
+            if self.ensemble_noise_scale > 0 and self.ensemble_size > 1:
                 bb = context.coordinate.backbone_coordinate
                 noised = bb + self.ensemble_noise_scale * torch.randn(
                     bb.shape,
@@ -231,7 +189,6 @@ class ArtiosPotts(nn.Module):
             mpnn_out = self.mpnn(
                 context=ctx, masked_restypes=masked_restypes, is_masked=is_masked
             )
-
             h_i, J_i = self.potts(
                 mpnn_out.node_feats,
                 mpnn_out.edge_feats,
@@ -248,42 +205,87 @@ class ArtiosPotts(nn.Module):
                 h_sum = h_sum + h_i
                 J_sum = J_sum + J_i
 
-        if self.ensemble_dropout and self.mpnn.dropout > 0:
-            for m in self.mpnn.modules():
-                if isinstance(m, nn.Dropout):
-                    m.eval()
-
-        h = h_sum / self.ensemble_size
-        J = J_sum / self.ensemble_size
-
-        ### Initialiation logic
-        stitched_mask = (
-            context.stitched.stitched_mask if context.stitched is not None else None
+        return (
+            h_sum / self.ensemble_size,
+            J_sum / self.ensemble_size,
+            edge_index,
+            edge_mask,
         )
-        stitched_restype = (
-            context.stitched.stitched_restype[..., :R]
-            if context.stitched is not None
+
+    def main_inference_loop(
+        self,
+        context: FullContext,
+        seed: Optional[int] = None,
+    ) -> PottsOutput:
+        device = context.token.restype.device
+        _, _, R = context.token.restype.shape
+
+        generator = (
+            torch.Generator(device).manual_seed(seed) if seed is not None else None
+        )
+
+        ### Conditional ensemble
+        masked_restypes, is_masked = self._build_masked_inputs(context)
+        h, J, edge_index, edge_mask = self._run_ensemble(
+            context, masked_restypes, is_masked, generator
+        )
+
+        ### Unconditional ensemble
+        h_uncond = J_uncond = edge_index_uncond = edge_mask_uncond = None
+        if self.cfg_scale != 1.0:
+            logger.info(
+                f"Running unconditional ensemble for CFG (scale={self.cfg_scale})"
+            )
+            uncond_context = context.without_ligand()
+            uncond_masked, uncond_is_masked = self._build_masked_inputs(uncond_context)
+            h_uncond, J_uncond, edge_index_uncond, edge_mask_uncond = (
+                self._run_ensemble(
+                    uncond_context, uncond_masked, uncond_is_masked, generator
+                )
+            )
+
+        ### Initialisation logic
+        active_site_mask = build_backbone_ligand_proximity_mask(
+            backbone_coordinate=context.coordinate.backbone_coordinate,
+            centre_coordinate=context.coordinate.centre_coordinate,
+            is_ligand_token=context.entity.is_ligand_token,
+            token_mask=context.mask.token_mask,
+            backbone_mask=context.mask.backbone_mask,
+            distance_cutoff=self.active_site_distance_cutoff,
+        )
+        fixed_mask = (
+            context.fixed_residues.fixed_mask
+            if context.fixed_residues is not None
+            else None
+        )
+        fixed_restype = (
+            context.fixed_residues.fixed_restype
+            if context.fixed_residues is not None
             else None
         )
 
-        mutable_mask = build_mutable_mask(context.mask.token_mask, stitched_mask)
+        mutable_mask = build_mutable_mask(context.mask.token_mask, fixed_mask)
         alphabet_mask = build_alphabet_mask(
             mutable_mask, R, self.exclude_cys, self.exclude_met
         )
-
-        h = h + ~alphabet_mask * ALPHABET_BIAS
-
         energy_bias = build_energy_bias_vector(self.energy_bias, R, device)
-        if energy_bias is not None:
-            h = h + energy_bias
-
         S_init = build_s_init(
             h,
             self.potts_sampler.temperature_init,
-            stitched_mask,
-            stitched_restype,
+            fixed_mask,
+            fixed_restype,
             generator,
         )
+
+        ### Apply masks and biases
+        h = h + ~alphabet_mask * ALPHABET_BIAS
+        if h_uncond is not None:
+            h_uncond = h_uncond + ~alphabet_mask * ALPHABET_BIAS
+
+        if energy_bias is not None:
+            h = h + energy_bias
+            if h_uncond is not None:
+                h_uncond = h_uncond + energy_bias
 
         ### Penalty logic
         penalty_dict: dict[str, callable] = {}
@@ -305,19 +307,6 @@ class ArtiosPotts(nn.Module):
                 )
 
             penalty_dict["lcp"] = lcp_penalty
-
-        # Active site mask
-        needs_active_site = (
-            self.aromatic_penalty_weight > 0 or self.charged_penalty_weight > 0
-        )
-        if needs_active_site:
-            active_site_mask = build_active_site_mask(
-                context.coordinate.centre_coordinate,
-                context.entity.is_ligand_token,
-                context.entity.is_protein_token,
-                context.mask.token_mask,
-                self.active_site_distance_cutoff,
-            )
 
         if self.aromatic_penalty_weight > 0:
 
@@ -362,6 +351,11 @@ class ArtiosPotts(nn.Module):
             S_init=S_init,
             generator=generator,
             penalty=penalty,
+            h_uncond=h_uncond,
+            J_uncond=J_uncond,
+            edge_index_uncond=edge_index_uncond,
+            edge_mask_uncond=edge_mask_uncond,
+            active_site_mask=active_site_mask,
         )
 
         return PottsOutput(
@@ -469,8 +463,26 @@ class ArtiosPotts(nn.Module):
         is_resolved = context.mask.centre_atom_is_resolved
         mask = output.is_masked & is_resolved
 
-        loss_weight = self.masking_sampler.get_loss_weights(output.timestep)
+        _, N = gt_seq.shape
+
+        # Get loss weights
+        sampler_weight = self.masking_sampler.get_loss_weights(output.timestep)  # [B]
         eps = 1e-6
+
+        if self.loss_config.active_site_upweight > 1.0:
+            active_site = build_backbone_ligand_proximity_mask(
+                backbone_coordinate=context.coordinate.backbone_coordinate,
+                centre_coordinate=context.coordinate.centre_coordinate,
+                is_ligand_token=context.entity.is_ligand_token,
+                token_mask=context.mask.token_mask,
+                backbone_mask=context.mask.backbone_mask,
+                distance_cutoff=self.loss_config.active_site_distance,
+            )  # [B, N]
+            position_weight = torch.where(
+                active_site, self.loss_config.active_site_upweight, 1.0
+            )  # [B, N]
+        else:
+            position_weight = None
 
         match self.loss_config.loss_type:
             case PottsLossType.PSEUDO:
@@ -515,8 +527,12 @@ class ArtiosPotts(nn.Module):
             case _:
                 assert_never(self.loss_config.loss_type)
 
-        weighted_nll = loss_weight * nll  # [B]
-        loss = weighted_nll.mean()
+        # Get loss weight
+        loss_weight = repeat(sampler_weight, "B -> B N", N=N)
+        if position_weight is not None:
+            loss_weight = loss_weight * position_weight
+
+        loss = masked_mean(loss_weight * per_position_nll, mask, axes=-1).mean()
 
         # Metrics
         metrics: dict[str, Tensor] = {}

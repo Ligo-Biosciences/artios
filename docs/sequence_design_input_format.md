@@ -1,77 +1,89 @@
 # Sequence Design Input Format
 
-This document describes the JSON input format for sequence design inference, where an amino acid sequence is predicted for a given backbone structure with ligand(s).
+This document describes the JSON input format for sequence design inference, where an amino-acid sequence is predicted for a backbone structure (plus ligands) produced upstream by backbone inference.
 
 ## Overview
 
-Sequence design allows you to:
-1. Provide a poly-glycine backbone CIF file with ligand(s) included directly
-2. Specify which residue positions have fixed (constrained) amino acid identities
-3. Predict the optimal sequence for the remaining designable positions
+Sequence design takes an NPZ file containing a serialised `AtomArrayStack` from backbone inference. That NPZ already carries everything the sequence-design model needs:
 
-The model will predict a sequence that folds into the given backbone structure and binds the ligand.
+- Protein backbone coordinates (poly-glycine)
+- Ligand coordinates and annotations
+- Motif residue annotations (`is_motif`, `is_motif_related`)
+- Chain IDs for all entities
+
+You can additionally:
+
+1. Pin amino-acid identity at specific positions via `fixed_residues`
+2. Control which backbones in the stack are used (and how many output sequences to generate per backbone) via `backbone_index_map`
+
+The model predicts a sequence that folds into the given backbone and binds any ligands present.
 
 ## JSON Format
+
+The top-level shape is a task envelope that the inference dispatcher uses to select the sequence-design pipeline. The task-specific data lives under `spec`:
 
 ```json
 {
   "name": "my_sequence_design",
-  "cif_file": "path/to/backbone.cif",
-  "fixed_residues": [
-    {"chain_id": "A", "res_id": 94, "residue": "HIS"},
-    {"chain_id": "A", "res_id": 96, "residue": "H"},
-    {"chain_id": "A", "res_id": 119, "residue": "HIS"}
-  ]
+  "task": "sequence_design",
+  "spec": {
+    "npz_file": "path/to/backbone_output.npz",
+    "fixed_residues": {
+      "0": [
+        {"res_id": 94,  "res_name": "HIS"},
+        {"res_id": 96,  "res_name": "H"},
+        {"res_id": 119, "res_name": "HIS"}
+      ]
+    },
+    "backbone_index_map": [0, 0, 1, 1, 2]
+  }
 }
 ```
 
-### Fields
+### Top-level fields
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | No | Identifier for this design job |
-| `cif_file` | Yes | Path to the backbone CIF file (.cif or .mmcif) |
-| `fixed_residues` | No | List of residues with constrained amino acid identity |
-| `fixed_residues[].chain_id` | Yes | Chain identifier |
-| `fixed_residues[].res_id` | Yes | Residue number (1-based) |
-| `fixed_residues[].residue` | Yes | Amino acid code (1-letter or 3-letter) |
+| `name` | Yes | Job identifier |
+| `task` | Yes | Must be the literal string `"sequence_design"` |
+| `spec` | Yes | Task-specific payload (see below) |
 
-## Backbone CIF File
+### `spec` fields
 
-The backbone CIF file should contain:
+| Field | Required | Description |
+|-------|----------|-------------|
+| `npz_file` | Yes | Path to the backbone NPZ file. May be a string or `{"path": "..."}` |
+| `fixed_residues` | No | Per-sample map from backbone stack index → list of fixed residues |
+| `backbone_index_map` | No | Per-output-position NPZ stack index. Controls which backbones produce sequences and how many per backbone |
 
-- **Poly-glycine protein chain(s)**: Backbone atoms only (N, CA, C, O) with all residues as GLY
-- **Ligand(s)**: The target molecule(s) to design binding for, with full atomic coordinates
+### `fixed_residues[<sample_idx>][]` fields
 
-The ligand(s) should be included directly in the CIF file as HETATM records with complete atomic information. No separate ligand mapping is needed.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `res_id` | Yes | Residue number (1-based) |
+| `res_name` | Yes | Amino-acid code (1-letter or 3-letter) |
 
-Example backbone structure:
-```
-ATOM      1  N   GLY A   1      10.000  10.000  10.000  1.00  0.00           N
-ATOM      2  CA  GLY A   1      11.458  10.000  10.000  1.00  0.00           C
-ATOM      3  C   GLY A   1      12.009  11.420  10.000  1.00  0.00           C
-ATOM      4  O   GLY A   1      11.251  12.400  10.000  1.00  0.00           O
-ATOM      5  N   GLY A   2      13.320  11.540  10.000  1.00  0.00           N
-...
-HETATM  500  ZN  ZN  B   1      15.000  15.000  15.000  1.00  0.00          ZN
-```
+`fixed_residues` keys are integers — the backbone stack position in the NPZ. Residues pinned under key `N` apply only to outputs generated from backbone `N`. The stack index `N` is the same index used by `backbone_index_map` entries (see below).
 
-The backbone can be obtained from:
-- An existing structure with sidechains stripped
-- A de novo designed backbone from structure prediction
-- Any source providing backbone coordinates
+## Backbone NPZ File
+
+The NPZ file is the saved `AtomArrayStack` from backbone inference, loaded via `artios.utils.file_io.load_atomarray_stack`. A single NPZ can contain many backbones (stack depth `m`), each sharing the same atom annotations but with its own coordinates.
+
+Because this file comes straight out of backbone inference, no separate ligand mapping, chain assignment, or motif annotation is required at the sequence-design stage — all of that is already baked into the NPZ.
 
 ## Fixed Residues
 
-Fixed residues constrain specific positions to known amino acid identities. Common use cases:
+Fixed residues constrain specific positions to known amino-acid identities. Common sources:
 
-- **Catalytic residues**: Essential for enzyme function (e.g., HIS in zinc-binding sites)
-- **Binding site residues**: Known to interact with the ligand
-- **Conserved residues**: From evolutionary analysis or experimental data
+- **Stitched motif residues**: Catalytic/binding residues carried through motif scaffolding
+- **Pocket residues**: Residues inherited from a successful folded ancestor in the redesign pipeline
+- **External constraints**: Conserved residues from evolutionary analysis or experimental data
+
+In the evaluation pipeline, all sources are merged by `make_potts_input_json` into a single per-sample-index list before this JSON is written. If the same `res_id` appears in multiple sources for the same sample index, stitched-motif identity wins — see `evaluation/utils/pocket_residues.py::merge_fixed_residues`.
 
 ### Residue Code Format
 
-Both 1-letter and 3-letter amino acid codes are accepted:
+Both 1-letter and 3-letter amino-acid codes are accepted. Codes are case-insensitive and normalised to 3-letter format internally.
 
 | 1-letter | 3-letter | Amino Acid |
 |----------|----------|------------|
@@ -96,106 +108,120 @@ Both 1-letter and 3-letter amino acid codes are accepted:
 | Y | TYR | Tyrosine |
 | V | VAL | Valine |
 
-Codes are case-insensitive and normalized to 3-letter format internally.
+## `backbone_index_map`
+
+`backbone_index_map` is an optional list of integers that controls the mapping from output sequence index to NPZ stack index.
+
+- **Omitted / `null`**: one output per backbone, in stack order — equivalent to `list(range(stack_depth))`. This is the gen0 default.
+- **Provided**: entry `i` is the NPZ stack position that output sequence `i` should be generated from. Multiple entries may point to the same stack position, and group sizes need not be uniform. This is used in later redesign generations where filter survival rates vary per backbone.
+
+The ordering contract (in `evaluation/functions/artios_potts_function.py` and consumed by `artios/data/infer_data_pipeline.py::MPNNDataset`): output position `i` in the FASTA corresponds to the UID whose `batch_sample_idx == i`, and `backbone_index_map[i]` is that UID's `backbone_sample_idx`.
 
 ## Complete Examples
 
-### Zinc-Binding Protein Redesign
-
-Redesigning a carbonic anhydrase-like zinc-binding site:
-
-```json
-{
-  "name": "zinc_binding_redesign",
-  "cif_file": "backbones/carbonic_anhydrase_polyG.cif",
-  "fixed_residues": [
-    {"chain_id": "A", "res_id": 94, "residue": "HIS"},
-    {"chain_id": "A", "res_id": 96, "residue": "HIS"},
-    {"chain_id": "A", "res_id": 119, "residue": "HIS"}
-  ]
-}
-```
-
-### ATP-Binding Protein
-
-Designing a sequence for an ATP-binding protein with key binding residues fixed:
-
-```json
-{
-  "name": "atp_binding_design",
-  "cif_file": "backbones/kinase_fold_polyG.cif",
-  "fixed_residues": [
-    {"chain_id": "A", "res_id": 52, "residue": "K"},
-    {"chain_id": "A", "res_id": 168, "residue": "D"},
-    {"chain_id": "A", "res_id": 184, "residue": "D"}
-  ]
-}
-```
-
-### Multi-Chain Complex
-
-Designing sequences for a homodimer with a shared ligand:
-
-```json
-{
-  "name": "homodimer_design",
-  "cif_file": "backbones/homodimer_polyG.cif",
-  "fixed_residues": [
-    {"chain_id": "A", "res_id": 45, "residue": "GLY"},
-    {"chain_id": "A", "res_id": 47, "residue": "GLY"},
-    {"chain_id": "B", "res_id": 45, "residue": "GLY"},
-    {"chain_id": "B", "res_id": 47, "residue": "GLY"}
-  ]
-}
-```
-
-### No Fixed Residues
-
-If no residues are constrained, all positions are designable:
+### Default one-sequence-per-backbone run
 
 ```json
 {
   "name": "full_redesign",
-  "cif_file": "backbones/target_polyG.cif"
+  "task": "sequence_design",
+  "spec": {
+    "npz_file": "backbones/target_backbones.npz"
+  }
+}
+```
+
+### Zinc-binding site with fixed histidines
+
+Pin the three catalytic histidines for every backbone in the stack (stack depth 2 in this example):
+
+```json
+{
+  "name": "zinc_binding_redesign",
+  "task": "sequence_design",
+  "spec": {
+    "npz_file": "backbones/carbonic_anhydrase_backbones.npz",
+    "fixed_residues": {
+      "0": [
+        {"res_id": 94,  "res_name": "HIS"},
+        {"res_id": 96,  "res_name": "HIS"},
+        {"res_id": 119, "res_name": "HIS"}
+      ],
+      "1": [
+        {"res_id": 94,  "res_name": "HIS"},
+        {"res_id": 96,  "res_name": "HIS"},
+        {"res_id": 119, "res_name": "HIS"}
+      ]
+    }
+  }
+}
+```
+
+### Redesign generation with uneven group sizes
+
+Three surviving backbones (stack positions 0, 1, 2) produce 2, 3, and 1 sequences respectively. Only backbone 1 has pinned residues:
+
+```json
+{
+  "name": "gen1_redesign",
+  "task": "sequence_design",
+  "spec": {
+    "npz_file": "backbones/gen0_stack.npz",
+    "fixed_residues": {
+      "1": [
+        {"res_id": 52,  "res_name": "K"},
+        {"res_id": 168, "res_name": "D"}
+      ]
+    },
+    "backbone_index_map": [0, 0, 1, 1, 1, 2]
+  }
 }
 ```
 
 ## Validation
 
-The parser validates:
+The parser (`artios.data.parsing.json.SequenceDesignInput`) validates:
 
-1. **File format**: CIF file must be `.cif` or `.mmcif`
-2. **Residue codes**: Must be valid standard amino acids (20 natural amino acids)
-3. **Residue numbers**: Must be positive integers (1-based)
-4. **No duplicates**: Each (chain_id, res_id) pair can only appear once in `fixed_residues`
+1. **Task envelope**: `task` must be `"sequence_design"`; `name` and `spec` are required
+2. **File format**: `npz_file` must end in `.npz`
+3. **Residue codes**: `res_name` must be a standard amino acid (20 natural amino acids); 1-letter and 3-letter forms both accepted
 
 ## Python Usage
 
 ```python
 from artios.data.parsing.json import (
-    parse_sequence_design_json,
-    SequenceDesignInput,
     FixedResidue,
-    CIFFile,
+    NPZFile,
+    SequenceDesignInput,
+    parse_input_dict,
+    parse_sequence_design_json,
 )
 
-# Parse from file
+# Parse from a task-wrapped dict (inference pipeline entry point)
+input_data = parse_input_dict({
+    "name": "my_design",
+    "task": "sequence_design",
+    "spec": {"npz_file": "backbone.npz"},
+})
+
+# Or parse a flat JSON file directly
 input_data = parse_sequence_design_json("my_design.json")
 
 # Access fields
 print(input_data.name)
-print(input_data.cif_file.path)
+print(input_data.npz_file.path)
 
-for fr in input_data.fixed_residues:
-    # residue is always normalized to 3-letter code
-    print(f"Chain {fr.chain_id}, Res {fr.res_id}: {fr.residue}")
+for sample_idx, residues in input_data.fixed_residues.items():
+    for fr in residues:
+        print(f"Sample {sample_idx}: res_id {fr.res_id} pinned to {fr.res_name}")
 
 # Create programmatically
 input_data = SequenceDesignInput(
     name="my_design",
-    cif_file=CIFFile(path="backbone.cif"),
-    fixed_residues=[
-        FixedResidue(chain_id="A", res_id=94, residue="H"),  # normalized to "HIS"
-    ],
+    npz_file=NPZFile(path="backbone.npz"),
+    fixed_residues={
+        0: [FixedResidue(res_id=94, res_name="HIS")],
+    },
+    backbone_index_map=[0, 0, 1],
 )
 ```

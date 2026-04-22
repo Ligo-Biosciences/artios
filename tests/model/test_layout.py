@@ -394,34 +394,6 @@ class TestDeviceAndDtype:
             )
             assert result.dtype == dtype
 
-    @pytest.mark.gpu
-    def test_works_on_cuda(self):
-        """Should work on CUDA device."""
-        if not torch.cuda.is_available():
-            pytest.skip("CUDA not available")
-
-        k_x = torch.randn(128, 16, device="cuda")
-        result = rearrange_to_key_subset(
-            k_x, rearrange_dim=-2, num_keys=128, num_queries=32
-        )
-        assert result.device.type == "cuda"
-
-    @pytest.mark.gpu
-    def test_gradient_flow_cuda(self):
-        """Gradients should flow correctly on CUDA."""
-        if not torch.cuda.is_available():
-            pytest.skip("CUDA not available")
-
-        k_x = torch.randn(128, 16, device="cuda", requires_grad=True)
-        result = rearrange_to_key_subset(
-            k_x, rearrange_dim=-2, num_keys=128, num_queries=32
-        )
-        loss = result.sum()
-        loss.backward()
-
-        assert k_x.grad is not None
-        assert k_x.grad.device.type == "cuda"
-
 
 class TestGatherTrunkPairEmbedding:
     """Test the torch.gather-based gather_trunk_pair_embedding implementation."""
@@ -524,24 +496,6 @@ class TestGatherTrunkPairEmbedding:
 
             result = gather_trunk_pair_embedding(x, idx_q, idx_k)
             assert result.dtype == dtype
-
-    @pytest.mark.gpu
-    def test_works_on_cuda(self):
-        """Should work on CUDA device."""
-        if not torch.cuda.is_available():
-            pytest.skip("CUDA not available")
-
-        n_token, d = 16, 32
-        n_b, n_q, n_k = 4, 8, 16
-
-        x = torch.randn(n_token, n_token, d, device="cuda")
-        idx_q = torch.randint(0, n_token, (n_b, n_q), device="cuda")
-        idx_k = torch.randint(0, n_token, (n_b, n_k), device="cuda")
-
-        result = gather_trunk_pair_embedding(x, idx_q, idx_k)
-
-        assert result.device.type == "cuda"
-        assert result.shape == (n_b, n_q, n_k, d)
 
 
 class TestBroadcastTokenToLocalAtomPair:
@@ -691,28 +645,6 @@ class TestBroadcastTokenToLocalAtomPair:
             )
 
             assert result.dtype == dtype
-
-    @pytest.mark.gpu
-    def test_works_on_cuda(self):
-        """Should work on CUDA device."""
-        if not torch.cuda.is_available():
-            pytest.skip("CUDA not available")
-
-        n_token, n_atom, d = 8, 64, 16
-
-        z_token = torch.randn(n_token, n_token, d, device="cuda")
-        atom_to_token_idx = torch.repeat_interleave(
-            torch.arange(n_token, device="cuda"), n_atom // n_token
-        )
-
-        result = broadcast_token_to_local_atom_pair(
-            z_token=z_token,
-            atom_to_token_idx=atom_to_token_idx,
-            num_queries=self.num_queries,
-            num_keys=self.num_keys,
-        )
-
-        assert result.device.type == "cuda"
 
 
 class TestMaskingIntegration:

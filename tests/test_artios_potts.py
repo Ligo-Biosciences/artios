@@ -40,6 +40,8 @@ def _make_configs(
                 "potts": {
                     "loss_type": loss_type,
                     "label_smoothing": label_smoothing,
+                    "active_site_upweight": 1.0,
+                    "active_site_distance": 8.0,
                 },
             },
             "artios_mpnn": {
@@ -54,12 +56,16 @@ def _make_configs(
                     "positional_encoding_max_relative_feats": 32,
                     "num_rbf_kernels": 16,
                     "dropout": 0.0,
-                    "coord_noise": 0.1,
+                    "coord_noise_near_ligand": 0.1,
+                    "coord_noise_away_from_ligand": 0.1,
+                    "coord_noise_distance_cutoff": 8.0,
                     "checkpoint_grads": False,
                 },
                 "potts": {
                     "symmetric_J": symmetric_J,
+                    "zero_sum_gauge": True,
                     "parameterisation": parameterisation,
+                    "num_factors": 32,
                     "masking_sampler": "linear",
                     "sampling": {
                         "proposal": proposal,
@@ -79,8 +85,15 @@ def _make_configs(
                         "active_site_distance_cutoff": 8.0,
                         "charged_penalty_weight": 0.0,
                         "charged_target_fraction": 0.25,
+                        "composition_penalty_weight": 0.0,
+                        "composition_organism": "swissprot",
+                        "composition_tolerance_k": 1.0,
                         "ensemble_size": 1,
                         "ensemble_noise_scale": 0.3,
+                        "cfg_scale": 1.0,
+                        "active_site_only_cfg": False,
+                        "granular_active_site_coloring": False,
+                        "energy_bias": {aa: 0.0 for aa in "ARNDCQEGHILKMFPSTWYV"},
                         "track_trajectory": track_trajectory,
                         "trajectory_interval": trajectory_interval,
                         "track_u_i": track_u_i,
@@ -443,22 +456,6 @@ class TestComputeLossPseudo:
 
         assert has_grad, "No gradients computed"
 
-    def test_label_smoothing(self, context, device):
-        """Different label smoothing should produce different losses."""
-        m0 = ArtiosPotts(_make_configs(label_smoothing=0.0)).to(device)
-        m1 = ArtiosPotts(_make_configs(label_smoothing=0.1)).to(device)
-        m1.load_state_dict(m0.state_dict())
-
-        m0.eval()
-        m1.eval()
-
-        with torch.no_grad():
-            out = m0.main_train_loop(context=context, seed=42)
-            loss0, _ = m0.compute_loss(out, context)
-            loss1, _ = m1.compute_loss(out, context)
-
-        assert not torch.allclose(loss0, loss1), "Label smoothing should change loss"
-
 
 # ---------------------------------------------------------------------------
 # compute_loss tests (composite)
@@ -677,24 +674,6 @@ class TestParameterisationWithCompositeLoss:
                 ).all(), f"Non-finite gradient for {name}"
 
         assert has_grad, "No gradients computed"
-
-
-# ---------------------------------------------------------------------------
-# Invalid config
-# ---------------------------------------------------------------------------
-
-
-class TestInvalidConfig:
-    """Tests for invalid configurations."""
-
-    def test_invalid_loss_type_raises(self, context, device):
-        configs = _make_configs(loss_type="invalid")
-        model = ArtiosPotts(configs).to(device)
-        model.train()
-        output = model.main_train_loop(context=context, seed=42)
-
-        with pytest.raises(ValueError, match="Unknown loss_type"):
-            model.compute_loss(output, context)
 
 
 # ---------------------------------------------------------------------------

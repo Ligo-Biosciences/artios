@@ -10,6 +10,7 @@
         "ligands": [
             {
                 "cif_res_name": "ZN",
+                "chain_id": "C",
                 "full_ligand": {
                     "type": "ccd",
                     "codes": [
@@ -19,6 +20,7 @@
             },
             {
                 "cif_res_name": "AL5",
+                "chain_id": "D",
                 "full_ligand": {
                     "type": "ccd",
                     "codes": [

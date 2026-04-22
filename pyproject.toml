@@ -83,10 +83,6 @@ engineering = [
 dev = [
     "pytest>=6.0",
     "pytest-cov",
-    "black",
-    "isort",
-    "flake8",
-    "mypy",
     "pre-commit",
     "ipykernel",
     "notebook",
@@ -104,33 +100,9 @@ exclude = ["assets*", "benchmark*", "*.egg-info*", "tests*"]
 [tool.setuptools.package-data]
 "artios" = ["model/layer_norm/kernel/*"]
 
-[tool.black]
-line-length = 88
-target-version = ['py311']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
-
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-line_length = 88
-known_first_party = ["artios"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py"]
+python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
@@ -141,37 +113,10 @@ addopts = [
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "gpu: marks tests that require GPU",
 ]
-
-[tool.mypy]
-python_version = "3.11"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-check_untyped_defs = true
-disallow_untyped_decorators = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-warn_unreachable = true
-strict_equality = true
-
-[[tool.mypy.overrides]]
-module = [
-    "rdkit.*",
-    "ml_collections.*",
-    "dm_tree.*",
-    "wandb.*",
-    "biotite.*",
-    "deepspeed.*",
-]
-ignore_missing_imports = true
 
 [tool.ty.src]
-exclude = ["tests/", "artios/openfold_local/"]
+exclude = ["tests/"]
 
 [tool.uv]
 no-binary-package = ["atomworks"]

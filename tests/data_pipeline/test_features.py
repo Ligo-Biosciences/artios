@@ -1,0 +1,160 @@
+"""Tests for protenix.data.features module."""
+
+import pytest
+import torch
+
+from artios.data.features import (
+    AtomPermContext,
+    BasicContext,
+    CoordinateContext,
+    FullContext,
+    MaskContext,
+    TokenContext,
+)
+from tests._helpers.context import create_test_context
+
+
+class TestContextToFromDict:
+    """Tests for individual Context to_dict/from_dict methods."""
+
+    def test_token_context_roundtrip(self) -> None:
+        """TokenContext should roundtrip through to_dict/from_dict."""
+        n_tokens = 10
+        token = TokenContext(
+            token_index=torch.arange(n_tokens),
+            residue_index=torch.arange(n_tokens),
+            asym_id=torch.zeros(n_tokens, dtype=torch.long),
+            entity_id=torch.zeros(n_tokens, dtype=torch.long),
+            sym_id=torch.zeros(n_tokens, dtype=torch.long),
+            restype=torch.zeros(n_tokens, 32, dtype=torch.long),
+            token_bonds=torch.zeros(n_tokens, n_tokens, dtype=torch.long),
+        )
+
+        d = token.to_dict()
+        restored = TokenContext.from_dict(d)
+
+        assert torch.equal(token.token_index, restored.token_index)
+        assert torch.equal(token.residue_index, restored.residue_index)
+        assert torch.equal(token.restype, restored.restype)
+        assert torch.equal(token.token_bonds, restored.token_bonds)
+
+    def test_atom_perm_context_roundtrip(self) -> None:
+        """AtomPermContext should roundtrip through to_dict/from_dict."""
+        perms = [[0, 1, 2], [2, 1, 0], [1, 0, 2]]
+        atom_perm = AtomPermContext(perms=perms)
+
+        d = atom_perm.to_dict()
+        restored = AtomPermContext.from_dict(d)
+
+        assert restored.perms == perms
+
+    def test_coordinate_context_roundtrip(self) -> None:
+        """CoordinateContext should roundtrip, preserving resolution."""
+        n_atoms = 20
+        n_tokens = 5
+        resolution = 2.5
+
+        coord = CoordinateContext(
+            coordinate=torch.randn(n_atoms, 3),
+            centre_coordinate=torch.randn(n_tokens, 3),
+            backbone_coordinate=torch.randn(n_tokens, 5, 3),
+            resolution=resolution,
+        )
+
+        d = coord.to_dict()
+        restored = CoordinateContext.from_dict(d, resolution=resolution)
+
+        assert torch.allclose(coord.coordinate, restored.coordinate)
+        assert torch.allclose(coord.centre_coordinate, restored.centre_coordinate)
+        assert restored.resolution == resolution
+
+    def test_mask_context_roundtrip(self) -> None:
+        """MaskContext should roundtrip through to_dict/from_dict."""
+        n_atoms = 20
+        n_tokens = 5
+
+        mask = MaskContext(
+            centre_atom_mask=torch.zeros(n_atoms, dtype=torch.bool),
+            atom_mask=torch.ones(n_atoms, dtype=torch.bool),
+            is_resolved=torch.ones(n_atoms, dtype=torch.bool),
+            centre_atom_is_resolved=torch.ones(n_tokens, dtype=torch.bool),
+            backbone_mask=torch.ones(n_tokens, 5, dtype=torch.bool),
+            atom_loss_mask=torch.ones(n_atoms, dtype=torch.bool),
+            token_mask=torch.ones(n_tokens, dtype=torch.bool),
+        )
+
+        d = mask.to_dict()
+        restored = MaskContext.from_dict(d)
+
+        assert torch.equal(mask.atom_mask, restored.atom_mask)
+        assert torch.equal(mask.is_resolved, restored.is_resolved)
+        assert torch.equal(
+            mask.centre_atom_is_resolved, restored.centre_atom_is_resolved
+        )
+        assert torch.equal(mask.token_mask, restored.token_mask)
+
+
+class TestFullContextToFromDict:
+    """Tests for FullContext to_dict/from_dict methods."""
+
+    @pytest.fixture
+    def context(self) -> FullContext:
+        """Create a test FullContext."""
+        return create_test_context(
+            batch_size=2,
+            n_tokens=10,
+            n_atoms=30,
+            device=torch.device("cpu"),
+        )
+
+    def test_roundtrip_preserves_tensor_values(self, context: FullContext) -> None:
+        """Roundtrip should preserve tensor values."""
+        d = context.to_dict()
+        resolution = context.coordinate.resolution
+
+        restored = FullContext.from_dict(d, resolution=resolution)
+
+        # Check tensor equality
+        assert torch.equal(context.token.token_index, restored.token.token_index)
+        assert torch.equal(context.mask.atom_mask, restored.mask.atom_mask)
+        assert torch.allclose(
+            context.coordinate.coordinate, restored.coordinate.coordinate
+        )
+
+    def test_from_dict_infers_basic_context(self) -> None:
+        """from_dict should infer BasicContext when not provided."""
+        context = create_test_context(
+            batch_size=4,
+            n_tokens=15,
+            n_atoms=45,
+            device=torch.device("cpu"),
+        )
+
+        d = context.to_dict()
+        restored = FullContext.from_dict(d, resolution=1.5)
+
+        # BasicContext should be inferred from tensor shapes
+        assert isinstance(restored.basic, BasicContext)
+        assert restored.basic.n_token == [15] * 4
+        assert restored.basic.n_atom == [45] * 4
+
+
+class TestBatchedContext:
+    """Tests for batched context serialization."""
+
+    def test_batched_context_roundtrip(self) -> None:
+        """Batched context should roundtrip correctly."""
+        context = create_test_context(
+            batch_size=8,
+            n_tokens=20,
+            n_atoms=60,
+            device=torch.device("cpu"),
+        )
+
+        d = context.to_dict()
+        restored = FullContext.from_dict(d, resolution=context.coordinate.resolution)
+
+        # Check shapes are preserved
+        assert restored.token.token_index.shape == (8, 20)
+        assert restored.mask.atom_mask.shape == (8, 60)
+        assert restored.coordinate.coordinate.shape == (8, 60, 3)

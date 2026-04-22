@@ -451,6 +451,40 @@ class FixedResidueContext(Context):
 
 @typecheck
 @dataclass
+class MSAContext(Context):
+    """MSA features for one reference chain, token-aligned to the cropped structure.
+
+    Shape convention: n_token is the leading non-batch axis so that the
+    existing FeatureType.TOKEN pad_fn (pads last non-batch dim by n_token_pad)
+    applies uniformly to all fields.  The MSA dataclass (artios/data/msa/
+    sampler.py) stores the transposed MSA-native ``[n_msa, l_chain]`` layout;
+    ContextGenerator._build_msa_context performs the transpose and gap-fill.
+
+    Non-reference-chain tokens are filled with gap (31); msa_chain_mask
+    marks which tokens are covered.
+    """
+
+    tokens: Feature(
+        Int[Tensor, "*batch n_token n_msa"],
+        type=FeatureType.TOKEN,
+        encoding=EncodingType.IDENTITY,
+        description="MSA tokens per (token, row); non-chain rows are gap.",
+    )
+    gap_mask: Mask(
+        Bool[Tensor, "*batch n_token n_msa"],
+        type=FeatureType.TOKEN,
+        description="True where tokens == 31 (gap).",
+    )
+    msa_chain_mask: Mask(
+        Bool[Tensor, "*batch n_token"],
+        type=FeatureType.TOKEN,
+        description="True on tokens belonging to the reference MSA chain.",
+    )
+    msa_chain_asym_id: int | list[int]  # becomes list[int] after batching
+
+
+@typecheck
+@dataclass
 class CoordinateContext(Context):
     """Coordinate features."""
 
@@ -511,6 +545,7 @@ class FullContext:
     # NOTE: Temporarily optional - expensive to compute, currently unused
     atom_perm: AtomPermContext = field(default_factory=AtomPermContext)
     fixed_residues: FixedResidueContext | None = None
+    msa: MSAContext | None = None
 
     def pad(self, n_max_atoms: int, n_max_tokens: int) -> FullContext:
         """Pad all features to n_max_tokens/n_max_atoms."""
@@ -621,6 +656,7 @@ class FullContext:
             coordinate=self.coordinate,
             basic=self.basic,
             fixed_residues=self.fixed_residues,
+            msa=self.msa,
         )
 
     def without_ligand(self) -> FullContext:
@@ -688,6 +724,7 @@ class FullContext:
             coordinate=new_coordinate,
             basic=self.basic,
             fixed_residues=self.fixed_residues,
+            msa=self.msa,
         )
 
     @classmethod
@@ -754,6 +791,11 @@ class FullContext:
         if "fixed_residues" in d:
             fixed_residues = FixedResidueContext.from_dict(d["fixed_residues"])
 
+        # Optional: MSAContext
+        msa = None
+        if "msa" in d:
+            msa = MSAContext.from_dict(d["msa"])
+
         return cls(
             token=token,
             reference=reference,
@@ -766,4 +808,5 @@ class FullContext:
             coordinate=coordinate,
             basic=basic_context,
             fixed_residues=fixed_residues,
+            msa=msa,
         )

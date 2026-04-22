@@ -35,6 +35,7 @@ from artios.data.features import FullContext
 from artios.data.features.featurizer import ContextGenerator
 from artios.data.filter import Filter
 from artios.data.motif_maker import MotifMaker
+from artios.data.msa import MSA, MSAQueryInfo, MSASampler
 from artios.data.structure import AnnotatedStructure, annotation
 from artios.utils.file_io import read_indices_csv
 from artios.utils.geometry import random_transform
@@ -62,6 +63,7 @@ class BaseSingleDataset(Dataset):
         cropping_configs: dict[str, Any],
         template_featurizer: Optional[Any] = None,
         motif_maker: Optional[MotifMaker] = None,
+        msa_sampler: Optional[MSASampler] = None,
         name: Optional[str] = None,
         **kwargs,
     ) -> None:
@@ -132,6 +134,7 @@ class BaseSingleDataset(Dataset):
 
         self.template_featurizer = template_featurizer
         self.motif_maker = motif_maker
+        self.msa_sampler = msa_sampler
 
         # Motif training configs
         self.motif_configs = kwargs.get("motif_training", {})
@@ -451,6 +454,13 @@ class BaseSingleDataset(Dataset):
         sample_indice, structure, pdb_id, npz_path = self._get_bioassembly_data(idx=idx)
         timings["get_bioassembly"] = time.time() - t0
 
+        # --- MSA query info (must be extracted pre-crop) ---
+        msa_query_info: Optional[MSAQueryInfo] = None
+        if self.msa_sampler is not None:
+            msa_query_info = MSAQueryInfo.from_pre_crop_structure(
+                structure, sample_indice.chain_1_id
+            )
+
         # --- Select ---
         if self.use_reference_chains_only:
             ref_chain_ids = [sample_indice.chain_1_id, sample_indice.chain_2_id]
@@ -528,14 +538,23 @@ class BaseSingleDataset(Dataset):
         timings["motif"] = time.time() - tmotif
 
         # --- Featurize ---
-        t4 = time.time()
         structure = AnnotatedStructure.from_atom_array(cropped_atom_array)
+
+        # --- MSA sample (post-crop so chain asym_id matches the cropped structure) ---
+        msa: Optional[MSA] = None
+        if self.msa_sampler is not None and msa_query_info is not None:
+            t_msa = time.time()
+            msa = self.msa_sampler.sample(structure, msa_query_info)
+            timings["msa_sample"] = time.time() - t_msa
+
+        t4 = time.time()
         context = ContextGenerator(
             structure,
             ref_pos_augment=self.ref_pos_augment,
             lig_atom_rename=self.lig_atom_rename,
             bioassembly_dict_fpath=npz_path,
             pdb_id=pdb_id,
+            msa=msa,
         ).get_full_context(include_arrays=self.include_arrays_in_context)
         timings["get_feature_and_label"] = time.time() - t4
 
@@ -550,6 +569,7 @@ class BaseSingleDataset(Dataset):
                 f"crop={timings.get('crop', 0):.3f}s, "
                 f"augment={timings.get('augmentation', 0):.3f}s, "
                 f"motif={timings.get('motif', 0):.3f}s, "
+                f"msa={timings.get('msa_sample', 0):.3f}s, "
                 f"features={timings.get('get_feature_and_label', 0):.3f}s, "
                 f"padding={timings.get('padding', 0):.3f}s"
             )

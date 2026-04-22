@@ -10,6 +10,7 @@ from sklearn.neighbors import KDTree  # TODO: switch to scipy
 
 from artios.common.constants import (
     BACKBONE_DEFS,
+    GAP,
     STD_RESIDUES,
     STD_RESIDUES_AND_GAP,
     get_all_elems,
@@ -27,8 +28,12 @@ from artios.data.features import (
     ReferenceConformerContext,
     TokenContext,
 )
+from artios.data.features.context import MSAContext
+from artios.data.msa import MSA
 from artios.data.structure import AnnotatedStructure
 from artios.utils.geometry import compute_virtual_cb, random_transform
+
+_GAP_TOKEN = GAP["-"]  # 31
 
 
 class ContextGenerator:
@@ -41,6 +46,7 @@ class ContextGenerator:
         original_motif_mapping: list[dict] | None = None,
         ref_pos_augment: bool = True,
         lig_atom_rename: bool = False,
+        msa: MSA | None = None,
     ) -> None:
         self.s = structure
         self.pdb_id = pdb_id
@@ -48,6 +54,7 @@ class ContextGenerator:
         self.ref_pos_augment = ref_pos_augment
         self.lig_atom_rename = lig_atom_rename
         self.original_motif_mapping = original_motif_mapping
+        self.msa = msa
 
         self.atom_to_token_idx = torch.from_numpy(
             self.s.grouping.atom_token_index
@@ -440,6 +447,33 @@ class ContextGenerator:
             original_motif_mapping=self.original_motif_mapping,
         )
 
+    def _build_msa_context(self) -> MSAContext | None:
+        """Option A expansion from compact MSA ([n_msa, l_chain]) to the
+        token-aligned MSAContext ([n_token, n_msa]).
+
+        Non-reference-chain tokens get gap-filled (token 31); the
+        msa_chain_mask identifies which tokens carry real MSA data.
+        """
+        if self.msa is None:
+            return None
+
+        n_token = self.s.grouping.n_tokens
+        n_msa = self.msa.tokens.shape[0]
+
+        tokens = np.full((n_token, n_msa), _GAP_TOKEN, dtype=np.int8)
+        tokens[self.msa.chain_token_indices, :] = self.msa.tokens.T
+        gap_mask = tokens == _GAP_TOKEN
+
+        msa_chain_mask = np.zeros(n_token, dtype=bool)
+        msa_chain_mask[self.msa.chain_token_indices] = True
+
+        return MSAContext(
+            tokens=torch.from_numpy(tokens),
+            gap_mask=torch.from_numpy(gap_mask),
+            msa_chain_mask=torch.from_numpy(msa_chain_mask),
+            msa_chain_asym_id=int(self.msa.msa_chain_asym_id),
+        )
+
     def get_full_context(self, include_arrays: bool = True) -> FullContext:
         """Get all context required for design pipeline.
 
@@ -460,6 +494,7 @@ class ContextGenerator:
             entity=self.get_entity_context(),
             coordinate=self.get_coordinate_context(),
             basic=self.get_basic_context(include_arrays=include_arrays),
+            msa=self._build_msa_context(),
         )
 
     def get_atom_permutation_list(

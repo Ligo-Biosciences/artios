@@ -143,6 +143,27 @@ class MSA:
         if not np.array_equal(self.gap_mask, self.tokens == _GAP):
             raise ValueError("gap_mask must equal (tokens == 31)")
 
+    @classmethod
+    def null_for(cls, n_msa: int) -> "MSA":
+        """Sentinel MSA for samples with no resolvable protein chain.
+
+        Uses ``l_chain_cropped=0`` (empty chain columns). When this is
+        featurised into an MSAContext the scatter is a no-op:
+        ``tokens`` stays gap-filled (31) across the full n_token grid,
+        ``msa_chain_mask`` stays all-False, and the sample contributes
+        zero to the MSA loss through ordinary masking.
+
+        Used in ``dataset.process_one`` to keep every MSA-enabled sample
+        producing a same-shape MSAContext so the collate can stack the
+        batch without None-vs-tensor ambiguity.
+        """
+        return cls(
+            tokens=np.full((n_msa, 0), _GAP, dtype=np.int8),
+            gap_mask=np.ones((n_msa, 0), dtype=bool),
+            msa_chain_asym_id=-1,
+            chain_token_indices=np.empty(0, dtype=np.int32),
+        )
+
 
 class MSASampler:
     """Loads and subsamples MSAs for one protein chain per call.

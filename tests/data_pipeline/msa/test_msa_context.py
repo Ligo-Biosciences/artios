@@ -86,6 +86,47 @@ def test_msa_raises_when_gap_mask_inconsistent_with_tokens():
 
 
 # ---------------------------------------------------------------------------
+# MSA.null_for — sentinel for samples with no protein chain
+# ---------------------------------------------------------------------------
+
+
+def test_null_msa_construction_passes_invariants():
+    """Null MSA uses l_chain_cropped=0 (empty chain columns). All invariants
+    should pass vacuously."""
+    null = MSA.null_for(n_msa=64)
+    assert null.tokens.shape == (64, 0)
+    assert null.gap_mask.shape == (64, 0)
+    assert null.chain_token_indices.shape == (0,)
+    assert null.msa_chain_asym_id == -1
+    assert null.tokens.dtype == np.int8
+
+
+def test_null_msa_build_context_gap_fills_and_masks_everything_out(
+    load_structure,
+):
+    """A null MSA run through _build_msa_context must yield:
+      - tokens all 31 (gap) over the full n_token grid,
+      - gap_mask all True,
+      - msa_chain_mask all False.
+
+    This is the invariant the MSA loss relies on to contribute zero for
+    samples where no protein chain was resolvable."""
+    s = load_structure("2g1k")
+    n_token = s.grouping.n_tokens
+    null = MSA.null_for(n_msa=8)
+
+    ctx = ContextGenerator(s, msa=null, pdb_id="2g1k").get_full_context(
+        include_arrays=False
+    )
+    assert ctx.msa is not None
+    assert ctx.msa.tokens.shape == (n_token, 8)
+    assert (ctx.msa.tokens == _GAP).all()
+    assert ctx.msa.gap_mask.all()
+    assert not ctx.msa.msa_chain_mask.any()
+    assert ctx.msa.msa_chain_asym_id == -1
+
+
+# ---------------------------------------------------------------------------
 # MSAQueryInfo extraction
 # ---------------------------------------------------------------------------
 

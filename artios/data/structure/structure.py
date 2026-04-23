@@ -254,6 +254,7 @@ class AnnotatedStructure:
         """
         atoms = atom_array.copy()
 
+        # TODO: is_resolved handling doesn't belong here.
         # Default is_resolved for inference-time AtomArrays that lack it.
         if "is_resolved" not in atoms.get_annotation_categories():
             atoms.set_annotation("is_resolved", np.ones(len(atoms), dtype=bool))
@@ -267,7 +268,7 @@ class AnnotatedStructure:
             for g in _AnnotationGroup.__subclasses__()
         }
 
-        # grouping isn't a group — fishing type_masks/motif out by key is
+        # TODO: grouping isn't a group — fishing type_masks/motif out by key is
         # awkward but localised.
         grouping = compute_token_grouping_vectorized(
             atoms,

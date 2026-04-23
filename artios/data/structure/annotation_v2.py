@@ -318,6 +318,7 @@ class _AnnotationGroup:
     @classmethod
     def maybe_from_atom_array(cls, atom_array: AtomArray):
         """Like ``from_atom_array``, but returns ``None`` if all fields are absent.
+        # TODO: Weird method name, should be removed.
 
         Raises ``ValueError`` on partial presence — either all fields or none.
         """
@@ -633,6 +634,8 @@ class DerivedAnnotations(_AnnotationGroup):
 
         cano_seq_resname = np.empty(n, dtype="U3")
         modified_res_mask = np.zeros(n, dtype=int)
+
+        # TODO: the code quality here is not the best, needs improving.
 
         res_starts = get_residue_starts(atom_array, add_exclusive_stop=True)
         for start, stop in zip(res_starts[:-1], res_starts[1:]):

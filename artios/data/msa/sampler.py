@@ -69,6 +69,44 @@ class MSAQueryInfo:
 
         return cls(chain_id=chain_1_id, sequence=sequence, res_ids=res_ids)
 
+    @classmethod
+    def from_any_protein_chain(
+        cls,
+        structure: AnnotatedStructure,
+        preferred_chain_ids: list[str],
+    ) -> MSAQueryInfo | None:
+        """Find a protein chain to use as the MSA reference.
+
+        Tries each id in ``preferred_chain_ids`` in order; falls back to
+        scanning the remaining chains in the structure if none resolve.
+        Returns the first chain for which :meth:`from_pre_crop_structure`
+        succeeds, or None if the structure has no protein chain at all.
+
+        Supersedes CLAUDE.md §11's strict chain_1-only rule: in interface
+        samples where sample_indice.chain_1_id is a ligand / ion / nucleic
+        chain, falling back to chain_2 (or any other protein chain in the
+        complex) recovers what would otherwise be a silent msa=None.
+        """
+        tried: set[str] = set()
+        for chain_id in preferred_chain_ids:
+            if not isinstance(chain_id, str) or chain_id in tried:
+                continue
+            tried.add(chain_id)
+            info = cls.from_pre_crop_structure(structure, chain_id)
+            if info is not None:
+                return info
+
+        # Fallback: scan remaining chains in the structure.
+        for chain_id in np.unique(structure.atoms.chain_id):
+            chain_id_str = str(chain_id)
+            if chain_id_str in tried:
+                continue
+            info = cls.from_pre_crop_structure(structure, chain_id_str)
+            if info is not None:
+                return info
+
+        return None
+
 
 @dataclass(frozen=True)
 class MSA:

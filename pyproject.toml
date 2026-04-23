@@ -63,7 +63,7 @@ dependencies = [
     "polars>=1.35.2",
     "rapidgzip>=0.15.2",
     "beartype>=0.22.6",
-    "pydantic>=2.12.5",
+    "pydantic==2.12.3",
     "einops>=0.8.1",
     "streamlit",
     "trambio>=1.0.3",

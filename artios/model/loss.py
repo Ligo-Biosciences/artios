@@ -188,27 +188,15 @@ def composite_nll_loss_msa(
         be consumed by the same pipeline as the non-MSA
         ``composite_nll_loss``.
     """
-    # Local import avoids a circular import on module load.
     from artios.model.modules.potts import compute_potts_joint_logits
 
-    # MSAContext stores tokens/gap_mask as [B, N, n_msa]; this loss
-    # iterates over the n_msa axis, so flip to [B, n_msa, N] once here
-    # rather than requiring the caller to do it. ``.contiguous()`` keeps
-    # the downstream chunked slicing cheap.
+    # [B, N, M] -> [B, M, N]
     msa_tokens = msa_tokens.transpose(-2, -1).contiguous().long()
     msa_gap_mask = msa_gap_mask.transpose(-2, -1).contiguous()
 
-    B, M, N = msa_tokens.shape
+    M = msa_tokens.shape[1]
     K = edge_index.shape[-1]
     R = h.shape[-1]
-
-    # Broadcast h, J, edge_index, edge_mask to gain an n_msa axis. These
-    # are views (stride 0 along n_msa) — zero memory cost until the
-    # downstream ops materialise per-chunk.
-    h_b = h.unsqueeze(1)
-    J_b = J.unsqueeze(1)
-    ei_b = edge_index.unsqueeze(1)
-    em_b = edge_mask.unsqueeze(1)
 
     lp_chunks: list[Tensor] = []
     mask_chunks: list[Tensor] = []
@@ -218,34 +206,33 @@ def composite_nll_loss_msa(
         c = m_end - m_start
         seq_chunk = msa_tokens[:, m_start:m_end]  # [B, c, N]
 
-        # Expand the broadcast views to the chunk size (still views).
-        h_c = h_b.expand(B, c, N, R)
-        J_c = J_b.expand(B, c, N, K, R, R)
-        ei_c = ei_b.expand(B, c, N, K)
-        em_c = em_b.expand(B, c, N, K)
+        h_c = repeat(h, "b n r -> b m n r", m=c)
+        J_c = repeat(J, "b n k r1 r2 -> b m n k r1 r2", m=c)
+        ei_c = repeat(edge_index, "b n k -> b m n k", m=c)
+        em_c = repeat(edge_mask, "b n k -> b m n k", m=c)
 
-        # Joint Potts logits per (sample, row, token, edge) — this is
-        # the [R, R] materialisation step that makes chunking necessary.
+        # BEWARE: this materialises joint_c shape [B, c, N, K, R, R]
         joint_c, mask_c = compute_potts_joint_logits(seq_chunk, h_c, J_c, ei_c, em_c)
 
-        # log-softmax over the flattened (R, R) joint state dim.
+        # Log-softmax over R x R joint states
         logp_flat = F.log_softmax(
             rearrange(joint_c, "... r1 r2 -> ... (r1 r2)"),
             dim=-1,
         )
         logp = rearrange(logp_flat, "... (r1 r2) -> ... r1 r2", r1=R)
-        # joint_c no longer needed for backward (log_softmax's backward
-        # uses its OUTPUT). Dropping the Python reference lets PyTorch
-        # free the buffer once autograd finishes with it.
+
         del joint_c
 
-        # Gather by the neighbour's row-token: [B, c, N, K, R, 1] → R
+        # Gather neighbour GT states
         S_j = gather_nodes(seq_chunk.unsqueeze(-1).float(), ei_c).long()
         S_j = repeat(S_j, "... n k 1 -> ... n k r 1", r=R)
+
+        ### Extract probs corresponding to GT states of the nodes and GT states of
+        ### each of their neighbours.
+        # Index using GT neighbour indices
         logp_at_sj = torch.gather(logp, -1, S_j).squeeze(-1)  # [B, c, N, K, R]
         del logp, logp_flat
-
-        # Gather by the centre's row-token: [B, c, N, K]
+        # Index using GT node indices
         S_i = repeat(seq_chunk.long(), "... n -> ... n k 1", k=K)
         lp_c = torch.gather(logp_at_sj, -1, S_i).squeeze(-1)
         del logp_at_sj
@@ -254,22 +241,19 @@ def composite_nll_loss_msa(
         mask_chunks.append(mask_c)
 
     logp_ij = torch.cat(lp_chunks, dim=1)  # [B, M, N, K]
-    combined_mask = torch.cat(mask_chunks, dim=1)  # [B, M, N, K]
+    edge_no_self_mask = torch.cat(mask_chunks, dim=1)  # [B, M, N, K]
 
-    # Mean over valid edges (with /2 for undirected double-counting),
-    # exactly as the non-MSA composite_nll_loss. Yields per-(sample,
-    # row, token) NLL.
-    edge_count = combined_mask.float().sum(dim=-1).clamp(min=eps)  # [B, M, N]
-    per_pair_nll = -(combined_mask.float() * logp_ij).sum(dim=-1) / (
+    # Mean over valid edges (with /2 for undirected double-counting)
+    edge_count = edge_no_self_mask.float().sum(dim=-1).clamp(min=eps)  # [B, M, N]
+    per_position_msa_nll = -(edge_no_self_mask.float() * logp_ij).sum(dim=-1) / (
         2 * edge_count
     )  # [B, M, N]
 
-    # Collapse the n_msa axis via a gap-masked mean — rows where this
-    # token is a homolog gap don't contribute. Tokens where every row
-    # is non-gap (including every non-reference-chain token under the
-    # gt-fill convention) average over all M rows.
+    # Mean over seqs in the MSA. Only non-gap tokens contribute.
     non_gap = ~msa_gap_mask  # [B, M, N]
-    per_position_nll = masked_mean(per_pair_nll, non_gap, axes=1, eps=eps)  # [B, N]
+    per_position_nll = masked_mean(
+        per_position_msa_nll, non_gap, axes=1, eps=eps
+    )  # [B, N]
 
     return per_position_nll
 
@@ -300,19 +284,20 @@ def composite_nll_loss(
     Returns:
         Per-position composite NLL [B, N].
     """
-    # Local import avoids a circular import on module load.
     from artios.model.modules.potts import compute_potts_joint_logits
 
-    joint_logits, combined_edge_mask = compute_potts_joint_logits(
+    joint_logits, edge_no_self_mask = compute_potts_joint_logits(
         seq, h, J, edge_index, edge_mask
     )
     R = joint_logits.shape[-1]
     K = joint_logits.shape[2]
 
     # Log-softmax over R x R joint states
-    logits_flat = rearrange(joint_logits, "b n k r1 r2 -> b n k (r1 r2)")
-    log_probs_flat = F.log_softmax(logits_flat, dim=-1)
-    log_probs = rearrange(log_probs_flat, "b n k (r1 r2) -> b n k r1 r2", r1=R)
+    logp_flat = F.log_softmax(
+        rearrange(joint_logits, "b n k r1 r2 -> b n k (r1 r2)"),
+        dim=-1,
+    )
+    logp = rearrange(logp_flat, "b n k (r1 r2) -> b n k r1 r2", r1=R)
 
     # Gather neighbour GT states
     S_j = gather_nodes(seq.unsqueeze(-1).float(), edge_index).long()
@@ -321,14 +306,14 @@ def composite_nll_loss(
     ### Extract probs corresponding to GT states of the nodes and GT states of
     ### each of their neighbours.
     # Index using GT neighbour indices
-    logp_at_sj = torch.gather(log_probs, -1, S_j).squeeze(-1)  # [B, N, K, R]
+    logp_at_sj = torch.gather(logp, -1, S_j).squeeze(-1)  # [B, N, K, R]
     # Index using GT node indices
     S_i = repeat(seq.long(), "b n -> b n k 1", k=K)
     logp_ij = torch.gather(logp_at_sj, -1, S_i).squeeze(-1)  # [B, N, K]
 
     # Per-position NLL: average over valid edges, /2 since we double counted
-    edge_count = combined_edge_mask.float().sum(dim=-1).clamp(min=eps)  # [B, N]
-    per_position_nll = -(combined_edge_mask.float() * logp_ij).sum(dim=-1) / (
+    edge_count = edge_no_self_mask.float().sum(dim=-1).clamp(min=eps)  # [B, N]
+    per_position_nll = -(edge_no_self_mask.float() * logp_ij).sum(dim=-1) / (
         2 * edge_count
     )  # [B, N]
 

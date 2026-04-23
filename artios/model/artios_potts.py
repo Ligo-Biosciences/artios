@@ -93,6 +93,7 @@ class ArtiosPotts(nn.Module):
             label_smoothing=potts_loss_cfg.label_smoothing,
             active_site_upweight=potts_loss_cfg.active_site_upweight,
             active_site_distance=potts_loss_cfg.active_site_distance,
+            n_msa_chunk=potts_loss_cfg.n_msa_chunk,
         )
 
         masking_sampler_type = MaskingSamplerType(
@@ -514,6 +515,7 @@ class ArtiosPotts(nn.Module):
                         edge_mask=output.edge_mask,
                         msa_tokens=context.msa.tokens,
                         msa_gap_mask=context.msa.gap_mask,
+                        n_chunk=self.loss_config.n_msa_chunk,
                         eps=eps,
                     )
                 else:

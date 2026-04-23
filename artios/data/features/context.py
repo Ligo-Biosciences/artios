@@ -455,25 +455,41 @@ class MSAContext(Context):
     """MSA features for one reference chain, token-aligned to the cropped structure.
 
     Shape convention: n_token is the leading non-batch axis so that the
-    existing FeatureType.TOKEN pad_fn (pads last non-batch dim by n_token_pad)
-    applies uniformly to all fields.  The MSA dataclass (artios/data/msa/
-    sampler.py) stores the transposed MSA-native ``[n_msa, l_chain]`` layout;
-    ContextGenerator._build_msa_context performs the transpose and gap-fill.
+    existing FeatureType.TOKEN pad_fn (pads the last non-batch dim by
+    n_token_pad) applies uniformly to all fields. The MSA dataclass
+    (artios/data/msa/sampler.py) stores the transposed MSA-native
+    ``[n_msa, l_chain]`` layout; ``ContextGenerator._build_msa_context``
+    transposes and scatters chain columns into their n_token positions.
 
-    Non-reference-chain tokens are filled with gap (31); msa_chain_mask
-    marks which tokens are covered.
+    Vocabulary (same as ``artios.common.constants.STD_RESIDUES_AND_GAP``):
+      - 0..19: canonical amino acids, alphabetical by 3-letter code
+               (ALA=0, ARG=1, ..., VAL=19).
+      - 20: UNK (X / B / Z / J / U / O / any non-canonical character).
+      - 21..30: RNA/DNA slots in the shared vocab — never appear in
+               protein MSAs.
+      - 31: gap ('-').
+
+    Non-reference-chain tokens are gap-filled (31); ``msa_chain_mask``
+    marks which tokens carry real MSA data.
     """
 
     tokens: Feature(
         Int[Tensor, "*batch n_token n_msa"],
         type=FeatureType.TOKEN,
         encoding=EncodingType.IDENTITY,
-        description="MSA tokens per (token, row); non-chain rows are gap.",
+        description=(
+            "Integer token IDs in [0, 31] from STD_RESIDUES_AND_GAP — NOT "
+            "three-letter codes or strings. Axis layout: n_token × n_msa. "
+            "Column 0 is the query row; columns 1..n_msa-1 are homologs. "
+            "Rows (n_token axis) outside the reference chain are gap-filled "
+            "with 31. Encoding: 0..19 canonical AAs (ALA..VAL alphabetical), "
+            "20 UNK, 31 gap."
+        ),
     )
     gap_mask: Mask(
         Bool[Tensor, "*batch n_token n_msa"],
         type=FeatureType.TOKEN,
-        description="True where tokens == 31 (gap).",
+        description="True where tokens == 31 (gap). Materialised for convenience.",
     )
     msa_chain_mask: Mask(
         Bool[Tensor, "*batch n_token"],

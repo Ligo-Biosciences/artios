@@ -110,10 +110,16 @@ class MSA:
     Stored in the MSA-native ``[n_msa, l_chain_cropped]`` layout. MSAContext
     transposes to ``[n_token, n_msa]`` at featurisation time to stay
     compatible with artios' n_token-first padding machinery.
+
+    ``tokens`` values are integer IDs in ``[0, 31]`` from
+    ``artios.common.constants.STD_RESIDUES_AND_GAP``: 0..19 canonical AAs
+    (ALA=0, ARG=1, ..., VAL=19, alphabetical by 3-letter code), 20 UNK,
+    31 gap. Not strings, not three-letter codes. ``tokens[0]`` is the
+    query row.
     """
 
-    tokens: np.ndarray  # int8[n_msa, l_chain_cropped]
-    gap_mask: np.ndarray  # bool[n_msa, l_chain_cropped]
+    tokens: np.ndarray  # int8[n_msa, l_chain_cropped] — STD_RESIDUES_AND_GAP IDs
+    gap_mask: np.ndarray  # bool[n_msa, l_chain_cropped] — True where tokens == 31
     msa_chain_asym_id: (
         int  # asym_id_int of the reference chain in the cropped structure
     )

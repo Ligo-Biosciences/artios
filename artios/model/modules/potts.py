@@ -287,12 +287,12 @@ def _symmetrize_J(
 
 @typecheck
 def compute_potts_single_logits(
-    seq: Int[Tensor, "batch n_token"],
-    h: Float[Tensor, "batch n_token num_residue_types"],
-    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
-    edge_index: Int[Tensor, "batch n_token neighbours"],
-    edge_mask: Bool[Tensor, "batch n_token neighbours"],
-) -> Float[Tensor, "batch n_token num_residue_types"]:
+    seq: Int[Tensor, "*batch n_token"],
+    h: Float[Tensor, "*batch n_token num_residue_types"],
+    J: Float[Tensor, "*batch n_token neighbours num_residue_types num_residue_types"],
+    edge_index: Int[Tensor, "*batch n_token neighbours"],
+    edge_mask: Bool[Tensor, "*batch n_token neighbours"],
+) -> Float[Tensor, "*batch n_token num_residue_types"]:
     """Compute conditional logits for the Potts model.
     This is the logits for the conditional probability:
     p(state of i | state of neighbours of i ; h, J).
@@ -301,48 +301,54 @@ def compute_potts_single_logits(
         logit_i(a) = -(h_i(a) + sum_j J_ij(a, s_j))
     where s_j is the current state of neighbor j.
 
+    Accepts arbitrary leading batch dims (``*batch``). Call with
+    ``unsqueeze(1)``-broadcasted h/J/edge_index/edge_mask to compute
+    per-MSA-row logits in one shot.
+
     Args:
-        S_idx: Current sequence indices [B, N].
-        h: Potts fields [B, N, R].
-        J: Potts couplings [B, N, K, R, R].
-        edge_index: Neighbor indices [B, N, K].
-        edge_mask: Valid edge mask [B, N, K].
+        seq: Current sequence indices [*batch, N].
+        h: Potts fields [*batch, N, R].
+        J: Potts couplings [*batch, N, K, R, R].
+        edge_index: Neighbor indices [*batch, N, K].
+        edge_mask: Valid edge mask [*batch, N, K].
 
     Returns:
-        Conditional logits [B, N, R].
+        Conditional logits [*batch, N, R].
     """
     R = h.shape[-1]
+    N = edge_index.shape[-2]
 
-    # Mask out self-edges
-    ii = torch.arange(edge_index.shape[1], device=edge_index.device)
-    not_self = edge_index != ii[None, :, None]  # [B, N, K]
+    # Mask out self-edges. ii[None, :, None] broadcasts against any number
+    # of leading batch dims (aligns to the trailing three of edge_index).
+    ii = torch.arange(N, device=edge_index.device)
+    not_self = edge_index != ii[None, :, None]
 
-    # Get neighbour states [B, N, K, 1]
+    # Get neighbour states [*batch, N, K, 1]
     S_neighbours = gather_nodes(seq.unsqueeze(-1).float(), edge_index).long()
 
-    # Index into J with neighbour states: J[..., s_j] -> [B, N, K, R]
+    # Index into J with neighbour states: J[..., s_j] -> [*batch, N, K, R]
     S_neighbours = repeat(S_neighbours, "... n k 1 -> ... n k r 1", r=R)
-    J_at_S = torch.gather(J, -1, S_neighbours).squeeze(-1)  # [B, N, K, R]
+    J_at_S = torch.gather(J, -1, S_neighbours).squeeze(-1)
 
     # Apply mask and remove self-edges
     J_at_S = J_at_S * (not_self & edge_mask).unsqueeze(-1)
 
     # Sum coupling contributions over neighbours
-    J_node = J_at_S.sum(dim=-2)  # [B, N, R]
+    J_node = J_at_S.sum(dim=-2)  # [*batch, N, R]
 
     return -(h + J_node)
 
 
 @typecheck
 def compute_potts_joint_logits(
-    seq: Int[Tensor, "batch n_token"],
-    h: Float[Tensor, "batch n_token num_residue_types"],
-    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
-    edge_index: Int[Tensor, "batch n_token neighbours"],
-    edge_mask: Bool[Tensor, "batch n_token neighbours"],
+    seq: Int[Tensor, "*batch n_token"],
+    h: Float[Tensor, "*batch n_token num_residue_types"],
+    J: Float[Tensor, "*batch n_token neighbours num_residue_types num_residue_types"],
+    edge_index: Int[Tensor, "*batch n_token neighbours"],
+    edge_mask: Bool[Tensor, "*batch n_token neighbours"],
 ) -> tuple[
-    Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
-    Bool[Tensor, "batch n_token neighbours"],
+    Float[Tensor, "*batch n_token neighbours num_residue_types num_residue_types"],
+    Bool[Tensor, "*batch n_token neighbours"],
 ]:
     """Compute joint Potts logits for composite likelihood.
 
@@ -350,54 +356,60 @@ def compute_potts_joint_logits(
     For each edge (i, j), computes the joint logit over all state pairs
     (a, b), accounting for background contributions from all other nodes.
 
+    Accepts arbitrary leading batch dims (``*batch``). Call with
+    ``unsqueeze(1)``-broadcasted h/J/edge_index/edge_mask to compute
+    per-MSA-row joint logits in one shot.
+
     Args:
-        seq: Current sequence indices [B, N].
-        h: Potts fields [B, N, R].
-        J: Potts couplings [B, N, K, R, R].
-        edge_index: Neighbor indices [B, N, K].
-        edge_mask: Valid edge mask [B, N, K].
+        seq: Current sequence indices [*batch, N].
+        h: Potts fields [*batch, N, R].
+        J: Potts couplings [*batch, N, K, R, R].
+        edge_index: Neighbor indices [*batch, N, K].
+        edge_mask: Valid edge mask [*batch, N, K].
 
     Returns:
         Tuple of (joint_logits, combined_edge_mask):
-            joint_logits: [B, N, K, R, R]
-            combined_edge_mask: [B, N, K] (self-edges excluded)
+            joint_logits: [*batch, N, K, R, R]
+            combined_edge_mask: [*batch, N, K] (self-edges excluded)
     """
-    _, N, K = edge_index.shape
+    N = edge_index.shape[-2]
+    K = edge_index.shape[-1]
     R = h.shape[-1]
 
-    # Remove self edges (prevents leakage)
+    # Remove self edges (prevents leakage). ii[None, :, None] broadcasts
+    # against any number of leading batch dims.
     ii = torch.arange(N, device=edge_index.device)
     not_self = edge_index != ii[None, :, None]
     combined_mask = not_self & edge_mask
 
     ### Get interactions between node states and GT neighbour states
     S_j = gather_nodes(seq.unsqueeze(-1).float(), edge_index).long()
-    # Index into J with GT neighbour states J[..., s_j] -> [B, N, K, R]
+    # Index into J with GT neighbour states J[..., s_j] -> [*batch, N, K, R]
     S_j = repeat(S_j, "... n k 1 -> ... n k r 1", r=R)
-    J_j = torch.gather(J, -1, S_j).squeeze(-1)  # [B, N, K, R]
+    J_j = torch.gather(J, -1, S_j).squeeze(-1)  # [*batch, N, K, R]
 
     ### Get interactions between GT node state and neighbour states
-    # Index into J with GT node states J[..., s_i, :] -> [B, N, K, 1, R]
-    S_i = repeat(seq.long(), "b n -> b n k 1 r", k=K, r=R)
-    J_i = torch.gather(J, -2, S_i)  # [B, N, K, 1, R]
+    # Index into J with GT node states J[..., s_i, :] -> [*batch, N, K, 1, R]
+    S_i = repeat(seq.long(), "... n -> ... n k 1 r", k=K, r=R)
+    J_i = torch.gather(J, -2, S_i)  # [*batch, N, K, 1, R]
 
     # Get node energies from GT neighbour states
     J_j_self_edge_masked = J_j * not_self.unsqueeze(-1)  # zero out self-edges
-    E_i = h + J_j_self_edge_masked.sum(dim=2)  # [B, N, R]
+    E_i = h + J_j_self_edge_masked.sum(dim=-2)  # [*batch, N, R]
 
     # Get neighbour energies by gathering node energies
-    E_j = gather_nodes(E_i, edge_index)  # [B, N, K, R]
+    E_j = gather_nodes(E_i, edge_index)  # [*batch, N, K, R]
 
     # Remove J_ij contribution from E_i (prevents leakage)
-    E_i_minus_ij = repeat(E_i, "b n r -> b n k r 1", k=K) - J_j.unsqueeze(
+    E_i_minus_ij = repeat(E_i, "... n r -> ... n k r 1", k=K) - J_j.unsqueeze(
         -1
-    )  # [B, N, K, R, 1]
+    )  # [*batch, N, K, R, 1]
 
     # Remove J_ji contribution from E_j (prevents leakage)
-    E_j_minus_ji = repeat(E_j, "b n k r -> b n k 1 r") - J_i  # [B, N, K, 1, R]
+    E_j_minus_ji = repeat(E_j, "... n k r -> ... n k 1 r") - J_i  # [*batch, N, K, 1, R]
 
     # Joint logits (negative energy)
-    joint_logits = -(E_i_minus_ij + E_j_minus_ji + J)  # [B, N, K, R, R]
+    joint_logits = -(E_i_minus_ij + E_j_minus_ji + J)  # [*batch, N, K, R, R]
 
     return joint_logits, combined_mask
 

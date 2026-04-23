@@ -79,6 +79,8 @@ class AnnotatedStructure:
         assert len(self.grouping.atom_token_index) == n
         assert len(self.grouping.centre_atom_mask) == n
         assert len(self.derived.cano_seq_resname) == n
+        if self.motif is not None:
+            assert len(self.motif.is_motif) == n
 
     @cached_property
     def centre_atom_indices(self) -> Int[np.ndarray, "n_tokens"]:
@@ -186,6 +188,25 @@ class AnnotatedStructure:
         )
 
     # -- Transformations ------------------------------------------------------
+
+    def with_motif_annotations(
+        self,
+        is_motif: Int[np.ndarray, "n_atom"],
+        is_motif_related: Int[np.ndarray, "n_atom"],
+    ) -> AnnotatedStructure:
+        """Return a new structure with ``MotifAnnotation`` attached.
+
+        Replaces any existing motif group. No other fields change — this is
+        the entry point for motif-aware pipelines; subsequent transforms
+        (``with_unindexed_motif`` etc.) read the masks set here.
+        """
+        return dataclasses.replace(
+            self,
+            motif=MotifAnnotation(
+                is_motif=is_motif,
+                is_motif_related=is_motif_related,
+            ),
+        )
 
     def shuffle_by_mol_id(self) -> AnnotatedStructure:
         """Return new structure with molecules in random order."""

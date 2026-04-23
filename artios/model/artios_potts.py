@@ -464,15 +464,6 @@ class ArtiosPotts(nn.Module):
         Returns:
             Tuple of (loss tensor, metrics dict for logging).
         """
-        if (
-            context.msa is not None
-            and self.loss_config.loss_type != PottsLossType.COMPOSITE
-        ):
-            raise ValueError(
-                "MSA loss is only implemented for the composite path. "
-                f"Got loss_type={self.loss_config.loss_type!r}."
-            )
-
         gt_seq = context.token.restype.argmax(dim=-1)
         labels = context.token.restype.float()
         is_resolved = context.mask.centre_atom_is_resolved
@@ -480,7 +471,6 @@ class ArtiosPotts(nn.Module):
 
         _, N = gt_seq.shape
 
-        # Get loss weights
         sampler_weight = self.masking_sampler.get_loss_weights(output.timestep)  # [B]
         eps = 1e-6
 
@@ -501,6 +491,8 @@ class ArtiosPotts(nn.Module):
 
         match self.loss_config.loss_type:
             case PottsLossType.PSEUDO:
+                if context.msa is not None:
+                    raise ValueError("MSA not implemented for pseudo loss.")
                 logits = compute_potts_single_logits(
                     gt_seq,
                     output.h,

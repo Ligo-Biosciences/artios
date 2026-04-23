@@ -83,8 +83,8 @@ class TestTokenGrouping:
         aa = structure.to_atom_array()
         type_masks = TypeMasks.from_atom_array(aa)
 
-        g_orig = compute_token_grouping(aa, type_masks, motif=None)
-        g_vec = compute_token_grouping_vectorized(aa, type_masks, motif=None)
+        g_orig = compute_token_grouping(aa, mol_type=type_masks.mol_type)
+        g_vec = compute_token_grouping_vectorized(aa, mol_type=type_masks.mol_type)
 
         assert g_orig.n_tokens == g_vec.n_tokens
         np.testing.assert_array_equal(g_orig.atom_token_index, g_vec.atom_token_index)

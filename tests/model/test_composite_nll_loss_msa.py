@@ -54,13 +54,12 @@ def test_n_msa_1_matches_non_msa_per_position_nll():
     h, J, edge_index, edge_mask, gt = _make_potts_inputs()
     B, N = gt.shape
 
-    _, per_pos_nonmsa = composite_nll_loss(
+    per_pos_nonmsa = composite_nll_loss(
         h=h,
         J=J,
         edge_index=edge_index,
         edge_mask=edge_mask,
         seq=gt,
-        node_mask=torch.ones(B, N, dtype=torch.bool),
     )
 
     # MSA path with M=1, column 0 = gt, no gaps. MSAContext layout is
@@ -88,13 +87,12 @@ def test_n_msa_many_all_equal_to_gt_matches_non_msa():
     h, J, edge_index, edge_mask, gt = _make_potts_inputs(seed=3)
     B, N = gt.shape
 
-    _, per_pos_nonmsa = composite_nll_loss(
+    per_pos_nonmsa = composite_nll_loss(
         h=h,
         J=J,
         edge_index=edge_index,
         edge_mask=edge_mask,
         seq=gt,
-        node_mask=torch.ones(B, N, dtype=torch.bool),
     )
 
     M = 8

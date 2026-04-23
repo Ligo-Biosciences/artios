@@ -525,17 +525,14 @@ class ArtiosPotts(nn.Module):
                         eps=eps,
                     )
                 else:
-                    _, per_position_nll = composite_nll_loss(
+                    per_position_nll = composite_nll_loss(
                         h=output.h,
                         J=output.J,
                         edge_index=output.edge_index,
                         edge_mask=output.edge_mask,
                         seq=gt_seq,
-                        node_mask=mask,
                     )
-                # Single-logits are used only for accuracy metrics — always
-                # derived from the query sequence so numbers stay comparable
-                # between MSA and non-MSA runs.
+
                 logits = compute_potts_single_logits(
                     gt_seq,
                     output.h,

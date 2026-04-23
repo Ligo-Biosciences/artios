@@ -280,15 +280,14 @@ def composite_nll_loss(
     edge_index: Int[Tensor, "batch n_token neighbours"],
     edge_mask: Bool[Tensor, "batch n_token neighbours"],
     seq: Int[Tensor, "batch n_token"],
-    node_mask: Bool[Tensor, "batch n_token"],
     eps: float = 1e-6,
-) -> tuple[Float[Tensor, "batch"], Float[Tensor, "batch n_token"]]:
-    """Compute composite NLL loss from Potts fields and couplings.
+) -> Float[Tensor, "batch n_token"]:
+    """Compute per-position composite NLL from Potts fields and couplings.
 
     Computes joint Potts logits via ``compute_potts_joint_logits``, then
-    log P(s_i, s_j | s_{-i,-j}) for each edge, averages over valid edges
-    per node (with /2 for undirected double-counting), and masked-means
-    over positions.
+    log P(s_i, s_j | s_{-i,-j}) for each edge, and averages over valid
+    edges per node (with /2 for undirected double-counting). Node-level
+    masking and reduction to a scalar are the caller's responsibility.
 
     Args:
         h: Potts fields [B, N, R].
@@ -296,13 +295,10 @@ def composite_nll_loss(
         edge_index: Neighbour indices [B, N, K].
         edge_mask: Valid edge mask [B, N, K].
         seq: Ground truth sequence indices [B, N].
-        node_mask: Valid node mask [B, N].
         eps: Epsilon for numerical stability.
 
     Returns:
-        Tuple of (nll, per_position_nll):
-            nll: Per-batch composite NLL [B].
-            per_position_nll: Per-position composite NLL [B, N].
+        Per-position composite NLL [B, N].
     """
     # Local import avoids a circular import on module load.
     from artios.model.modules.potts import compute_potts_joint_logits
@@ -336,10 +332,7 @@ def composite_nll_loss(
         2 * edge_count
     )  # [B, N]
 
-    # Masked mean over positions
-    nll = masked_mean(per_position_nll, node_mask, axes=-1, eps=eps)  # [B]
-
-    return nll, per_position_nll
+    return per_position_nll
 
 
 # =============================================================================

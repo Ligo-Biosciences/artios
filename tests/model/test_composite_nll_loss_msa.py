@@ -25,7 +25,6 @@ import pytest
 import torch
 
 from artios.model.loss import composite_nll_loss, composite_nll_loss_msa
-from artios.model.modules.potts import compute_potts_joint_logits
 
 
 def _make_potts_inputs(
@@ -55,21 +54,18 @@ def test_n_msa_1_matches_non_msa_per_position_nll():
     h, J, edge_index, edge_mask, gt = _make_potts_inputs()
     B, N = gt.shape
 
-    # Non-MSA path: per_position_nll is computed without node_mask
-    # applied inside.
-    joint_logits, combined_edge_mask = compute_potts_joint_logits(
-        gt, h, J, edge_index, edge_mask
-    )
     _, per_pos_nonmsa = composite_nll_loss(
-        joint_logits,
-        gt,
-        edge_index,
-        combined_edge_mask,
+        h=h,
+        J=J,
+        edge_index=edge_index,
+        edge_mask=edge_mask,
+        seq=gt,
         node_mask=torch.ones(B, N, dtype=torch.bool),
     )
 
-    # MSA path with M=1, row 0 = gt, no gaps.
-    msa_tokens = gt.unsqueeze(1)  # [B, 1, N]
+    # MSA path with M=1, column 0 = gt, no gaps. MSAContext layout is
+    # [B, N, M] — composite_nll_loss_msa handles the transpose.
+    msa_tokens = gt.unsqueeze(-1)  # [B, N, 1]
     msa_gap_mask = torch.zeros_like(msa_tokens, dtype=torch.bool)
 
     per_pos_msa = composite_nll_loss_msa(
@@ -92,20 +88,18 @@ def test_n_msa_many_all_equal_to_gt_matches_non_msa():
     h, J, edge_index, edge_mask, gt = _make_potts_inputs(seed=3)
     B, N = gt.shape
 
-    joint_logits, combined_edge_mask = compute_potts_joint_logits(
-        gt, h, J, edge_index, edge_mask
-    )
     _, per_pos_nonmsa = composite_nll_loss(
-        joint_logits,
-        gt,
-        edge_index,
-        combined_edge_mask,
+        h=h,
+        J=J,
+        edge_index=edge_index,
+        edge_mask=edge_mask,
+        seq=gt,
         node_mask=torch.ones(B, N, dtype=torch.bool),
     )
 
     M = 8
-    msa_tokens = gt.unsqueeze(1).expand(B, M, N).contiguous()
-    msa_gap_mask = torch.zeros(B, M, N, dtype=torch.bool)
+    msa_tokens = gt.unsqueeze(-1).expand(B, N, M).contiguous()
+    msa_gap_mask = torch.zeros(B, N, M, dtype=torch.bool)
 
     per_pos_msa = composite_nll_loss_msa(
         h, J, edge_index, edge_mask, msa_tokens, msa_gap_mask
@@ -120,7 +114,7 @@ def test_n_msa_many_all_equal_to_gt_matches_non_msa():
 
 
 def test_all_gap_msa_gives_zero_per_position_nll():
-    """A batch where every (row, token) pair is masked as a gap must
+    """A batch where every (token, row) pair is masked as a gap must
     produce per_position_nll = 0 — ``masked_mean`` returns 0 when the
     mask sum is zero (its canonical "no valid rows" fallback).
 
@@ -136,8 +130,8 @@ def test_all_gap_msa_gives_zero_per_position_nll():
     M = 4
 
     # Use an in-range token id — value is masked out anyway.
-    msa_tokens = torch.zeros((B, M, N), dtype=torch.long)
-    msa_gap_mask = torch.ones(B, M, N, dtype=torch.bool)
+    msa_tokens = torch.zeros((B, N, M), dtype=torch.long)
+    msa_gap_mask = torch.ones(B, N, M, dtype=torch.bool)
     assert msa_tokens.max().item() < R  # sanity: in-bounds for J-gather
 
     per_pos = composite_nll_loss_msa(
@@ -158,12 +152,12 @@ def test_partial_gap_mask_only_excludes_gapped_rows():
     M = 2
 
     gen = torch.Generator().manual_seed(6)
-    msa_tokens = torch.empty(B, M, N, dtype=torch.long)
-    msa_tokens[:, 0] = gt
-    msa_tokens[:, 1] = torch.randint(0, R, (B, N), generator=gen)
+    msa_tokens = torch.empty(B, N, M, dtype=torch.long)
+    msa_tokens[..., 0] = gt
+    msa_tokens[..., 1] = torch.randint(0, R, (B, N), generator=gen)
 
-    msa_gap_mask = torch.zeros(B, M, N, dtype=torch.bool)
-    msa_gap_mask[:, 1, :] = True  # row 1 entirely gapped
+    msa_gap_mask = torch.zeros(B, N, M, dtype=torch.bool)
+    msa_gap_mask[..., 1] = True  # row 1 entirely gapped
 
     per_pos_partial = composite_nll_loss_msa(
         h, J, edge_index, edge_mask, msa_tokens, msa_gap_mask
@@ -175,8 +169,8 @@ def test_partial_gap_mask_only_excludes_gapped_rows():
         J,
         edge_index,
         edge_mask,
-        msa_tokens[:, :1],
-        torch.zeros(B, 1, N, dtype=torch.bool),
+        msa_tokens[..., :1],
+        torch.zeros(B, N, 1, dtype=torch.bool),
     )
 
     torch.testing.assert_close(per_pos_partial, per_pos_row0_only, rtol=1e-5, atol=1e-5)
@@ -199,15 +193,15 @@ def test_row_swap_of_different_content_changes_per_position_nll():
     M = 2
 
     gen = torch.Generator().manual_seed(12)
-    msa_a = torch.empty(B, M, N, dtype=torch.long)
-    msa_a[:, 0] = gt
-    msa_a[:, 1] = torch.randint(0, R, (B, N), generator=gen)
+    msa_a = torch.empty(B, N, M, dtype=torch.long)
+    msa_a[..., 0] = gt
+    msa_a[..., 1] = torch.randint(0, R, (B, N), generator=gen)
 
     msa_b = msa_a.clone()
     # Replace row 1 with a different random sequence at all tokens.
-    msa_b[:, 1] = torch.randint(0, R, (B, N), generator=gen)
+    msa_b[..., 1] = torch.randint(0, R, (B, N), generator=gen)
 
-    msa_gap_mask = torch.zeros(B, M, N, dtype=torch.bool)
+    msa_gap_mask = torch.zeros(B, N, M, dtype=torch.bool)
 
     per_pos_a = composite_nll_loss_msa(h, J, edge_index, edge_mask, msa_a, msa_gap_mask)
     per_pos_b = composite_nll_loss_msa(h, J, edge_index, edge_mask, msa_b, msa_gap_mask)
@@ -229,8 +223,8 @@ def test_chunked_matches_full_vectorised(n_chunk):
     M = 6
     gen = torch.Generator().manual_seed(18)
 
-    msa_tokens = torch.randint(0, R, (B, M, N), generator=gen)
-    msa_gap_mask = torch.zeros(B, M, N, dtype=torch.bool)
+    msa_tokens = torch.randint(0, R, (B, N, M), generator=gen)
+    msa_gap_mask = torch.zeros(B, N, M, dtype=torch.bool)
 
     per_pos_full = composite_nll_loss_msa(
         h, J, edge_index, edge_mask, msa_tokens, msa_gap_mask, n_chunk=M
@@ -288,8 +282,9 @@ def test_hand_calc_single_edge_single_position():
     edge_index = torch.tensor([[[1], [1]]], dtype=torch.long)  # [1, 2, 1]
     edge_mask = torch.ones(B, N, K, dtype=torch.bool)
 
-    msa_tokens = torch.tensor([[[0, 1]]], dtype=torch.long)  # [1, 1, 2]
-    msa_gap_mask = torch.zeros(B, M, N, dtype=torch.bool)
+    # MSAContext layout: [B, N, M]. Row 0 is the query [0, 1].
+    msa_tokens = torch.tensor([[[0], [1]]], dtype=torch.long)  # [1, 2, 1]
+    msa_gap_mask = torch.zeros(B, N, M, dtype=torch.bool)
 
     per_pos = composite_nll_loss_msa(
         h, J, edge_index, edge_mask, msa_tokens, msa_gap_mask

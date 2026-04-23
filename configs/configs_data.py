@@ -234,6 +234,13 @@ data_configs = {
         "seq_to_idx_path": os.path.join(DATA_ROOT_DIR, "common/seq_to_pdb_index.json"),
         "n_msa": 64,
         "seed": 42,
+        # Per-homolog quality filters. Computed on the cropped chain columns
+        # actually used by the Potts loss. Defaults disable both.
+        # - min_homolog_identity: reject homologs whose non-gap identity to
+        #   the query is below this threshold.
+        # - max_gap_rate: reject homologs whose gap fraction exceeds this.
+        "min_homolog_identity": 0.0,
+        "max_gap_rate": 1.0,
     },
     "train_sets": ListValue(
         [

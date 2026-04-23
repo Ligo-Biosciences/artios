@@ -224,3 +224,114 @@ def test_missing_a3m_file_returns_none(sample_sampler_setup, tmp_path):
 
     sampler = MSASampler(msa_root=msa_root, seq_to_idx_path=seq_to_idx_path, n_msa=3)
     assert sampler.sample(structure, info) is None
+
+
+# ---------------------------------------------------------------------------
+# Per-homolog quality filters: min_homolog_identity + max_gap_rate
+# ---------------------------------------------------------------------------
+
+
+def _write_custom_a3m(a3m_path: Path, query: str, homologs: list[str]) -> None:
+    """Write an a3m with explicit per-homolog sequences (no synthesized hits)."""
+    a3m_path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = [">query", query]
+    for i, h in enumerate(homologs):
+        lines.append(f">hit_{i}")
+        lines.append(h)
+    a3m_path.write_text("\n".join(lines) + "\n")
+
+
+def _setup_custom(tmp_path: Path, query: str, homologs: list[str]):
+    a3m_path = tmp_path / "msa_root" / "0" / "non_pairing.a3m"
+    _write_custom_a3m(a3m_path, query, homologs)
+    seq_to_idx_path = _write_seq_to_idx(tmp_path, {query: 0})
+    return tmp_path / "msa_root", seq_to_idx_path
+
+
+def test_max_gap_rate_filters_out_gappy_homologs(sample_sampler_setup, tmp_path):
+    """Gappy homologs above max_gap_rate are dropped from the subsample pool."""
+    structure, info, _ = sample_sampler_setup
+    q = info.sequence
+    # 5 clean homologs (copy of query = 0 gaps), 5 all-gap homologs.
+    homologs = [q] * 5 + ["-" * len(q)] * 5
+    msa_root, seq_to_idx_path = _setup_custom(tmp_path, q, homologs)
+
+    sampler = MSASampler(
+        msa_root=msa_root,
+        seq_to_idx_path=seq_to_idx_path,
+        n_msa=6,  # needs 5 homologs
+        max_gap_rate=0.5,  # drops the 5 all-gap rows
+        seed=0,
+    )
+    msa = sampler.sample(structure, info)
+    assert msa is not None
+    # All sampled homolog rows must be below the threshold.
+    homolog_gap_frac = (msa.tokens[1:] == 31).mean(axis=1)
+    assert (homolog_gap_frac <= 0.5).all()
+
+
+def test_max_gap_rate_returns_none_when_too_few_survive(sample_sampler_setup, tmp_path):
+    """Tight max_gap_rate plus a mostly-gappy a3m → insufficient depth."""
+    structure, info, _ = sample_sampler_setup
+    q = info.sequence
+    # Only 2 clean + 8 all-gap → 2 survive the filter.
+    homologs = [q] * 2 + ["-" * len(q)] * 8
+    msa_root, seq_to_idx_path = _setup_custom(tmp_path, q, homologs)
+
+    sampler = MSASampler(
+        msa_root=msa_root,
+        seq_to_idx_path=seq_to_idx_path,
+        n_msa=5,  # needs 4 homologs, only 2 survive
+        max_gap_rate=0.5,
+    )
+    assert sampler.sample(structure, info) is None
+
+
+def test_min_homolog_identity_filters_out_low_identity_rows(
+    sample_sampler_setup, tmp_path
+):
+    """Low-identity homologs below min_homolog_identity are dropped."""
+    structure, info, _ = sample_sampler_setup
+    q = info.sequence
+    # 5 identical-to-query (identity=1.0), 5 all-X (identity≈0 on non-gap).
+    homologs = [q] * 5 + ["X" * len(q)] * 5
+    msa_root, seq_to_idx_path = _setup_custom(tmp_path, q, homologs)
+
+    sampler = MSASampler(
+        msa_root=msa_root,
+        seq_to_idx_path=seq_to_idx_path,
+        n_msa=6,
+        min_homolog_identity=0.5,
+        seed=0,
+    )
+    msa = sampler.sample(structure, info)
+    assert msa is not None
+    # With only 5 identity=1.0 homologs surviving and n_msa-1=5, the sampler
+    # must pick all of them — every sampled row should equal the query row.
+    for row in range(1, 6):
+        np.testing.assert_array_equal(msa.tokens[row], msa.tokens[0])
+
+
+def test_min_homolog_identity_returns_none_when_too_few_survive(
+    sample_sampler_setup, tmp_path
+):
+    """Tight min_homolog_identity + mostly-divergent a3m → insufficient depth."""
+    structure, info, _ = sample_sampler_setup
+    q = info.sequence
+    homologs = [q] * 2 + ["X" * len(q)] * 8  # only 2 high-identity
+    msa_root, seq_to_idx_path = _setup_custom(tmp_path, q, homologs)
+
+    sampler = MSASampler(
+        msa_root=msa_root,
+        seq_to_idx_path=seq_to_idx_path,
+        n_msa=5,
+        min_homolog_identity=0.5,
+    )
+    assert sampler.sample(structure, info) is None
+
+
+def test_init_rejects_thresholds_outside_unit_interval():
+    with pytest.raises(ValueError, match="min_homolog_identity"):
+        MSASampler(msa_root="/x", seq_to_idx_path="/y", min_homolog_identity=-0.1)
+    with pytest.raises(ValueError, match="max_gap_rate"):
+        MSASampler(msa_root="/x", seq_to_idx_path="/y", max_gap_rate=1.5)

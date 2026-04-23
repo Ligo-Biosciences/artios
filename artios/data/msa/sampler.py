@@ -120,10 +120,31 @@ class MSASampler:
         seq_to_idx_path: str | Path,
         n_msa: int = 64,
         seed: int | None = None,
+        min_homolog_identity: float = 0.0,
+        max_gap_rate: float = 1.0,
     ) -> None:
+        """
+        Args:
+            msa_root / seq_to_idx_path / n_msa / seed: see CLAUDE.md §8.
+            min_homolog_identity: reject any homolog whose non-gap identity
+                to the query (computed on cropped chain columns) is strictly
+                below this. ``0.0`` disables the filter.
+            max_gap_rate: reject any homolog whose fraction of gap tokens
+                (computed on cropped chain columns) is strictly above this.
+                ``1.0`` disables the filter.
+        """
+        if not 0.0 <= min_homolog_identity <= 1.0:
+            raise ValueError(
+                f"min_homolog_identity must be in [0, 1], got {min_homolog_identity}"
+            )
+        if not 0.0 <= max_gap_rate <= 1.0:
+            raise ValueError(f"max_gap_rate must be in [0, 1], got {max_gap_rate}")
+
         self.msa_root = Path(msa_root)
         self.n_msa = n_msa
         self._seed = seed
+        self.min_homolog_identity = min_homolog_identity
+        self.max_gap_rate = max_gap_rate
         # Shared Generator: consecutive calls vary. Two samplers with the
         # same seed produce identical call sequences (useful for tests and
         # reproducible epochs).
@@ -200,19 +221,38 @@ class MSASampler:
         # 9. Slice MSA columns down to the cropped chain residues.
         tokens_chain = tokens_full[:, cols_arr]  # [n_rows, l_chain_cropped]
 
-        # 10. Depth gate: require at least n_msa rows.
+        # 10. Fast-path depth gate: if the a3m itself has fewer rows than
+        # n_msa, no amount of filtering can rescue it.
         if n_rows < self.n_msa:
             return None
 
-        # 11. Sample rows uniformly without replacement; query stays at 0.
-        other = self._rng.choice(
-            np.arange(1, n_rows), size=self.n_msa - 1, replace=False
+        # 11. Per-homolog quality filters (evaluated on cropped chain columns
+        # — what the Potts loss actually sees). Query row is always kept.
+        query_row = tokens_chain[0]
+        homolog_rows = tokens_chain[1:]  # [n_rows - 1, l_chain_cropped]
+        is_gap = homolog_rows == _GAP
+        non_gap = ~is_gap
+        n_non_gap = non_gap.sum(axis=1)
+        matches = (homolog_rows == query_row) & non_gap
+        identity = np.where(
+            n_non_gap > 0,
+            matches.sum(axis=1) / np.maximum(n_non_gap, 1),
+            0.0,
         )
-        sampled = np.concatenate([[0], other])
+        gap_rate = is_gap.mean(axis=1)
+        keep = (identity >= self.min_homolog_identity) & (gap_rate <= self.max_gap_rate)
+        kept_offsets = np.where(keep)[0] + 1  # offsets into tokens_chain
+
+        # 12. Post-filter depth gate: need n_msa - 1 surviving homologs.
+        if len(kept_offsets) < self.n_msa - 1:
+            return None
+
+        # 13. Sample n_msa - 1 homologs without replacement; query stays at 0.
+        selected = self._rng.choice(kept_offsets, size=self.n_msa - 1, replace=False)
+        sampled = np.concatenate([[0], selected])
         sampled_tokens = np.ascontiguousarray(tokens_chain[sampled])
         sampled_gap_mask = sampled_tokens == _GAP
 
-        # 12. Pack up.
         return MSA(
             tokens=sampled_tokens,
             gap_mask=sampled_gap_mask,

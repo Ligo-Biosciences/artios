@@ -10,193 +10,28 @@ import dataclasses
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import ClassVar
 
 import numpy as np
 from biotite.structure import AtomArray
 
 from artios.data.structure import annotation
+from artios.data.structure.annotation_v2 import (
+    DerivedAnnotations,
+    EntityIds,
+    MoleculeIds,
+    MotifAnnotation,
+    ReferenceConformer,
+    TrainingAnnotations,
+    TypeMasks,
+    _AnnotationGroup,
+)
 from artios.data.structure.tokenization import (
     TokenGrouping,
     compute_token_grouping_vectorized,
     reindex_grouping,
 )
 from artios.utils.file_io import dump_atomarray_to_npz, load_atomarray_from_npz
-from artios.utils.typing import Bool, Float, Int, Int32, Shaped, typecheck
-
-
-class _AnnotationGroup:
-    """Mixin for frozen dataclasses whose field names match AtomArray annotations.
-
-    Provides ``from_atom_array`` / ``to_atom_array`` / ``strip_from`` so the
-    mapping between typed fields and stringly-typed annotations is defined once
-    — by the field names on the dataclass.
-
-    Subclasses declare ``FIELD_NAME`` (attribute name on ``AnnotatedStructure``)
-    and may override ``REQUIRED`` to ``False`` for optional groups.
-
-    Fields with a default value (e.g. ``None``) are treated as optional:
-    missing annotations use the default instead of raising.
-    """
-
-    FIELD_NAME: ClassVar[str]
-    REQUIRED: ClassVar[bool] = True
-
-    @classmethod
-    def from_atom_array(cls, atom_array: AtomArray):
-        """Read annotations into typed fields."""
-        kwargs = {}
-        for f in dataclasses.fields(cls):
-            val = getattr(atom_array, f.name, None)
-            if (
-                val is None
-                and f.default is dataclasses.MISSING
-                and f.default_factory is dataclasses.MISSING
-            ):
-                raise AttributeError(
-                    f"Required annotation '{f.name}' missing from atom_array"
-                )
-            kwargs[f.name] = val
-        return cls(**kwargs)
-
-    @classmethod
-    def maybe_from_atom_array(cls, atom_array: AtomArray):
-        """Like ``from_atom_array``, but returns ``None`` if all fields are absent.
-
-        Raises ``ValueError`` on partial presence — either all fields or none.
-        """
-        names = [f.name for f in dataclasses.fields(cls)]
-        cats = atom_array.get_annotation_categories()
-        present = [n in cats for n in names]
-        if not any(present):
-            return None
-        if not all(present):
-            missing = [n for n, p in zip(names, present) if not p]
-            raise ValueError(
-                f"{cls.__name__} partially present on atom_array: " f"missing {missing}"
-            )
-        return cls.from_atom_array(atom_array)
-
-    def to_atom_array(self, atom_array: AtomArray) -> None:
-        """Write typed fields back as annotations (mutates *atom_array*).
-
-        Skips fields that are None.
-        """
-        for f in dataclasses.fields(self):
-            val = getattr(self, f.name)
-            if val is not None:
-                atom_array.set_annotation(f.name, val)
-
-    @classmethod
-    def strip_from(cls, atom_array: AtomArray) -> None:
-        """Remove our annotations from *atom_array*."""
-        for f in dataclasses.fields(cls):
-            if f.name in atom_array.get_annotation_categories():
-                atom_array.del_annotation(f.name)
-
-    def select(self, indices: np.ndarray):
-        """Slice all fields by *indices*. Returns new instance."""
-        return type(self)(
-            **{
-                f.name: (
-                    getattr(self, f.name)[indices]
-                    if getattr(self, f.name) is not None
-                    else None
-                )
-                for f in dataclasses.fields(self)
-            }
-        )
-
-
-@typecheck
-@dataclass(frozen=True)
-class EntityIds(_AnnotationGroup):
-    """Per-atom entity identification."""
-
-    FIELD_NAME: ClassVar[str] = "entity_ids"
-
-    asym_id_int: Int[np.ndarray, "n_atom"]
-    entity_id_int: Int[np.ndarray, "n_atom"]
-    sym_id_int: Int[np.ndarray, "n_atom"]
-
-
-@typecheck
-@dataclass(frozen=True)
-class MoleculeIds(_AnnotationGroup):
-    """Per-atom molecule identification (covalently connected units)."""
-
-    FIELD_NAME: ClassVar[str] = "molecule_ids"
-
-    mol_id: Int32[np.ndarray, "n_atom"]
-    entity_mol_id: Int32[np.ndarray, "n_atom"]
-    mol_atom_index: Int32[np.ndarray, "n_atom"]
-
-
-@typecheck
-@dataclass(frozen=True)
-class TypeMasks(_AnnotationGroup):
-    """Per-atom molecular type classification."""
-
-    FIELD_NAME: ClassVar[str] = "type_masks"
-
-    # mol_type is numpy str_ (e.g. "protein"|"rna"|"dna"|"ligand"); jaxtyping
-    # has no string-specific marker, so Shaped enforces shape only.
-    mol_type: Shaped[np.ndarray, "n_atom"]
-    is_protein: Int[np.ndarray, "n_atom"]
-    is_ligand: Int[np.ndarray, "n_atom"]
-    is_dna: Int[np.ndarray, "n_atom"]
-    is_rna: Int[np.ndarray, "n_atom"]
-
-
-@typecheck
-@dataclass(frozen=True)
-class ReferenceConformer(_AnnotationGroup):
-    """Per-atom reference conformer data from CCD."""
-
-    FIELD_NAME: ClassVar[str] = "reference"
-
-    ref_pos: Float[np.ndarray, "n_atom 3"]
-    ref_charge: Int[np.ndarray, "n_atom"]
-    ref_mask: Int[np.ndarray, "n_atom"]
-    ref_space_uid: Int[np.ndarray, "n_atom"]
-
-
-@typecheck
-@dataclass(frozen=True)
-class DerivedAnnotations(_AnnotationGroup):
-    """Per-atom annotations computed during the annotation pipeline."""
-
-    FIELD_NAME: ClassVar[str] = "derived"
-
-    cano_seq_resname: Shaped[np.ndarray, "n_atom"]  # numpy str_
-    tokatom_idx: Int[np.ndarray, "n_atom"]
-    modified_res_mask: Int[np.ndarray, "n_atom"]
-
-
-@typecheck
-@dataclass(frozen=True)
-class TrainingAnnotations(_AnnotationGroup):
-    """Optional per-atom annotations for training. Fields default to None."""
-
-    FIELD_NAME: ClassVar[str] = "training"
-
-    is_resolved: Bool[np.ndarray, "n_atom"] | None = None
-    plddt_m_rep_atom_mask: Int[np.ndarray, "n_atom"] | None = None
-    pocket_id: Int[np.ndarray, "n_atom"] | None = None
-    fragment_id: Int[np.ndarray, "n_atom"] | None = None
-
-
-@typecheck
-@dataclass(frozen=True)
-class MotifAnnotation(_AnnotationGroup):
-    """Per-atom motif masks. Only present when motif is active."""
-
-    FIELD_NAME: ClassVar[str] = "motif"
-    REQUIRED: ClassVar[bool] = False
-
-    is_motif: Int[np.ndarray, "n_atom"]
-    is_motif_related: Int[np.ndarray, "n_atom"]
-
+from artios.utils.typing import Float, Int
 
 # ---------------------------------------------------------------------------
 # AnnotatedStructure

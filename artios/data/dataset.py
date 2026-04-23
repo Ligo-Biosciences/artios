@@ -28,13 +28,13 @@ from ml_collections.config_dict import ConfigDict
 from torch.utils.data import Dataset
 
 from artios.common import ccd_sets
-from artios.common.constants import BACKBONE_DEFS, EvaluationChainInterface
+from artios.common.constants import EvaluationChainInterface
 from artios.data.data_pipeline import DataPipeline
 from artios.data.data_weights import get_sample_weights
 from artios.data.features import FullContext
 from artios.data.features.featurizer import ContextGenerator
 from artios.data.motif_maker import MotifMaker
-from artios.data.structure import AnnotatedStructure, annotation
+from artios.data.structure import AnnotatedStructure
 from artios.utils.file_io import read_indices_csv
 from artios.utils.geometry import random_transform
 from artios.utils.logger import get_logger
@@ -721,75 +721,6 @@ class BaseSingleDataset(Dataset):
         motif_atom_array = atom_array[atom_array.is_motif > 0]
         save_structure(motif_fpath, motif_atom_array)
         save_structure(structure_fpath, atom_array)
-
-    @staticmethod
-    def _duplicate_motif_backbone_atoms(atom_array: AtomArray) -> AtomArray:
-        """
-        Duplicates backbone atoms of motif-related residues, setting their is_motif and
-        is_motif_related annotations to False. This allows us to un-index
-        the motif sidechains without breaking the backbone.
-
-        Args:
-            atom_array (AtomArray): AtomArray with is_motif and is_motif_related annotations.
-
-        Returns:
-            AtomArray: AtomArray with duplicated backbone atoms of motif-related residues.
-        """
-        is_motif_related = atom_array.is_motif_related
-        is_backbone = (
-            (
-                (atom_array.mol_type == "protein")
-                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["protein"]))
-            )
-            | (
-                (atom_array.mol_type == "DNA")
-                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["dna"]))
-            )
-            | (
-                (atom_array.mol_type == "RNA")
-                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["rna"]))
-            )
-        )
-
-        duplicate_mask = is_backbone & (is_motif_related > 0)
-
-        if not duplicate_mask.any():
-            return atom_array
-
-        duplicated_atoms = atom_array[duplicate_mask].copy()
-        duplicated_atoms.is_motif = np.zeros(len(duplicated_atoms), dtype=int)
-        duplicated_atoms.is_motif_related = np.zeros(len(duplicated_atoms), dtype=int)
-
-        return atom_array + duplicated_atoms
-
-    @staticmethod
-    def _update_ids_to_unindex_motif_residues(atom_array: AtomArray) -> AtomArray:
-        """
-        Updates entity_id_int, sym_id_int, asym_id_int, res_id and ref_space_uid to un-index
-        the sidechains of motif residues. Motif-related residues are grouped by
-        residue identity into new entities, with each residue instance
-        becoming its own chain. Each atom within a motif residue gets a unique res_id since we
-        are going to be tokenizing the sidechains per-atom.
-
-        Args:
-            atom_array (AtomArray): AtomArray with is_motif_related annotation
-
-        Returns:
-            AtomArray: AtomArray with updated IDs for motif-related residues
-        """
-        # Discard the mapping for training - only needed for inference RMSD computation
-        atom_array, _ = annotation.update_ids_to_unindex_motif_residues(atom_array)
-        return atom_array
-
-    @staticmethod
-    def _update_centre_atom_mask_to_include_motif(atom_array: AtomArray) -> AtomArray:
-        """
-        Updates the centre_atom_mask of the atom array to include all motif
-        related atoms. This is important as the Featurizer looks at the
-        centre atom indices to retrieve the correct chain, res IDs etc.
-        TODO: we are not using this method, is this a silent error?
-        """
-        return annotation.update_centre_atom_mask_to_include_motif(atom_array)
 
 
 def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMaker]:

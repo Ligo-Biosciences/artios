@@ -1,0 +1,186 @@
+"""Golden-parity tests for the training motif-handling seam in ``dataset.py``.
+
+Pre-PR-C, training's ``process_one`` runs a six-step motif zigzag on a
+post-crop AtomArray (see ``BaseSingleDataset._apply_motif_processing``):
+
+    to_atom_array → inject motif masks → duplicate_backbone_atoms
+    → remove_non_motif_sidechains → update_ids_to_unindex_motif_residues
+    → update_centre_atom_mask_to_include_motif → from_atom_array → featurize
+
+Post-PR-C, the same work is done as:
+
+    struct.with_motif_annotations → with_duplicated_motif_backbones
+    → without_non_motif_sidechains → with_unindexed_motif → featurize
+
+We pin the FullContext on both paths — the pre-refactor golden is the
+legacy behaviour; after the refactor, the new path must reproduce it
+byte-for-byte. Any drift here names a silent behavioural change.
+
+This intentionally bypasses ``BaseSingleDataset.__init__`` (which needs a
+CSV index, weights, etc.). The risky part of PR C is the motif seam, not
+the cropping / augmentation that happens earlier in ``process_one``, so
+testing the seam in isolation is sufficient *and* cheaper to set up.
+
+See ``tests/integration/CLAUDE.md`` for regeneration ergonomics.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from artios.data.features.featurizer import ContextGenerator
+from artios.data.filter import Filter
+from artios.data.structure import AnnotatedStructure
+from artios.data.structure import annotation as legacy_annotation
+from artios.utils.seed import seed_everything
+
+FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
+STRUCTURES_DIR = FIXTURES_DIR / "structures"
+GOLDEN_DIR = FIXTURES_DIR / "integration"
+
+RNG_SEED = 0
+
+
+def _seed() -> None:
+    seed_everything(RNG_SEED, deterministic=False)
+
+
+def _build_motif_mask(
+    aa,
+    *,
+    protein_chain: str,
+    protein_res_ids: tuple[int, ...],
+    ligand_chain: str | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Hand-craft deterministic ``(is_motif, is_motif_related)`` masks.
+
+    Picks a handful of protein residues as motif (so the per-restype entity
+    grouping, backbone duplication, and sidechain removal branches all
+    fire), plus optionally a ligand chain (to exercise the ligand branch of
+    ``update_ids_to_unindex_motif_residues``).
+    """
+    is_motif = np.zeros(len(aa), dtype=int)
+    protein_mask = (aa.chain_id == protein_chain) & np.isin(
+        aa.res_id, np.array(protein_res_ids)
+    )
+    is_motif[protein_mask] = 1
+    if ligand_chain is not None:
+        is_motif[aa.chain_id == ligand_chain] = 1
+
+    # is_motif_related = all atoms sharing a ref_space_uid with a motif atom.
+    # Mirrors ``MotifMaker._get_is_motif_related_mask`` exactly.
+    is_motif_related = np.zeros(len(aa), dtype=int)
+    motif_uids = np.unique(aa.ref_space_uid[is_motif > 0])
+    is_motif_related[np.isin(aa.ref_space_uid, motif_uids)] = 1
+    return is_motif, is_motif_related
+
+
+def _apply_legacy_motif_seam(aa):
+    """Run the legacy four-step motif seam on an AtomArray in-place order.
+
+    Mirrors ``BaseSingleDataset._apply_motif_processing`` minus the
+    ``_get_motif`` / ``_save_motif`` calls (we supply the mask ourselves).
+    """
+    # Step 1 — duplicate backbones of motif residues (scaffold dupes keep
+    # is_motif=0; originals stay is_motif=1).
+    from artios.data.dataset import BaseSingleDataset
+
+    aa = BaseSingleDataset._duplicate_motif_backbone_atoms(aa)
+    # Step 2 — strip sidechains of non-motif residues.
+    aa = Filter.remove_non_motif_residue_sidechains(aa)
+    # Step 3 — un-index motif residue ids (per-instance chains per restype).
+    aa, _ = legacy_annotation.update_ids_to_unindex_motif_residues(
+        aa, update_labels=False
+    )
+    # Step 4 — promote every motif-related atom to centre-atom status.
+    aa = legacy_annotation.update_centre_atom_mask_to_include_motif(aa)
+    return aa
+
+
+class TestTrainingMotifSeamParity:
+    """Pin the post-crop motif-seam → featurize output for a real structure.
+
+    Input: 1m2g (249-res protein chain + ZN ion + APR cofactor). Motif mask
+    covers four consecutive protein residues (mixed restypes → multiple new
+    entities on unindex) plus the ZN ligand chain (ligand-branch coverage).
+    """
+
+    STRUCTURE = STRUCTURES_DIR / "1m2g.npz"
+    GOLDEN = GOLDEN_DIR / "training_motif_seam" / "context.npz"
+    # 1m2g chain A residues 5-8 are ASP/GLU/LYS/LEU — four distinct restypes
+    # so the per-restype entity grouping in update_ids_to_unindex_motif
+    # creates four new entities. Chain B is the ZN ligand.
+    PROTEIN_CHAIN = "A"
+    PROTEIN_MOTIF_RES_IDS = (5, 6, 7, 8)
+    LIGAND_CHAIN = "B"
+
+    def _run(self) -> Any:
+        structure = AnnotatedStructure.load(self.STRUCTURE)
+        aa = structure.to_atom_array()
+        is_motif, is_motif_related = _build_motif_mask(
+            aa,
+            protein_chain=self.PROTEIN_CHAIN,
+            protein_res_ids=self.PROTEIN_MOTIF_RES_IDS,
+            ligand_chain=self.LIGAND_CHAIN,
+        )
+        aa.set_annotation("is_motif", is_motif)
+        aa.set_annotation("is_motif_related", is_motif_related)
+
+        aa = _apply_legacy_motif_seam(aa)
+
+        new_structure = AnnotatedStructure.from_atom_array(aa)
+        _seed()
+        return ContextGenerator(new_structure, pdb_id="1m2g-motif").get_full_context(
+            include_arrays=False
+        )
+
+    def test_motif_seam_matches_golden(self, regenerate_golden):
+        from .test_infer_parity import _assert_round_trip
+
+        _assert_round_trip(self.GOLDEN, self._run(), regenerate_golden)
+
+    def test_run_is_deterministic(self):
+        from .test_infer_parity import _assert_deterministic
+
+        _assert_deterministic(self._run)
+
+    def test_motif_mask_hits_all_branches(self):
+        """Sanity check — a motif mask that only covered one code path would
+        make the golden worthless. Assert the configured motif hits:
+        - backbone-duplicatable atoms (triggers _duplicate_motif_backbone_atoms)
+        - mixed protein restypes (triggers multi-entity unindex)
+        - ligand chain (triggers ligand-branch of unindex)
+        """
+        structure = AnnotatedStructure.load(self.STRUCTURE)
+        aa = structure.to_atom_array()
+        is_motif, is_motif_related = _build_motif_mask(
+            aa,
+            protein_chain=self.PROTEIN_CHAIN,
+            protein_res_ids=self.PROTEIN_MOTIF_RES_IDS,
+            ligand_chain=self.LIGAND_CHAIN,
+        )
+
+        # At least one protein backbone atom in the motif.
+        protein_bb_in_motif = (
+            (aa.chain_id == self.PROTEIN_CHAIN)
+            & np.isin(aa.atom_name, ["N", "CA", "C", "O"])
+            & (is_motif_related > 0)
+        )
+        assert (
+            protein_bb_in_motif.any()
+        ), "no protein backbone in motif — duplication branch dead"
+
+        # Multiple distinct protein restypes among motif residues.
+        motif_restypes = np.unique(
+            aa.res_name[(aa.chain_id == self.PROTEIN_CHAIN) & (is_motif_related > 0)]
+        )
+        assert (
+            len(motif_restypes) >= 2
+        ), f"only {len(motif_restypes)} restype in motif — per-restype entity grouping dead"
+
+        # Ligand atoms in motif.
+        ligand_in_motif = (aa.chain_id == self.LIGAND_CHAIN) & (is_motif_related > 0)
+        assert ligand_in_motif.any(), "no ligand atoms in motif — ligand branch dead"

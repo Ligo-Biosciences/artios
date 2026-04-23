@@ -22,6 +22,7 @@ from artios.data.structure import (
 from artios.utils.file_io import load_atomarray_from_npz
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "parsing"
+CIF_DIR = Path(__file__).parent.parent / "fixtures" / "cif"
 
 
 @pytest.fixture
@@ -412,6 +413,24 @@ class TestGoldenRoundTrip:
         aa = original.to_atom_array()
         rebuilt = AnnotatedStructure.from_atom_array(aa)
         _assert_structures_equal(original, rebuilt)
+
+    def test_cif_pipeline_matches_golden(self, load_structure, name):
+        """Re-run the production pipeline (CIF → get_bioassembly → from_atom_array)
+        and compare to the saved golden — drift in cleaning, ordering, or any
+        of the ~30 annotation steps fails this test at the exact field.
+
+        This is the widest CIF→pipeline-output coverage we have; pairs with
+        the save/load round-trip (structural) and to_atom_array invertibility
+        (group schemas) to pin the three layers.
+        """
+        from artios.data.parsing.cif import MMCIFParser
+
+        parser = MMCIFParser(mmcif_file=CIF_DIR / f"{name}.cif")
+        bioassembly = parser.get_bioassembly()
+        atom_array = bioassembly["atom_array"]
+        assert atom_array is not None, f"{name}: get_bioassembly returned None"
+        fresh = AnnotatedStructure.from_atom_array(atom_array)
+        _assert_structures_equal(fresh, load_structure(name))
 
 
 @pytest.mark.parametrize("name", GOLDEN_FIXTURES)

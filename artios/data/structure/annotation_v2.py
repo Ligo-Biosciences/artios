@@ -364,12 +364,14 @@ class _AnnotationGroup:
             }
         )
 
-    def duplicate_rows(self, mask: np.ndarray):
+    def append_selection(self, mask: np.ndarray):
         """Append a copy of the rows selected by *mask* to every array field.
 
-        Counterpart to ``select`` — grows each per-atom array by ``mask.sum()``
-        rows. Used by ``AnnotatedStructure.with_duplicated_motif_backbones``
-        to keep every group's length in lockstep with the atom array when
+        Counterpart to ``select`` — where ``select`` slices a subset out,
+        this slices a subset out *and concatenates it onto the tail*.
+        Every per-atom array grows by ``mask.sum()`` rows in the same order.
+        Used by ``AnnotatedStructure.with_duplicated_motif_backbones`` to
+        keep every group's length in lockstep with the atom array when
         motif-residue backbones are physically duplicated.
         """
         return type(self)(
@@ -786,3 +788,26 @@ class MotifAnnotation(_AnnotationGroup):
 
     is_motif: Int[np.ndarray, "n_atom"]
     is_motif_related: Int[np.ndarray, "n_atom"]
+
+    # TODO(delete-me): this override exists only because some legacy inference
+    # writers store is_motif/is_motif_related as bool arrays (via ``[False]*n``
+    # on set_annotation) while our contract is Int[...]. It is a boundary
+    # bandaid — nothing else about MotifAnnotation needs a custom reader.
+    # Two ways out, pick when PR C lands:
+    #   1. Delete the legacy writers (PR C8 removes ``add_atom_array_attributes``
+    #      + backbone_input_to_atom_array + packing_input_to_atom_array_v2);
+    #      then no bool values reach this path and the base class reader
+    #      suffices.
+    #   2. Flip the group's dtype to Bool (tracked in the annotation_v2
+    #      module docstring's int→bool migration TODO).
+    # Either way: when you pick one, delete this method. It should NOT become
+    # a permanent fixture.
+    @classmethod
+    def from_atom_array(cls, atom_array: AtomArray) -> "MotifAnnotation":
+        is_motif = atom_array.is_motif
+        is_motif_related = atom_array.is_motif_related
+        if is_motif.dtype == bool:
+            is_motif = is_motif.astype(int)
+        if is_motif_related.dtype == bool:
+            is_motif_related = is_motif_related.astype(int)
+        return cls(is_motif=is_motif, is_motif_related=is_motif_related)

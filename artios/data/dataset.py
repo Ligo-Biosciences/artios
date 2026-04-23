@@ -551,10 +551,21 @@ class BaseSingleDataset(Dataset):
         structure = AnnotatedStructure.from_atom_array(cropped_atom_array)
 
         # --- MSA sample (post-crop so chain asym_id matches the cropped structure) ---
+        # When the sampler is enabled, always hand a populated MSA down to
+        # ContextGenerator — either the real one, or MSA.null_for(n_msa) for
+        # samples where no protein chain was resolvable / the sampler bailed.
+        # This keeps every sample producing a same-shape MSAContext so the
+        # dataloader collate can stack the batch without None/tensor mixing.
+        # Null MSAs have l_chain_cropped=0, so their MSAContext is entirely
+        # gap-filled with msa_chain_mask all-False — they contribute zero to
+        # the MSA loss through ordinary masking.
         msa: Optional[MSA] = None
-        if self.msa_sampler is not None and msa_query_info is not None:
+        if self.msa_sampler is not None:
             t_msa = time.time()
-            msa = self.msa_sampler.sample(structure, msa_query_info)
+            if msa_query_info is not None:
+                msa = self.msa_sampler.sample(structure, msa_query_info)
+            if msa is None:
+                msa = MSA.null_for(self.msa_sampler.n_msa)
             timings["msa_sample"] = time.time() - t_msa
 
         t4 = time.time()

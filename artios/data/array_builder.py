@@ -4,15 +4,12 @@ import logging
 import random
 import warnings
 
-import biotite.sequence.io as seqio
 import biotite.structure as struc
-import biotite.structure.io as strucio
 import numpy as np
 from biotite.sequence import ProteinSequence
 from biotite.structure import AtomArray
 from typing_extensions import assert_never
 
-from artios.common.constants import BACKBONE_DEFS
 from artios.common.residue_names import PROTEIN_COMMON_ONE_TO_THREE as PROTEIN_1to3
 from artios.data.chem import ccd
 from artios.data.chem.rdkit import (
@@ -23,14 +20,11 @@ from artios.data.chem.rdkit import (
 from artios.data.parsing.json import (
     BackboneInput,
     CCDLigand,
-    PackingInput,
-    SequenceDesignInput,
     SMILESLigand,
 )
 from artios.data.parsing.motif import Motif, MotifLigand, MotifResidue
 from artios.data.structure import annotation
 from artios.data.structure.structure import AnnotatedStructure
-from artios.utils.file_io import load_atomarray_from_npz
 from evaluation.utils.constants import DESIGN_CHAIN_ID
 
 logger = logging.getLogger(__name__)
@@ -130,154 +124,6 @@ def set_chain_and_seq_ids(
     atom_array.set_annotation("copy_id", ["1"] * len(atom_array))
     atom_array.set_annotation("label_entity_id", [str(entity_id)] * len(atom_array))
     return atom_array
-
-
-def backbone_input_to_atom_array(
-    backbone_input: BackboneInput,
-) -> tuple[AtomArray, list[dict]]:
-    """Process motif scaffolding input and builds AtomArray.
-
-    Returns:
-        tuple containing:
-            - AtomArray: Complete atom array with all annotations
-            - list[dict]: Mapping from unindexed chain to original motif residue info
-    """
-    assert len(backbone_input.design) == 1, "Only one design entity is supported"
-
-    # Build protein array
-    sequence = [PROTEIN_1to3["G"] for _ in range(backbone_input.design[0].length)]
-    design_atom_array = _build_polymer_atom_array(sequence)
-    design_atom_array = add_reference_features(design_atom_array)
-    design_atom_array = set_chain_and_seq_ids(
-        design_atom_array, chain_id=backbone_input.design[0].chain_id, entity_id=1
-    )
-    # TODO: tidy this up !
-    # filter the array for OXT atoms
-    design_atom_array = design_atom_array[design_atom_array.atom_name != "OXT"]
-
-    design_atom_array.set_annotation(
-        "is_motif_related", [False] * len(design_atom_array)
-    )
-    design_atom_array.set_annotation("is_motif", [False] * len(design_atom_array))
-    design_atom_array.set_annotation(
-        "original_motif_res_id", np.full(len(design_atom_array), -1, dtype=int)
-    )
-    design_atom_array.set_annotation(
-        "original_motif_chain_id", np.array([""] * len(design_atom_array))
-    )
-
-    # Build motif (chain_ids already set from CIF in build_motif_residue/build_motif_ligand)
-    has_motif = backbone_input.motif is not None
-    if has_motif:
-        motif_atom_array = build_motif(Motif.from_spec(backbone_input.motif))
-        design_atom_array += motif_atom_array
-
-    # Apply MSE->MET conversion and add annotations
-    design_atom_array = mse_to_met(design_atom_array)
-    design_atom_array, original_motif_mapping = add_atom_array_attributes(
-        design_atom_array, has_motif=has_motif
-    )
-
-    return design_atom_array, original_motif_mapping
-
-
-def sequence_input_to_atom_array(
-    sequence_input: SequenceDesignInput,
-) -> tuple[AtomArray, list[dict]]:
-    """Load AtomArray from NPZ file saved during backbone inference.
-
-    The NPZ file contains the complete AtomArray with all annotations already set:
-    - Protein backbone and motif sidechain coordinates
-    - Ligand coordinates
-    - Chain IDs for all entities
-    - is_motif, is_motif_related annotations
-    - original_motif_res_id annotations
-
-    No additional processing (MSE->MET conversion or annotation addition) is needed
-    since this was already done during the backbone scaffolding phase.
-
-    Args:
-        sequence_input: SequenceDesignInput with npz_file path
-
-    Returns:
-        tuple containing:
-            - AtomArray: Loaded from NPZ with all annotations preserved
-            - list[dict]: Empty list (motif mapping not reconstructed from NPZ)
-    """
-    atom_array = load_atomarray_from_npz(sequence_input.npz_file.path)
-
-    # NPZ already has all annotations from backbone scaffolding phase.
-    # original_motif_mapping is not preserved in NPZ, return empty list.
-    # Downstream code can use original_motif_res_id annotation on atoms if needed.
-    return atom_array, []
-
-
-# TODO: DONT LOOK AT ME ! DELETE ME!
-def packing_input_to_atom_array(
-    packing_input: PackingInput,
-) -> tuple[AtomArray, list[dict]]:
-    """Process packing input and builds AtomArray.
-
-    Returns:
-        tuple containing:
-            - AtomArray: Complete atom array with all annotations
-            - list[dict]: Empty list (packing has no motifs)
-    """
-    # Load stitched backbone from cif
-    designed_array = strucio.load_structure(packing_input.cif_file.path)
-
-    arrays = []
-    # Build protein array
-    fasta_dict = seqio.load_sequences(packing_input.fasta_file.path)
-    sequence = list(fasta_dict.values())[0]
-    ccd_seqs = [PROTEIN_1to3[aa] for aa in sequence]
-
-    protein_array = _build_polymer_atom_array(ccd_seqs)
-    protein_array = add_reference_features(protein_array)
-    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0, entity_id=1)
-    arrays.append(protein_array)
-
-    # Build ligand arrays
-    for i, ligand in enumerate(packing_input.ligands):
-        ligand_array = build_ligand(ligand).atom_array
-        ligand_array = set_chain_and_seq_ids(
-            ligand_array, chain_id=i + 1, entity_id=i + 2
-        )
-        arrays.append(ligand_array)
-
-    combined = arrays[0]
-    for arr in arrays[1:]:
-        combined += arr
-
-    # Get backbone atom masks
-    backbone_atoms = BACKBONE_DEFS["protein"]
-    backbone_design_mask = (designed_array.hetero) | (
-        (~designed_array.hetero) & (np.isin(designed_array.atom_name, backbone_atoms))
-    )
-    backbone_combined_mask = (combined.hetero) | (
-        (~combined.hetero) & (np.isin(combined.atom_name, backbone_atoms))
-    )
-
-    # Add the coordinates to combined array
-    assert (
-        sum(backbone_combined_mask.astype(int)) == sum(backbone_design_mask.astype(int))
-    ), f"backbone mask has different number of atoms {sum(backbone_combined_mask.astype(int))} vs {sum(backbone_design_mask.astype(int))}"
-    combined.coord[backbone_combined_mask] = designed_array.coord[backbone_design_mask]
-
-    combined.set_annotation("is_motif_related", [False] * len(combined))
-    combined.set_annotation("is_motif", [False] * len(combined))
-    combined.set_annotation(
-        "original_motif_res_id", np.full(len(combined), -1, dtype=int)
-    )
-    combined.set_annotation("original_motif_chain_id", np.array([""] * len(combined)))
-
-    # Apply MSE->MET conversion and add annotations (no motif-specific handling)
-    combined = mse_to_met(combined)
-    combined, original_motif_mapping = add_atom_array_attributes(
-        combined, has_motif=False
-    )
-
-    return combined, original_motif_mapping
 
 
 def packing_input_to_atom_array_v2(
@@ -437,36 +283,16 @@ def packing_input_to_structure(
     """Build ``AnnotatedStructure`` for sidechain packing.
 
     Mirrors the legacy ``packing_input_to_atom_array_v2`` + ``from_atom_array``
-    flow exactly — protein is annotated fresh, ligand carries its NPZ
+    flow — protein is annotated fresh, ligand carries its NPZ
     annotations through the concatenation unchanged. Using
     ``AnnotatedStructure.annotate`` on the combined array would regenerate
     ligand ``ref_pos`` from CCD (zeros for unknown ligands like ``UNL``),
-    diverging from the golden. The legacy-preservation pattern goes away
-    when PR C8 deletes ``packing_input_to_atom_array_v2``.
+    diverging from the golden. ``packing_input_to_atom_array_v2`` +
+    ``add_atom_array_attributes`` stay alive for this one call site until
+    a follow-up refactor eliminates the split-annotation pattern.
     """
     combined = packing_input_to_atom_array_v2(input_array, sequence)
     return AnnotatedStructure.from_atom_array(combined), []
-
-
-def process_input_to_atom_array(
-    input: BackboneInput | SequenceDesignInput | PackingInput,
-) -> tuple[AtomArray, list[dict]]:
-    """Dispatch to appropriate task-specific processor based on input structure.
-
-    Returns:
-        tuple containing:
-            - AtomArray: Complete atom array with all annotations
-            - list[dict]: Mapping from unindexed chain to original motif residue info
-    """
-    match input:
-        case BackboneInput():
-            return backbone_input_to_atom_array(input)
-        case SequenceDesignInput():
-            return sequence_input_to_atom_array(input)
-        case PackingInput():
-            return packing_input_to_atom_array(input)
-        case _:
-            assert_never(input)
 
 
 def _build_polymer_atom_array(ccd_seqs: list[str]) -> AtomArray:

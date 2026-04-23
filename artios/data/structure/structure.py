@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 from biotite.structure import AtomArray
 
-from artios.data.structure import annotation, annotation_v2
+from artios.data.structure import annotation_v2
 from artios.data.structure.annotation_v2 import (
     DerivedAnnotations,
     EntityIds,
@@ -99,69 +99,23 @@ class AnnotatedStructure:
         include_ref_conformer: bool = True,
         include_training_masks: bool = False,
     ) -> AnnotatedStructure:
-        """Compute all annotations in the correct order. Single entry point.
+        """Compute every annotation group for a cleaned AtomArray.
+
+        Flow:
+        1. Structural: canonicalize chain ids, reorder atoms by mol.
+        2. Content: each ``_AnnotationGroup`` subclass runs its ``compute()``
+           in dependency order.
+        3. Strip group-owned annotations from ``aa`` so ``atoms`` stays
+           biotite-native only — groups are the single source of truth.
 
         Args:
             atom_array: Cleaned AtomArray with biotite-native fields and
                 ``label_entity_id`` set. Must NOT have been through
-                ``unique_chain_and_add_ids`` or ``find_equiv_mol`` yet.
+                ``canonicalize_chain_ids`` or ``order_atoms_by_mol`` yet.
             sequences: ``{label_entity_id: canonical_sequence}``.
             entity_poly_type: ``{label_entity_id: poly_type}`` from mmCIF.
-            include_ref_conformer: Compute reference conformer.
+            include_ref_conformer: Fill ref_pos/ref_charge/ref_mask from CCD.
             include_training_masks: Compute plddt_m_rep_atom_mask.
-        """
-        atom_array = annotation.add_token_mol_type(atom_array, sequences)
-        atom_array = annotation.unique_chain_and_add_ids(atom_array)
-        atom_array = annotation.find_equiv_mol_and_assign_ids(
-            atom_array,
-            entity_poly_type,
-            check_final_equiv=entity_poly_type is not None,
-        )
-        atom_array = annotation.add_ref_space_uid(atom_array)
-
-        atom_array = annotation.add_atom_mol_type_mask(atom_array)
-        atom_array = annotation.add_cano_seq_resname(atom_array)
-        atom_array = annotation.add_tokatom_idx(atom_array)
-        atom_array = annotation.add_modified_res_mask(atom_array)
-
-        if include_ref_conformer:
-            ref_pos, ref_charge, ref_mask = annotation.add_ref_feat_info(atom_array)
-            atom_array.set_annotation("ref_pos", ref_pos)
-            atom_array.set_annotation("ref_charge", ref_charge)
-            atom_array.set_annotation("ref_mask", ref_mask)
-        else:
-            n = len(atom_array)
-            atom_array.set_annotation("ref_pos", np.zeros((n, 3)))
-            atom_array.set_annotation("ref_charge", np.zeros(n, dtype=int))
-            atom_array.set_annotation("ref_mask", np.zeros(n, dtype=int))
-
-        if "is_resolved" not in atom_array.get_annotation_categories():
-            atom_array.set_annotation(
-                "is_resolved", np.ones(len(atom_array), dtype=bool)
-            )
-
-        if include_training_masks:
-            atom_array = annotation.add_plddt_m_rep_atom_mask(atom_array)
-
-        return cls.from_atom_array(atom_array)
-
-    @classmethod
-    def _annotate_v2(
-        cls,
-        atom_array: AtomArray,
-        sequences: dict[str, str],
-        entity_poly_type: dict[str, str] | None = None,
-        include_ref_conformer: bool = True,
-        include_training_masks: bool = False,
-    ) -> AnnotatedStructure:
-        """compute()-based annotate path, kept in parallel with ``annotate``.
-
-        Temporary during PR B of the data-pipeline refactor. The dual-path
-        test in ``tests/data_pipeline/test_compute_migration_parity.py``
-        byte-compares this against ``annotate``; once stable, ``annotate``
-        gets flipped to this body and ``_annotate_v2`` is removed.
-
-        See docs/refactor_plans/data_pipeline_refactor_sequence.md PR B.
         """
         aa = atom_array.copy()
         aa = annotation_v2.canonicalize_chain_ids(aa)
@@ -181,9 +135,6 @@ class AnnotatedStructure:
         )
         grouping = compute_token_grouping_vectorized(aa, mol_type=type_masks.mol_type)
 
-        # Strip group-owned annotations from aa so ``atoms`` keeps only
-        # biotite-native fields + label_entity_id. Mirrors from_atom_array —
-        # groups are the single source of truth, not AtomArray annotations.
         for g in _AnnotationGroup.__subclasses__():
             g.strip_from(aa)
         # TODO(follow-up): stop writing ``centre_atom_mask`` as an AtomArray

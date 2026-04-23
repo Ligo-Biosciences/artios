@@ -12,19 +12,19 @@ from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from typing_extensions import assert_never
 
 from artios.data.array_builder import (
-    backbone_input_to_atom_array,
-    packing_input_to_atom_array_v2,
+    backbone_input_to_structure,
+    packing_input_to_structure,
+    sequence_design_input_to_structure,
 )
 from artios.data.collate.collate import CollateContexts
 from artios.data.features import FullContext
-from artios.data.featurizer import ContextGenerator
+from artios.data.features.featurizer import ContextGenerator
 from artios.data.parsing.json import (
     BackboneInput,
     PackingInput,
     SequenceDesignInput,
     parse_input_dict,
 )
-from artios.data.structure.tokenizer import AtomArrayTokenizer
 from artios.utils.distributed import DIST_WRAPPER
 from artios.utils.file_io import load_atomarray_stack
 
@@ -110,14 +110,11 @@ class MotifDataset(Dataset):
         sample_name = self.backbone_input.name
         logger.info(f"Featurizing {sample_name}...")
 
-        atom_array, original_motif_mapping = backbone_input_to_atom_array(
+        structure, original_motif_mapping = backbone_input_to_structure(
             self.backbone_input
         )
-
-        token_array = AtomArrayTokenizer(atom_array).get_token_array()
         return ContextGenerator(
-            token_array,
-            atom_array,
+            structure,
             pdb_id=sample_name,
             original_motif_mapping=original_motif_mapping,
         ).get_full_context()
@@ -162,15 +159,15 @@ class MPNNDataset(Dataset):
             f"(backbone_sample_idx {backbone_sample_idx})..."
         )
 
-        atom_array = self.atom_stack[backbone_sample_idx]
-        token_array = AtomArrayTokenizer(atom_array).get_token_array()
+        structure, _ = sequence_design_input_to_structure(
+            self.atom_stack[backbone_sample_idx]
+        )
 
         # fixed_residues keyed by backbone stack position (backbone-dependent)
         fixed = self.sequence_input.fixed_residues.get(backbone_sample_idx)
 
         return ContextGenerator(
-            token_array,
-            atom_array,
+            structure,
             pdb_id=sample_name,
         ).get_full_context(fixed_residues=fixed)
 
@@ -212,11 +209,8 @@ class PackingDataset(Dataset):
         # # TODO: temporary fix while working on distillation backbones
         # input_array.res_id = input_array.res_id - input_array.res_id.min() + 1
         sequence = self.sequences[index]
-        atom_array = packing_input_to_atom_array_v2(input_array, sequence)
-
-        token_array = AtomArrayTokenizer(atom_array).get_token_array()
+        structure, _ = packing_input_to_structure(input_array, sequence)
         return ContextGenerator(
-            token_array,
-            atom_array,
+            structure,
             pdb_id=sample_name,
         ).get_full_context()

@@ -10,22 +10,19 @@ import dataclasses
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
+from typing import ClassVar
 
-import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
-from numpy.typing import NDArray
 
-from artios.common.constants import STD_RESIDUES
 from artios.data.structure import annotation
+from artios.data.structure.tokenization import (
+    TokenGrouping,
+    compute_token_grouping_vectorized,
+    reindex_grouping,
+)
 from artios.utils.file_io import dump_atomarray_to_npz, load_atomarray_from_npz
-
-# Typed array aliases — encode dtype in the type system, shapes in comments.
-IntArray = NDArray[np.int64]
-Int32Array = NDArray[np.int32]
-BoolArray = NDArray[np.bool_]
-FloatArray = NDArray[np.float64]
-StrArray = NDArray[np.str_]
+from artios.utils.typing import Bool, Float, Int, Int32, Shaped, typecheck
 
 
 class _AnnotationGroup:
@@ -35,9 +32,15 @@ class _AnnotationGroup:
     mapping between typed fields and stringly-typed annotations is defined once
     — by the field names on the dataclass.
 
+    Subclasses declare ``FIELD_NAME`` (attribute name on ``AnnotatedStructure``)
+    and may override ``REQUIRED`` to ``False`` for optional groups.
+
     Fields with a default value (e.g. ``None``) are treated as optional:
     missing annotations use the default instead of raising.
     """
+
+    FIELD_NAME: ClassVar[str]
+    REQUIRED: ClassVar[bool] = True
 
     @classmethod
     def from_atom_array(cls, atom_array: AtomArray):
@@ -55,6 +58,24 @@ class _AnnotationGroup:
                 )
             kwargs[f.name] = val
         return cls(**kwargs)
+
+    @classmethod
+    def maybe_from_atom_array(cls, atom_array: AtomArray):
+        """Like ``from_atom_array``, but returns ``None`` if all fields are absent.
+
+        Raises ``ValueError`` on partial presence — either all fields or none.
+        """
+        names = [f.name for f in dataclasses.fields(cls)]
+        cats = atom_array.get_annotation_categories()
+        present = [n in cats for n in names]
+        if not any(present):
+            return None
+        if not all(present):
+            missing = [n for n, p in zip(names, present) if not p]
+            raise ValueError(
+                f"{cls.__name__} partially present on atom_array: " f"missing {missing}"
+            )
+        return cls.from_atom_array(atom_array)
 
     def to_atom_array(self, atom_array: AtomArray) -> None:
         """Write typed fields back as annotations (mutates *atom_array*).
@@ -87,259 +108,99 @@ class _AnnotationGroup:
         )
 
 
+@typecheck
 @dataclass(frozen=True)
 class EntityIds(_AnnotationGroup):
     """Per-atom entity identification."""
 
-    asym_id_int: IntArray  # [n_atom]
-    entity_id_int: IntArray  # [n_atom]
-    sym_id_int: IntArray  # [n_atom]
+    FIELD_NAME: ClassVar[str] = "entity_ids"
+
+    asym_id_int: Int[np.ndarray, "n_atom"]
+    entity_id_int: Int[np.ndarray, "n_atom"]
+    sym_id_int: Int[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class MoleculeIds(_AnnotationGroup):
     """Per-atom molecule identification (covalently connected units)."""
 
-    mol_id: Int32Array  # [n_atom]
-    entity_mol_id: Int32Array  # [n_atom]
-    mol_atom_index: Int32Array  # [n_atom]
+    FIELD_NAME: ClassVar[str] = "molecule_ids"
+
+    mol_id: Int32[np.ndarray, "n_atom"]
+    entity_mol_id: Int32[np.ndarray, "n_atom"]
+    mol_atom_index: Int32[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class TypeMasks(_AnnotationGroup):
     """Per-atom molecular type classification."""
 
-    mol_type: StrArray  # [n_atom] "protein"|"rna"|"dna"|"ligand"
-    is_protein: IntArray  # [n_atom]
-    is_ligand: IntArray  # [n_atom]
-    is_dna: IntArray  # [n_atom]
-    is_rna: IntArray  # [n_atom]
+    FIELD_NAME: ClassVar[str] = "type_masks"
+
+    # mol_type is numpy str_ (e.g. "protein"|"rna"|"dna"|"ligand"); jaxtyping
+    # has no string-specific marker, so Shaped enforces shape only.
+    mol_type: Shaped[np.ndarray, "n_atom"]
+    is_protein: Int[np.ndarray, "n_atom"]
+    is_ligand: Int[np.ndarray, "n_atom"]
+    is_dna: Int[np.ndarray, "n_atom"]
+    is_rna: Int[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class ReferenceConformer(_AnnotationGroup):
     """Per-atom reference conformer data from CCD."""
 
-    ref_pos: FloatArray  # [n_atom, 3]
-    ref_charge: IntArray  # [n_atom]
-    ref_mask: IntArray  # [n_atom]
-    ref_space_uid: IntArray  # [n_atom]
+    FIELD_NAME: ClassVar[str] = "reference"
+
+    ref_pos: Float[np.ndarray, "n_atom 3"]
+    ref_charge: Int[np.ndarray, "n_atom"]
+    ref_mask: Int[np.ndarray, "n_atom"]
+    ref_space_uid: Int[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class DerivedAnnotations(_AnnotationGroup):
     """Per-atom annotations computed during the annotation pipeline."""
 
-    cano_seq_resname: StrArray  # [n_atom]
-    tokatom_idx: IntArray  # [n_atom]
-    modified_res_mask: IntArray  # [n_atom]
+    FIELD_NAME: ClassVar[str] = "derived"
+
+    cano_seq_resname: Shaped[np.ndarray, "n_atom"]  # numpy str_
+    tokatom_idx: Int[np.ndarray, "n_atom"]
+    modified_res_mask: Int[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class TrainingAnnotations(_AnnotationGroup):
     """Optional per-atom annotations for training. Fields default to None."""
 
-    is_resolved: BoolArray | None = None
-    plddt_m_rep_atom_mask: IntArray | None = None
-    pocket_id: IntArray | None = None
-    fragment_id: IntArray | None = None
+    FIELD_NAME: ClassVar[str] = "training"
+
+    is_resolved: Bool[np.ndarray, "n_atom"] | None = None
+    plddt_m_rep_atom_mask: Int[np.ndarray, "n_atom"] | None = None
+    pocket_id: Int[np.ndarray, "n_atom"] | None = None
+    fragment_id: Int[np.ndarray, "n_atom"] | None = None
 
 
+@typecheck
 @dataclass(frozen=True)
 class MotifAnnotation(_AnnotationGroup):
     """Per-atom motif masks. Only present when motif is active."""
 
-    is_motif: IntArray  # [n_atom]
-    is_motif_related: IntArray  # [n_atom]
+    FIELD_NAME: ClassVar[str] = "motif"
+    REQUIRED: ClassVar[bool] = False
 
-
-@dataclass(frozen=True)
-class TokenGrouping:
-    """How atoms partition into tokens.
-
-    Single source of truth for the standard-vs-per-atom decision.
-    Replaces both centre_atom_mask computation and TokenArray pre-computation.
-    """
-
-    atom_token_index: IntArray  # [n_atom] — which token each atom belongs to
-    centre_atom_mask: BoolArray  # [n_atom]
-    n_tokens: int
-
-
-# ---------------------------------------------------------------------------
-# compute_token_grouping — single source of truth for tokenization decision
-# ---------------------------------------------------------------------------
-
-
-def _find_centre_atom(
-    atom_array: AtomArray, start: int, stop: int, mol_type: str
-) -> int:
-    """Find the centre atom index for a standard residue.
-
-    CA for protein, C1' for nucleotide. Falls back to first atom.
-    """
-    names = atom_array.atom_name[start:stop]
-    if mol_type == "protein":
-        target = "CA"
-    else:
-        target = "C1'"
-    matches = np.where(names == target)[0]
-    if len(matches) > 0:
-        return start + matches[0]
-    return start
-
-
-def compute_token_grouping(
-    atom_array: AtomArray,
-    type_masks: TypeMasks,
-    motif: MotifAnnotation | None = None,
-) -> TokenGrouping:
-    """Compute how atoms partition into tokens.
-
-    Rules (AF3 SI 2.6):
-    - Standard residue, not ligand, not motif-related: 1 token per residue.
-      Centre atom: CA (protein), C1' (nucleotide).
-    - Everything else: 1 token per atom, each atom is its own centre.
-
-    """
-    n_atoms = len(atom_array)
-    centre_atom_mask = np.zeros(n_atoms, dtype=bool)
-    atom_token_index = np.full(n_atoms, -1, dtype=np.int64)
-    token_counter = 0
-
-    is_motif_related = (
-        motif.is_motif_related if motif is not None else np.zeros(n_atoms, dtype=int)
-    )
-
-    # Running counter mirrors the old AtomArrayTokenizer.tokenize() pattern.
-    # residue_iter yields sub-arrays in array order, so len(res) advances us.
-    start = 0
-    for res in struc.residue_iter(atom_array):
-        stop = start + len(res)
-
-        res_name = atom_array.res_name[start]
-        mol_type = type_masks.mol_type[start]
-
-        is_standard = (
-            res_name in STD_RESIDUES
-            and mol_type != "ligand"
-            and not is_motif_related[start]
-        )
-
-        if is_standard:
-            atom_token_index[start:stop] = token_counter
-            centre_idx = _find_centre_atom(atom_array, start, stop, mol_type)
-            centre_atom_mask[centre_idx] = True
-            token_counter += 1
-        else:
-            for i in range(start, stop):
-                atom_token_index[i] = token_counter
-                centre_atom_mask[i] = True
-                token_counter += 1
-
-        start = stop
-
-    assert (atom_token_index >= 0).all(), "Some atoms were not assigned to a token"
-
-    return TokenGrouping(
-        atom_token_index=atom_token_index,
-        centre_atom_mask=centre_atom_mask,
-        n_tokens=token_counter,
-    )
-
-
-def compute_token_grouping_vectorized(
-    atom_array: AtomArray,
-    type_masks: TypeMasks,
-    motif: MotifAnnotation | None = None,
-) -> TokenGrouping:
-    """Vectorized version of compute_token_grouping (same logic, no Python loops)."""
-    n_atoms = len(atom_array)
-    is_motif_related = (
-        motif.is_motif_related if motif is not None else np.zeros(n_atoms, dtype=int)
-    )
-
-    # -- Residue-level arrays ------------------------------------------------
-    starts = struc.get_residue_starts(atom_array)
-    n_res = len(starts)
-    sizes = np.diff(np.append(starts, n_atoms))
-    residue_index = np.repeat(np.arange(n_res), sizes)  # [n_atoms]
-
-    # Per-residue properties (sampled from first atom of each residue).
-    res_names = atom_array.res_name[starts]
-    mol_types = type_masks.mol_type[starts]
-
-    is_standard_res = (
-        np.isin(res_names, list(STD_RESIDUES))
-        & (mol_types != "ligand")
-        & ~is_motif_related[starts].astype(bool)
-    )
-
-    # -- Token index ----------------------------------------------------------
-    tokens_per_res = np.where(is_standard_res, 1, sizes)  # [n_res]
-    token_offset = np.zeros(n_res, dtype=np.int64)
-    if n_res > 1:
-        np.cumsum(tokens_per_res[:-1], out=token_offset[1:])
-
-    is_standard_atom = is_standard_res[residue_index]  # [n_atoms]
-    within_res_offset = np.arange(n_atoms) - starts[residue_index]
-    within_res_offset[is_standard_atom] = 0
-
-    atom_token_index = token_offset[residue_index] + within_res_offset
-
-    # -- Centre atom mask -----------------------------------------------------
-    # Non-standard: every atom is its own centre.
-    centre_atom_mask = ~is_standard_atom
-
-    # Standard residues: CA (protein) or C1' (nucleotide), fallback first atom.
-    per_atom_mol = mol_types[residue_index]
-    target_match = is_standard_atom & (
-        ((per_atom_mol == "protein") & (atom_array.atom_name == "CA"))
-        | ((per_atom_mol != "protein") & (atom_array.atom_name == "C1'"))
-    )
-    matched_atoms = np.where(target_match)[0]
-    if len(matched_atoms) > 0:
-        _, first_idx = np.unique(residue_index[matched_atoms], return_index=True)
-        centre_atom_mask[matched_atoms[first_idx]] = True
-
-    # Fallback: standard residues with no name-matched centre use first atom.
-    std_res_indices = np.where(is_standard_res)[0]
-    matched_res = (
-        np.unique(residue_index[matched_atoms])
-        if len(matched_atoms) > 0
-        else np.array([], dtype=int)
-    )
-    fallback_res = np.setdiff1d(std_res_indices, matched_res)
-    if len(fallback_res) > 0:
-        centre_atom_mask[starts[fallback_res]] = True
-
-    assert (atom_token_index >= 0).all(), "Some atoms were not assigned to a token"
-
-    return TokenGrouping(
-        atom_token_index=atom_token_index,
-        centre_atom_mask=centre_atom_mask,
-        n_tokens=int(tokens_per_res.sum()),
-    )
+    is_motif: Int[np.ndarray, "n_atom"]
+    is_motif_related: Int[np.ndarray, "n_atom"]
 
 
 # ---------------------------------------------------------------------------
 # AnnotatedStructure
 # ---------------------------------------------------------------------------
-
-
-def _reindex_grouping(grouping: TokenGrouping, indices: np.ndarray) -> TokenGrouping:
-    """Reindex a TokenGrouping after atom selection.
-
-    Maps old token indices to dense 0..n_new_tokens-1.
-    """
-    old_token_idx = grouping.atom_token_index[indices]
-    # Map unique old token indices to new dense indices
-    unique_old, inverse = np.unique(old_token_idx, return_inverse=True)
-    return TokenGrouping(
-        atom_token_index=inverse.astype(np.int64),
-        centre_atom_mask=grouping.centre_atom_mask[indices],
-        n_tokens=len(unique_old),
-    )
 
 
 # TODO: rename this class to `Structure`. The "Annotated" prefix is legacy from
@@ -368,7 +229,6 @@ class AnnotatedStructure:
     reference: ReferenceConformer
     grouping: TokenGrouping
     derived: DerivedAnnotations
-    resolution: float
     motif: MotifAnnotation | None = None
     training: TrainingAnnotations = dataclasses.field(
         default_factory=TrainingAnnotations
@@ -386,12 +246,12 @@ class AnnotatedStructure:
         assert len(self.derived.cano_seq_resname) == n
 
     @cached_property
-    def centre_atom_indices(self) -> IntArray:
+    def centre_atom_indices(self) -> Int[np.ndarray, "n_tokens"]:
         """[n_tokens] indices into atom arrays for each token's centre."""
         return np.where(self.grouping.centre_atom_mask)[0]
 
     @cached_property
-    def token_centre_coords(self) -> FloatArray:
+    def token_centre_coords(self) -> Float[np.ndarray, "n_tokens 3"]:
         """[n_tokens, 3] coordinates of token centres."""
         return self.atoms.coord[self.centre_atom_indices]
 
@@ -401,7 +261,6 @@ class AnnotatedStructure:
         atom_array: AtomArray,
         sequences: dict[str, str],
         entity_poly_type: dict[str, str] | None = None,
-        resolution: float = -1.0,
         include_ref_conformer: bool = True,
         include_training_masks: bool = False,
     ) -> AnnotatedStructure:
@@ -413,7 +272,6 @@ class AnnotatedStructure:
                 ``unique_chain_and_add_ids`` or ``find_equiv_mol`` yet.
             sequences: ``{label_entity_id: canonical_sequence}``.
             entity_poly_type: ``{label_entity_id: poly_type}`` from mmCIF.
-            resolution: Structure resolution in Angstroms.
             include_ref_conformer: Compute reference conformer.
             include_training_masks: Compute plddt_m_rep_atom_mask.
         """
@@ -450,7 +308,7 @@ class AnnotatedStructure:
         if include_training_masks:
             atom_array = annotation.add_plddt_m_rep_atom_mask(atom_array)
 
-        return cls.from_atom_array(atom_array, resolution=resolution)
+        return cls.from_atom_array(atom_array)
 
     # -- Selection ------------------------------------------------------------
 
@@ -476,9 +334,8 @@ class AnnotatedStructure:
             molecule_ids=self.molecule_ids.select(indices),
             type_masks=self.type_masks.select(indices),
             reference=self.reference.select(indices),
-            grouping=_reindex_grouping(self.grouping, indices),
+            grouping=reindex_grouping(self.grouping, indices),
             derived=self.derived.select(indices),
-            resolution=self.resolution,
             motif=self.motif.select(indices) if self.motif else None,
             training=self.training.select(indices),
         )
@@ -538,106 +395,68 @@ class AnnotatedStructure:
             ),
         )
 
-    def with_motif_masks(
-        self, is_motif: np.ndarray, is_motif_related: np.ndarray
-    ) -> AnnotatedStructure:
-        """Return new structure with motif masks set."""
-        return dataclasses.replace(
-            self,
-            motif=MotifAnnotation(is_motif=is_motif, is_motif_related=is_motif_related),
-        )
-
     # -- AtomArray conversion -------------------------------------------------
-    #
-    # Annotation names are derived from field names on the sub-dataclasses
-    # via the _AnnotationGroup protocol. No separate constant needed.
-
-    _GROUPS = (EntityIds, MoleculeIds, TypeMasks, ReferenceConformer)
 
     @classmethod
-    def from_atom_array(
-        cls,
-        atom_array: AtomArray,
-        resolution: float | None = None,
-    ) -> AnnotatedStructure:
+    def from_atom_array(cls, atom_array: AtomArray) -> AnnotatedStructure:
         """Construct from an annotated AtomArray.
 
-        Reads custom annotations into typed fields, then strips them from
-        the AtomArray so it only keeps biotite-native fields. This ensures
-        a single source of truth.
+        Each ``_AnnotationGroup`` subclass contributes one field to the result
+        via its ``FIELD_NAME``. Required groups use ``from_atom_array``;
+        optional groups use ``maybe_from_atom_array`` and yield ``None`` when
+        absent. Transferred annotations are stripped so ``atoms`` retains only
+        biotite-native fields — single source of truth.
         """
         atoms = atom_array.copy()
 
-        if resolution is None:
-            raw_res = getattr(atoms, "resolution", None)
-            resolution = float(raw_res[0]) if raw_res is not None else -1.0
-
-        # Required annotation groups.
-        entity_ids = EntityIds.from_atom_array(atoms)
-        molecule_ids = MoleculeIds.from_atom_array(atoms)
-        type_masks = TypeMasks.from_atom_array(atoms)
-        reference = ReferenceConformer.from_atom_array(atoms)
-        derived = DerivedAnnotations.from_atom_array(atoms)
-
-        # Optional groups — from_atom_array returns None when all fields missing.
-        motif: MotifAnnotation | None = None
-        if (
-            getattr(atoms, "is_motif", None) is not None
-            and getattr(atoms, "is_motif_related", None) is not None
-        ):
-            motif = MotifAnnotation.from_atom_array(atoms)
-
-        # Default is_resolved to all-True (inference case).
+        # Default is_resolved for inference-time AtomArrays that lack it.
         if "is_resolved" not in atoms.get_annotation_categories():
             atoms.set_annotation("is_resolved", np.ones(len(atoms), dtype=bool))
-        training = TrainingAnnotations.from_atom_array(atoms)
 
-        grouping = compute_token_grouping_vectorized(atoms, type_masks, motif)
+        groups: dict[str, _AnnotationGroup | None] = {
+            g.FIELD_NAME: (
+                g.from_atom_array(atoms)
+                if g.REQUIRED
+                else g.maybe_from_atom_array(atoms)
+            )
+            for g in _AnnotationGroup.__subclasses__()
+        }
 
-        # Strip all transferred annotations.
-        for group in cls._GROUPS:
-            group.strip_from(atoms)
-        DerivedAnnotations.strip_from(atoms)
-        TrainingAnnotations.strip_from(atoms)
-        if motif is not None:
-            MotifAnnotation.strip_from(atoms)
-        for name in ("centre_atom_mask", "resolution"):
-            if name in atoms.get_annotation_categories():
-                atoms.del_annotation(name)
+        # grouping isn't a group — fishing type_masks/motif out by key is
+        # awkward but localised.
+        grouping = compute_token_grouping_vectorized(
+            atoms,
+            mol_type=groups["type_masks"].mol_type,
+            is_motif_related=(
+                groups["motif"].is_motif_related if groups["motif"] else None
+            ),
+        )
+
+        for g in _AnnotationGroup.__subclasses__():
+            g.strip_from(atoms)
+        # centre_atom_mask is recomputed via compute_token_grouping — strip if
+        # present on the input so the AtomArray stays a single source of truth.
+        # TODO(PR C): fold the centre_atom_mask write in to_atom_array away once
+        # legacy ContextGenerator and dataset.process_one's motif zigzag are gone.
+        if "centre_atom_mask" in atoms.get_annotation_categories():
+            atoms.del_annotation("centre_atom_mask")
 
         return cls(
             atoms=atoms,
-            entity_ids=entity_ids,
-            molecule_ids=molecule_ids,
-            type_masks=type_masks,
-            reference=reference,
             grouping=grouping,
-            derived=derived,
-            resolution=resolution,
-            motif=motif,
-            training=training,
+            **groups,
         )
 
     def to_atom_array(self) -> AtomArray:
         """Create a fully-annotated AtomArray. Reverse of ``from_atom_array``."""
         aa = self.atoms.copy()
 
-        for group in (
-            self.entity_ids,
-            self.molecule_ids,
-            self.type_masks,
-            self.reference,
-            self.derived,
-        ):
-            group.to_atom_array(aa)
-
-        if self.motif is not None:
-            self.motif.to_atom_array(aa)
-        if self.training is not None:
-            self.training.to_atom_array(aa)
+        for f in dataclasses.fields(self):
+            val = getattr(self, f.name)
+            if isinstance(val, _AnnotationGroup):
+                val.to_atom_array(aa)
 
         aa.set_annotation("centre_atom_mask", self.grouping.centre_atom_mask)
-        aa.set_annotation("resolution", np.full(len(aa), self.resolution))
         return aa
 
     # -- Serialization --------------------------------------------------------

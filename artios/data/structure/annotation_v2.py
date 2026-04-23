@@ -364,6 +364,25 @@ class _AnnotationGroup:
             }
         )
 
+    def duplicate_rows(self, mask: np.ndarray):
+        """Append a copy of the rows selected by *mask* to every array field.
+
+        Counterpart to ``select`` — grows each per-atom array by ``mask.sum()``
+        rows. Used by ``AnnotatedStructure.with_duplicated_motif_backbones``
+        to keep every group's length in lockstep with the atom array when
+        motif-residue backbones are physically duplicated.
+        """
+        return type(self)(
+            **{
+                f.name: (
+                    np.concatenate([getattr(self, f.name), getattr(self, f.name)[mask]])
+                    if getattr(self, f.name) is not None
+                    else None
+                )
+                for f in dataclasses.fields(self)
+            }
+        )
+
 
 @typecheck
 @dataclass(frozen=True)

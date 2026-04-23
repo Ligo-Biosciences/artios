@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 from biotite.structure import AtomArray
 
+from artios.common.constants import BACKBONE_DEFS, PRO_STD_RESIDUES
 from artios.data.structure import annotation_v2
 from artios.data.structure.annotation_v2 import (
     DerivedAnnotations,
@@ -207,6 +208,239 @@ class AnnotatedStructure:
                 is_motif_related=is_motif_related,
             ),
         )
+
+    def with_duplicated_motif_backbones(self) -> AnnotatedStructure:
+        """Physically duplicate backbone atoms of motif-related residues.
+
+        Motif sidechains are tokenized per-atom downstream (see
+        ``with_unindexed_motif``). To keep the polymer backbone intact we
+        first add scaffold copies of every motif residue's backbone atoms —
+        the duplicates carry ``is_motif=0``/``is_motif_related=0`` so the
+        unindex step leaves them in their original entity/chain, while the
+        originals are diverted into new per-instance chains.
+
+        Requires ``motif`` to be set (call ``with_motif_annotations`` first).
+        If nothing to duplicate (no motif-related backbone atoms) the
+        original structure is returned unchanged.
+        """
+        assert (
+            self.motif is not None
+        ), "with_duplicated_motif_backbones requires motif to be set"
+
+        mol_type = self.type_masks.mol_type
+        atom_name = self.atoms.atom_name
+        is_backbone = (
+            ((mol_type == "protein") & np.isin(atom_name, BACKBONE_DEFS["protein"]))
+            | ((mol_type == "DNA") & np.isin(atom_name, BACKBONE_DEFS["dna"]))
+            | ((mol_type == "RNA") & np.isin(atom_name, BACKBONE_DEFS["rna"]))
+        )
+        duplicate_mask = is_backbone & (self.motif.is_motif_related > 0)
+        if not duplicate_mask.any():
+            return self
+
+        new_atoms = self.atoms + self.atoms[duplicate_mask]
+
+        # Duplicated atoms are scaffold — their motif masks are 0 on the
+        # concatenated tail. Preserve the original dtype so @typecheck holds.
+        n_dup = int(duplicate_mask.sum())
+        new_motif = MotifAnnotation(
+            is_motif=np.concatenate(
+                [self.motif.is_motif, np.zeros(n_dup, dtype=self.motif.is_motif.dtype)]
+            ),
+            is_motif_related=np.concatenate(
+                [
+                    self.motif.is_motif_related,
+                    np.zeros(n_dup, dtype=self.motif.is_motif_related.dtype),
+                ]
+            ),
+        )
+
+        new_type_masks = self.type_masks.duplicate_rows(duplicate_mask)
+        new_grouping = compute_token_grouping_vectorized(
+            new_atoms,
+            mol_type=new_type_masks.mol_type,
+            is_motif_related=new_motif.is_motif_related,
+        )
+
+        return AnnotatedStructure(
+            atoms=new_atoms,
+            entity_ids=self.entity_ids.duplicate_rows(duplicate_mask),
+            molecule_ids=self.molecule_ids.duplicate_rows(duplicate_mask),
+            type_masks=new_type_masks,
+            reference=self.reference.duplicate_rows(duplicate_mask),
+            grouping=new_grouping,
+            derived=self.derived.duplicate_rows(duplicate_mask),
+            motif=new_motif,
+            training=self.training.duplicate_rows(duplicate_mask),
+        )
+
+    def without_non_motif_sidechains(self) -> AnnotatedStructure:
+        """Strip sidechain atoms from non-motif protein/DNA/RNA residues.
+
+        Keeps: all motif-related atoms, all ligand atoms, polymer backbone
+        atoms for protein/DNA/RNA chains. Mirrors
+        ``Filter.remove_non_motif_residue_sidechains`` — uses the
+        chain-majority masks on ``TypeMasks`` (``is_protein``/``is_dna``/
+        ``is_rna``/``is_ligand``) rather than per-atom ``mol_type``.
+
+        Requires ``motif`` to be set. No-op equivalent if motif is all
+        zero: all atoms satisfy the chain-backbone branches so no atoms
+        are dropped.
+        """
+        assert (
+            self.motif is not None
+        ), "without_non_motif_sidechains requires motif to be set"
+        atom_name = self.atoms.atom_name
+        keep = (
+            (self.motif.is_motif_related > 0)
+            | (self.type_masks.is_ligand > 0)
+            | (
+                (self.type_masks.is_protein > 0)
+                & np.isin(atom_name, BACKBONE_DEFS["protein"])
+            )
+            | ((self.type_masks.is_dna > 0) & np.isin(atom_name, BACKBONE_DEFS["dna"]))
+            | ((self.type_masks.is_rna > 0) & np.isin(atom_name, BACKBONE_DEFS["rna"]))
+        )
+        return self.select_atoms(keep)
+
+    def with_unindexed_motif(
+        self,
+    ) -> tuple[AnnotatedStructure, list[dict]]:
+        """Remap ids so every motif residue instance lives in its own chain.
+
+        Protein motif residues: one new entity per restype (residues of the
+        same residue name share an entity), one new asym/sym/ref_space_uid
+        per *instance*. Each protein motif residue's ``res_id`` is reset to
+        1 — the sidechain will be tokenized per-atom downstream, so the
+        position-within-chain no longer means anything.
+
+        Ligand motif residues: keep their existing ids. Downstream
+        tokenization already treats ligand atoms as per-atom tokens.
+
+        Label fields (``label_asym_id``/``auth_asym_id``/``label_seq_id``/
+        ``label_entity_id``) are always written through from the integer
+        ids — inference writes these to CIF output; training ignores them.
+        Unconditional write-through is cheaper than a ``update_labels``
+        flag and avoids two behaviours diverging.
+
+        Re-runs tokenization with ``is_motif_related`` as an arg so every
+        motif atom becomes its own token centre — replaces the legacy
+        ``centre_atom_mask[is_motif_related > 0] = 1`` patch with a
+        proper recomputation.
+
+        Returns ``(new_structure, mapping)``. ``mapping`` is a per-residue
+        list describing the ``new_chain_id → (original_chain_id, original_res_id)``
+        correspondence — training discards it; inference threads it
+        through so the output CIF can reference original residue ids.
+
+        Requires ``motif`` to be set. If ``is_motif_related.sum() == 0`` the
+        original structure is returned with an empty mapping.
+        """
+        assert self.motif is not None, "with_unindexed_motif requires motif to be set"
+
+        is_motif_related = self.motif.is_motif_related > 0
+        if not is_motif_related.any():
+            return self, []
+
+        asym = self.entity_ids.asym_id_int.copy()
+        entity = self.entity_ids.entity_id_int.copy()
+        sym = self.entity_ids.sym_id_int.copy()
+        ref_uid = self.reference.ref_space_uid.copy()
+        res_id = self.atoms.res_id.copy()
+
+        entity_counter = int(entity.max()) + 1
+        asym_counter = int(asym.max()) + 1
+        ref_space_uid_counter = int(ref_uid.max()) + 1
+
+        mapping: list[dict] = []
+        cats = self.atoms.get_annotation_categories()
+        has_orig_res_id = "original_motif_res_id" in cats
+        has_orig_chain_id = "original_motif_chain_id" in cats
+
+        motif_restypes = np.unique(self.atoms.res_name[is_motif_related])
+        for restype in motif_restypes:
+            restype_mask = is_motif_related & (self.atoms.res_name == restype)
+            is_protein_restype = str(restype) in PRO_STD_RESIDUES
+            unique_residue_uids = np.unique(self.reference.ref_space_uid[restype_mask])
+
+            if is_protein_restype:
+                entity[restype_mask] = entity_counter
+                entity_counter += 1
+
+            sym_id_counter = 0
+            for residue_uid in unique_residue_uids:
+                instance_mask = restype_mask & (
+                    self.reference.ref_space_uid == residue_uid
+                )
+                first_idx = int(np.where(instance_mask)[0][0])
+
+                orig_res_id = int(
+                    self.atoms.original_motif_res_id[first_idx]
+                    if has_orig_res_id
+                    else self.atoms.res_id[first_idx]
+                )
+                orig_chain_id = str(
+                    self.atoms.original_motif_chain_id[first_idx]
+                    if has_orig_chain_id
+                    else self.atoms.chain_id[first_idx]
+                )
+
+                if is_protein_restype:
+                    unindexed_chain_id = str(asym_counter)
+                    unindexed_res_id = 1
+
+                    asym[instance_mask] = asym_counter
+                    asym_counter += 1
+                    sym[instance_mask] = sym_id_counter
+                    sym_id_counter += 1
+                    ref_uid[instance_mask] = ref_space_uid_counter
+                    ref_space_uid_counter += 1
+                    res_id[instance_mask] = unindexed_res_id
+                else:
+                    # Ligand motif: keep existing ids (asym becomes chain_id
+                    # at the end, so read it from the working asym array).
+                    unindexed_chain_id = str(asym[first_idx])
+                    unindexed_res_id = int(res_id[first_idx])
+
+                mapping.append(
+                    {
+                        "unindexed_chain_id": unindexed_chain_id,
+                        "unindexed_res_id": unindexed_res_id,
+                        "original_motif_res_id": orig_res_id,
+                        "original_motif_chain_id": orig_chain_id,
+                        "res_name": str(restype),
+                    }
+                )
+
+        new_atoms = self.atoms.copy()
+        new_atoms.res_id = res_id
+        # chain_id/label_* inherit biotite's auto-stringification when
+        # assigned an int array — matches legacy ``new_array.chain_id =
+        # new_array.asym_id_int`` dtype widening.
+        new_atoms.chain_id = asym
+        new_atoms.label_asym_id = asym
+        new_atoms.auth_asym_id = asym
+        new_atoms.label_seq_id = res_id
+        new_atoms.label_entity_id = entity
+
+        new_entity_ids = EntityIds(
+            asym_id_int=asym, entity_id_int=entity, sym_id_int=sym
+        )
+        new_reference = dataclasses.replace(self.reference, ref_space_uid=ref_uid)
+        new_grouping = compute_token_grouping_vectorized(
+            new_atoms,
+            mol_type=self.type_masks.mol_type,
+            is_motif_related=self.motif.is_motif_related,
+        )
+
+        new_struct = dataclasses.replace(
+            self,
+            atoms=new_atoms,
+            entity_ids=new_entity_ids,
+            reference=new_reference,
+            grouping=new_grouping,
+        )
+        return new_struct, mapping
 
     def shuffle_by_mol_id(self) -> AnnotatedStructure:
         """Return new structure with molecules in random order."""

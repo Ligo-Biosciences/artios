@@ -448,11 +448,30 @@ class ContextGenerator:
         )
 
     def _build_msa_context(self) -> MSAContext | None:
-        """Option A expansion from compact MSA ([n_msa, l_chain]) to the
-        token-aligned MSAContext ([n_token, n_msa]).
+        """Expand the compact MSA ([n_msa, l_chain_cropped]) to the
+        token-aligned ``MSAContext`` ([n_token, n_msa]).
 
-        Non-reference-chain tokens get gap-filled (token 31); the
-        msa_chain_mask identifies which tokens carry real MSA data.
+        Every token position is seeded with its own ground-truth residue
+        id (from ``cano_seq_resname``) across all ``n_msa`` rows; then the
+        reference-chain columns are overwritten with the real MSA data via
+        ``chain_token_indices``. This has two effects the pure-gap-fill
+        alternative did not:
+
+        - Non-reference-chain tokens (ligands, ions, nucleic acids,
+          other protein chains) carry their true residue id in every row
+          rather than a gap sentinel. The Potts loss at those positions
+          is then a meaningful NLL against the true residue, not
+          ``log P(gap, gap | ...)``.
+        - For null-MSA samples (``MSA.null_for``, ``l_chain_cropped=0``)
+          every row ends up identical to the query — the MSA loss
+          gracefully degrades to the single-sequence composite NLL.
+
+        ``gap_mask`` (``tokens == 31``) is consequently True only on
+        reference-chain columns where a particular homolog actually has a
+        gap; never on non-reference-chain positions. ``msa_chain_mask``
+        stays as it was — a metadata flag identifying which tokens
+        received real homolog data, useful for diagnostics but no longer
+        required by the loss path.
         """
         if self.msa is None:
             return None
@@ -460,7 +479,12 @@ class ContextGenerator:
         n_token = self.s.grouping.n_tokens
         n_msa = self.msa.tokens.shape[0]
 
-        tokens = np.full((n_token, n_msa), _GAP_TOKEN, dtype=np.int8)
+        centre = self.centre_atom_indices
+        restype_codes = self.s.derived.cano_seq_resname[centre]
+        restype_onehot = self.restype_onehot_encoded(restype_codes)
+        gt_tokens = restype_onehot.argmax(dim=-1).to(torch.int8).numpy()
+
+        tokens = np.broadcast_to(gt_tokens[:, None], (n_token, n_msa)).copy()
         tokens[self.msa.chain_token_indices, :] = self.msa.tokens.T
         gap_mask = tokens == _GAP_TOKEN
 

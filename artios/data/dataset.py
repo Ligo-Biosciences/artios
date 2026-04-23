@@ -33,7 +33,6 @@ from artios.data.data_pipeline import DataPipeline
 from artios.data.data_weights import get_sample_weights
 from artios.data.features import FullContext
 from artios.data.features.featurizer import ContextGenerator
-from artios.data.filter import Filter
 from artios.data.motif_maker import MotifMaker
 from artios.data.structure import AnnotatedStructure, annotation
 from artios.utils.file_io import read_indices_csv
@@ -453,6 +452,7 @@ class BaseSingleDataset(Dataset):
 
         # --- Select ---
         if self.use_reference_chains_only:
+            # TODO: when is this path ever used? We can just delete this.
             ref_chain_ids = [sample_indice.chain_1_id, sample_indice.chain_2_id]
             if sample_indice.type == "chain":
                 ref_chain_ids.pop(-1)
@@ -495,43 +495,36 @@ class BaseSingleDataset(Dataset):
             keep = ~np.isin(cropped_structure.atoms.res_name, list(ccd_sets.GLYCANS))
             cropped_structure = cropped_structure.select_atoms(keep)
 
-        # Bridge: convert back to fully-annotated AtomArray for post-crop ops
-        # that still operate on raw arrays (motif processing, augmentation).
-        # Reconstructed into AnnotatedStructure at featurize step below.
-        cropped_atom_array = cropped_structure.to_atom_array()
-
         # --- Augment (post-crop) ---
         t_aug = time.time()
-        cropped_atom_array.coord = random_transform(
-            points=cropped_atom_array.coord,
+        new_atoms = cropped_structure.atoms.copy()
+        new_atoms.coord = random_transform(
+            points=new_atoms.coord,
             max_translation=1.0,
             apply_augmentation=True,
             centralize=True,
-            mask=cropped_atom_array.is_resolved,
+            mask=cropped_structure.training.is_resolved,
         )
+        cropped_structure = dataclasses.replace(cropped_structure, atoms=new_atoms)
         timings["augmentation"] = time.time() - t_aug
 
         # --- Motif ---
         tmotif = time.time()
         if self.motif_configs["motif_train_rate"] > 0.0:
-            cropped_atom_array = self._apply_motif_processing(
-                cropped_atom_array, pdb_id=pdb_id
+            cropped_structure = self._apply_motif_processing(
+                cropped_structure, pdb_id=pdb_id
             )
         else:
-            cropped_atom_array.set_annotation(
-                "is_motif", np.zeros(len(cropped_atom_array), dtype=int)
+            n = len(cropped_structure.atoms)
+            cropped_structure = cropped_structure.with_motif_annotations(
+                np.zeros(n, dtype=int), np.zeros(n, dtype=int)
             )
-            cropped_atom_array.set_annotation(
-                "is_motif_related", np.zeros(len(cropped_atom_array), dtype=int)
-            )
-
         timings["motif"] = time.time() - tmotif
 
         # --- Featurize ---
         t4 = time.time()
-        structure = AnnotatedStructure.from_atom_array(cropped_atom_array)
         context = ContextGenerator(
-            structure,
+            cropped_structure,
             ref_pos_augment=self.ref_pos_augment,
             lig_atom_rename=self.lig_atom_rename,
             bioassembly_dict_fpath=npz_path,
@@ -618,6 +611,7 @@ class BaseSingleDataset(Dataset):
 
         Returns:
             A tuple containing the evaluation type, cluster ID, chain 1 mask, and chain 2 mask.
+        # TODO: really horrible looking method this.
         """
         if self.group_by_pdb_id:
             assert isinstance(self.indices_list, list)
@@ -660,32 +654,28 @@ class BaseSingleDataset(Dataset):
 
         return eval_type, cluster_id, chain_1_mask, chain_2_mask
 
-    def _apply_motif_processing(self, atom_array: AtomArray, pdb_id: str) -> AtomArray:
+    def _apply_motif_processing(
+        self, structure: AnnotatedStructure, pdb_id: str
+    ) -> AnnotatedStructure:
+        """Apply motif-related processing on an ``AnnotatedStructure``.
+
+        One tiny round-trip through AtomArray is needed because
+        ``MotifMaker.make_motif`` still takes an AtomArray — its signature
+        is outside PR C's scope to change. Everything else is structure
+        methods: attach masks → duplicate backbones → strip non-motif
+        sidechains → un-index. Even when the MotifMaker roll doesn't fire
+        (motif masks stay zero), the sidechain strip still runs — matches
+        legacy behaviour when ``motif_train_rate > 0``.
         """
-        Applies all motif-related processing to the atom array.
+        aa = structure.to_atom_array()
+        aa = self._get_motif(aa)
+        self._save_motif(aa, pdb_id)
 
-        This method consolidates all motif operations:
-        1. Generate motif annotations via MotifMaker
-        2. Optionally save motif for debugging
-        3. Duplicate backbone atoms for motif residues
-        4. Remove non-motif residue sidechains
-        5. Update IDs to un-index motif residues
-        6. Update centre atom mask to include motif atoms
-
-        Args:
-            atom_array: Input atom array to process
-            pdb_id: PDB ID for saving motif files
-
-        Returns:
-            Processed atom array with motif annotations and modifications
-        """
-        atom_array = self._get_motif(atom_array)
-        self._save_motif(atom_array, pdb_id)
-        atom_array = self._duplicate_motif_backbone_atoms(atom_array)
-        atom_array = Filter.remove_non_motif_residue_sidechains(atom_array)
-        atom_array = self._update_ids_to_unindex_motif_residues(atom_array)
-        atom_array = self._update_centre_atom_mask_to_include_motif(atom_array)
-        return atom_array
+        structure = structure.with_motif_annotations(aa.is_motif, aa.is_motif_related)
+        structure = structure.with_duplicated_motif_backbones()
+        structure = structure.without_non_motif_sidechains()
+        structure, _ = structure.with_unindexed_motif()
+        return structure
 
     def _get_motif(self, atom_array: AtomArray) -> AtomArray:
         """
@@ -696,6 +686,7 @@ class BaseSingleDataset(Dataset):
 
         Returns:
             AtomArray: Atom array with is_motif and is_motif_related annotations (int masks)
+        # TODO: this method should be completely absorbed into apply motif processing, it's too small by itself.
         """
         motif_train_rate = self.motif_configs["motif_train_rate"]
 
@@ -712,6 +703,7 @@ class BaseSingleDataset(Dataset):
         """
         Saves the motif to the motif directory. Mainly used for debugging/visualising
         changes to motif generation algorithm.
+        TODO: we usually do this offline, I'm not sure if an extra method is needed here.
         """
         # temp motif dir
         self.motif_dir = Path(self.bioassembly_dict_dir).parent.parent.parent / "motifs"
@@ -795,6 +787,7 @@ class BaseSingleDataset(Dataset):
         Updates the centre_atom_mask of the atom array to include all motif
         related atoms. This is important as the Featurizer looks at the
         centre atom indices to retrieve the correct chain, res IDs etc.
+        TODO: we are not using this method, is this a silent error?
         """
         return annotation.update_centre_atom_mask_to_include_motif(atom_array)
 

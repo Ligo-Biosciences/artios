@@ -81,11 +81,6 @@ class MSAQueryInfo:
         scanning the remaining chains in the structure if none resolve.
         Returns the first chain for which :meth:`from_pre_crop_structure`
         succeeds, or None if the structure has no protein chain at all.
-
-        Supersedes CLAUDE.md §11's strict chain_1-only rule: in interface
-        samples where sample_indice.chain_1_id is a ligand / ion / nucleic
-        chain, falling back to chain_2 (or any other protein chain in the
-        complex) recovers what would otherwise be a silent msa=None.
         """
         tried: set[str] = set()
         for chain_id in preferred_chain_ids:

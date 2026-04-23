@@ -455,10 +455,20 @@ class BaseSingleDataset(Dataset):
         timings["get_bioassembly"] = time.time() - t0
 
         # --- MSA query info (must be extracted pre-crop) ---
+        # Try chain_1 first (the sample's nominal primary), then chain_2 for
+        # interface samples, then scan the rest of the complex. Supersedes
+        # CLAUDE.md §11's strict chain_1-only rule: a large fraction of
+        # weightedPDB is ligand_prot / ions_prot / nuc_prot interfaces where
+        # chain_1 is non-protein but the complex still has a usable protein
+        # chain we'd otherwise throw away.
         msa_query_info: Optional[MSAQueryInfo] = None
         if self.msa_sampler is not None:
-            msa_query_info = MSAQueryInfo.from_pre_crop_structure(
-                structure, sample_indice.chain_1_id
+            preferred_chain_ids: list[str] = [sample_indice.chain_1_id]
+            chain_2_id = sample_indice.get("chain_2_id")
+            if isinstance(chain_2_id, str):
+                preferred_chain_ids.append(chain_2_id)
+            msa_query_info = MSAQueryInfo.from_any_protein_chain(
+                structure, preferred_chain_ids
             )
 
         # --- Select ---

@@ -114,6 +114,50 @@ def test_query_info_returns_none_for_non_protein_chain(load_structure):
     assert MSAQueryInfo.from_pre_crop_structure(s, "G") is None
 
 
+def test_query_info_falls_back_to_second_candidate(load_structure):
+    """First candidate is non-protein (chain G); fallback picks chain A."""
+    s = load_structure("2g1k")
+    info = MSAQueryInfo.from_any_protein_chain(s, ["G", "A"])
+    assert info is not None
+    assert info.chain_id == "A"
+
+
+def test_query_info_scans_complex_when_no_candidate_resolves(load_structure):
+    """Neither candidate is a protein chain (bogus + non-protein); scan
+    finds chain A (the only protein chain in 2g1k)."""
+    s = load_structure("2g1k")
+    info = MSAQueryInfo.from_any_protein_chain(s, ["ZZZ_BOGUS", "G"])
+    assert info is not None
+    assert info.chain_id == "A"
+
+
+def test_query_info_empty_preferred_list_scans_from_scratch(load_structure):
+    """Empty preferred list → scan finds the first protein chain."""
+    s = load_structure("2g1k")
+    info = MSAQueryInfo.from_any_protein_chain(s, [])
+    assert info is not None
+    assert info.chain_id == "A"
+
+
+def test_query_info_first_candidate_wins(load_structure):
+    """Don't waste time on the scan when chain_1 is already protein."""
+    s = load_structure("2g1k")
+    info = MSAQueryInfo.from_any_protein_chain(s, ["A", "G"])
+    assert info is not None
+    assert info.chain_id == "A"
+
+
+def test_query_info_handles_non_string_candidates(load_structure):
+    """Candidates containing nan / None / non-strings are skipped cleanly."""
+    s = load_structure("2g1k")
+    info = MSAQueryInfo.from_any_protein_chain(
+        s,
+        [None, float("nan"), "G", "A"],  # type: ignore[list-item]
+    )
+    assert info is not None
+    assert info.chain_id == "A"
+
+
 # ---------------------------------------------------------------------------
 # MSAContext plumbing through FullContext
 # ---------------------------------------------------------------------------

@@ -1,18 +1,17 @@
 """Annotation groups + their structural and content helpers.
 
 Staging ground for PR B in docs/refactor_plans/data_pipeline_refactor_sequence.md.
-Three kinds of things live here:
+Two kinds of things live here:
 
 1. **Structural ops** (``canonicalize_chain_ids``, ``order_atoms_by_mol``) —
    mutate AtomArray shape or order.
-2. **Content helpers** (``compute_entity_ids_arrays``, etc.) — pure per-atom
-   computation that reads a cleaned AtomArray and returns bare arrays.
-3. **Annotation groups** (``EntityIds``, ``TypeMasks``, ...) — typed frozen
-   dataclasses. Each group's ``compute()`` classmethod wraps the matching
-   content helper into the typed container.
+2. **Annotation groups** (``EntityIds``, ``TypeMasks``, ...) — typed frozen
+   dataclasses. Each group owns its content logic via a ``compute()``
+   classmethod.
 
-Content helpers return raw arrays (not group instances) so they can be written
-and tested independently; the ``compute()`` classmethods are thin adapters.
+Shared helpers that are genuinely called from more than one place live at
+module scope (``_mol_boundaries``, ``_compute_mol_atom_index``). Content
+that is used by a single group goes straight into the group's ``compute()``.
 
 This module will supersede ``annotation.py``; during migration both coexist so
 ``test_compute_migration_parity.py`` can byte-compare the pipelines.
@@ -27,13 +26,38 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 import numpy as np
-from biotite.structure import AtomArray, get_chain_starts
+from biotite.structure import AtomArray, get_chain_starts, get_residue_starts
 from biotite.structure.molecules import get_molecule_indices
 
+from artios.common.constants import (
+    DNA_STD_RESIDUES,
+    PROT_STD_RESIDUES_ONE_TO_THREE,
+    RES_ATOMS_DICT,
+    RNA_STD_RESIDUES,
+    STD_RESIDUES,
+)
+from artios.data.chem import ccd
+from artios.data.chem.ccd import RefInfo, get_ccd_ref_info
 from artios.data.structure.annotation import remove_bonds_between_polymer_chains
 from artios.utils.typing import Bool, Float, Int, Int32, Shaped, typecheck
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _MolRef:
+    """Scratch record for equivalence detection in ``order_atoms_by_mol``.
+
+    One instance per *unique* molecule shape — if a later mol matches on
+    entity_ids + atom_name, we reuse the existing entry's index rather than
+    appending a new one. Replaces the legacy pattern of monkey-patching
+    arbitrary attrs onto a single-atom ``AtomArray`` slice.
+    """
+
+    atom_indices: np.ndarray
+    entity_ids: list
+    atom_name: np.ndarray
+
 
 # ---------------------------------------------------------------------------
 # Structural ops
@@ -113,7 +137,7 @@ def order_atoms_by_mol(
     assert (mol_ids >= 0).all(), "Some mol_id is not assigned."
     assert len(np.unique(mol_ids)) == len(mol_indices), "Some mol_id is duplicated."
 
-    ref_mol_infos: list = []
+    ref_mol_infos: list[_MolRef] = []
     new_atom_perm: list[int] = []
     chain_starts = get_chain_starts(atom_array, add_exclusive_stop=False)
     entity_mol_ids = np.zeros(n_atom, dtype=np.int32)
@@ -125,23 +149,28 @@ def order_atoms_by_mol(
         atom_indices = atom_indices[chain_perm]
         new_atom_perm.extend(atom_indices)
 
+        # chain_starts is global (first-atom index of each chain in the whole
+        # array). mol_chain_mask picks out the subset that happens to be
+        # first-of-chain WITHIN this mol — so entity_ids[mol_chain_mask] is
+        # one label_entity_id per chain in the mol, not per atom.
         mol_chain_mask = np.isin(atom_indices, chain_starts)
         entity_ids = atom_array.label_entity_id[atom_indices][mol_chain_mask].tolist()
 
+        # TODO: O(n_mols^2). Hash on (tuple(entity_ids), n_atoms,
+        # tuple(atom_name)) to collapse to O(n_mols).
         match_entity_mol_id: int | None = None
-        for existing_id, mol_info in enumerate(ref_mol_infos):
-            if entity_ids != mol_info.entity_ids:
+        atom_name = atom_array.atom_name[atom_indices]
+        for existing_id, ref in enumerate(ref_mol_infos):
+            if entity_ids != ref.entity_ids:
                 continue
-            if len(atom_indices) != len(mol_info.atom_name):
+            if len(atom_indices) != len(ref.atom_name):
                 continue
 
-            atom_name_not_equal = (
-                atom_array.atom_name[atom_indices] != mol_info.atom_name
-            )
+            atom_name_not_equal = atom_name != ref.atom_name
             if np.any(atom_name_not_equal):
                 diff_indices = np.where(atom_name_not_equal)[0]
                 query_atom = atom_array[atom_indices[diff_indices[0]]]
-                ref_atom = atom_array[mol_info.atom_indices[diff_indices[0]]]
+                ref_atom = atom_array[ref.atom_indices[diff_indices[0]]]
                 logger.warning(
                     "Two mols have entity_ids and same number of atoms, "
                     f"but diff atom name:\n{query_atom=}\n{  ref_atom=}"
@@ -152,13 +181,14 @@ def order_atoms_by_mol(
             break
 
         if match_entity_mol_id is None:
-            mol_info = atom_array[atom_indices[0]]
-            mol_info.atom_indices = atom_indices
-            mol_info.entity_ids = entity_ids
-            mol_info.atom_name = atom_array.atom_name[atom_indices]
-            mol_info.entity_mol_id = len(ref_mol_infos)
-            ref_mol_infos.append(mol_info)
-            match_entity_mol_id = mol_info.entity_mol_id
+            match_entity_mol_id = len(ref_mol_infos)
+            ref_mol_infos.append(
+                _MolRef(
+                    atom_indices=atom_indices,
+                    entity_ids=entity_ids,
+                    atom_name=atom_name,
+                )
+            )
 
         entity_mol_ids[atom_indices] = match_entity_mol_id
 
@@ -178,12 +208,14 @@ def _check_mol_equivalence(
     mol_id: np.ndarray,
     entity_mol_id: np.ndarray,
 ) -> None:
-    """Assert that mols sharing an entity_mol_id match atom-by-atom.
+    """Assert that mols sharing an ``entity_mol_id`` match atom-by-atom.
 
-    res_name and atom_name must be equal across equivalent mols.
-    mol_atom_index is computed locally (not stored) to preserve the exact
-    check the legacy ``find_equiv_mol_and_assign_ids`` performed.
+    res_name and atom_name must match across equivalent mols. mol_atom_index
+    is computed locally (not stored) to preserve the exact check the legacy
+    ``find_equiv_mol_and_assign_ids`` performed — note it's always trivially
+    equal for equal-length mols (0..n-1 on both), but kept for parity.
     """
+    # TODO: O(n_mols^2). Group by entity_mol_id first; compare only within groups.
     boundaries = _mol_boundaries(mol_id)
     mol_atom_index = _compute_mol_atom_index(mol_id)
     num_mols = len(boundaries) - 1
@@ -198,13 +230,14 @@ def _check_mol_equivalence(
                 (aa_ordered.atom_name, "atom_name"),
                 (mol_atom_index, "mol_atom_index"),
             ):
-                assert np.all(
-                    arr[start_i:stop_i] == arr[start_j:stop_j]
-                ), f"not equal {name} when order_atoms_by_mol()"
+                assert np.all(arr[start_i:stop_i] == arr[start_j:stop_j]), (
+                    f"{name} mismatch between mols {i} and {j} "
+                    f"(entity_mol_id={entity_mol_id[start_i]}) in order_atoms_by_mol()"
+                )
 
 
 # ---------------------------------------------------------------------------
-# Content helpers
+# Shared helpers (multi-caller internals)
 # ---------------------------------------------------------------------------
 
 
@@ -221,43 +254,6 @@ def _compute_mol_atom_index(mol_id: np.ndarray) -> Int32[np.ndarray, "n_atom"]:
     for start, stop in zip(boundaries[:-1], boundaries[1:]):
         result[start:stop] = np.arange(stop - start, dtype=np.int32)
     return result
-
-
-def compute_entity_ids_arrays(
-    atom_array: AtomArray,
-) -> tuple[
-    Int[np.ndarray, "n_atom"],
-    Int[np.ndarray, "n_atom"],
-    Int[np.ndarray, "n_atom"],
-]:
-    """Compute (asym_id_int, entity_id_int, sym_id_int).
-
-    Requires canonicalized chain_id (see ``canonicalize_chain_ids``) — each
-    distinct chain gets its own asym_id. ``label_entity_id`` drives entity
-    grouping; sym_id_int enumerates copies of the same entity in chain order.
-    """
-    entity_id_uniq = np.sort(np.unique(atom_array.label_entity_id))
-    entity_id_dict = {e: i for i, e in enumerate(entity_id_uniq)}
-
-    n_atom = len(atom_array)
-    asym_ids = np.zeros(n_atom, dtype=int)
-    entity_ids = np.zeros(n_atom, dtype=int)
-    sym_ids = np.zeros(n_atom, dtype=int)
-
-    counter: Counter = Counter()
-    start_indices = get_chain_starts(atom_array, add_exclusive_stop=True)
-    for i in range(len(start_indices) - 1):
-        start_i = start_indices[i]
-        stop_i = start_indices[i + 1]
-        asym_ids[start_i:stop_i] = i
-
-        entity_id = atom_array.label_entity_id[start_i]
-        entity_ids[start_i:stop_i] = entity_id_dict[entity_id]
-
-        sym_ids[start_i:stop_i] = counter[entity_id]
-        counter[entity_id] += 1
-
-    return asym_ids, entity_ids, sym_ids
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +347,15 @@ class _AnnotationGroup:
 @typecheck
 @dataclass(frozen=True)
 class EntityIds(_AnnotationGroup):
-    """Per-atom entity identification."""
+    """Per-atom entity identification.
+
+    - ``asym_id_int``:   per-chain integer (each distinct chain_id → 1 id).
+    - ``entity_id_int``: per-entity integer (shared across chains of the same
+      entity).
+    - ``sym_id_int``:    bioassembly replica index for the entity — each copy
+      of the same entity (different symmetry operator) gets a distinct
+      sym_id. Unrelated to *structural* symmetry. See AF3 SI 2.5.
+    """
 
     FIELD_NAME: ClassVar[str] = "entity_ids"
 
@@ -363,17 +367,40 @@ class EntityIds(_AnnotationGroup):
     def compute(cls, atom_array: AtomArray) -> EntityIds:
         """Compute from an AtomArray with canonicalized chain_id.
 
-        Expects ``atom_array.chain_id`` to be uniqueified first — see
+        Each distinct chain_id gets its own asym_id. ``label_entity_id`` drives
+        entity grouping; sym_id_int enumerates copies of the same entity in
+        chain order. Expects chain_id to be uniqueified first — see
         ``canonicalize_chain_ids``.
         """
-        asym, entity, sym = compute_entity_ids_arrays(atom_array)
+        entity_id_uniq = np.sort(np.unique(atom_array.label_entity_id))
+        entity_id_dict = {e: i for i, e in enumerate(entity_id_uniq)}
+
+        n = len(atom_array)
+        asym = np.zeros(n, dtype=int)
+        entity = np.zeros(n, dtype=int)
+        sym = np.zeros(n, dtype=int)
+
+        sym_counter: Counter = Counter()
+        starts = get_chain_starts(atom_array, add_exclusive_stop=True)
+        for i, (start, stop) in enumerate(zip(starts[:-1], starts[1:])):
+            asym[start:stop] = i
+            entity_id = atom_array.label_entity_id[start]
+            entity[start:stop] = entity_id_dict[entity_id]
+            sym[start:stop] = sym_counter[entity_id]
+            sym_counter[entity_id] += 1
+
         return cls(asym_id_int=asym, entity_id_int=entity, sym_id_int=sym)
 
 
 @typecheck
 @dataclass(frozen=True)
 class MoleculeIds(_AnnotationGroup):
-    """Per-atom molecule identification (covalently connected units)."""
+    """Per-atom molecule identification (covalently connected units).
+
+    TODO: these fields are ``Int32`` while other int fields on sibling groups
+    (``asym_id_int``, ``entity_id_int``, …) are int64. Arbitrary historical
+    inconsistency — harmless today but worth unifying.
+    """
 
     FIELD_NAME: ClassVar[str] = "molecule_ids"
 
@@ -402,7 +429,21 @@ class MoleculeIds(_AnnotationGroup):
 @typecheck
 @dataclass(frozen=True)
 class TypeMasks(_AnnotationGroup):
-    """Per-atom molecular type classification."""
+    """Per-atom molecular type classification.
+
+    TODO: ``mol_type`` is **per-residue** (from CCD lookup); the ``is_*`` masks
+    are **per-chain** (majority-vote of mol_type within each chain). A chain
+    with one ligand residue among 200 protein residues has ``is_ligand=0``
+    for all 201 atoms — so atom-level ``mol_type`` and atom-level ``is_ligand``
+    can disagree. AF3 SI documents this as intended, but it's a footgun.
+    Audit downstream users; consider renaming to ``chain_is_*`` or splitting
+    into atom-level + chain-level fields.
+
+    TODO: ``is_*`` are ``Int`` but semantically ``Bool``; same for
+    ``ref_mask`` / ``modified_res_mask`` / ``plddt_m_rep_atom_mask`` /
+    ``is_motif`` / ``is_motif_related`` on the other groups. Worth a mask→bool
+    migration sweep once downstream readers are audited.
+    """
 
     FIELD_NAME: ClassVar[str] = "type_masks"
 
@@ -413,6 +454,39 @@ class TypeMasks(_AnnotationGroup):
     is_ligand: Int[np.ndarray, "n_atom"]
     is_dna: Int[np.ndarray, "n_atom"]
     is_rna: Int[np.ndarray, "n_atom"]
+
+    @classmethod
+    def compute(cls, atom_array: AtomArray, sequences: dict[str, str]) -> TypeMasks:
+        """Compute mol_type + is_{protein,ligand,dna,rna} masks.
+
+        ``sequences`` is ``{label_entity_id: canonical_sequence}``; entities
+        absent from this dict are treated as ligand. mol_type is per-residue
+        from the CCD lookup; is_* masks are chain-level (each chain's most
+        frequent mol_type wins — matches the legacy AF3 pipeline).
+        """
+        n = len(atom_array)
+        mol_type = np.zeros(n, dtype="U7")
+        res_starts = get_residue_starts(atom_array, add_exclusive_stop=True)
+        for start, stop in zip(res_starts[:-1], res_starts[1:]):
+            entity_id = atom_array.label_entity_id[start]
+            if entity_id not in sequences:
+                mol_type[start:stop] = "ligand"
+                continue
+            mol_type[start:stop] = ccd.get_mol_type(atom_array.res_name[start])
+
+        chain_starts = get_chain_starts(atom_array, add_exclusive_stop=True)
+        chain_mol_type = np.zeros(n, dtype="U7")
+        for start, end in zip(chain_starts[:-1], chain_starts[1:]):
+            counts = Counter(mol_type[start:end])
+            chain_mol_type[start:end] = max(counts, key=counts.get)
+
+        return cls(
+            mol_type=mol_type,
+            is_protein=(chain_mol_type == "protein").astype(int),
+            is_ligand=(chain_mol_type == "ligand").astype(int),
+            is_dna=(chain_mol_type == "dna").astype(int),
+            is_rna=(chain_mol_type == "rna").astype(int),
+        )
 
 
 @typecheck
@@ -427,6 +501,76 @@ class ReferenceConformer(_AnnotationGroup):
     ref_mask: Int[np.ndarray, "n_atom"]
     ref_space_uid: Int[np.ndarray, "n_atom"]
 
+    @classmethod
+    def compute(
+        cls,
+        atom_array: AtomArray,
+        entity_ids: EntityIds,
+        include_conformer: bool = True,
+    ) -> ReferenceConformer:
+        """Compute ref_space_uid + CCD reference conformer (or zero fallback).
+
+        ref_space_uid: AF3 SI 2.8 Table 5 — unique int per (asym_id, res_id).
+        ref_pos/charge/mask: CCD lookup keyed by res_name + atom_name.
+        Residues whose res_name lacks a CCD entry get zero-filled pos/charge/mask
+        (and ref_mask=0 signals "not present" to downstream).
+
+        When ``include_conformer=False``, ref_space_uid is still computed
+        (it's cheap and used downstream); pos/charge/mask fall back to zeros.
+        """
+        n = len(atom_array)
+
+        # ref_space_uid = rank of each (asym_id, res_id) pair after lex-sorting
+        # the unique pairs. np.unique(return_inverse=...) gives exactly that.
+        chain_res_id = np.stack([entity_ids.asym_id_int, atom_array.res_id], axis=1)
+        _, ref_space_uid = np.unique(chain_res_id, axis=0, return_inverse=True)
+
+        if not include_conformer:
+            return cls(
+                ref_pos=np.zeros((n, 3)),
+                ref_charge=np.zeros(n, dtype=int),
+                ref_mask=np.zeros(n, dtype=int),
+                ref_space_uid=ref_space_uid,
+            )
+
+        # Key CCD info by res_name directly — all atoms in a residue share the
+        # same CCD entry; the legacy code keyed by ref_space_uid, storing the
+        # same tuple repeatedly for each residue instance.
+        ccd_info: dict = {}
+        for ccd_id in np.unique(atom_array.res_name):
+            ref_result: RefInfo | None = get_ccd_ref_info(ccd_id)
+            if ref_result:
+                ccd_info[ccd_id] = (
+                    ref_result.atom_map,
+                    ref_result.coord,
+                    ref_result.charge,
+                    ref_result.mask,
+                )
+
+        # TODO: per-atom Python loop; vectorise via (res_name, atom_name) →
+        # flat index lookup built once from ccd_info. Bottleneck >~50k atoms.
+        ref_pos = np.zeros((n, 3))
+        ref_charge = np.zeros(n, dtype=int)
+        ref_mask = np.zeros(n, dtype=int)
+        for i, (res_name, atom_name) in enumerate(
+            zip(atom_array.res_name, atom_array.atom_name)
+        ):
+            ref_data = ccd_info.get(res_name)
+            if ref_data is None:
+                continue
+            atom_map, coord, charge, mask = ref_data
+            sub_idx = atom_map[atom_name]
+            ref_pos[i] = coord[sub_idx]
+            ref_charge[i] = charge[sub_idx]
+            ref_mask[i] = mask[sub_idx]
+
+        return cls(
+            ref_pos=ref_pos,
+            ref_charge=ref_charge,
+            ref_mask=ref_mask,
+            ref_space_uid=ref_space_uid,
+        )
+
 
 @typecheck
 @dataclass(frozen=True)
@@ -438,6 +582,75 @@ class DerivedAnnotations(_AnnotationGroup):
     cano_seq_resname: Shaped[np.ndarray, "n_atom"]  # numpy str_
     tokatom_idx: Int[np.ndarray, "n_atom"]
     modified_res_mask: Int[np.ndarray, "n_atom"]
+
+    @classmethod
+    def compute(
+        cls, atom_array: AtomArray, type_masks: TypeMasks
+    ) -> DerivedAnnotations:
+        """Compute cano_seq_resname, tokatom_idx, modified_res_mask.
+
+        All three depend on ``type_masks.mol_type`` (not an annotation on
+        ``atom_array``) to decide the protein/rna/dna/ligand path. Reads
+        ``atom_array.res_name`` / ``atom_array.atom_name`` for the content
+        side; no mutation.
+
+        - cano_seq_resname: three-letter canonical resname (AF3 SI 5.9.3),
+          non-standard residues mapped to standard ones, unmapped → "UNK"/"N"/"DN".
+        - tokatom_idx: atom's position within its residue from RES_ATOMS_DICT
+          for standard residues; 0 for ligand or unknown residue.
+        - modified_res_mask: 1 for non-standard non-ligand residues; 0 otherwise.
+        """
+        n = len(atom_array)
+        mol_type = type_masks.mol_type
+
+        cano_seq_resname = np.empty(n, dtype="U3")
+        modified_res_mask = np.zeros(n, dtype=int)
+
+        res_starts = get_residue_starts(atom_array, add_exclusive_stop=True)
+        for start, stop in zip(res_starts[:-1], res_starts[1:]):
+            resname = atom_array.res_name[start]
+            mt = mol_type[start]
+
+            # CCD occasionally maps a non-standard residue code to a
+            # multi-letter "one-letter" code (modified nucleotides etc).
+            # We only accept genuine 1-char codes — the len != 1 branch
+            # catches both None and those multi-letter strings.
+            one_letter = ccd.get_one_letter_code(resname)
+            if one_letter is None or len(one_letter) != 1:
+                one_letter = "X" if mt == "protein" else "N"
+
+            if mt == "protein":
+                cano_name = PROT_STD_RESIDUES_ONE_TO_THREE.get(one_letter, "UNK")
+            elif mt == "dna":
+                cano_name = "D" + one_letter
+                if cano_name not in DNA_STD_RESIDUES:
+                    cano_name = "DN"
+            elif mt == "rna":
+                cano_name = one_letter
+                if cano_name not in RNA_STD_RESIDUES:
+                    cano_name = "N"
+            else:
+                cano_name = "UNK"
+
+            cano_seq_resname[start:stop] = cano_name
+
+            if resname not in STD_RESIDUES and mt != "ligand":
+                modified_res_mask[start:stop] = 1
+
+        # TODO: per-atom Python loop; vectorise via a flat (res_name, atom_name)
+        # → idx lookup built once from RES_ATOMS_DICT. Bottleneck >~50k atoms.
+        tokatom_idx = np.zeros(n, dtype=int)
+        for i in range(n):
+            atom_name_pos = RES_ATOMS_DICT.get(atom_array.res_name[i])
+            if mol_type[i] == "ligand" or atom_name_pos is None:
+                continue
+            tokatom_idx[i] = atom_name_pos[atom_array.atom_name[i]]
+
+        return cls(
+            cano_seq_resname=cano_seq_resname,
+            tokatom_idx=tokatom_idx,
+            modified_res_mask=modified_res_mask,
+        )
 
 
 @typecheck

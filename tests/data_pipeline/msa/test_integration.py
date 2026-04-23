@@ -16,6 +16,7 @@ The test auto-skips unless the paths below resolve to real files.
 from __future__ import annotations
 
 import os
+import random
 from pathlib import Path
 
 import pytest
@@ -86,17 +87,26 @@ def test_process_one_with_msa_produces_populated_msacontext():
     )
     assert len(dataset) > 0
 
-    # Find a sample whose MSA is populated. ~91% of samples should have one
-    # at n_msa=64; we try up to 10 to avoid flaky runs on shallow outliers.
+    # Random indices, NOT sequential: the weightedPDB indices CSV is sorted
+    # by PDB id alphabetically, so indices 0..N are dominated by a few
+    # non-protein PDBs (100d etc.) whose chain_1_id is nucleic/ligand.
+    # Random sampling gives a representative mix.
+    #
+    # Expected hit rate: ~50% of entries are protein × ~91% MSA coverage on
+    # protein ≈ 45%. 20 trials → P(all miss) ≈ 4e-6.
+    rng = random.Random(0)
+    probe_indices = rng.sample(range(len(dataset)), min(20, len(dataset)))
+
     context = None
-    for idx in range(min(10, len(dataset))):
-        candidate = dataset.process_one(idx)
+    for probe_idx in probe_indices:
+        candidate = dataset.process_one(probe_idx)
         if candidate.msa is not None:
             context = candidate
             break
-    assert (
-        context is not None and context.msa is not None
-    ), "Expected at least one of 10 samples to have a populated MSA"
+    assert context is not None and context.msa is not None, (
+        f"Expected at least one of {len(probe_indices)} random samples to "
+        "have a populated MSA"
+    )
 
     msa = context.msa
     n_token = context.basic.n_token

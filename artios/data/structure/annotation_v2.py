@@ -21,14 +21,19 @@ This module will supersede ``annotation.py``; during migration both coexist so
 from __future__ import annotations
 
 import dataclasses
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from typing import ClassVar
 
 import numpy as np
 from biotite.structure import AtomArray, get_chain_starts
+from biotite.structure.molecules import get_molecule_indices
 
+from artios.data.structure.annotation import remove_bonds_between_polymer_chains
 from artios.utils.typing import Bool, Float, Int, Int32, Shaped, typecheck
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Structural ops
@@ -62,9 +67,160 @@ def canonicalize_chain_ids(atom_array: AtomArray) -> AtomArray:
     return atom_array
 
 
+def order_atoms_by_mol(
+    atom_array: AtomArray,
+    entity_poly_type: dict[str, str] | None = None,
+    check_final_equiv: bool = True,
+) -> tuple[
+    AtomArray,
+    Int32[np.ndarray, "n_atom"],
+    Int32[np.ndarray, "n_atom"],
+]:
+    """Reorder atoms so each covalently-bonded molecule is contiguous.
+
+    A molecule is a connected component of the bond graph. When
+    ``entity_poly_type`` is given, polymer-polymer inter-chain bonds are
+    removed first so each polymer chain is its own molecule.
+
+    Also identifies *equivalent* molecules (same entity_id sequence and atom
+    names) and assigns them the same ``entity_mol_id``.
+
+    Returns the reordered AtomArray plus ``mol_id`` and ``entity_mol_id``
+    arrays already reordered to match. ``MoleculeIds.compute`` packages
+    these and adds ``mol_atom_index``.
+
+    Args:
+        atom_array: Input AtomArray.
+        entity_poly_type: ``{label_entity_id: poly_type}`` from mmCIF. When
+            given, inter-chain bonds between polymer entities are removed
+            before connected-component search.
+        check_final_equiv: If True, assert that mols sharing an
+            ``entity_mol_id`` have identical res_name/atom_name/mol_atom_index
+            sequences.
+    """
+    if entity_poly_type is None:
+        mol_indices = get_molecule_indices(atom_array)
+    else:
+        bonds_filtered = remove_bonds_between_polymer_chains(
+            atom_array, entity_poly_type
+        )
+        mol_indices = get_molecule_indices(bonds_filtered)
+
+    n_atom = len(atom_array)
+    mol_ids = np.full(n_atom, -1, dtype=np.int32)
+    for mol_id, atom_indices in enumerate(mol_indices):
+        mol_ids[atom_indices] = mol_id
+    assert (mol_ids >= 0).all(), "Some mol_id is not assigned."
+    assert len(np.unique(mol_ids)) == len(mol_indices), "Some mol_id is duplicated."
+
+    ref_mol_infos: list = []
+    new_atom_perm: list[int] = []
+    chain_starts = get_chain_starts(atom_array, add_exclusive_stop=False)
+    entity_mol_ids = np.zeros(n_atom, dtype=np.int32)
+    for _mol_id, atom_indices in enumerate(mol_indices):
+        atom_indices = np.sort(atom_indices)
+        # Stable-sort chains within the mol by label_entity_id so equivalent
+        # multi-chain mols traverse their chains in a consistent order.
+        chain_perm = np.argsort(atom_array.label_entity_id[atom_indices], kind="stable")
+        atom_indices = atom_indices[chain_perm]
+        new_atom_perm.extend(atom_indices)
+
+        mol_chain_mask = np.isin(atom_indices, chain_starts)
+        entity_ids = atom_array.label_entity_id[atom_indices][mol_chain_mask].tolist()
+
+        match_entity_mol_id: int | None = None
+        for existing_id, mol_info in enumerate(ref_mol_infos):
+            if entity_ids != mol_info.entity_ids:
+                continue
+            if len(atom_indices) != len(mol_info.atom_name):
+                continue
+
+            atom_name_not_equal = (
+                atom_array.atom_name[atom_indices] != mol_info.atom_name
+            )
+            if np.any(atom_name_not_equal):
+                diff_indices = np.where(atom_name_not_equal)[0]
+                query_atom = atom_array[atom_indices[diff_indices[0]]]
+                ref_atom = atom_array[mol_info.atom_indices[diff_indices[0]]]
+                logger.warning(
+                    "Two mols have entity_ids and same number of atoms, "
+                    f"but diff atom name:\n{query_atom=}\n{  ref_atom=}"
+                )
+                continue
+
+            match_entity_mol_id = existing_id
+            break
+
+        if match_entity_mol_id is None:
+            mol_info = atom_array[atom_indices[0]]
+            mol_info.atom_indices = atom_indices
+            mol_info.entity_ids = entity_ids
+            mol_info.atom_name = atom_array.atom_name[atom_indices]
+            mol_info.entity_mol_id = len(ref_mol_infos)
+            ref_mol_infos.append(mol_info)
+            match_entity_mol_id = mol_info.entity_mol_id
+
+        entity_mol_ids[atom_indices] = match_entity_mol_id
+
+    new_atom_perm_arr = np.asarray(new_atom_perm)
+    aa_ordered = atom_array[new_atom_perm_arr]
+    mol_ids_ordered = mol_ids[new_atom_perm_arr]
+    entity_mol_ids_ordered = entity_mol_ids[new_atom_perm_arr]
+
+    if check_final_equiv:
+        _check_mol_equivalence(aa_ordered, mol_ids_ordered, entity_mol_ids_ordered)
+
+    return aa_ordered, mol_ids_ordered, entity_mol_ids_ordered
+
+
+def _check_mol_equivalence(
+    aa_ordered: AtomArray,
+    mol_id: np.ndarray,
+    entity_mol_id: np.ndarray,
+) -> None:
+    """Assert that mols sharing an entity_mol_id match atom-by-atom.
+
+    res_name and atom_name must be equal across equivalent mols.
+    mol_atom_index is computed locally (not stored) to preserve the exact
+    check the legacy ``find_equiv_mol_and_assign_ids`` performed.
+    """
+    boundaries = _mol_boundaries(mol_id)
+    mol_atom_index = _compute_mol_atom_index(mol_id)
+    num_mols = len(boundaries) - 1
+    for i in range(num_mols):
+        for j in range(i + 1, num_mols):
+            start_i, stop_i = boundaries[i], boundaries[i + 1]
+            start_j, stop_j = boundaries[j], boundaries[j + 1]
+            if entity_mol_id[start_i] != entity_mol_id[start_j]:
+                continue
+            for arr, name in (
+                (aa_ordered.res_name, "res_name"),
+                (aa_ordered.atom_name, "atom_name"),
+                (mol_atom_index, "mol_atom_index"),
+            ):
+                assert np.all(
+                    arr[start_i:stop_i] == arr[start_j:stop_j]
+                ), f"not equal {name} when order_atoms_by_mol()"
+
+
 # ---------------------------------------------------------------------------
 # Content helpers
 # ---------------------------------------------------------------------------
+
+
+def _mol_boundaries(mol_id: np.ndarray) -> np.ndarray:
+    """Indices where mol_id transitions, plus the array length. Assumes mol_id is contiguous."""
+    transitions = np.where(np.diff(mol_id) != 0)[0] + 1
+    return np.concatenate([[0], transitions, [len(mol_id)]])
+
+
+def _compute_mol_atom_index(mol_id: np.ndarray) -> Int32[np.ndarray, "n_atom"]:
+    """Running atom index within each mol, assuming mol_id is contiguous."""
+    result = np.zeros(len(mol_id), dtype=np.int32)
+    boundaries = _mol_boundaries(mol_id)
+    for start, stop in zip(boundaries[:-1], boundaries[1:]):
+        result[start:stop] = np.arange(stop - start, dtype=np.int32)
+    return result
 
 
 def compute_entity_ids_arrays(
@@ -224,6 +380,23 @@ class MoleculeIds(_AnnotationGroup):
     mol_id: Int32[np.ndarray, "n_atom"]
     entity_mol_id: Int32[np.ndarray, "n_atom"]
     mol_atom_index: Int32[np.ndarray, "n_atom"]
+
+    @classmethod
+    def compute(
+        cls,
+        mol_id: Int32[np.ndarray, "n_atom"],
+        entity_mol_id: Int32[np.ndarray, "n_atom"],
+    ) -> MoleculeIds:
+        """Package ``mol_id`` / ``entity_mol_id`` from ``order_atoms_by_mol`` + compute mol_atom_index.
+
+        ``mol_id`` must be contiguous (atoms sharing a mol appear in a single
+        run) — which is the contract ``order_atoms_by_mol`` already guarantees.
+        """
+        return cls(
+            mol_id=mol_id,
+            entity_mol_id=entity_mol_id,
+            mol_atom_index=_compute_mol_atom_index(mol_id),
+        )
 
 
 @typecheck

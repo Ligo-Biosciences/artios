@@ -686,13 +686,12 @@ class DerivedAnnotations(_AnnotationGroup):
 class TrainingAnnotations(_AnnotationGroup):
     """Optional per-atom annotations for training. Fields default to None.
 
-    Two origins for fields here:
-    - Annotate-time (``compute()`` below): ``is_resolved`` and, when requested,
-      ``plddt_m_rep_atom_mask``.
-    - External pipelines: ``pocket_id`` (pocketeer) and ``fragment_id``
-      (FragmentMaker) are produced by standalone training data-prep steps
-      and layered on after annotate(), via ``dataclasses.replace(training,
-      pocket_id=...)``. ``compute()`` leaves them None.
+    Mixed provenance:
+    - ``is_resolved`` and ``plddt_m_rep_atom_mask`` are computed inside
+      ``compute()`` (the latter only when ``include_plddt_mask=True``).
+    - ``pocket_id`` and ``fragment_id`` come from separate training-prep
+      pipelines (pocketeer, FragmentMaker) and arrive on the input
+      ``atom_array``. ``compute()`` passes them through when present.
     """
 
     FIELD_NAME: ClassVar[str] = "training"
@@ -710,38 +709,48 @@ class TrainingAnnotations(_AnnotationGroup):
         type_masks: TypeMasks,
         include_plddt_mask: bool = False,
     ) -> TrainingAnnotations:
-        """Compute annotate-time training fields.
+        """Fill every field of the group.
 
-        - ``is_resolved``: read from ``atom_array`` if already set (preprocessing
-          flags low-pLDDT residues as unresolved via
-          ``annotation.unresolve_low_plddt_residues``); otherwise default to
-          all-True.
-        - ``plddt_m_rep_atom_mask``: AF3 SI 4.3.1 representative atoms for
-          pLDDT loss — CA for standard protein residues, C1' for standard
-          nucleic acid residues. Computed only when ``include_plddt_mask=True``.
-        - ``pocket_id`` / ``fragment_id``: always None here (see class docstring).
+        Per-field behaviour:
+
+        - ``is_resolved``: read from ``atom_array`` if set (preprocessing
+          flags low-pLDDT residues via
+          ``annotation.unresolve_low_plddt_residues``); else default to all-True.
+        - ``plddt_m_rep_atom_mask``: **computed here** when
+          ``include_plddt_mask=True`` (AF3 SI 4.3.1 — CA for standard protein,
+          C1' for standard nucleic acid). Else pass through from ``atom_array``
+          if present, else ``None``.
+        - ``pocket_id`` / ``fragment_id``: populated by upstream training-prep
+          pipelines (pocketeer, FragmentMaker) and carried on ``atom_array``;
+          passed through if present, else ``None``. compute() never recomputes
+          them — it has no way to.
         """
         cls._require_annotations(atom_array)
         n = len(atom_array)
+        cats = atom_array.get_annotation_categories()
 
-        if "is_resolved" in atom_array.get_annotation_categories():
-            is_resolved = atom_array.is_resolved.astype(bool)
-        else:
-            is_resolved = np.ones(n, dtype=bool)
+        is_resolved = (
+            atom_array.is_resolved.astype(bool)
+            if "is_resolved" in cats
+            else np.ones(n, dtype=bool)
+        )
 
-        plddt_m_rep_atom_mask = None
         if include_plddt_mask:
             std_res = np.isin(atom_array.res_name, list(STD_RESIDUES.keys())) & (
                 type_masks.mol_type != "ligand"
             )
             ca_or_c1 = (atom_array.atom_name == "CA") | (atom_array.atom_name == r"C1'")
             plddt_m_rep_atom_mask = (std_res & ca_or_c1).astype(int)
+        elif "plddt_m_rep_atom_mask" in cats:
+            plddt_m_rep_atom_mask = atom_array.plddt_m_rep_atom_mask
+        else:
+            plddt_m_rep_atom_mask = None
 
         return cls(
             is_resolved=is_resolved,
             plddt_m_rep_atom_mask=plddt_m_rep_atom_mask,
-            pocket_id=None,
-            fragment_id=None,
+            pocket_id=atom_array.pocket_id if "pocket_id" in cats else None,
+            fragment_id=atom_array.fragment_id if "fragment_id" in cats else None,
         )
 
 

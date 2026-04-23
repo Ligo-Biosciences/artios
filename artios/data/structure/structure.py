@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 from biotite.structure import AtomArray
 
-from artios.data.structure import annotation
+from artios.data.structure import annotation, annotation_v2
 from artios.data.structure.annotation_v2 import (
     DerivedAnnotations,
     EntityIds,
@@ -144,6 +144,65 @@ class AnnotatedStructure:
             atom_array = annotation.add_plddt_m_rep_atom_mask(atom_array)
 
         return cls.from_atom_array(atom_array)
+
+    @classmethod
+    def _annotate_v2(
+        cls,
+        atom_array: AtomArray,
+        sequences: dict[str, str],
+        entity_poly_type: dict[str, str] | None = None,
+        include_ref_conformer: bool = True,
+        include_training_masks: bool = False,
+    ) -> AnnotatedStructure:
+        """compute()-based annotate path, kept in parallel with ``annotate``.
+
+        Temporary during PR B of the data-pipeline refactor. The dual-path
+        test in ``tests/data_pipeline/test_compute_migration_parity.py``
+        byte-compares this against ``annotate``; once stable, ``annotate``
+        gets flipped to this body and ``_annotate_v2`` is removed.
+
+        See docs/refactor_plans/data_pipeline_refactor_sequence.md PR B.
+        """
+        aa = atom_array.copy()
+        aa = annotation_v2.canonicalize_chain_ids(aa)
+        aa, mol_id, entity_mol_id = annotation_v2.order_atoms_by_mol(
+            aa, entity_poly_type, check_final_equiv=entity_poly_type is not None
+        )
+
+        entity_ids = EntityIds.compute(aa)
+        type_masks = TypeMasks.compute(aa, sequences)
+        molecule_ids = MoleculeIds.compute(mol_id, entity_mol_id)
+        reference = ReferenceConformer.compute(
+            aa, entity_ids, include_conformer=include_ref_conformer
+        )
+        derived = DerivedAnnotations.compute(aa, type_masks)
+        training = TrainingAnnotations.compute(
+            aa, type_masks, include_plddt_mask=include_training_masks
+        )
+        grouping = compute_token_grouping_vectorized(aa, mol_type=type_masks.mol_type)
+
+        # Strip group-owned annotations from aa so ``atoms`` keeps only
+        # biotite-native fields + label_entity_id. Mirrors from_atom_array —
+        # groups are the single source of truth, not AtomArray annotations.
+        for g in _AnnotationGroup.__subclasses__():
+            g.strip_from(aa)
+        # TODO(follow-up): stop writing ``centre_atom_mask`` as an AtomArray
+        # annotation in to_atom_array so this string-based delete can go away.
+        # centre_atom_mask already lives on TokenGrouping; the AtomArray copy
+        # only exists for the legacy ContextGenerator / dataset.py motif path.
+        if "centre_atom_mask" in aa.get_annotation_categories():
+            aa.del_annotation("centre_atom_mask")
+
+        return cls(
+            atoms=aa,
+            entity_ids=entity_ids,
+            molecule_ids=molecule_ids,
+            type_masks=type_masks,
+            reference=reference,
+            grouping=grouping,
+            derived=derived,
+            training=training,
+        )
 
     # -- Selection ------------------------------------------------------------
 

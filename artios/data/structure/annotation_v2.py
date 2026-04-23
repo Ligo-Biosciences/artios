@@ -268,8 +268,16 @@ class _AnnotationGroup:
     mapping between typed fields and stringly-typed annotations is defined once
     — by the field names on the dataclass.
 
-    Subclasses declare ``FIELD_NAME`` (attribute name on ``AnnotatedStructure``)
-    and may override ``REQUIRED`` to ``False`` for optional groups.
+    Subclasses declare:
+
+    - ``FIELD_NAME``: attribute name on ``AnnotatedStructure``.
+    - ``REQUIRED``: whether the group must be present (default True).
+    - ``REQUIRES``: biotite AtomArray annotations the ``compute()`` reads.
+      Checked at the top of ``compute()`` via ``_require_annotations`` — a
+      missing name raises ``ValueError`` naming the group, which beats an
+      ``AttributeError`` from deep in the compute body. Does NOT check
+      structural preconditions (canonicalized chains, reordered mols) —
+      those live in the ``compute()`` docstring.
 
     Fields with a default value (e.g. ``None``) are treated as optional:
     missing annotations use the default instead of raising.
@@ -277,6 +285,18 @@ class _AnnotationGroup:
 
     FIELD_NAME: ClassVar[str]
     REQUIRED: ClassVar[bool] = True
+    REQUIRES: ClassVar[tuple[str, ...]] = ()
+
+    @classmethod
+    def _require_annotations(cls, atom_array: AtomArray) -> None:
+        """Raise if any ``REQUIRES`` entry is missing from ``atom_array``."""
+        present = atom_array.get_annotation_categories()
+        missing = [n for n in cls.REQUIRES if n not in present]
+        if missing:
+            raise ValueError(
+                f"{cls.__name__}.compute requires atom_array annotations "
+                f"that are missing: {missing}"
+            )
 
     @classmethod
     def from_atom_array(cls, atom_array: AtomArray):
@@ -358,6 +378,7 @@ class EntityIds(_AnnotationGroup):
     """
 
     FIELD_NAME: ClassVar[str] = "entity_ids"
+    REQUIRES: ClassVar[tuple[str, ...]] = ("chain_id", "label_entity_id")
 
     asym_id_int: Int[np.ndarray, "n_atom"]
     entity_id_int: Int[np.ndarray, "n_atom"]
@@ -372,6 +393,7 @@ class EntityIds(_AnnotationGroup):
         chain order. Expects chain_id to be uniqueified first — see
         ``canonicalize_chain_ids``.
         """
+        cls._require_annotations(atom_array)
         entity_id_uniq = np.sort(np.unique(atom_array.label_entity_id))
         entity_id_dict = {e: i for i, e in enumerate(entity_id_uniq)}
 
@@ -446,6 +468,7 @@ class TypeMasks(_AnnotationGroup):
     """
 
     FIELD_NAME: ClassVar[str] = "type_masks"
+    REQUIRES: ClassVar[tuple[str, ...]] = ("res_name", "label_entity_id")
 
     # mol_type is numpy str_ (e.g. "protein"|"rna"|"dna"|"ligand"); jaxtyping
     # has no string-specific marker, so Shaped enforces shape only.
@@ -464,6 +487,7 @@ class TypeMasks(_AnnotationGroup):
         from the CCD lookup; is_* masks are chain-level (each chain's most
         frequent mol_type wins — matches the legacy AF3 pipeline).
         """
+        cls._require_annotations(atom_array)
         n = len(atom_array)
         mol_type = np.zeros(n, dtype="U7")
         res_starts = get_residue_starts(atom_array, add_exclusive_stop=True)
@@ -495,6 +519,7 @@ class ReferenceConformer(_AnnotationGroup):
     """Per-atom reference conformer data from CCD."""
 
     FIELD_NAME: ClassVar[str] = "reference"
+    REQUIRES: ClassVar[tuple[str, ...]] = ("res_id", "res_name", "atom_name")
 
     ref_pos: Float[np.ndarray, "n_atom 3"]
     ref_charge: Int[np.ndarray, "n_atom"]
@@ -518,6 +543,7 @@ class ReferenceConformer(_AnnotationGroup):
         When ``include_conformer=False``, ref_space_uid is still computed
         (it's cheap and used downstream); pos/charge/mask fall back to zeros.
         """
+        cls._require_annotations(atom_array)
         n = len(atom_array)
 
         # ref_space_uid = rank of each (asym_id, res_id) pair after lex-sorting
@@ -578,6 +604,7 @@ class DerivedAnnotations(_AnnotationGroup):
     """Per-atom annotations computed during the annotation pipeline."""
 
     FIELD_NAME: ClassVar[str] = "derived"
+    REQUIRES: ClassVar[tuple[str, ...]] = ("res_name", "atom_name")
 
     cano_seq_resname: Shaped[np.ndarray, "n_atom"]  # numpy str_
     tokatom_idx: Int[np.ndarray, "n_atom"]
@@ -600,6 +627,7 @@ class DerivedAnnotations(_AnnotationGroup):
           for standard residues; 0 for ligand or unknown residue.
         - modified_res_mask: 1 for non-standard non-ligand residues; 0 otherwise.
         """
+        cls._require_annotations(atom_array)
         n = len(atom_array)
         mol_type = type_masks.mol_type
 

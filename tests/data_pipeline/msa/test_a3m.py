@@ -113,24 +113,47 @@ def test_fixture_corrupt_raises(fixtures_dir: Path):
         parse_a3m(content)
 
 
-def test_real_a3m_fixtures_parse_cleanly(fixtures_dir: Path):
-    """Smoke check on any real non_pairing.a3m supplied by the user.
+# Real non_pairing.a3m fixtures supplied from the training data. Each tuple is
+# (filename, expected_depth, expected_query_length). Filenames also encode
+# these values so they're easy to spot-check if the set changes. The files
+# span ~3 orders of magnitude in depth and ~10x in chain length — together
+# they catch parser bugs that only surface on real-scale input (long rows
+# crossing typical wrap points, high-depth allocations, real-world header
+# formats, lowercase insertion density).
+REAL_A3M_FIXTURES = [
+    ("small_idx34631_depth9_len166.a3m", 9, 166),
+    ("undersampled_idx37866_depth54_len54.a3m", 54, 54),
+    ("medium_idx31354_depth312_len272.a3m", 312, 272),
+    ("deep_idx83928_depth1067_len521.a3m", 1067, 521),
+    ("verydeep_idx32802_depth7805_len150.a3m", 7805, 150),
+]
 
-    Skipped until at least one real fixture is dropped under
-    tests/fixtures/msa/real/. Catches classes of parse failure that the
-    handcrafted fixtures can't anticipate (long rows, unusual headers,
-    Windows line endings, etc.).
-    """
-    real_dir = fixtures_dir / "msa" / "real"
-    paths = sorted(real_dir.glob("*.a3m")) if real_dir.exists() else []
-    if not paths:
-        pytest.skip(f"no real a3m fixtures under {real_dir}")
-    for path in paths:
-        query, rows = parse_a3m(path.read_text())
-        assert len(query) > 0
-        assert all(len(r) == len(query) for r in rows)
-        tokens, gap_mask = encode_rows(rows)
-        assert tokens.shape == (len(rows), len(query))
-        assert tokens.dtype == np.int8
-        # Query (row 0) is canonical protein — no gaps.
-        assert not gap_mask[0].any()
+
+@pytest.mark.parametrize("fname,expected_depth,expected_query_len", REAL_A3M_FIXTURES)
+def test_real_a3m_fixture_parses_with_expected_shape(
+    fname: str, expected_depth: int, expected_query_len: int, fixtures_dir: Path
+):
+    """Each real fixture parses with the exact depth + length encoded in its
+    filename.  Fails per-file so a bad file is immediately identifiable."""
+    path = fixtures_dir / "msa" / "real" / fname
+    if not path.exists():
+        pytest.skip(f"missing real fixture: {path}")
+
+    query, rows = parse_a3m(path.read_text())
+
+    assert len(query) == expected_query_len, f"{fname}: query length"
+    assert len(rows) == expected_depth, f"{fname}: row count"
+    assert all(
+        len(r) == expected_query_len for r in rows
+    ), f"{fname}: post-strip length invariant"
+
+    tokens, gap_mask = encode_rows(rows)
+    assert tokens.shape == (expected_depth, expected_query_len)
+    assert tokens.dtype == np.int8
+    # Query row is canonical protein — no gaps.
+    assert not gap_mask[0].any()
+    # For reasonably deep MSAs there must be at least one gap in homolog rows —
+    # a silent regression that dropped '-' alongside lowercase would zero this
+    # out.
+    if expected_depth >= 50:
+        assert gap_mask[1:].any(), f"{fname}: expected at least one homolog gap"

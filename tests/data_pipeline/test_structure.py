@@ -169,6 +169,52 @@ class TestSelection:
 
 
 # ---------------------------------------------------------------------------
+# Motif transformations
+# ---------------------------------------------------------------------------
+
+
+class TestMotifTransforms:
+    """Tests for the first-class motif transforms on AnnotatedStructure."""
+
+    def test_with_motif_annotations_replaces_existing_group(self, structure):
+        """Calling with_motif_annotations twice should replace, not compound.
+
+        Catches a bug where the method mistakenly merges/appends instead of
+        overwriting — leaving stale masks on the structure.
+        """
+        n = len(structure.atoms)
+        first = np.zeros(n, dtype=int)
+        first[:5] = 1
+        s1 = structure.with_motif_annotations(first, first)
+        assert s1.motif is not None and s1.motif.is_motif.sum() == 5
+
+        second = np.zeros(n, dtype=int)
+        second[-3:] = 1
+        s2 = s1.with_motif_annotations(second, second)
+        # Second call fully replaces — mask shape is the NEW mask, not a merge.
+        assert s2.motif.is_motif.sum() == 3
+        assert (s2.motif.is_motif[:5] == 0).all()
+        assert (s2.motif.is_motif[-3:] == 1).all()
+
+    def test_with_motif_annotations_rejects_wrong_length(self, structure):
+        """__post_init__ must enforce cross-group length consistency — a
+        motif mask shorter than n_atom would yield silently-wrong
+        featurization downstream (out-of-bounds indexing or mis-aligned
+        per-atom lookups)."""
+        bad = np.zeros(len(structure.atoms) - 1, dtype=int)
+        with pytest.raises(AssertionError):
+            structure.with_motif_annotations(bad, bad)
+
+    def test_with_motif_annotations_does_not_mutate_source(self, structure):
+        """Transform returns a new structure; the original must stay motif-free
+        so callers can apply different masks from the same base."""
+        assert structure.motif is None
+        mask = np.zeros(len(structure.atoms), dtype=int)
+        structure.with_motif_annotations(mask, mask)
+        assert structure.motif is None, "with_motif_annotations mutated source"
+
+
+# ---------------------------------------------------------------------------
 # AnnotatedStructure.annotate() — end-to-end from CIF
 # ---------------------------------------------------------------------------
 

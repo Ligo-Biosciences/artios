@@ -231,7 +231,7 @@ data_configs = {
     "msa": {
         "enabled": False,
         "root": os.path.join(DATA_ROOT_DIR, "mmcif_msa_template"),
-        "seq_to_idx_path": os.path.join(DATA_ROOT_DIR, "common/seq_to_pdb_index.json"),
+        "seq_to_idx_path": os.path.join(DATA_ROOT_DIR, "seq_to_pdb_index.json"),
         "n_msa": 64,
         "seed": 42,
         # Per-homolog quality filters. Computed on the cropped chain columns

@@ -29,6 +29,7 @@ from artios.data.parsing.json import (
 )
 from artios.data.parsing.motif import Motif, MotifLigand, MotifResidue
 from artios.data.structure import annotation
+from artios.data.structure.structure import AnnotatedStructure
 from artios.utils.file_io import load_atomarray_from_npz
 from evaluation.utils.constants import DESIGN_CHAIN_ID
 
@@ -345,6 +346,106 @@ def packing_input_to_atom_array_v2(
         combined = protein_array
 
     return combined
+
+
+# ---------------------------------------------------------------------------
+# Input → AnnotatedStructure adapters (PR C unified path)
+# ---------------------------------------------------------------------------
+#
+# These three functions produce the same ``(AnnotatedStructure, mapping)``
+# shape. They replace the legacy ``*_to_atom_array`` + ``AtomArrayTokenizer``
+# pipeline used in ``infer_data_pipeline.py`` with
+# ``AnnotatedStructure.annotate()`` + the motif transforms (PR C1-C4).
+#
+# Legacy functions above remain alive until PR C8 deletes them; keeping
+# both during PR C lets the test_infer_parity goldens verify byte-equality
+# across the flip.
+# ---------------------------------------------------------------------------
+
+
+def backbone_input_to_structure(
+    backbone_input: BackboneInput,
+) -> tuple[AnnotatedStructure, list[dict]]:
+    """Build ``AnnotatedStructure`` from a ``BackboneInput``.
+
+    Replaces ``backbone_input_to_atom_array`` + the motif-enabled legacy
+    annotation pipeline with the unified ``AnnotatedStructure.annotate()``
+    + ``with_unindexed_motif()``.
+    """
+    assert len(backbone_input.design) == 1, "Only one design entity is supported"
+
+    sequence = [PROTEIN_1to3["G"] for _ in range(backbone_input.design[0].length)]
+    design_atom_array = _build_polymer_atom_array(sequence)
+    design_atom_array = add_reference_features(design_atom_array)
+    design_atom_array = set_chain_and_seq_ids(
+        design_atom_array, chain_id=backbone_input.design[0].chain_id, entity_id=1
+    )
+    # OXT is added by _build_polymer_atom_array as a trailing atom — the
+    # motif pipeline never emits it, so strip here to match the legacy
+    # build shape exactly.
+    design_atom_array = design_atom_array[design_atom_array.atom_name != "OXT"]
+
+    design_atom_array.set_annotation(
+        "is_motif_related", np.zeros(len(design_atom_array), dtype=int)
+    )
+    design_atom_array.set_annotation(
+        "is_motif", np.zeros(len(design_atom_array), dtype=int)
+    )
+    design_atom_array.set_annotation(
+        "original_motif_res_id", np.full(len(design_atom_array), -1, dtype=int)
+    )
+    design_atom_array.set_annotation(
+        "original_motif_chain_id", np.array([""] * len(design_atom_array))
+    )
+
+    has_motif = backbone_input.motif is not None
+    if has_motif:
+        motif_atom_array = build_motif(Motif.from_spec(backbone_input.motif))
+        design_atom_array += motif_atom_array
+
+    design_atom_array = mse_to_met(design_atom_array)
+
+    sequences = {
+        entity_id: "" for entity_id in np.unique(design_atom_array.label_entity_id)
+    }
+    structure = AnnotatedStructure.annotate(design_atom_array, sequences)
+
+    if has_motif:
+        structure, mapping = structure.with_unindexed_motif()
+    else:
+        mapping = []
+    return structure, mapping
+
+
+def sequence_design_input_to_structure(
+    atom_array: AtomArray,
+) -> tuple[AnnotatedStructure, list[dict]]:
+    """Build ``AnnotatedStructure`` from a single model of a pre-annotated stack.
+
+    The MPNN path loads an ``AtomArrayStack`` that's already been through
+    ``backbone_input_to_structure`` + ``with_unindexed_motif`` and saved via
+    ``to_atom_array``. ``from_atom_array`` reconstructs the typed structure
+    from those annotations directly — no motif transform needed.
+    """
+    return AnnotatedStructure.from_atom_array(atom_array), []
+
+
+def packing_input_to_structure(
+    input_array: AtomArray,
+    sequence: ProteinSequence,
+) -> tuple[AnnotatedStructure, list[dict]]:
+    """Build ``AnnotatedStructure`` for sidechain packing.
+
+    Mirrors the legacy ``packing_input_to_atom_array_v2`` + ``from_atom_array``
+    flow exactly — protein is annotated fresh, ligand carries its NPZ
+    annotations through the concatenation unchanged. Using
+    ``AnnotatedStructure.annotate`` on the combined array would regenerate
+    ligand ``ref_pos`` from CCD (zeros for unknown ligands like ``UNL``),
+    diverging from the golden. The legacy-preservation pattern goes away
+    when PR C8 deletes ``packing_input_to_atom_array_v2``.
+    """
+    combined = packing_input_to_atom_array_v2(input_array, sequence)
+    return AnnotatedStructure.from_atom_array(combined), []
 
 
 def process_input_to_atom_array(

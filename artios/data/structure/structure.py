@@ -138,6 +138,10 @@ class AnnotatedStructure:
         )
         grouping = compute_token_grouping_vectorized(aa, mol_type=type_masks.mol_type)
 
+        # Motif is optional — read from aa if present. order_atoms_by_mol has
+        # already permuted these alongside the atoms so the arrays line up.
+        motif = MotifAnnotation.maybe_from_atom_array(aa)
+
         for g in _AnnotationGroup.__subclasses__():
             g.strip_from(aa)
         # TODO(follow-up): stop writing ``centre_atom_mask`` as an AtomArray
@@ -155,6 +159,7 @@ class AnnotatedStructure:
             reference=reference,
             grouping=grouping,
             derived=derived,
+            motif=motif,
             training=training,
         )
 
@@ -255,7 +260,7 @@ class AnnotatedStructure:
             ),
         )
 
-        new_type_masks = self.type_masks.duplicate_rows(duplicate_mask)
+        new_type_masks = self.type_masks.append_selection(duplicate_mask)
         new_grouping = compute_token_grouping_vectorized(
             new_atoms,
             mol_type=new_type_masks.mol_type,
@@ -264,14 +269,14 @@ class AnnotatedStructure:
 
         return AnnotatedStructure(
             atoms=new_atoms,
-            entity_ids=self.entity_ids.duplicate_rows(duplicate_mask),
-            molecule_ids=self.molecule_ids.duplicate_rows(duplicate_mask),
+            entity_ids=self.entity_ids.append_selection(duplicate_mask),
+            molecule_ids=self.molecule_ids.append_selection(duplicate_mask),
             type_masks=new_type_masks,
-            reference=self.reference.duplicate_rows(duplicate_mask),
+            reference=self.reference.append_selection(duplicate_mask),
             grouping=new_grouping,
-            derived=self.derived.duplicate_rows(duplicate_mask),
+            derived=self.derived.append_selection(duplicate_mask),
             motif=new_motif,
-            training=self.training.duplicate_rows(duplicate_mask),
+            training=self.training.append_selection(duplicate_mask),
         )
 
     def without_non_motif_sidechains(self) -> AnnotatedStructure:

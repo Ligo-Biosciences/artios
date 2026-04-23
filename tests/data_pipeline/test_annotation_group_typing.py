@@ -23,8 +23,8 @@ import numpy as np
 import pytest
 from biotite.structure import AtomArray
 
-from artios.data.structure.structure import (
-    AnnotatedStructure,
+from artios.data.structure import AnnotatedStructure
+from artios.data.structure.annotation_v2 import (
     EntityIds,
     MotifAnnotation,
     ReferenceConformer,

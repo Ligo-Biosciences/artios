@@ -1,16 +1,13 @@
 """MSA-dispatch tests for ``ArtiosPotts.compute_loss``.
 
 Cover:
-  - When context.msa is not None, compute_loss routes through
-    ``_compute_loss_msa``.
-  - Null-MSA batches produce a finite, zero loss (no NaN, no gradient
-    explosion).
+  - When context.msa is not None, compute_loss routes through the
+    MSA-aware composite NLL path.
+  - All-gap batches (test-level null-MSA fixture) produce a finite,
+    zero loss (no NaN, no gradient explosion).
   - Pseudo + MSA raises.
   - Loss is finite and gradients flow through h and J for non-null
     MSAs.
-  - With MSA that's n_msa copies of gt_seq (zero gap), the MSA loss
-    roughly equals the non-MSA composite loss (gradient signal
-    direction matches).
 """
 
 from __future__ import annotations
@@ -209,9 +206,13 @@ def test_msa_loss_is_finite_and_has_gradients(context_with_restype, device):
 
 
 def test_null_msa_batch_returns_zero_loss_cleanly(context_with_restype, device):
-    """When every sample in the batch is a null MSA (msa_chain_mask all
-    False), the MSA loss should be 0, finite, and not propagate NaN into
-    gradients (gradients may be exactly zero, which is fine)."""
+    """When every (row, token) in the batch is marked as a gap, the MSA
+    per-position NLL is the canonical masked_mean-with-empty-mask fallback
+    (0). The scalar loss must be finite, exactly zero, and must not
+    propagate NaN into gradients. Real null-MSA samples produced by the
+    featurizer instead fill every row with the gt sequence and degrade
+    to the single-sequence composite NLL — that path is covered by
+    integration tests in the data-pipeline suite."""
     model = ArtiosPotts(_make_msa_configs()).to(device)
     model.train()
     ctx = _attach_msa(

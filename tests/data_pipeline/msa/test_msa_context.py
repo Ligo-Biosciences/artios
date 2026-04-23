@@ -101,16 +101,17 @@ def test_null_msa_construction_passes_invariants():
     assert null.tokens.dtype == np.int8
 
 
-def test_null_msa_build_context_gap_fills_and_masks_everything_out(
+def test_null_msa_build_context_fills_rows_with_gt_residues(
     load_structure,
 ):
     """A null MSA run through _build_msa_context must yield:
-      - tokens all 31 (gap) over the full n_token grid,
-      - gap_mask all True,
-      - msa_chain_mask all False.
-
-    This is the invariant the MSA loss relies on to contribute zero for
-    samples where no protein chain was resolvable."""
+    - tokens filled with the gt residue id at every (token, row) — every
+      row is a copy of the query so the MSA loss degrades to the
+      single-sequence composite NLL,
+    - gap_mask True only where a gt residue id genuinely equals 31
+      (i.e. nowhere in a clean protein fixture),
+    - msa_chain_mask all False (no reference-chain data was supplied).
+    """
     s = load_structure("2g1k")
     n_token = s.grouping.n_tokens
     null = MSA.null_for(n_msa=8)
@@ -120,8 +121,12 @@ def test_null_msa_build_context_gap_fills_and_masks_everything_out(
     )
     assert ctx.msa is not None
     assert ctx.msa.tokens.shape == (n_token, 8)
-    assert (ctx.msa.tokens == _GAP).all()
-    assert ctx.msa.gap_mask.all()
+    # Every row is identical to row 0 (the gt residue id per token).
+    row0 = ctx.msa.tokens[:, 0]
+    assert (ctx.msa.tokens == row0.unsqueeze(-1)).all()
+    # gap_mask is exactly `tokens == 31`; no gt tokens should be gap in
+    # this fixture, but the invariant is consistency, not absence.
+    assert torch.equal(ctx.msa.gap_mask, ctx.msa.tokens == _GAP)
     assert not ctx.msa.msa_chain_mask.any()
     assert ctx.msa.msa_chain_asym_id == -1
 
@@ -297,10 +302,13 @@ def test_full_context_to_dict_omits_msa_when_none(load_structure):
     assert "msa" not in ctx.to_dict()
 
 
-def test_context_generator_build_msa_context_expands_and_gap_fills(load_structure):
+def test_context_generator_build_msa_context_scatters_and_gt_fills(load_structure):
     """_build_msa_context turns [n_msa, l_chain] MSA into a token-wide
-    MSAContext: scatter chain columns into their token positions, gap-fill
-    elsewhere. This is the Option A expansion test."""
+    MSAContext: scatter chain columns into their token positions, fill
+    every other (token, row) cell with the gt residue id from the
+    reference sequence. Non-reference-chain positions no longer carry the
+    gap sentinel — they carry their true residue id so the Potts loss
+    contributes a meaningful NLL at those tokens."""
     s = load_structure("2g1k")
     n_token = s.grouping.n_tokens
 
@@ -343,15 +351,22 @@ def test_context_generator_build_msa_context_expands_and_gap_fills(load_structur
     assert ctx.msa.gap_mask.shape == (n_token, 2)
     assert ctx.msa.msa_chain_mask.shape == (n_token,)
 
-    # All non-chain positions are gap (31) in both rows.
+    # Chain columns carry the original MSA values (transposed).
+    assert ctx.msa.tokens[int(token_positions[0]), 0] == 0  # row 0, col 0
+    assert ctx.msa.tokens[int(token_positions[1]), 0] == 1  # row 0, col 1
+    assert ctx.msa.tokens[int(token_positions[1]), 1] == _GAP  # row 1, col 1
+
+    # Non-chain positions are gt residue ids — both rows identical there,
+    # and none of them equal the gap sentinel in a clean protein fixture.
     non_chain = torch.ones(n_token, dtype=torch.bool)
     non_chain[torch.from_numpy(token_positions).long()] = False
-    assert (ctx.msa.tokens[non_chain] == _GAP).all()
+    assert (ctx.msa.tokens[non_chain, 0] == ctx.msa.tokens[non_chain, 1]).all()
+    assert (ctx.msa.tokens[non_chain] != _GAP).all()
+
+    # gap_mask is exactly `tokens == 31` everywhere.
+    assert torch.equal(ctx.msa.gap_mask, ctx.msa.tokens == _GAP)
+
     # msa_chain_mask is True exactly on chain_token_indices.
     assert ctx.msa.msa_chain_mask.sum().item() == 3
     for pos in token_positions:
         assert ctx.msa.msa_chain_mask[int(pos)]
-    # Chain columns carry the original values (transposed).
-    assert ctx.msa.tokens[int(token_positions[0]), 0] == 0  # row 0, col 0
-    assert ctx.msa.tokens[int(token_positions[1]), 0] == 1  # row 0, col 1
-    assert ctx.msa.tokens[int(token_positions[1]), 1] == _GAP  # row 1, col 1

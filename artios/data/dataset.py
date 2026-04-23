@@ -872,6 +872,8 @@ def get_msa_sampler(configs: ConfigDict, dataset_name: str) -> Optional[MSASampl
         seq_to_idx_path=msa_config["seq_to_idx_path"],
         n_msa=msa_config.get("n_msa", 64),
         seed=msa_config.get("seed", None),
+        min_homolog_identity=msa_config.get("min_homolog_identity", 0.0),
+        max_gap_rate=msa_config.get("max_gap_rate", 1.0),
     )
 
 

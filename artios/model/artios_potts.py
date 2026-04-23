@@ -34,7 +34,6 @@ from artios.model.modules.potts import (
     build_energy_bias_vector,
     build_mutable_mask,
     build_s_init,
-    compute_potts_joint_logits,
     compute_potts_single_logits,
 )
 from artios.model.output import PottsOutput
@@ -516,31 +515,23 @@ class ArtiosPotts(nn.Module):
 
             case PottsLossType.COMPOSITE:
                 if context.msa is not None:
-                    # MSAContext stores tokens/gap_mask as [B, N, n_msa];
-                    # composite_nll_loss_msa expects [B, n_msa, N].
-                    msa_tokens = (
-                        context.msa.tokens.transpose(-2, -1).contiguous().long()
-                    )
-                    msa_gap_mask = context.msa.gap_mask.transpose(-2, -1).contiguous()
                     per_position_nll = composite_nll_loss_msa(
                         h=output.h,
                         J=output.J,
                         edge_index=output.edge_index,
                         edge_mask=output.edge_mask,
-                        msa_tokens=msa_tokens,
-                        msa_gap_mask=msa_gap_mask,
+                        msa_tokens=context.msa.tokens,
+                        msa_gap_mask=context.msa.gap_mask,
                         eps=eps,
                     )
                 else:
-                    joint_logits, edge_mask = compute_potts_joint_logits(
-                        gt_seq, output.h, output.J, output.edge_index, output.edge_mask
-                    )
                     _, per_position_nll = composite_nll_loss(
-                        joint_logits,
-                        gt_seq,
-                        output.edge_index,
-                        edge_mask,
-                        mask,
+                        h=output.h,
+                        J=output.J,
+                        edge_index=output.edge_index,
+                        edge_mask=output.edge_mask,
+                        seq=gt_seq,
+                        node_mask=mask,
                     )
                 # Single-logits are used only for accuracy metrics — always
                 # derived from the query sequence so numbers stay comparable

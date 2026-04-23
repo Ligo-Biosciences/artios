@@ -131,8 +131,8 @@ def composite_nll_loss_msa(
     J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
     edge_index: Int[Tensor, "batch n_token neighbours"],
     edge_mask: Bool[Tensor, "batch n_token neighbours"],
-    msa_tokens: Int[Tensor, "batch n_msa n_token"],
-    msa_gap_mask: Bool[Tensor, "batch n_msa n_token"],
+    msa_tokens: Int[Tensor, "batch n_token n_msa"],
+    msa_gap_mask: Bool[Tensor, "batch n_token n_msa"],
     n_chunk: int = 8,
     eps: float = 1e-6,
 ) -> Float[Tensor, "batch n_token"]:
@@ -171,12 +171,14 @@ def composite_nll_loss_msa(
         J: Potts couplings [B, N, K, R, R].
         edge_index: Neighbour indices [B, N, K].
         edge_mask: Valid edge mask [B, N, K].
-        msa_tokens: MSA residue ids in STD_RESIDUES_AND_GAP [B, M, N].
-            Row 0 is the query; row 1..M-1 are homologs. Non-reference-
-            chain columns carry the gt residue id across every row.
+        msa_tokens: MSA residue ids in STD_RESIDUES_AND_GAP [B, N, M] —
+            matches ``MSAContext.tokens``. Column 0 is the query; columns
+            1..M-1 are homologs. Non-reference-chain rows carry the gt
+            residue id across every column.
         msa_gap_mask: True where ``msa_tokens == 31`` (real homolog gap
-            on a reference-chain position). False on non-reference-chain
-            positions (they hold gt residues, not gaps).
+            on a reference-chain position) [B, N, M] — matches
+            ``MSAContext.gap_mask``. False on non-reference-chain rows
+            (they hold gt residues, not gaps).
         n_chunk: Chunk size along ``n_msa`` for the joint-logits step.
             Default 8. Reduce if OOM.
         eps: Numerical-stability epsilon.
@@ -188,6 +190,13 @@ def composite_nll_loss_msa(
     """
     # Local import avoids a circular import on module load.
     from artios.model.modules.potts import compute_potts_joint_logits
+
+    # MSAContext stores tokens/gap_mask as [B, N, n_msa]; this loss
+    # iterates over the n_msa axis, so flip to [B, n_msa, N] once here
+    # rather than requiring the caller to do it. ``.contiguous()`` keeps
+    # the downstream chunked slicing cheap.
+    msa_tokens = msa_tokens.transpose(-2, -1).contiguous().long()
+    msa_gap_mask = msa_gap_mask.transpose(-2, -1).contiguous()
 
     B, M, N = msa_tokens.shape
     K = edge_index.shape[-1]
@@ -266,27 +275,28 @@ def composite_nll_loss_msa(
 
 
 def composite_nll_loss(
-    joint_logits: Float[
-        Tensor, "batch n_token neighbours num_residue_types num_residue_types"
-    ],
-    seq: Int[Tensor, "batch n_token"],
+    h: Float[Tensor, "batch n_token num_residue_types"],
+    J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
     edge_index: Int[Tensor, "batch n_token neighbours"],
     edge_mask: Bool[Tensor, "batch n_token neighbours"],
+    seq: Int[Tensor, "batch n_token"],
     node_mask: Bool[Tensor, "batch n_token"],
     eps: float = 1e-6,
 ) -> tuple[Float[Tensor, "batch"], Float[Tensor, "batch n_token"]]:
-    """Compute composite NLL loss from joint Potts logits.
+    """Compute composite NLL loss from Potts fields and couplings.
 
-    Computes log P(s_i, s_j | s_{-i,-j}) for each edge, then averages
-    over valid edges per node (with /2 for undirected double-counting)
-    and masked-means over positions.
+    Computes joint Potts logits via ``compute_potts_joint_logits``, then
+    log P(s_i, s_j | s_{-i,-j}) for each edge, averages over valid edges
+    per node (with /2 for undirected double-counting), and masked-means
+    over positions.
 
     Args:
-        joint_logits: Joint logits (negative energy) for state pairs [B, N, K, R, R].
-        seq: Ground truth sequence indices [B, N].
+        h: Potts fields [B, N, R].
+        J: Potts couplings [B, N, K, R, R].
         edge_index: Neighbour indices [B, N, K].
         edge_mask: Valid edge mask [B, N, K].
-        node_masl: Valid node mask [B, N].
+        seq: Ground truth sequence indices [B, N].
+        node_mask: Valid node mask [B, N].
         eps: Epsilon for numerical stability.
 
     Returns:
@@ -294,6 +304,12 @@ def composite_nll_loss(
             nll: Per-batch composite NLL [B].
             per_position_nll: Per-position composite NLL [B, N].
     """
+    # Local import avoids a circular import on module load.
+    from artios.model.modules.potts import compute_potts_joint_logits
+
+    joint_logits, combined_edge_mask = compute_potts_joint_logits(
+        seq, h, J, edge_index, edge_mask
+    )
     R = joint_logits.shape[-1]
     K = joint_logits.shape[2]
 
@@ -315,8 +331,8 @@ def composite_nll_loss(
     logp_ij = torch.gather(logp_at_sj, -1, S_i).squeeze(-1)  # [B, N, K]
 
     # Per-position NLL: average over valid edges, /2 since we double counted
-    edge_count = edge_mask.float().sum(dim=-1).clamp(min=eps)  # [B, N]
-    per_position_nll = -(edge_mask.float() * logp_ij).sum(dim=-1) / (
+    edge_count = combined_edge_mask.float().sum(dim=-1).clamp(min=eps)  # [B, N]
+    per_position_nll = -(combined_edge_mask.float() * logp_ij).sum(dim=-1) / (
         2 * edge_count
     )  # [B, N]
 

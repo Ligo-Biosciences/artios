@@ -18,7 +18,7 @@ from artios.model.generator import (
     PottsProposal,
     PottsSampler,
 )
-from artios.model.loss import composite_nll_loss, nll_loss
+from artios.model.loss import composite_nll_loss, composite_nll_loss_msa, nll_loss
 from artios.model.modules.mpnn import MPNN
 from artios.model.modules.penalty import (
     PenaltyCollection,
@@ -444,12 +444,138 @@ class ArtiosPotts(nn.Module):
         return output
 
     @disable_autocast
+    def _compute_loss_msa(
+        self,
+        output: PottsOutput,
+        context: FullContext,
+    ) -> tuple[Tensor, dict[str, Tensor]]:
+        """MSA-aware composite NLL loss.
+
+        Uses ``composite_nll_loss_msa`` to score every MSA row in a
+        vectorised (chunked) pass, then reduces per-row-uniform →
+        per-sample (weighted by masking-timestep sampler_weight) →
+        batch (masked by ``samp_valid`` to drop null-MSA samples
+        without NaN).
+
+        Entity-level metrics (nll, accuracy) are taken from row 0 of
+        the MSA (the query row) so they remain comparable to the
+        non-MSA numbers.
+        """
+        assert context.msa is not None  # guarded by compute_loss dispatch
+        gt_seq = context.token.restype.argmax(dim=-1)
+        is_resolved = context.mask.centre_atom_is_resolved
+        node_mask = output.is_masked & is_resolved  # [B, N]
+        eps = 1e-6
+
+        # Per-sample weight from the masking-timestep schedule.
+        sampler_weight = self.masking_sampler.get_loss_weights(output.timestep)
+
+        # Per-token weight for active-site upweighting (broadcast across n_msa
+        # inside composite_nll_loss_msa).
+        if self.loss_config.active_site_upweight > 1.0:
+            active_site = build_backbone_ligand_proximity_mask(
+                backbone_coordinate=context.coordinate.backbone_coordinate,
+                centre_coordinate=context.coordinate.centre_coordinate,
+                is_ligand_token=context.entity.is_ligand_token,
+                token_mask=context.mask.token_mask,
+                backbone_mask=context.mask.backbone_mask,
+                distance_cutoff=self.loss_config.active_site_distance,
+            )
+            position_weight = torch.where(
+                active_site, self.loss_config.active_site_upweight, 1.0
+            )
+        else:
+            position_weight = None
+
+        # MSAContext stores tokens/gap_mask as [B, N, n_msa]; the loss
+        # function expects [B, n_msa, N].
+        msa_tokens = context.msa.tokens.transpose(-2, -1).contiguous().long()
+        msa_gap_mask = context.msa.gap_mask.transpose(-2, -1).contiguous()
+        msa_chain_mask = context.msa.msa_chain_mask
+
+        samp_nll, samp_valid, per_pair_nll = composite_nll_loss_msa(
+            h=output.h,
+            J=output.J,
+            edge_index=output.edge_index,
+            edge_mask=output.edge_mask,
+            msa_tokens=msa_tokens,
+            msa_gap_mask=msa_gap_mask,
+            msa_chain_mask=msa_chain_mask,
+            node_mask=node_mask,
+            position_weight=position_weight,
+            eps=eps,
+        )
+        # Batch reduction: valid-masked mean so null-MSA samples don't
+        # dilute the average (they'd have zero gradient anyway). If the
+        # whole batch is null, fall back to zero without NaN.
+        samp_valid_f = samp_valid.float()
+        weighted = samp_nll * sampler_weight * samp_valid_f
+        loss = weighted.sum() / samp_valid_f.sum().clamp(min=1)
+
+        # Accuracy + per-entity metrics computed from gt_seq (row 0 of
+        # the MSA is the query; we score the model's single-logit
+        # prediction at each masked token).
+        logits = compute_potts_single_logits(
+            gt_seq, output.h, output.J, output.edge_index, output.edge_mask
+        )  # [B, N, R]
+        pred_tokens = logits.argmax(dim=-1)
+        correct = (pred_tokens == gt_seq).float()
+
+        # Per-position NLL for entity-level metrics: row 0 of per_pair_nll
+        # (the query row). Positions outside the MSA chain or outside the
+        # model-masked region carry zero; downstream per-entity masks drop
+        # those.
+        per_position_nll_query = per_pair_nll[:, 0]  # [B, N]
+
+        metrics: dict[str, Tensor] = {}
+        metrics["weighted_nll_loss"] = loss.detach()
+
+        entity_masks = {
+            "protein": context.entity.is_protein_token,
+            "dna": context.entity.is_dna_token,
+            "rna": context.entity.is_rna_token,
+            "ligand": context.entity.is_ligand_token,
+        }
+
+        for entity_name, entity_mask in entity_masks.items():
+            combined_mask = node_mask & entity_mask  # [B, N]
+
+            sum_nll = (per_position_nll_query * combined_mask).sum(dim=-1)  # [B]
+            count = combined_mask.sum(dim=-1).clamp(min=eps)  # [B]
+            per_batch_nll = sum_nll / count
+
+            sum_correct = (correct * combined_mask).sum(dim=-1)  # [B]
+            per_batch_acc = sum_correct / count
+
+            no_tokens = combined_mask.sum(dim=-1) == 0
+            per_batch_nll = torch.where(
+                no_tokens, torch.full_like(per_batch_nll, float("nan")), per_batch_nll
+            )
+            per_batch_acc = torch.where(
+                no_tokens, torch.full_like(per_batch_acc, float("nan")), per_batch_acc
+            )
+
+            metrics[f"nll_{entity_name}_loss"] = per_batch_nll
+            metrics[f"accuracy_{entity_name}"] = per_batch_acc
+
+        # Overall accuracy.
+        sum_correct_all = (correct * node_mask).sum(dim=-1)
+        count_all = node_mask.sum(dim=-1).clamp(min=eps)
+        metrics["accuracy"] = sum_correct_all / count_all
+
+        return loss, metrics
+
+    @disable_autocast
     def compute_loss(
         self,
         output: PottsOutput,
         context: FullContext,
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Compute loss from Potts parameters (pseudo or composite likelihood).
+
+        When ``context.msa`` is present, dispatches to the MSA-aware path
+        that averages composite NLL over MSA rows. Pseudo-likelihood is
+        not supported under MSA and raises.
 
         Args:
             output: PottsOutput containing h, J, masking info, and timestep.
@@ -458,6 +584,16 @@ class ArtiosPotts(nn.Module):
         Returns:
             Tuple of (loss tensor, metrics dict for logging).
         """
+        if context.msa is not None:
+            # PottsLossType is a str-Enum; configs pass plain strings, so use
+            # value-equality rather than identity to handle both cases.
+            if self.loss_config.loss_type != PottsLossType.COMPOSITE:
+                raise ValueError(
+                    "MSA loss is only implemented for the composite path. "
+                    f"Got loss_type={self.loss_config.loss_type!r}."
+                )
+            return self._compute_loss_msa(output, context)
+
         gt_seq = context.token.restype.argmax(dim=-1)
         labels = context.token.restype.float()
         is_resolved = context.mask.centre_atom_is_resolved

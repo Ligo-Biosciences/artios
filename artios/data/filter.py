@@ -26,7 +26,6 @@ from artios.common.ccd_sets import (
     CRYSTALLIZATION_AIDS,
     EXTRA_CRYSTALLIZATION_AIDS,
 )
-from artios.common.constants import BACKBONE_DEFS
 from artios.common.elements import METALS
 
 
@@ -732,49 +731,6 @@ class Filter(object):
         for bond in asymmetric_bonds:
             atom_array.bonds.remove_bond(bond[0], bond[1])
         return atom_array
-
-    @staticmethod
-    def remove_non_motif_residue_sidechains(atom_array: AtomArray) -> AtomArray:
-        """
-        Removes side chain atoms only from residues that aren't part of the motif. This is only performed
-        during motif training.
-
-        Args:
-            atom_array (AtomArray): Input atom array containing protein structure
-
-        Returns:
-            AtomArray: Modified atom array with the non-motif residue protein side chains removed.
-
-        Notes:
-        I don't really like the if logic to begin this function. Especially as in other contexts we also might not need all the sidechains
-        (say in binder design), so it feels like we're repeating filtering logic. It would be nice if this could be completely
-        unified.
-        """
-        assert hasattr(
-            atom_array, "is_motif"
-        ), "Atom array must have is_motif annotation."
-        assert hasattr(
-            atom_array, "is_motif_related"
-        ), "Atom array must have is_motif_related annotation."
-
-        mask = (
-            (atom_array.is_motif_related > 0)
-            | (atom_array.chain_mol_type == "ligand")
-            | (
-                (atom_array.chain_mol_type == "protein")
-                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["protein"]))
-            )
-            | (
-                (atom_array.chain_mol_type == "dna")
-                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["dna"]))
-            )
-            | (
-                (atom_array.chain_mol_type == "rna")
-                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["rna"]))
-            )
-        )
-
-        return atom_array[mask]
 
     @staticmethod
     def remove_disordered_fragments(atom_array: AtomArray) -> AtomArray:

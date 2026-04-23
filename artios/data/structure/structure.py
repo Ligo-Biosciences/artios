@@ -15,18 +15,11 @@ from typing import ClassVar
 import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
-from numpy.typing import NDArray
 
 from artios.common.constants import STD_RESIDUES
 from artios.data.structure import annotation
 from artios.utils.file_io import dump_atomarray_to_npz, load_atomarray_from_npz
-
-# Typed array aliases — encode dtype in the type system, shapes in comments.
-IntArray = NDArray[np.int64]
-Int32Array = NDArray[np.int32]
-BoolArray = NDArray[np.bool_]
-FloatArray = NDArray[np.float64]
-StrArray = NDArray[np.str_]
+from artios.utils.typing import Bool, Float, Int, Int32, Shaped, typecheck
 
 
 class _AnnotationGroup:
@@ -112,76 +105,85 @@ class _AnnotationGroup:
         )
 
 
+@typecheck
 @dataclass(frozen=True)
 class EntityIds(_AnnotationGroup):
     """Per-atom entity identification."""
 
     FIELD_NAME: ClassVar[str] = "entity_ids"
 
-    asym_id_int: IntArray  # [n_atom]
-    entity_id_int: IntArray  # [n_atom]
-    sym_id_int: IntArray  # [n_atom]
+    asym_id_int: Int[np.ndarray, "n_atom"]
+    entity_id_int: Int[np.ndarray, "n_atom"]
+    sym_id_int: Int[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class MoleculeIds(_AnnotationGroup):
     """Per-atom molecule identification (covalently connected units)."""
 
     FIELD_NAME: ClassVar[str] = "molecule_ids"
 
-    mol_id: Int32Array  # [n_atom]
-    entity_mol_id: Int32Array  # [n_atom]
-    mol_atom_index: Int32Array  # [n_atom]
+    mol_id: Int32[np.ndarray, "n_atom"]
+    entity_mol_id: Int32[np.ndarray, "n_atom"]
+    mol_atom_index: Int32[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class TypeMasks(_AnnotationGroup):
     """Per-atom molecular type classification."""
 
     FIELD_NAME: ClassVar[str] = "type_masks"
 
-    mol_type: StrArray  # [n_atom] "protein"|"rna"|"dna"|"ligand"
-    is_protein: IntArray  # [n_atom]
-    is_ligand: IntArray  # [n_atom]
-    is_dna: IntArray  # [n_atom]
-    is_rna: IntArray  # [n_atom]
+    # mol_type is numpy str_ (e.g. "protein"|"rna"|"dna"|"ligand"); jaxtyping
+    # has no string-specific marker, so Shaped enforces shape only.
+    mol_type: Shaped[np.ndarray, "n_atom"]
+    is_protein: Int[np.ndarray, "n_atom"]
+    is_ligand: Int[np.ndarray, "n_atom"]
+    is_dna: Int[np.ndarray, "n_atom"]
+    is_rna: Int[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class ReferenceConformer(_AnnotationGroup):
     """Per-atom reference conformer data from CCD."""
 
     FIELD_NAME: ClassVar[str] = "reference"
 
-    ref_pos: FloatArray  # [n_atom, 3]
-    ref_charge: IntArray  # [n_atom]
-    ref_mask: IntArray  # [n_atom]
-    ref_space_uid: IntArray  # [n_atom]
+    ref_pos: Float[np.ndarray, "n_atom 3"]
+    ref_charge: Int[np.ndarray, "n_atom"]
+    ref_mask: Int[np.ndarray, "n_atom"]
+    ref_space_uid: Int[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class DerivedAnnotations(_AnnotationGroup):
     """Per-atom annotations computed during the annotation pipeline."""
 
     FIELD_NAME: ClassVar[str] = "derived"
 
-    cano_seq_resname: StrArray  # [n_atom]
-    tokatom_idx: IntArray  # [n_atom]
-    modified_res_mask: IntArray  # [n_atom]
+    cano_seq_resname: Shaped[np.ndarray, "n_atom"]  # numpy str_
+    tokatom_idx: Int[np.ndarray, "n_atom"]
+    modified_res_mask: Int[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class TrainingAnnotations(_AnnotationGroup):
     """Optional per-atom annotations for training. Fields default to None."""
 
     FIELD_NAME: ClassVar[str] = "training"
 
-    is_resolved: BoolArray | None = None
-    plddt_m_rep_atom_mask: IntArray | None = None
-    pocket_id: IntArray | None = None
-    fragment_id: IntArray | None = None
+    is_resolved: Bool[np.ndarray, "n_atom"] | None = None
+    plddt_m_rep_atom_mask: Int[np.ndarray, "n_atom"] | None = None
+    pocket_id: Int[np.ndarray, "n_atom"] | None = None
+    fragment_id: Int[np.ndarray, "n_atom"] | None = None
 
 
+@typecheck
 @dataclass(frozen=True)
 class MotifAnnotation(_AnnotationGroup):
     """Per-atom motif masks. Only present when motif is active."""
@@ -189,10 +191,11 @@ class MotifAnnotation(_AnnotationGroup):
     FIELD_NAME: ClassVar[str] = "motif"
     REQUIRED: ClassVar[bool] = False
 
-    is_motif: IntArray  # [n_atom]
-    is_motif_related: IntArray  # [n_atom]
+    is_motif: Int[np.ndarray, "n_atom"]
+    is_motif_related: Int[np.ndarray, "n_atom"]
 
 
+@typecheck
 @dataclass(frozen=True)
 class TokenGrouping:
     """How atoms partition into tokens.
@@ -201,8 +204,8 @@ class TokenGrouping:
     Replaces both centre_atom_mask computation and TokenArray pre-computation.
     """
 
-    atom_token_index: IntArray  # [n_atom] — which token each atom belongs to
-    centre_atom_mask: BoolArray  # [n_atom]
+    atom_token_index: Int[np.ndarray, "n_atom"]
+    centre_atom_mask: Bool[np.ndarray, "n_atom"]
     n_tokens: int
 
 
@@ -425,12 +428,12 @@ class AnnotatedStructure:
         assert len(self.derived.cano_seq_resname) == n
 
     @cached_property
-    def centre_atom_indices(self) -> IntArray:
+    def centre_atom_indices(self) -> Int[np.ndarray, "n_tokens"]:
         """[n_tokens] indices into atom arrays for each token's centre."""
         return np.where(self.grouping.centre_atom_mask)[0]
 
     @cached_property
-    def token_centre_coords(self) -> FloatArray:
+    def token_centre_coords(self) -> Float[np.ndarray, "n_tokens 3"]:
         """[n_tokens, 3] coordinates of token centres."""
         return self.atoms.coord[self.centre_atom_indices]
 

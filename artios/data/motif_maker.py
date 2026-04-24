@@ -1,11 +1,20 @@
-"""
-Houses all the logic for generating motifs during model training.
+"""Stochastic motif sampler for model training.
 
-TODO: make the motif maker config its own dataclass / Pydantic object for cleaner access / initialization.
+Attached to an ``AnnotatedStructure`` via ``structure.with_sampled_motif(maker)``;
+returns a ``MotifAnnotation`` describing which atoms belong to the motif.
+
+The branches of ``sample()``:
+
+- ``_generate_ligand_motif_mask`` — centred on a ligand. Used on ligand complexes
+  with probability ``ligand_motif_prob``.
+- ``_generate_pocket_motif_mask`` — centred on a detected pocket. Used with
+  probability ``pocket_motif_prob`` when pocket annotations are present.
+- ``_generate_chain_motif_mask`` — fallback, centred on a random polymer atom.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from logging import getLogger
 from typing import TYPE_CHECKING, Any
 
@@ -22,117 +31,62 @@ if TYPE_CHECKING:
 logger = getLogger(__name__)
 
 
+@dataclass
 class MotifMaker:
-    """
-    Main class for generating motifs during model training. All methods work with
-    integer masks (0/1) to mark which atoms are part of the motif, consistent with
-    other masks like is_protein.
+    """Stochastic motif sampler. See module docstring for branch descriptions.
 
-    The different motif selection methods are as follows:
-
-    - _generate_ligand_motif_mask:
-        Generates a motif mask centered around a ligand. If the complex contains a ligand,
-        this method is picked with probability `ligand_motif_prob`. Otherwise,
-        _generate_chain_motif_mask is used.
-
-    - _generate_chain_motif_mask:
-        Generates a motif mask centered around a pocket-esque point on a polymer chain.
-
-    - _generate_motif_around_point_mask:
-        Generates a motif mask centered around a point, identifying residues within a sphere.
-
-    - _get_partial_residue_motif_mask:
-        Generates a partial residue motif mask using BFS on the residue bond graph.
+    Stored as a plain dataclass so ``MotifMaker(**config_dict)`` works from
+    ml_collections ConfigDict — any unknown key raises ``TypeError``. Dict-valued
+    fields accept str or int keys (config files typically stringify ints); they
+    get normalized to int and precomputed into parallel numpy arrays in
+    ``__post_init__`` so ``np.random.choice`` doesn't re-parse each call.
     """
 
-    def __init__(
-        self,
-        ligand_motif_prob: float = 0.8,
-        pocket_motif_prob: float = 0.8,
-        whole_ligand_prob: float = 0.7,
-        drop_ligand_motif_prob: float = 0.1,
-        whole_sidechain_prob: float = 0.2,
-        sidechain_seed_is_tip_prob: float = 0.1,
-        sidechain_seed_is_in_sphere_prob: float = 0.8,
-        sidechain_bfs_depth_prob: float = 0.5,
-        residue_inclusion_prob: float = 0.9,
-        use_tip_atoms_only_prob: float = 0.9,
-        r_min: float = 3.0,
-        r_max: float = 6.0,
-        max_motif_residues: int = 20,
-        motif_train_rate: float = 0.0,
-        complex_ligand_threshold: int = 5,
-        complex_ligand_preference_prob: float = 0.9,
-        ligand_region_count_probs: dict[str, float] = {
-            "1": 0.5,
-            "2": 0.4,
-            "3": 0.07,
-            "4": 0.03,
-        },
-        ligand_bfs_atom_count_probs: dict[str, float] = {
-            "1": 0.15,
-            "2": 0.25,
-            "3": 0.3,
-            "4": 0.2,
-            "5": 0.1,
-        },
-        ligand_fixed_size_bfs_prob: float = 0.9,
-        supplementary_ligand_distance: float = 5.0,
-        supplementary_ligand_prob: float = 0.5,
-        **kwargs,
-    ):
-        """
-        Args:
-            ligand_motif_prob (float): Probability _generate_ligand_motif_mask is used for ligand complexes.
-            pocket_motif_prob (float): Probability _generate_pocket_motif_mask is used for complexes with a pocket.
-            whole_ligand_prob (float): Probability the whole ligand is used in the motif.
-            drop_ligand_motif_prob (float): Probability of not including ligand atoms in the motif generated
-                around the ligand.
-            whole_sidechain_prob (float): Probability the whole sidechain is included vs partial.
-            sidechain_seed_is_tip_prob (float): Probability tip atom is used as seed.
-            sidechain_seed_is_in_sphere_prob (float): Probability in-sphere atom is used as seed.
-            sidechain_bfs_depth_prob (float): Probability parameter for geometric distribution of BFS depth.
-            residue_inclusion_prob (float): Probability of including a residue in sphere.
-            r_min (float): Minimum radius in angstroms for sphere search.
-            r_max (float): Maximum radius in angstroms for sphere search.
-            max_motif_residues (int): Maximum number of residues allowed in motif.
-            motif_train_rate (float): Training rate for motif generation.
-            use_tip_atoms_only_prob (float): Probability of using only tip atoms in the motif.
-            complex_ligand_threshold (int): Minimum atom count to classify a ligand as "complex".
-                Ligands with fewer atoms are considered "simple" (e.g., metal ions, small molecules).
-            complex_ligand_preference_prob (float): Probability of selecting from complex ligands
-                (if any exist) rather than sampling uniformly from all ligands.
-            ligand_region_count_probs (dict[str, float]): Mapping from number of regions (as string)
-                to probability. Defaults to {"1": 0.5, "2": 0.4, "3": 0.07, "4": 0.03}.
-            ligand_bfs_atom_count_probs (dict[str, float]): Mapping from number of atoms per BFS
-                region (as string) to probability. Defaults to {"1": 0.15, ..., "5": 0.1}.
-            ligand_fixed_size_bfs_prob (float): Probability of using fixed-size BFS (sampling from
-                ligand_bfs_atom_count_probs) vs proportion-based BFS. Defaults to 0.9.
-            supplementary_ligand_distance (float): Maximum distance (in Angstroms) from seed point
-                to consider nearby ligand atoms for supplementary ligand inclusion. Defaults to 5.0.
-            supplementary_ligand_prob (float): Probability of including each detected nearby ligand
-                chain as a supplementary ligand in the motif. Defaults to 0.5.
-        """
-        self.ligand_motif_prob = ligand_motif_prob
-        self.pocket_motif_prob = pocket_motif_prob
-        self.whole_ligand_prob = whole_ligand_prob
-        self.drop_ligand_motif_prob = drop_ligand_motif_prob
-        self.whole_sidechain_prob = whole_sidechain_prob
-        self.sidechain_seed_is_tip_prob = sidechain_seed_is_tip_prob
-        self.sidechain_seed_is_in_sphere_prob = sidechain_seed_is_in_sphere_prob
-        self.sidechain_bfs_depth_prob = sidechain_bfs_depth_prob
-        self.residue_inclusion_prob = residue_inclusion_prob
-        self.use_tip_atoms_only_prob = use_tip_atoms_only_prob
-        self.r_min = r_min
-        self.r_max = r_max
-        self.max_motif_residues = max_motif_residues
-        self.complex_ligand_threshold = complex_ligand_threshold
-        self.complex_ligand_preference_prob = complex_ligand_preference_prob
-        self.ligand_region_count_probs = ligand_region_count_probs
-        self.ligand_bfs_atom_count_probs = ligand_bfs_atom_count_probs
-        self.ligand_fixed_size_bfs_prob = ligand_fixed_size_bfs_prob
-        self.supplementary_ligand_distance = supplementary_ligand_distance
-        self.supplementary_ligand_prob = supplementary_ligand_prob
+    # --- Branch selection ----------------------------------------------------
+    ligand_motif_prob: float = 0.8
+    pocket_motif_prob: float = 0.8
+
+    # --- Ligand motif --------------------------------------------------------
+    whole_ligand_prob: float = 0.7
+    drop_ligand_motif_prob: float = 0.1
+    complex_ligand_threshold: int = 5
+    complex_ligand_preference_prob: float = 0.9
+    ligand_region_count_probs: dict[int, float] = field(
+        default_factory=lambda: {1: 0.5, 2: 0.4, 3: 0.07, 4: 0.03}
+    )
+    ligand_bfs_atom_count_probs: dict[int, float] = field(
+        default_factory=lambda: {1: 0.15, 2: 0.25, 3: 0.3, 4: 0.2, 5: 0.1}
+    )
+    ligand_fixed_size_bfs_prob: float = 0.9
+    supplementary_ligand_distance: float = 5.0
+    supplementary_ligand_prob: float = 0.5
+
+    # --- Around-a-point mask (shared by all branches) ------------------------
+    r_min: float = 3.0
+    r_max: float = 6.0
+    residue_inclusion_prob: float = 0.9
+    use_tip_atoms_only_prob: float = 0.9
+    whole_sidechain_prob: float = 0.2
+    max_motif_residues: int = 20
+
+    # --- Partial residue (sidechain BFS) -------------------------------------
+    sidechain_seed_is_tip_prob: float = 0.1
+    sidechain_seed_is_in_sphere_prob: float = 0.8
+    sidechain_bfs_depth_prob: float = 0.5
+
+    def __post_init__(self) -> None:
+        self.ligand_region_count_probs = {
+            int(k): v for k, v in self.ligand_region_count_probs.items()
+        }
+        self.ligand_bfs_atom_count_probs = {
+            int(k): v for k, v in self.ligand_bfs_atom_count_probs.items()
+        }
+        self._region_counts, self._region_probs = _dist_to_arrays(
+            self.ligand_region_count_probs
+        )
+        self._bfs_counts, self._bfs_probs = _dist_to_arrays(
+            self.ligand_bfs_atom_count_probs
+        )
 
     def sample(self, structure: AnnotatedStructure) -> MotifAnnotation:
         """Sample a motif overlay from a loaded structure."""
@@ -179,25 +133,15 @@ class MotifMaker:
         return is_motif_related
 
     def _sample_bfs_atom_count(self, ligand_graph_size: int) -> int:
-        """
-        Sample the number of atoms to collect via BFS for a ligand region.
+        """Number of atoms to collect via BFS for a ligand region.
 
-        With probability ligand_fixed_size_bfs_prob, samples from ligand_bfs_atom_count_probs.
-        Otherwise, uses proportion-based sampling.
-
-        Args:
-            ligand_graph_size (int): Number of nodes in the ligand graph.
-
-        Returns:
-            int: Number of atoms to collect via BFS.
+        With probability ``ligand_fixed_size_bfs_prob``, samples from
+        ``ligand_bfs_atom_count_probs``; otherwise proportion-based.
         """
         if np.random.rand() < self.ligand_fixed_size_bfs_prob:
-            atom_counts = [int(k) for k in self.ligand_bfs_atom_count_probs.keys()]
-            atom_probs = list(self.ligand_bfs_atom_count_probs.values())
-            return int(np.random.choice(atom_counts, p=atom_probs))
-        else:
-            ligand_proportion = np.random.rand()
-            return max(1, int(ligand_proportion * ligand_graph_size))
+            return int(np.random.choice(self._bfs_counts, p=self._bfs_probs))
+        ligand_proportion = np.random.rand()
+        return max(1, int(ligand_proportion * ligand_graph_size))
 
     def _add_supplementary_ligands(
         self,
@@ -349,15 +293,11 @@ class MotifMaker:
             graph_nodes = list(ligand_graph.nodes())
 
             if len(graph_nodes) == 0:
-                # logger.warning("No nodes in ligand graph. Returning empty motif mask.")
-                # logger.warning(
-                #     f"Number of ligand atoms involved in this empty graph: {len(ligand_array)}"
-                # )
                 return is_motif
 
-            region_counts = [int(k) for k in self.ligand_region_count_probs.keys()]
-            region_probs = list(self.ligand_region_count_probs.values())
-            num_regions = int(np.random.choice(region_counts, p=region_probs))
+            num_regions = int(
+                np.random.choice(self._region_counts, p=self._region_probs)
+            )
 
             seed_atoms = select_non_adjacent_seeds(
                 ligand_graph, graph_nodes, num_regions
@@ -519,9 +459,6 @@ class MotifMaker:
             atoms_in_sphere_mask = atoms_in_sphere_mask & optional_mask
 
         if not atoms_in_sphere_mask.any():
-            # logger.warning(
-            #     "No polymer atoms close to seed point. Setting all is_motif to 0."
-            # )
             return is_motif
 
         # Get unique residues in sphere
@@ -538,7 +475,6 @@ class MotifMaker:
         unique_ref_space_uids = np.unique(atoms_in_sphere.ref_space_uid)
 
         if len(unique_ref_space_uids) == 0:
-            # logger.warning("No residues in sphere. Setting all is_motif to 0.")
             return is_motif
 
         # Process each residue
@@ -592,7 +528,6 @@ class MotifMaker:
         graph_nodes = list(G_res.nodes())
 
         if len(graph_nodes) == 0:
-            # logger.warning("No nodes in residue graph. Setting all is_motif to 0.")
             return partial_motif_mask
 
         # Pick seed atom
@@ -633,6 +568,11 @@ class MotifMaker:
         partial_motif_mask[selected_indices] = 1
 
         return partial_motif_mask
+
+
+def _dist_to_arrays(dist: dict[int, float]) -> tuple[np.ndarray, np.ndarray]:
+    """Convert a ``{value: prob}`` dict to parallel arrays for ``np.random.choice``."""
+    return np.array(list(dist.keys())), np.array(list(dist.values()))
 
 
 def get_random_seed_atom_from_array(atom_array: AtomArray) -> np.ndarray:

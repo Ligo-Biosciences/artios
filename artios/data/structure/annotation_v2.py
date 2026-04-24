@@ -25,7 +25,10 @@ import logging
 import typing
 from collections import Counter
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from artios.data.structure.structure import AnnotatedStructure
 
 import numpy as np
 from biotite.structure import (
@@ -463,12 +466,12 @@ def unresolve_low_plddt_residues(
 
 
 def add_pocket_annotation(
-    atom_array: AtomArray,
+    structure: "AnnotatedStructure",
     plddt_cutoff: float | None = None,
     max_atoms: int = 20_000,
-) -> AtomArray:
-    """Run Pocketeer on the full structure and write ``pocket_id`` onto
-    the atom_array.
+) -> "AnnotatedStructure":
+    """Run Pocketeer and return a new ``AnnotatedStructure`` with
+    ``training.pocket_id`` populated.
 
     Skips detection for structures above ``max_atoms`` atoms (Delaunay
     tessellation is O(n²) memory; zero-fill the annotation instead so
@@ -478,42 +481,51 @@ def add_pocket_annotation(
     # in every image.
     from artios.data.pocket import find_pockets
 
-    if len(atom_array) > max_atoms:
-        logger.warning(
-            "Skipping pocket detection: %d atoms > %d", len(atom_array), max_atoms
-        )
-        atom_array.set_annotation("pocket_id", np.zeros(len(atom_array), dtype=int))
-        return atom_array
+    n = len(structure.atoms)
+    if n > max_atoms:
+        logger.warning("Skipping pocket detection: %d atoms > %d", n, max_atoms)
+        pocket_id = np.zeros(n, dtype=int)
+    else:
+        pockets = find_pockets(structure.atoms, plddt_cutoff=plddt_cutoff)
+        pocket_id = np.zeros(n, dtype=int)
+        for i, pocket in enumerate(pockets):
+            atom_indices: set[int] = set()
+            for sphere in pocket.spheres:
+                atom_indices.update(sphere.atom_indices)
+            pocket_id[list(atom_indices)] = i + 1
 
-    pockets = find_pockets(atom_array, plddt_cutoff=plddt_cutoff)
-    pocket_id = np.zeros(len(atom_array), dtype=int)
-    for i, pocket in enumerate(pockets):
-        atom_indices: set[int] = set()
-        for sphere in pocket.spheres:
-            atom_indices.update(sphere.atom_indices)
-        pocket_id[list(atom_indices)] = i + 1
-
-    atom_array.set_annotation("pocket_id", pocket_id)
-    return atom_array
+    return dataclasses.replace(
+        structure,
+        training=dataclasses.replace(structure.training, pocket_id=pocket_id),
+    )
 
 
 def add_pocket_annotation_per_fragment(
-    atom_array: AtomArray, plddt_cutoff: float | None = None
-) -> AtomArray:
-    """Run Pocketeer independently on each fragment.
+    structure: "AnnotatedStructure", plddt_cutoff: float | None = None
+) -> "AnnotatedStructure":
+    """Run Pocketeer independently on each fragment; return a new
+    ``AnnotatedStructure`` with ``training.pocket_id`` populated.
 
     Distillation pipeline: the atom-density filter inside Pocketeer
     behaves differently on a single fragment vs the full structure, so
     per-fragment detection gives more consistent results across samples.
 
-    Requires ``fragment_id`` to already be set on the atom_array; each
-    fragment with ``id != -1`` gets its own pocket detection pass, and
-    pocket ids are numbered globally across the structure.
+    Requires ``structure.training.fragment_id`` to be set already
+    (``add_fragment_annotation`` runs first). Each fragment with
+    ``id != -1`` gets its own pocket detection pass; pocket ids are
+    numbered globally across the structure.
     """
     from artios.data.pocket import find_pockets
 
-    pocket_id = np.zeros(len(atom_array), dtype=int)
-    fragment_ids = atom_array.fragment_id
+    if structure.training.fragment_id is None:
+        raise ValueError(
+            "add_pocket_annotation_per_fragment: fragment_id is not set; "
+            "run add_fragment_annotation first."
+        )
+
+    n = len(structure.atoms)
+    pocket_id = np.zeros(n, dtype=int)
+    fragment_ids = structure.training.fragment_id
     unique_frags = np.unique(fragment_ids)
     unique_frags = unique_frags[unique_frags != -1]
 
@@ -521,7 +533,7 @@ def add_pocket_annotation_per_fragment(
     for frag_id in unique_frags:
         frag_mask = fragment_ids == frag_id
         full_indices = np.where(frag_mask)[0]
-        frag_atoms = atom_array[frag_mask]
+        frag_atoms = structure.atoms[frag_mask]
         pockets = find_pockets(frag_atoms, plddt_cutoff=plddt_cutoff)
         for pocket in pockets:
             local_atom_indices: set[int] = set()
@@ -530,23 +542,58 @@ def add_pocket_annotation_per_fragment(
             pocket_id[full_indices[list(local_atom_indices)]] = next_pocket_id
             next_pocket_id += 1
 
-    atom_array.set_annotation("pocket_id", pocket_id)
-    return atom_array
+    return dataclasses.replace(
+        structure,
+        training=dataclasses.replace(structure.training, pocket_id=pocket_id),
+    )
 
 
-def add_fragment_annotation(atom_array: AtomArray) -> AtomArray:
-    """Spectral-bisection + spatial-clustering fragment detection,
-    filtered through the distillation-pipeline pre-pocket thresholds.
+def add_fragment_annotation(structure: "AnnotatedStructure") -> "AnnotatedStructure":
+    """Spectral-bisection + spatial-clustering fragment detection on
+    ``AnnotatedStructure``.
 
     Fragments failing any non-None threshold (``min_plddt``,
     ``min_length``, the Rg length bound, ``min_sse_entropy``, etc.) are
     marked with ``fragment_id = -1``. Ref: AF3 SI 5.9.3.
+
+    ``FragmentMaker`` still mutates an ``AtomArray`` in place — we pass
+    a copy of ``structure.atoms`` so the frozen structure stays
+    immutable, then extract the ``fragment_id`` annotation onto
+    ``training.fragment_id``.
     """
     from artios.data.engineering.pipeline.thresholds import PRE_POCKET_THRESHOLDS
     from artios.data.fragment import FragmentMaker
 
     maker = FragmentMaker(thresholds=PRE_POCKET_THRESHOLDS)
-    return maker.add_fragment_annotation(atom_array)
+    scratch = structure.atoms.copy()
+    maker.add_fragment_annotation(scratch)
+    return dataclasses.replace(
+        structure,
+        training=dataclasses.replace(
+            structure.training, fragment_id=scratch.fragment_id
+        ),
+    )
+
+
+def remove_disordered_fragments(
+    structure: "AnnotatedStructure",
+) -> "AnnotatedStructure":
+    """Drop atoms whose ``fragment_id`` is ``-1`` (disordered / filtered
+    out by ``add_fragment_annotation``).
+
+    Structure-level counterpart to ``Filter.remove_disordered_fragments``;
+    lives here so the distillation training-prep chain
+    (``add_fragment_annotation → remove_disordered_fragments →
+    add_pocket_annotation_per_fragment``) stays on ``AnnotatedStructure``
+    end-to-end.
+    """
+    if structure.training.fragment_id is None:
+        raise ValueError(
+            "remove_disordered_fragments: fragment_id is not set; "
+            "run add_fragment_annotation first."
+        )
+    mask = structure.training.fragment_id != -1
+    return structure.select_atoms(mask)
 
 
 # ---------------------------------------------------------------------------
@@ -845,7 +892,11 @@ class TypeMasks(_AnnotationGroup):
 
     # mol_type is numpy str_ (e.g. "protein"|"rna"|"dna"|"ligand"); jaxtyping
     # has no string-specific marker, so Shaped enforces shape only.
+    # chain_mol_type is the per-chain majority vote (same dtype); is_* masks
+    # are derived from it, but chain_mol_type itself is exposed as a field
+    # because motif_maker.py consumes it directly as a string annotation.
     mol_type: Shaped[np.ndarray, "n_atom"]
+    chain_mol_type: Shaped[np.ndarray, "n_atom"]
     is_protein: Int[np.ndarray, "n_atom"]
     is_ligand: Int[np.ndarray, "n_atom"]
     is_dna: Int[np.ndarray, "n_atom"]
@@ -853,12 +904,13 @@ class TypeMasks(_AnnotationGroup):
 
     @classmethod
     def compute(cls, atom_array: AtomArray, sequences: dict[str, str]) -> TypeMasks:
-        """Compute mol_type + is_{protein,ligand,dna,rna} masks.
+        """Compute mol_type + chain_mol_type + is_{protein,ligand,dna,rna} masks.
 
         ``sequences`` is ``{label_entity_id: canonical_sequence}``; entities
         absent from this dict are treated as ligand. mol_type is per-residue
-        from the CCD lookup; is_* masks are chain-level (each chain's most
-        frequent mol_type wins — matches the legacy AF3 pipeline).
+        from the CCD lookup; chain_mol_type and is_* masks are chain-level
+        (each chain's most frequent mol_type wins — matches the legacy AF3
+        pipeline).
         """
         cls._require_annotations(atom_array)
         n = len(atom_array)
@@ -879,6 +931,7 @@ class TypeMasks(_AnnotationGroup):
 
         return cls(
             mol_type=mol_type,
+            chain_mol_type=chain_mol_type,
             is_protein=(chain_mol_type == "protein").astype(int),
             is_ligand=(chain_mol_type == "ligand").astype(int),
             is_dna=(chain_mol_type == "dna").astype(int),

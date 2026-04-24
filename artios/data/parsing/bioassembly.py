@@ -37,7 +37,7 @@ from artios.data import filter as filter_module
 from artios.data.filter import Filter
 from artios.data.parsing import _biotite_compat, residue_repair
 from artios.data.parsing.mmcif_reader import MmcifHeader, MmcifReader
-from artios.data.structure import AnnotatedStructure, annotation, annotation_v2
+from artios.data.structure import AnnotatedStructure, annotation_v2
 
 logger = logging.getLogger(__name__)
 
@@ -328,125 +328,121 @@ def _clean_and_repair(
     return atom_array
 
 
-def _prepare_for_filters(
-    atom_array: AtomArray,
-    *,
-    entity_poly_type: dict[str, str],
-) -> AtomArray:
-    """Pre-expand annotations that survive ``expand_assembly``.
+def _remove_unresolved_mols(structure: AnnotatedStructure) -> AnnotatedStructure:
+    """Drop mols where every atom is unresolved.
 
-    Five of the seven calls here are redundant with the final
-    ``AnnotatedStructure.annotate`` pass — they stay in this phase to
-    preserve byte-for-byte parity while ``get_bioassembly`` is being
-    decomposed. Only ``mol_type`` (via ``add_token_mol_type``) and
-    ``centre_atom_mask`` are actually read by the post-expand filter
-    gate; the rest get overwritten by ``DerivedAnnotations.compute`` /
-    ``TypeMasks.compute`` / ``TrainingAnnotations.compute`` in the
-    terminal annotation step. A follow-up will prune the redundant
-    calls — tracked in the module docstring's Phase 1b note.
-
-    Args:
-        atom_array: Cleaned+repaired AtomArray.
-        entity_poly_type: ``{label_entity_id: poly_type}``. Passed to
-            ``add_token_mol_type`` as its ``sequences`` argument; the
-            legacy function only reads ``.keys()`` so the type name
-            mismatch is benign.
+    Reads ``molecule_ids.mol_id`` and ``training.is_resolved`` off the
+    typed groups directly — no flatten round-trip.
     """
-    atom_array = annotation.add_token_mol_type(atom_array, entity_poly_type)
-    atom_array = annotation.add_centre_atom_mask(atom_array)
-    atom_array = annotation.add_atom_mol_type_mask(atom_array)
-    atom_array = annotation.add_plddt_m_rep_atom_mask(atom_array)
-    atom_array = annotation.add_cano_seq_resname(atom_array)
-    atom_array = annotation.add_tokatom_idx(atom_array)
-    atom_array = annotation.add_modified_res_mask(atom_array)
-    return atom_array
+    mol_id = structure.molecule_ids.mol_id
+    is_resolved = structure.training.is_resolved
+    valid = [mid for mid in np.unique(mol_id) if is_resolved[mol_id == mid].any()]
+    mask = np.isin(mol_id, valid)
+    return structure.select_atoms(mask)
 
 
-def _apply_assembly_filters(
-    atom_array: AtomArray,
+def _too_many_chains_filter(
+    structure: AnnotatedStructure,
     *,
-    entity_poly_type: dict[str, str],
-    max_chains_num: int = 20,
-    max_tokens_num: int = 5120,
-) -> AtomArray | None:
-    """Post-expand filter gate.
+    core_chain_ids: np.ndarray,
+    max_chains_num: int,
+    max_tokens_num: int,
+) -> AnnotatedStructure | None:
+    """Structure-native wrapper over ``Filter.too_many_chains_filter``.
 
-    Sequence:
-
-    1. ``unique_chain_and_add_ids`` — rename duplicated chain_ids
-       (``A A B → A0 A1 B0``) so the clash filter treats symmetry
-       copies as distinct.
-    2. ``add_mol_id`` — filters below group atoms by connected component.
-    3. ``remove_unresolved_mols``.
-    4. ``too_many_chains_filter`` — returns ``None`` when no interface
-       token within the radius exists (propagated up as skip).
-    5. ``remove_clashing_chains``.
-    6. ``remove_asymmetric_polymer_ligand_bonds``.
-    7. ``find_equiv_mol_and_assign_ids`` — final entity_mol_id pass;
-       redundant with ``order_atoms_by_mol`` inside the terminal
-       annotation step but kept for parity (see docstring on
-       ``_prepare_for_filters``).
-
-    ``core_indices`` is re-derived after each filter that drops atoms
-    because chain membership shifts; the helper tracks the original
-    core chain ids and rematches them against the surviving chain_id
-    array.
+    Reuses the legacy clustering logic (CellList + distance-based chain
+    ranking) on a flattened view of the structure, then re-applies the
+    surviving ``mol_id`` set as a mask to slice every group consistently.
     """
-    atom_array = annotation.unique_chain_and_add_ids(atom_array)
-
-    core_indices = get_core_indices(atom_array)
-    if core_indices is not None:
-        ori_chain_ids = np.unique(atom_array.chain_id[core_indices])
-    else:
-        ori_chain_ids = np.unique(atom_array.chain_id)
-
-    atom_array = annotation.add_mol_id(atom_array)
-    atom_array = Filter.remove_unresolved_mols(atom_array)
-
-    core_indices = np.where(np.isin(atom_array.chain_id, ori_chain_ids))[0]
-    atom_array, _input_chains_num = Filter.too_many_chains_filter(
-        atom_array,
+    flat = structure.to_atom_array()
+    core_indices = np.where(np.isin(flat.chain_id, core_chain_ids))[0]
+    filtered, _ = Filter.too_many_chains_filter(
+        flat,
         core_indices=core_indices,
         max_chains_num=max_chains_num,
         max_tokens_num=max_tokens_num,
     )
-    if atom_array is None:
+    if filtered is None:
         return None
-
-    core_indices = np.where(np.isin(atom_array.chain_id, ori_chain_ids))[0]
-    atom_array, _removed = Filter.remove_clashing_chains(
-        atom_array, core_indices=core_indices
-    )
-    atom_array = Filter.remove_asymmetric_polymer_ligand_bonds(
-        atom_array, entity_poly_type
-    )
-    atom_array = annotation.find_equiv_mol_and_assign_ids(atom_array, entity_poly_type)
-    return atom_array
+    kept_mol_ids = np.unique(filtered.mol_id)
+    mask = np.isin(structure.molecule_ids.mol_id, kept_mol_ids)
+    return structure.select_atoms(mask)
 
 
-def _annotate_final(
-    atom_array: AtomArray,
+def _remove_clashing_chains(
+    structure: AnnotatedStructure,
     *,
-    sequences: dict[str, str],
+    core_chain_ids: np.ndarray,
+) -> AnnotatedStructure:
+    """Structure-native wrapper over ``Filter.remove_clashing_chains``."""
+    flat = structure.to_atom_array()
+    core_indices = np.where(np.isin(flat.chain_id, core_chain_ids))[0]
+    _, removed_chain_ids = Filter.remove_clashing_chains(
+        flat, core_indices=core_indices
+    )
+    mask = ~np.isin(structure.atoms.chain_id, removed_chain_ids)
+    return structure.select_atoms(mask)
+
+
+def _remove_asymmetric_polymer_ligand_bonds(
+    structure: AnnotatedStructure,
     entity_poly_type: dict[str, str],
 ) -> AnnotatedStructure:
-    """Canonical two-step annotation.
+    """Remove inter-chain polymer-ligand bonds that aren't symmetric
+    across every copy of the entity.
 
-    ``populate_ccd_reference`` is the pre-pass required by
-    ``AnnotatedStructure.annotate(include_ref_conformer=True)`` — it
-    writes ``ref_pos``/``ref_charge``/``ref_mask`` (and ``res_perm``)
-    from the CCD components dictionary, handling SMILES ligands
-    (``res_name == "UNL"``) by copying the RDKit conformer coords.
-    ``annotate`` then computes every typed group in one pass.
+    Mutates bonds only — no atoms are dropped. ``Filter``'s legacy
+    implementation reads only biotite-native atom fields (chain_id,
+    label_entity_id, res_id, res_name, atom_name) + bonds; all on
+    ``structure.atoms`` directly without a flatten round-trip.
     """
-    atom_array = annotation_v2.populate_ccd_reference(atom_array)
-    return AnnotatedStructure.annotate(
-        atom_array,
-        sequences=sequences,
-        entity_poly_type=entity_poly_type,
-        include_ref_conformer=True,
-        include_training_masks=True,
+    new_atoms = structure.atoms.copy()
+    new_atoms = Filter.remove_asymmetric_polymer_ligand_bonds(
+        new_atoms, entity_poly_type
     )
+    return dataclasses.replace(structure, atoms=new_atoms)
+
+
+def _apply_assembly_filters(
+    structure: AnnotatedStructure,
+    *,
+    entity_poly_type: dict[str, str],
+    max_chains_num: int = 20,
+    max_tokens_num: int = 5120,
+) -> AnnotatedStructure | None:
+    """Post-annotate filter gate (AnnotatedStructure-native).
+
+    Runs the four bioassembly filters in the legacy order:
+    ``remove_unresolved_mols`` → ``too_many_chains_filter`` →
+    ``remove_clashing_chains`` → ``remove_asymmetric_polymer_ligand_bonds``.
+    Returns ``None`` when ``too_many_chains_filter`` finds no viable
+    interface token (propagated upward as a skip).
+
+    ``core_chain_ids`` is derived once from the ``assembly_1`` annotation
+    ``expand_assembly`` writes — it survives ``annotate``'s strip pass
+    because no group owns it. ``structure.select_atoms`` preserves
+    chain_id identity, so one derivation is enough (the legacy pipeline
+    re-derived ``core_indices`` between every filter because indices
+    shift, but chain_ids don't).
+    """
+    cats = structure.atoms.get_annotation_categories()
+    if "assembly_1" in cats:
+        core_chain_ids = np.unique(structure.atoms.chain_id[structure.atoms.assembly_1])
+    else:
+        core_chain_ids = np.unique(structure.atoms.chain_id)
+
+    structure = _remove_unresolved_mols(structure)
+    structure = _too_many_chains_filter(
+        structure,
+        core_chain_ids=core_chain_ids,
+        max_chains_num=max_chains_num,
+        max_tokens_num=max_tokens_num,
+    )
+    if structure is None:
+        return None
+    structure = _remove_clashing_chains(structure, core_chain_ids=core_chain_ids)
+    structure = _remove_asymmetric_polymer_ligand_bonds(structure, entity_poly_type)
+    return structure
 
 
 def _count_protein_chains(
@@ -526,36 +522,32 @@ def load_bioassembly(
     if atom_array is None or len(atom_array) == 0:
         return None
 
-    atom_array = _prepare_for_filters(
-        atom_array, entity_poly_type=header.entity_poly_type
-    )
-
     atom_array = expand_assembly(atom_array, reader.cif, assembly_id)
     if len(atom_array) == 0:
         return None
     atom_array.coord[~atom_array.is_resolved, :] = 0.0
 
-    atom_array = _apply_assembly_filters(
+    # Annotate once — the filter gate below reads ``mol_id`` /
+    # ``centre_atom_mask`` / ``is_resolved`` off the typed groups.
+    atom_array = annotation_v2.populate_ccd_reference(atom_array)
+    structure = AnnotatedStructure.annotate(
         atom_array,
+        sequences=header.sequences,
+        entity_poly_type=header.entity_poly_type,
+        include_ref_conformer=True,
+        include_training_masks=True,
+    )
+
+    structure = _apply_assembly_filters(
+        structure,
         entity_poly_type=header.entity_poly_type,
         max_chains_num=max_chains_num,
         max_tokens_num=max_tokens_num,
     )
-    if atom_array is None:
+    if structure is None:
         return None
 
-    structure = _annotate_final(
-        atom_array,
-        sequences=header.sequences,
-        entity_poly_type=header.entity_poly_type,
-    )
-    # Pocket detection runs on the flattened post-annotate array (legacy
-    # ordering); rebuild the structure so pocket_id lands on
-    # training.pocket_id rather than riding as a stringly-typed
-    # AtomArray annotation.
-    atom_array = structure.to_atom_array()
-    atom_array = annotation_v2.add_pocket_annotation(atom_array)
-    structure = AnnotatedStructure.from_atom_array(atom_array)
+    structure = annotation_v2.add_pocket_annotation(structure)
 
     return Bioassembly(
         structure=structure,
@@ -563,9 +555,9 @@ def load_bioassembly(
         header=header,
         num_assembly_polymer_chains=num_chains,
         num_prot_chains=_count_protein_chains(
-            atom_array, entity_poly_type=header.entity_poly_type
+            structure.atoms, entity_poly_type=header.entity_poly_type
         ),
-        num_tokens=int(atom_array.centre_atom_mask.sum()),
+        num_tokens=structure.grouping.n_tokens,
     )
 
 
@@ -613,41 +605,33 @@ def load_distillation_bioassembly(
     if len(atom_array) == 0:
         return None
 
-    atom_array = _prepare_for_filters(
-        atom_array, entity_poly_type=header.entity_poly_type
-    )
-
-    # No expand, no filters — chain canonicalization + mol_id are run
-    # directly so the terminal annotation step has unique chain ids and
-    # equivalent-mol ids to read.
-    atom_array = annotation.unique_chain_and_add_ids(atom_array)
-    atom_array = annotation.find_equiv_mol_and_assign_ids(
-        atom_array, header.entity_poly_type
-    )
-
-    structure = _annotate_final(
+    # Annotate — ``canonicalize_chain_ids`` + ``order_atoms_by_mol``
+    # inside ``AnnotatedStructure.annotate`` subsume the legacy
+    # pre-annotate v1 calls (``unique_chain_and_add_ids`` +
+    # ``find_equiv_mol_and_assign_ids``).
+    atom_array = annotation_v2.populate_ccd_reference(atom_array)
+    structure = AnnotatedStructure.annotate(
         atom_array,
         sequences=reader.sequences_for(atom_array),
         entity_poly_type=header.entity_poly_type,
-    )
-    atom_array = structure.to_atom_array()
-
-    # Distillation-specific training annotations.
-    atom_array = annotation_v2.add_fragment_annotation(atom_array)
-    atom_array = Filter.remove_disordered_fragments(atom_array)
-    atom_array = annotation_v2.add_pocket_annotation_per_fragment(
-        atom_array, plddt_cutoff=70.0
+        include_ref_conformer=True,
+        include_training_masks=True,
     )
 
-    structure = AnnotatedStructure.from_atom_array(atom_array)
+    # Distillation-specific training annotations — all on AnnotatedStructure.
+    structure = annotation_v2.add_fragment_annotation(structure)
+    structure = annotation_v2.remove_disordered_fragments(structure)
+    structure = annotation_v2.add_pocket_annotation_per_fragment(
+        structure, plddt_cutoff=70.0
+    )
 
     return Bioassembly(
         structure=structure,
         header=header,
         num_prot_chains=_count_protein_chains(
-            atom_array, entity_poly_type=header.entity_poly_type
+            structure.atoms, entity_poly_type=header.entity_poly_type
         ),
-        num_tokens=int(atom_array.centre_atom_mask.sum()),
+        num_tokens=structure.grouping.n_tokens,
         # assembly_id and num_assembly_polymer_chains stay None — the
         # distillation path has no pdbx_struct_assembly expansion.
     )

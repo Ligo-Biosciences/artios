@@ -16,7 +16,6 @@ from biotite.structure import AtomArray
 from artios.data.parsing.bioassembly import (
     _clean_and_repair,
     _count_protein_chains,
-    _prepare_for_filters,
 )
 
 
@@ -94,60 +93,6 @@ class TestCleanAndRepair:
         )
 
         assert out is None
-
-
-# ---------------------------------------------------------------------------
-# _prepare_for_filters
-# ---------------------------------------------------------------------------
-
-
-class TestPrepareForFilters:
-    def test_writes_annotations_needed_by_downstream_filters(self):
-        """The filter gate reads ``mol_type`` (via token type checks) and
-        ``centre_atom_mask`` (via too_many_chains / remove_clashing). If
-        either is missing after ``_prepare_for_filters``, the filters
-        AttributeError deep in the stack — this test catches that at the
-        step boundary.
-        """
-        aa = _build_aa(
-            chain_id=["A"] * 3,
-            res_id=[1, 1, 1],
-            res_name=["ALA", "ALA", "ALA"],
-            atom_name=["N", "CA", "C"],
-            element=["N", "C", "C"],
-            label_entity_id=["e1"] * 3,
-        )
-        out = _prepare_for_filters(aa, entity_poly_type={"e1": "polypeptide(L)"})
-
-        cats = out.get_annotation_categories()
-        assert "mol_type" in cats
-        assert "centre_atom_mask" in cats
-        # CA is the token-centre for a standard amino acid — verify
-        # the mask isn't just written zeros.
-        assert out.centre_atom_mask[out.atom_name == "CA"].sum() == 1
-
-    def test_does_not_reorder_atoms(self):
-        """``expand_assembly`` runs next and relies on atom order. The v1
-        annotations this step writes are pure annotations — they must
-        not permute the array. A refactor that accidentally reorders
-        (e.g. by swapping to ``order_atoms_by_mol``) would corrupt the
-        bioassembly expansion.
-        """
-        aa = _build_aa(
-            chain_id=["A", "A", "B", "B"],
-            res_id=[1, 1, 1, 1],
-            res_name=["ALA", "ALA", "ALA", "ALA"],
-            atom_name=["N", "CA", "N", "CA"],
-            element=["N", "C", "N", "C"],
-            label_entity_id=["e1"] * 4,
-        )
-        before_chain_id = aa.chain_id.copy()
-        before_atom_name = aa.atom_name.copy()
-
-        out = _prepare_for_filters(aa, entity_poly_type={"e1": "polypeptide(L)"})
-
-        np.testing.assert_array_equal(out.chain_id, before_chain_id)
-        np.testing.assert_array_equal(out.atom_name, before_atom_name)
 
 
 # ---------------------------------------------------------------------------

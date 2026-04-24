@@ -448,14 +448,14 @@ class ContextGenerator:
         )
 
     def _build_msa_context(self) -> MSAContext | None:
-        """Expand the compact MSA ([n_msa, l_chain_cropped]) to the
-        token-aligned ``MSAContext`` ([n_token, n_msa]).
+        """Expand the compact MSA ([n_msa_plus_one, l_chain_cropped]) to
+        the token-aligned ``MSAContext`` ([n_token, n_msa_plus_one]).
 
         Every token position is seeded with its own ground-truth residue
-        id (from ``cano_seq_resname``) across all ``n_msa`` rows; then the
-        reference-chain columns are overwritten with the real MSA data via
-        ``chain_token_indices``. This has two effects the pure-gap-fill
-        alternative did not:
+        id (from ``cano_seq_resname``) across all ``n_msa_plus_one`` rows;
+        then the reference-chain columns are overwritten with the real MSA
+        data via ``chain_token_indices``. This has two effects the
+        pure-gap-fill alternative did not:
 
         - Non-reference-chain tokens (ligands, ions, nucleic acids,
           other protein chains) carry their true residue id in every row
@@ -477,14 +477,14 @@ class ContextGenerator:
             return None
 
         n_token = self.s.grouping.n_tokens
-        n_msa = self.msa.tokens.shape[0]
+        n_msa_plus_one = self.msa.tokens.shape[0]
 
         centre = self.centre_atom_indices
         restype_codes = self.s.derived.cano_seq_resname[centre]
         restype_onehot = self.restype_onehot_encoded(restype_codes)
         gt_tokens = restype_onehot.argmax(dim=-1).to(torch.int8).numpy()
 
-        tokens = np.broadcast_to(gt_tokens[:, None], (n_token, n_msa)).copy()
+        tokens = np.broadcast_to(gt_tokens[:, None], (n_token, n_msa_plus_one)).copy()
         tokens[self.msa.chain_token_indices, :] = self.msa.tokens.T
         gap_mask = tokens == _GAP_TOKEN
 

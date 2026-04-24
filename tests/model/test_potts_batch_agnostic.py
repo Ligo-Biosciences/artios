@@ -8,7 +8,8 @@ These guard that:
 produce bit-identical (up to float tolerance) results when called with an
 extra leading batch dimension versus calling the function once per slice
 along that dimension and stacking. The MSA loss path relies on this
-invariant so it can score ``n_msa`` rows in one pass rather than looping.
+invariant so it can score all ``n_msa_plus_one`` rows in one pass
+rather than looping.
 """
 
 from __future__ import annotations

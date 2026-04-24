@@ -458,7 +458,8 @@ class MSAContext(Context):
     existing FeatureType.TOKEN pad_fn (pads the last non-batch dim by
     n_token_pad) applies uniformly to all fields. The MSA dataclass
     (artios/data/msa/sampler.py) stores the transposed MSA-native
-    ``[n_msa, l_chain]`` layout; ``ContextGenerator._build_msa_context``
+    ``[n_msa_plus_one, l_chain]`` layout (one query row at index 0 plus
+    ``n_msa`` homolog rows); ``ContextGenerator._build_msa_context``
     transposes and scatters chain columns into their n_token positions.
 
     Vocabulary (same as ``artios.common.constants.STD_RESIDUES_AND_GAP``):
@@ -474,20 +475,21 @@ class MSAContext(Context):
     """
 
     tokens: Feature(
-        Int[Tensor, "*batch n_token n_msa"],
+        Int[Tensor, "*batch n_token n_msa_plus_one"],
         type=FeatureType.TOKEN,
         encoding=EncodingType.IDENTITY,
         description=(
             "Integer token IDs in [0, 31] from STD_RESIDUES_AND_GAP — NOT "
-            "three-letter codes or strings. Axis layout: n_token × n_msa. "
-            "Column 0 is the query row; columns 1..n_msa-1 are homologs. "
+            "three-letter codes or strings. Axis layout: "
+            "n_token × n_msa_plus_one. Column 0 is the query row; "
+            "columns 1..n_msa are homologs (n_msa_plus_one = n_msa + 1). "
             "Rows (n_token axis) outside the reference chain are gap-filled "
             "with 31. Encoding: 0..19 canonical AAs (ALA..VAL alphabetical), "
             "20 UNK, 31 gap."
         ),
     )
     gap_mask: Mask(
-        Bool[Tensor, "*batch n_token n_msa"],
+        Bool[Tensor, "*batch n_token n_msa_plus_one"],
         type=FeatureType.TOKEN,
         description="True where tokens == 31 (gap). Materialised for convenience.",
     )

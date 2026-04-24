@@ -34,6 +34,7 @@ def _make_msa_configs(loss_type: str = "composite"):
                     "label_smoothing": 0.0,
                     "active_site_upweight": 1.0,
                     "active_site_distance": 8.0,
+                    "n_msa_chunk": 8,
                 },
             },
             "artios_mpnn": {
@@ -170,7 +171,7 @@ def test_pseudo_loss_with_msa_raises(context_with_restype, device):
     model.train()
     ctx = _attach_msa(context_with_restype)
     output = model.main_train_loop(context=ctx, seed=0)
-    with pytest.raises(ValueError, match="MSA loss is only implemented"):
+    with pytest.raises(ValueError, match="MSA not implemented for pseudo loss"):
         model.compute_loss(output=output, context=ctx)
 
 

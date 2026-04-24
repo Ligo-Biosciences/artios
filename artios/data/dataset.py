@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import json
 import os
 import random
@@ -690,19 +691,18 @@ def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMak
     """
     data_config = configs.data
 
-    motif_config = data_config["motif_training"]
-    motif_train_rate = motif_config["motif_train_rate"]
+    motif_config = dict(data_config["motif_training"])
+    # motif_train_rate is a dataset-level training schedule knob (how often to
+    # invoke the maker), not a MotifMaker sampling field. Strip before passing.
+    motif_train_rate = motif_config.pop("motif_train_rate")
     if not 0 <= motif_train_rate <= 1.0:
         raise ValueError("motif_train_rate must be between 0 and 1")
 
     # Check for dataset-specific overrides
     if dataset_name in data_config and "motif_training" in data_config[dataset_name]:
-        # Merge dataset-specific config with global config
-        dataset_motif_config = {
-            **motif_config,
-            **data_config[dataset_name]["motif_training"],
-        }
-        return MotifMaker(**dataset_motif_config)
+        override = dict(data_config[dataset_name]["motif_training"])
+        override.pop("motif_train_rate", None)
+        return MotifMaker(**{**motif_config, **override})
 
     return MotifMaker(**motif_config)
 

@@ -437,6 +437,119 @@ def _compute_residue_permutations(
 
 
 # ---------------------------------------------------------------------------
+# Training-prep helpers (step 9 of the cif.py refactor)
+# ---------------------------------------------------------------------------
+#
+# These four functions used to live in ``annotation.py`` as free helpers.
+# They're mutually independent of each other and of the typed-group
+# machinery — each takes an atom_array, runs an external pipeline, and
+# writes an annotation. Moving them here lets ``annotation.py`` be
+# deleted in step 10.
+
+
+def unresolve_low_plddt_residues(
+    atom_array: AtomArray, plddt_threshold: float = 80.0
+) -> AtomArray:
+    """Mask residues with pLDDT below ``plddt_threshold`` as
+    ``is_resolved = False`` on the atom_array.
+
+    Used in the distillation path so low-confidence predicted residues
+    don't contribute to the loss.
+    """
+    plddt = atom_array.b_factor
+    is_high_plddt = plddt > plddt_threshold
+    atom_array.set_annotation("is_resolved", is_high_plddt & atom_array.is_resolved)
+    return atom_array
+
+
+def add_pocket_annotation(
+    atom_array: AtomArray,
+    plddt_cutoff: float | None = None,
+    max_atoms: int = 20_000,
+) -> AtomArray:
+    """Run Pocketeer on the full structure and write ``pocket_id`` onto
+    the atom_array.
+
+    Skips detection for structures above ``max_atoms`` atoms (Delaunay
+    tessellation is O(n²) memory; zero-fill the annotation instead so
+    downstream code doesn't fail on missing keys).
+    """
+    # Lazy import — pocket.py pulls in pocketeer which isn't installed
+    # in every image.
+    from artios.data.pocket import find_pockets
+
+    if len(atom_array) > max_atoms:
+        logger.warning(
+            "Skipping pocket detection: %d atoms > %d", len(atom_array), max_atoms
+        )
+        atom_array.set_annotation("pocket_id", np.zeros(len(atom_array), dtype=int))
+        return atom_array
+
+    pockets = find_pockets(atom_array, plddt_cutoff=plddt_cutoff)
+    pocket_id = np.zeros(len(atom_array), dtype=int)
+    for i, pocket in enumerate(pockets):
+        atom_indices: set[int] = set()
+        for sphere in pocket.spheres:
+            atom_indices.update(sphere.atom_indices)
+        pocket_id[list(atom_indices)] = i + 1
+
+    atom_array.set_annotation("pocket_id", pocket_id)
+    return atom_array
+
+
+def add_pocket_annotation_per_fragment(
+    atom_array: AtomArray, plddt_cutoff: float | None = None
+) -> AtomArray:
+    """Run Pocketeer independently on each fragment.
+
+    Distillation pipeline: the atom-density filter inside Pocketeer
+    behaves differently on a single fragment vs the full structure, so
+    per-fragment detection gives more consistent results across samples.
+
+    Requires ``fragment_id`` to already be set on the atom_array; each
+    fragment with ``id != -1`` gets its own pocket detection pass, and
+    pocket ids are numbered globally across the structure.
+    """
+    from artios.data.pocket import find_pockets
+
+    pocket_id = np.zeros(len(atom_array), dtype=int)
+    fragment_ids = atom_array.fragment_id
+    unique_frags = np.unique(fragment_ids)
+    unique_frags = unique_frags[unique_frags != -1]
+
+    next_pocket_id = 1
+    for frag_id in unique_frags:
+        frag_mask = fragment_ids == frag_id
+        full_indices = np.where(frag_mask)[0]
+        frag_atoms = atom_array[frag_mask]
+        pockets = find_pockets(frag_atoms, plddt_cutoff=plddt_cutoff)
+        for pocket in pockets:
+            local_atom_indices: set[int] = set()
+            for sphere in pocket.spheres:
+                local_atom_indices.update(sphere.atom_indices)
+            pocket_id[full_indices[list(local_atom_indices)]] = next_pocket_id
+            next_pocket_id += 1
+
+    atom_array.set_annotation("pocket_id", pocket_id)
+    return atom_array
+
+
+def add_fragment_annotation(atom_array: AtomArray) -> AtomArray:
+    """Spectral-bisection + spatial-clustering fragment detection,
+    filtered through the distillation-pipeline pre-pocket thresholds.
+
+    Fragments failing any non-None threshold (``min_plddt``,
+    ``min_length``, the Rg length bound, ``min_sse_entropy``, etc.) are
+    marked with ``fragment_id = -1``. Ref: AF3 SI 5.9.3.
+    """
+    from artios.data.engineering.pipeline.thresholds import PRE_POCKET_THRESHOLDS
+    from artios.data.fragment import FragmentMaker
+
+    maker = FragmentMaker(thresholds=PRE_POCKET_THRESHOLDS)
+    return maker.add_fragment_annotation(atom_array)
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers (multi-caller internals)
 # ---------------------------------------------------------------------------
 

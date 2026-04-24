@@ -485,18 +485,17 @@ class TestAnnotate:
 
         ``annotate(include_ref_conformer=True)`` requires the atom_array to
         already carry ``ref_pos``/``ref_charge``/``ref_mask`` annotations;
-        production CIF parses do this through
-        ``annotation.add_ref_info_and_res_perm`` inside
-        ``MMCIFParser.get_bioassembly``. This test exercises the
-        lower-level ``parser.get_structure()`` path, so we run the same
-        helper explicitly here to mirror the production contract.
+        production parses do this through
+        ``annotation_v2.populate_ccd_reference`` inside
+        ``MMCIFParser.get_bioassembly`` (post step-5 flip). This test
+        exercises the lower-level ``parser.get_structure()`` path, so we
+        run the same helper explicitly here to mirror the production
+        contract.
         """
         from artios.data.filter import Filter, clean_structure
         from artios.data.parsing.cif import MMCIFParser
-        from artios.data.structure.annotation import (
-            add_ref_info_and_res_perm,
-            add_ref_space_uid,
-        )
+        from artios.data.structure.annotation import unique_chain_and_add_ids
+        from artios.data.structure.annotation_v2 import populate_ccd_reference
 
         parser = MMCIFParser(FIXTURES / "5s8i.cif")
         atom_array = parser.get_structure()
@@ -514,14 +513,13 @@ class TestAnnotate:
         atom_array = parser.add_missing_atoms_and_residues(atom_array)
         atom_array = Filter.remove_element_X(atom_array)
 
-        # add_ref_info_and_res_perm keys off ref_space_uid, which in turn
-        # needs asym_id_int; unique_chain_and_add_ids is the canonical pair
-        # inside get_bioassembly.
-        from artios.data.structure.annotation import unique_chain_and_add_ids
-
+        # unique_chain_and_add_ids writes asym_id_int/entity_id_int/sym_id_int,
+        # which AnnotatedStructure.annotate's EntityIds.compute will re-derive
+        # but need to exist for the populate_ccd_reference pre-pass that we
+        # invoke below. populate_ccd_reference is the v2 replacement for the
+        # legacy add_ref_space_uid + add_ref_info_and_res_perm pair.
         atom_array = unique_chain_and_add_ids(atom_array)
-        atom_array = add_ref_space_uid(atom_array)
-        atom_array = add_ref_info_and_res_perm(atom_array)
+        atom_array = populate_ccd_reference(atom_array)
 
         return AnnotatedStructure.annotate(
             atom_array,

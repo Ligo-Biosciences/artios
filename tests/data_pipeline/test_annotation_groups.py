@@ -430,44 +430,11 @@ class TestPopulateCcdReference:
         assert "ref_charge" in aa.get_annotation_categories()
         assert "ref_mask" in aa.get_annotation_categories()
 
-    def test_matches_legacy_cif_path_output(self):
-        """Equivalence pin: on two standard protein residues
-        ``populate_ccd_reference`` produces the same
-        ``ref_pos``/``ref_charge``/``ref_mask``/``res_perm`` arrays as the
-        legacy ``annotation.add_ref_info_and_res_perm``. Catching a
-        mismatch here makes the diagnosis per-function instead of
-        per-fixture once the CIF golden parity test wires
-        ``populate_ccd_reference`` into the pipeline.
-
-        Scope is deliberately two standard residues: a broader fixture
-        would accidentally exercise a separate legacy bug in
-        ``add_res_perm`` (single-atom residues like monatomic ions lose
-        their perm row in the legacy code). That bug is noted in the
-        scan and will be fixed when the legacy module is deleted — here
-        we only want to pin the shared CCD-lookup path.
-        """
-        from artios.data.structure.annotation import add_ref_info_and_res_perm
-
-        def _fresh() -> AtomArray:
-            aa = _build_aa(
-                chain_id=["A"] * 6,
-                res_id=[1, 1, 1, 2, 2, 2],
-                res_name=["ALA"] * 6,
-                atom_name=["N", "CA", "C", "N", "CA", "C"],
-                element=["N", "C", "C", "N", "C", "C"],
-                label_entity_id=["e1"] * 6,
-            )
-            # Legacy path needs ref_space_uid pre-populated.
-            aa.set_annotation("ref_space_uid", np.array([0, 0, 0, 1, 1, 1], dtype=int))
-            return aa
-
-        legacy = add_ref_info_and_res_perm(_fresh())
-        new = populate_ccd_reference(_fresh())
-
-        np.testing.assert_allclose(new.ref_pos, legacy.ref_pos)
-        np.testing.assert_array_equal(new.ref_charge, legacy.ref_charge)
-        np.testing.assert_array_equal(new.ref_mask, legacy.ref_mask)
-        np.testing.assert_array_equal(new.res_perm, legacy.res_perm)
+    # test_matches_legacy_cif_path_output was a legacy-equivalence pin
+    # against annotation.add_ref_info_and_res_perm; deleted in step 10 of
+    # the cif.py refactor when the legacy function itself was removed.
+    # populate_ccd_reference is now the source of truth, covered by the
+    # other tests in this class plus the CIF-parse parity goldens.
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,21 @@
-"""Annotation functions for adding derived properties to AtomArray objects."""
+"""Legacy v1 annotation helpers retained for the cif.py pre-expand
+chain and ``array_builder.add_atom_array_attributes``.
+
+Everything here is either: (a) still called directly by cif.py /
+array_builder for the pre-annotation atom_array prep that runs before
+expand_assembly + filters, or (b) a legacy helper kept for back-compat
+until its callers are migrated onto ``annotation_v2``.
+
+Migration progress (cif.py refactor):
+- pocket / fragment / unresolve_low_plddt → moved to annotation_v2
+  (step 9).
+- populate_ccd_reference / remove_bonds_between_polymer_chains → live
+  in annotation_v2 (step 2).
+- pre-expand chain and unique_chain_and_add_ids /
+  find_equiv_mol_and_assign_ids / add_mol_id / add_ref_space_uid:
+  **still here**; migration blocked on making a non-reordering v2 path
+  for the pre-expand stage (expand_assembly is sensitive to atom order).
+"""
 
 import logging
 from collections import Counter
@@ -6,7 +23,7 @@ from typing import Optional
 
 import biotite.structure as struc
 import numpy as np
-from biotite.structure import AtomArray, get_chain_starts, get_residue_starts
+from biotite.structure import AtomArray, get_chain_starts
 from biotite.structure.molecules import get_molecule_indices
 
 from artios.common.constants import (
@@ -17,7 +34,7 @@ from artios.common.constants import (
     STD_RESIDUES,
 )
 from artios.data.chem import ccd
-from artios.data.chem.ccd import RefInfo, get_ccd_ref_info
+from artios.data.structure.annotation_v2 import remove_bonds_between_polymer_chains
 from artios.data.utils import get_starts_by
 
 logger = logging.getLogger(__name__)
@@ -239,35 +256,6 @@ def add_cano_seq_resname(atom_array: AtomArray) -> AtomArray:
 
     atom_array.set_annotation("cano_seq_resname", cano_seq_resname)
     return atom_array
-
-
-def remove_bonds_between_polymer_chains(
-    atom_array: AtomArray, entity_poly_type: dict[str, str]
-) -> struc.BondList:
-    """
-    Remove bonds between polymer chains based on entity_poly_type
-
-    Args:
-        atom_array (AtomArray): Biotite AtomArray object
-        entity_poly_type (dict[str, str]): entity_id to poly_type
-
-    Returns:
-        BondList: Biotite BondList object (copy) with bonds between polymer chains removed
-    """
-    copy = atom_array.bonds.copy()
-    polymer_mask = np.isin(atom_array.label_entity_id, list(entity_poly_type.keys()))
-    i = copy._bonds[:, 0]
-    j = copy._bonds[:, 1]
-    pp_bond_mask = polymer_mask[i] & polymer_mask[j]
-    diff_chain_mask = atom_array.chain_id[i] != atom_array.chain_id[j]
-    pp_bond_mask = pp_bond_mask & diff_chain_mask
-    copy._bonds = copy._bonds[~pp_bond_mask]
-
-    # post-process after modified bonds manually
-    # due to the extraction of bonds using a mask, the lower one of the two atom indices is still in the first
-    copy._remove_redundant_bonds()
-    copy._max_bonds_per_atom = copy._get_max_bonds_per_atom()
-    return copy
 
 
 def find_equiv_mol_and_assign_ids(
@@ -506,292 +494,3 @@ def unique_chain_and_add_ids(atom_array: AtomArray) -> AtomArray:
     atom_array.set_annotation("entity_id_int", entity_ids)
     atom_array.set_annotation("sym_id_int", sym_ids)
     return atom_array
-
-
-def add_ref_feat_info(
-    atom_array: AtomArray,
-) -> tuple[np.ndarray, np.ndarray, list[int]]:
-    """
-    Get info of reference structure of atoms based on the atom array.
-
-    Args:
-        atom_array (AtomArray): The atom array.
-
-    Returns:
-        tuple:
-            ref_pos (numpy.ndarray): Atom positions in the reference conformer,
-                                     with a random rotation and translation applied.
-                                     Atom positions are given in Å. Shape=(num_atom, 3).
-            ref_charge (numpy.ndarray): Charge for each atom in the reference conformer. Shape=(num_atom)
-            ref_mask ((numpy.ndarray): Mask indicating which atom slots are used in the reference conformer. Shape=(num_atom)
-    """
-    info_dict = {}
-    for ccd_id in np.unique(atom_array.res_name):
-        # create ref conformer for each CCD ID
-        ref_result: RefInfo = get_ccd_ref_info(ccd_id)
-        if ref_result:
-            for space_uid in np.unique(
-                atom_array[atom_array.res_name == ccd_id].ref_space_uid
-            ):
-                if ref_result:
-                    info_dict[space_uid] = [
-                        ref_result.atom_map,
-                        ref_result.coord,
-                        ref_result.charge,
-                        ref_result.mask,
-                    ]
-        else:
-            # get conformer failed will result in an empty dictionary
-            continue
-
-    ref_mask = []  # [N_atom]
-    ref_pos = []  # [N_atom, 3]
-    ref_charge = []  # [N_atom]
-    for atom in atom_array:
-        ref_data = info_dict.get(atom.ref_space_uid)
-        if ref_data is None:
-            # get conformer failed
-            ref_mask.append(0)
-            ref_pos.append([0.0, 0.0, 0.0])
-            ref_charge.append(0)
-
-        else:
-            atom_map, coord, charge, mask = ref_data
-            atom_sub_idx = atom_map[atom.atom_name]
-            ref_mask.append(mask[atom_sub_idx])
-            ref_pos.append(coord[atom_sub_idx])
-            ref_charge.append(charge[atom_sub_idx])
-
-    ref_pos = np.array(ref_pos)
-    ref_charge = np.array(ref_charge).astype(int)
-    ref_mask = np.array(ref_mask).astype(int)
-    return ref_pos, ref_charge, ref_mask
-
-
-def add_res_perm(
-    atom_array: AtomArray,
-) -> tuple[np.ndarray, np.ndarray, list[int]]:
-    """
-    Get permutations of each atom within the residue.
-
-    Args:
-        atom_array (AtomArray): biotite AtomArray object.
-
-    Returns:
-        list[list[int]]: 2D list of (N_atom, N_perm)
-    """
-    starts = get_residue_starts(atom_array, add_exclusive_stop=True)
-    res_perm = []
-    for start, stop in zip(starts[:-1], starts[1:]):
-        res_atom = atom_array[start:stop]
-        curr_res_atom_idx = list(range(len(res_atom)))
-
-        res_ref_info: Optional[RefInfo] = get_ccd_ref_info(
-            ccd_code=res_atom.res_name[0]
-        )
-        if not res_ref_info:
-            res_perm.extend([[i] for i in curr_res_atom_idx])
-            continue
-
-        # TODO: access the permutation info with dot accession instead
-        perm_array = res_ref_info.perm  # [N_atoms, N_perm]
-        perm_atom_idx_in_res_order = [
-            res_ref_info.atom_map[i] for i in res_atom.atom_name
-        ]
-        perm_idx_to_present_atom_idx = dict(
-            zip(perm_atom_idx_in_res_order, curr_res_atom_idx)
-        )
-
-        precent_row_mask = np.isin(perm_array[:, 0], perm_atom_idx_in_res_order)
-        perm_array_row_filtered = perm_array[precent_row_mask]
-
-        precent_col_mask = np.isin(
-            perm_array_row_filtered, perm_atom_idx_in_res_order
-        ).all(axis=0)
-        perm_array_filtered = perm_array_row_filtered[:, precent_col_mask]
-
-        # replace the elem in new_perm_array according to the perm_idx_to_present_atom_idx dict
-        new_perm_array = np.vectorize(perm_idx_to_present_atom_idx.get)(
-            perm_array_filtered
-        )
-
-        assert (
-            new_perm_array.shape[1] <= 1000
-            and new_perm_array.shape[1] <= perm_array.shape[1]
-        )
-        res_perm.extend(new_perm_array.tolist())
-    return res_perm
-
-
-def add_ref_info_and_res_perm(atom_array: AtomArray) -> AtomArray:
-    """
-    Add info of reference structure of atoms to the atom array.
-
-    Args:
-        atom_array (AtomArray): The atom array.
-
-    Returns:
-        AtomArray: The atom array with the 'ref_pos', 'ref_charge', 'ref_mask', 'res_perm' annotations added.
-    """
-    ref_pos, ref_charge, ref_mask = add_ref_feat_info(atom_array)
-    res_perm = add_res_perm(atom_array)
-
-    str_res_perm = []  # encode [N_atom, N_perm] -> list[str]
-    for i in res_perm:
-        str_res_perm.append("_".join([str(j) for j in i]))
-
-    assert (
-        len(atom_array)
-        == len(ref_pos)
-        == len(ref_charge)
-        == len(ref_mask)
-        == len(res_perm)
-    ), f"{len(atom_array)=}, {len(ref_pos)=}, {len(ref_charge)=}, {len(ref_mask)=}, {len(str_res_perm)=}"
-
-    atom_array.set_annotation("ref_pos", ref_pos)
-    atom_array.set_annotation("ref_charge", ref_charge)
-    atom_array.set_annotation("ref_mask", ref_mask)
-    atom_array.set_annotation("res_perm", str_res_perm)
-    return atom_array
-
-
-def unresolve_low_plddt_residues(
-    atom_array: AtomArray,
-    plddt_threshold: float = 80,
-) -> AtomArray:
-    """
-    Marks residues with low pLDDT values (below plddt_threshold) as is_resolved=False in the distillation dataset.
-
-    Args:
-        atom_array (AtomArray): The atom array.
-        plddt_threshold (float): The threshold for pLDDT values.
-
-    Returns:
-        AtomArray: The atom array with the 'is_resolved' annotation added.
-    """
-    plddt = atom_array.b_factor
-    is_high_plddt = plddt > plddt_threshold
-    atom_array.set_annotation("is_resolved", is_high_plddt & atom_array.is_resolved)
-    return atom_array
-
-
-def add_pocket_annotation(
-    atom_array: AtomArray,
-    plddt_cutoff: Optional[float] = None,
-    max_atoms: int = 20_000,
-) -> AtomArray:
-    """
-    Compute pockets with Pocketeer on the full structure and add pocket_id.
-
-    Suitable for bioassembly (PDB) structures where the full complex is
-    the relevant context for pocket detection.
-
-    Structures larger than ``max_atoms`` are skipped (Delaunay tessellation
-    is O(n^2) in memory).
-
-    Args:
-        atom_array (AtomArray): Biotite AtomArray object
-        plddt_cutoff (float): AlphaFold pLDDT cutoff for pockets
-        max_atoms (int): Skip pocket detection above this atom count.
-
-    Returns:
-        AtomArray: with "pocket_id" annotation added.
-            Values: 0 = no pocket, 1+ = pocket ID
-    """
-    from artios.data.pocket import find_pockets
-
-    if len(atom_array) > max_atoms:
-        logger.warning(
-            f"Skipping pocket detection: {len(atom_array):,} atoms > {max_atoms:,}"
-        )
-        atom_array.set_annotation("pocket_id", np.zeros(len(atom_array), dtype=int))
-        return atom_array
-
-    pockets = find_pockets(
-        atom_array,
-        plddt_cutoff=plddt_cutoff,
-    )
-    pocket_id = np.zeros(len(atom_array), dtype=int)
-    for i, pocket in enumerate(pockets):
-        atom_indices = set()
-        for sphere in pocket.spheres:
-            atom_indices.update(sphere.atom_indices)
-        pocket_id[list(atom_indices)] = i + 1
-
-    atom_array.set_annotation("pocket_id", pocket_id)
-    return atom_array
-
-
-def add_pocket_annotation_per_fragment(
-    atom_array: AtomArray, plddt_cutoff: Optional[float] = None
-) -> AtomArray:
-    """
-    Compute pockets per-fragment and add pocket_id annotation.
-
-    Runs find_pockets independently on each fragment
-    (fragment_id != -1). This ensures the atom density filter operates
-    on the fragment's local environment rather than the full structure.
-
-    Requires fragment_id annotation to already be set on atom_array.
-
-    Args:
-        atom_array (AtomArray): with "fragment_id" annotation set
-        plddt_cutoff (float): AlphaFold pLDDT cutoff for pockets
-
-    Returns:
-        AtomArray: with "pocket_id" annotation added.
-            Values: 0 = no pocket, 1+ = globally unique pocket ID
-    """
-    from artios.data.pocket import find_pockets
-
-    pocket_id = np.zeros(len(atom_array), dtype=int)
-
-    fragment_ids = atom_array.fragment_id
-    unique_frags = np.unique(fragment_ids)
-    unique_frags = unique_frags[unique_frags != -1]
-
-    next_pocket_id = 1
-    for frag_id in unique_frags:
-        frag_mask = fragment_ids == frag_id
-        # Map fragment-local indices back to full array indices
-        full_indices = np.where(frag_mask)[0]
-        frag_atoms = atom_array[frag_mask]
-
-        pockets = find_pockets(
-            frag_atoms,
-            plddt_cutoff=plddt_cutoff,
-        )
-
-        for pocket in pockets:
-            local_atom_indices = set()
-            for sphere in pocket.spheres:
-                local_atom_indices.update(sphere.atom_indices)
-            # Map local indices back to full array
-            pocket_id[full_indices[list(local_atom_indices)]] = next_pocket_id
-            next_pocket_id += 1
-
-    atom_array.set_annotation("pocket_id", pocket_id)
-    return atom_array
-
-
-def add_fragment_annotation(atom_array: AtomArray) -> AtomArray:
-    """
-    Add fragment annotation to atom array using ``PRE_POCKET_THRESHOLDS``.
-
-    Detects fragments via spectral bisection + spatial clustering, then
-    filters with the strict pre-pocket thresholds (min_plddt, min_length,
-    Rg length bound, min_sse_entropy, min_buried_hydrophobic,
-    max_hydrophobic_sasa, max_repeat_score, min_corrected_contact_order,
-    min_corrected_packing_efficiency). Fragments failing any non-None
-    threshold are marked with ``fragment_id = -1``.
-
-    Args:
-        atom_array (AtomArray): Biotite AtomArray object
-    Returns:
-        atom array with fragment_id annotations with spatially clustered fragments.
-    """
-    from artios.data.engineering.pipeline.thresholds import PRE_POCKET_THRESHOLDS
-    from artios.data.fragment import FragmentMaker
-
-    maker = FragmentMaker(thresholds=PRE_POCKET_THRESHOLDS)
-    return maker.add_fragment_annotation(atom_array)

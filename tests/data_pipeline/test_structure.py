@@ -481,9 +481,22 @@ class TestAnnotate:
 
     @pytest.fixture
     def annotated_from_cif(self):
-        """Clean atom_array (no custom annotations) → annotate() → AnnotatedStructure."""
+        """Clean atom_array → reference annotations → annotate() → AnnotatedStructure.
+
+        ``annotate(include_ref_conformer=True)`` requires the atom_array to
+        already carry ``ref_pos``/``ref_charge``/``ref_mask`` annotations;
+        production CIF parses do this through
+        ``annotation.add_ref_info_and_res_perm`` inside
+        ``MMCIFParser.get_bioassembly``. This test exercises the
+        lower-level ``parser.get_structure()`` path, so we run the same
+        helper explicitly here to mirror the production contract.
+        """
         from artios.data.filter import Filter, clean_structure
         from artios.data.parsing.cif import MMCIFParser
+        from artios.data.structure.annotation import (
+            add_ref_info_and_res_perm,
+            add_ref_space_uid,
+        )
 
         parser = MMCIFParser(FIXTURES / "5s8i.cif")
         atom_array = parser.get_structure()
@@ -500,6 +513,15 @@ class TestAnnotate:
         atom_array = parser.mse_to_met(atom_array)
         atom_array = parser.add_missing_atoms_and_residues(atom_array)
         atom_array = Filter.remove_element_X(atom_array)
+
+        # add_ref_info_and_res_perm keys off ref_space_uid, which in turn
+        # needs asym_id_int; unique_chain_and_add_ids is the canonical pair
+        # inside get_bioassembly.
+        from artios.data.structure.annotation import unique_chain_and_add_ids
+
+        atom_array = unique_chain_and_add_ids(atom_array)
+        atom_array = add_ref_space_uid(atom_array)
+        atom_array = add_ref_info_and_res_perm(atom_array)
 
         return AnnotatedStructure.annotate(
             atom_array,
@@ -753,3 +775,32 @@ def test_to_atom_array_does_not_mutate_source(load_structure, name):
         before_cats == after_cats
     ), f"atoms annotations changed: {before_cats ^ after_cats}"
     assert len(s.atoms) == before_n
+
+
+@pytest.mark.parametrize("name", GOLDEN_FIXTURES)
+def test_basic_context_atom_array_roundtrips_through_from_atom_array(
+    load_structure, name
+):
+    """``BasicContext.atom_array`` must carry the annotations needed to
+    reconstruct an equivalent ``AnnotatedStructure`` via ``from_atom_array``.
+
+    This pins the contract between the featurizer and the sequence-design /
+    packing inference paths. ``_save_backbone_to_npz`` persists whatever
+    annotations are on ``context.basic.atom_array``; downstream,
+    ``MPNNDataset`` / ``PackingDataset`` reload the stack and call
+    ``AnnotatedStructure.from_atom_array`` on each model. If the featurizer
+    ever returns ``self.s.atoms`` (the biotite-native view stripped by
+    ``from_atom_array``) instead of ``self.s.to_atom_array()`` (the
+    re-annotated view), this round-trip raises
+    ``AttributeError: Required annotation 'asym_id_int' missing``. This
+    regression guards against that.
+    """
+    from artios.data.features.featurizer import ContextGenerator
+
+    original = load_structure(name)
+    basic = ContextGenerator(
+        original, pdb_id=name, ref_pos_augment=False
+    ).get_basic_context(include_arrays=True)
+
+    rebuilt = AnnotatedStructure.from_atom_array(basic.atom_array)
+    _assert_structures_equal(original, rebuilt)

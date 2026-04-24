@@ -39,7 +39,6 @@ from artios.common.constants import (
     STD_RESIDUES,
 )
 from artios.data.chem import ccd
-from artios.data.chem.ccd import RefInfo, get_ccd_ref_info
 from artios.data.structure.annotation import remove_bonds_between_polymer_chains
 from artios.utils.typing import Bool, Float, Int, Int32, Shaped, typecheck
 
@@ -578,10 +577,10 @@ class TypeMasks(_AnnotationGroup):
 @typecheck
 @dataclass(frozen=True)
 class ReferenceConformer(_AnnotationGroup):
-    """Per-atom reference conformer data from CCD."""
+    """Per-atom reference conformer data."""
 
     FIELD_NAME: ClassVar[str] = "reference"
-    REQUIRES: ClassVar[tuple[str, ...]] = ("res_id", "res_name", "atom_name")
+    REQUIRES: ClassVar[tuple[str, ...]] = ("res_id",)
 
     ref_pos: Float[np.ndarray, "n_atom 3"]
     ref_charge: Int[np.ndarray, "n_atom"]
@@ -595,15 +594,28 @@ class ReferenceConformer(_AnnotationGroup):
         entity_ids: EntityIds,
         include_conformer: bool = True,
     ) -> ReferenceConformer:
-        """Compute ref_space_uid + CCD reference conformer (or zero fallback).
+        """Compute ``ref_space_uid`` and read ``ref_pos``/``ref_charge``/
+        ``ref_mask`` from the atom_array annotations.
 
-        ref_space_uid: AF3 SI 2.8 Table 5 — unique int per (asym_id, res_id).
-        ref_pos/charge/mask: CCD lookup keyed by res_name + atom_name.
-        Residues whose res_name lacks a CCD entry get zero-filled pos/charge/mask
-        (and ref_mask=0 signals "not present" to downstream).
+        Callers are responsible for populating the reference annotations
+        on the atom_array before ``annotate()``. The inference path uses
+        ``array_builder.add_reference_features`` (which handles SMILES
+        ligands — ``res_name == "UNL"`` — by copying the RDKit conformer
+        coords off ``atom_array.coord``). The CIF-parsing path uses
+        ``annotation.add_ref_info_and_res_perm`` inside ``get_bioassembly``.
+        Per-residue dispatch belongs in those builders, not here — keeping
+        a second CCD-by-``res_name`` lookup inside this group was silently
+        clobbering the UNL case and killing intra-ligand geometry
+        conditioning in the backbone diffusion.
 
-        When ``include_conformer=False``, ref_space_uid is still computed
-        (it's cheap and used downstream); pos/charge/mask fall back to zeros.
+        ``ref_space_uid`` (AF3 SI 2.8 Table 5 — unique int per
+        ``(asym_id, res_id)``) is always computed: it depends on
+        ``EntityIds`` rather than on the atom_array annotations, so it has
+        no sensible "read from the atom_array" path.
+
+        When ``include_conformer=False``, ``ref_pos``/``ref_charge``/
+        ``ref_mask`` are zero-filled — used by tests that only need
+        ``ref_space_uid`` and don't want to set up a CCD/SMILES pre-pass.
         """
         cls._require_annotations(atom_array)
         n = len(atom_array)
@@ -621,41 +633,21 @@ class ReferenceConformer(_AnnotationGroup):
                 ref_space_uid=ref_space_uid,
             )
 
-        # Key CCD info by res_name directly — all atoms in a residue share the
-        # same CCD entry; the legacy code keyed by ref_space_uid, storing the
-        # same tuple repeatedly for each residue instance.
-        ccd_info: dict = {}
-        for ccd_id in np.unique(atom_array.res_name):
-            ref_result: RefInfo | None = get_ccd_ref_info(ccd_id)
-            if ref_result:
-                ccd_info[ccd_id] = (
-                    ref_result.atom_map,
-                    ref_result.coord,
-                    ref_result.charge,
-                    ref_result.mask,
-                )
-
-        # TODO: per-atom Python loop; vectorise via (res_name, atom_name) →
-        # flat index lookup built once from ccd_info. Bottleneck >~50k atoms.
-        ref_pos = np.zeros((n, 3))
-        ref_charge = np.zeros(n, dtype=int)
-        ref_mask = np.zeros(n, dtype=int)
-        for i, (res_name, atom_name) in enumerate(
-            zip(atom_array.res_name, atom_array.atom_name)
-        ):
-            ref_data = ccd_info.get(res_name)
-            if ref_data is None:
-                continue
-            atom_map, coord, charge, mask = ref_data
-            sub_idx = atom_map[atom_name]
-            ref_pos[i] = coord[sub_idx]
-            ref_charge[i] = charge[sub_idx]
-            ref_mask[i] = mask[sub_idx]
+        cats = atom_array.get_annotation_categories()
+        missing = [f for f in ("ref_pos", "ref_charge", "ref_mask") if f not in cats]
+        if missing:
+            raise ValueError(
+                f"ReferenceConformer.compute(..., include_conformer=True) "
+                f"requires the atom_array to already carry {missing} "
+                f"annotations. Run ``add_reference_features`` (inference "
+                f"path) or ``add_ref_info_and_res_perm`` (CIF path) before "
+                f"``AnnotatedStructure.annotate``."
+            )
 
         return cls(
-            ref_pos=ref_pos,
-            ref_charge=ref_charge,
-            ref_mask=ref_mask,
+            ref_pos=atom_array.ref_pos,
+            ref_charge=atom_array.ref_charge.astype(int),
+            ref_mask=atom_array.ref_mask.astype(int),
             ref_space_uid=ref_space_uid,
         )
 

@@ -16,8 +16,8 @@ from dataclasses import dataclass
 import biotite.structure as struc
 import numpy as np
 
-from artios.data.parsing.cif import MMCIFParser
 from artios.data.parsing.json import CCDLigand, MotifSpec, SMILESLigand
+from artios.data.parsing.mmcif_reader import MmcifReader
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +75,7 @@ class Motif:
         if not cif_path.exists():
             raise FileNotFoundError(f"Motif CIF file not found: {cif_path}")
 
-        parser = MMCIFParser(cif_path)
-        atoms = parser.get_structure()
+        atoms = MmcifReader(cif_path).atom_array()
 
         # Build ligand mapping: (cif_res_name, chain_id) -> full_ligand
         ligand_mappings: dict[tuple[str, str], CCDLigand | SMILESLigand] = {

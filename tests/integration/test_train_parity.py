@@ -110,7 +110,7 @@ class TestTrainingMotifSeamParity:
         structure = structure.with_motif_annotations(is_motif, is_motif_related)
         structure = structure.with_duplicated_motif_backbones()
         structure = structure.without_non_motif_sidechains()
-        structure, _ = structure.with_unindexed_motif()
+        structure = structure.with_unindexed_motif()
 
         _seed()
         return ContextGenerator(structure, pdb_id="1m2g-motif").get_full_context(

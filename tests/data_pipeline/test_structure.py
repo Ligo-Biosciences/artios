@@ -337,14 +337,14 @@ class TestMotifTransforms:
             structure.with_unindexed_motif()
 
     def test_unindex_noop_when_no_motif_related(self, structure):
-        """Empty motif → return self + empty mapping."""
+        """Empty motif → return self, empty mapping on the annotation."""
         n = len(structure.atoms)
         s = structure.with_motif_annotations(
             np.zeros(n, dtype=int), np.zeros(n, dtype=int)
         )
-        out, mapping = s.with_unindexed_motif()
+        out = s.with_unindexed_motif()
         assert out is s
-        assert mapping == []
+        assert out.motif.mapping == ()
 
     def test_unindex_protein_motif_remaps_ids(self, structure_with_protein_motif):
         """Protein motif residues each become their own asym/sym/ref_uid; same
@@ -354,7 +354,7 @@ class TestMotifTransforms:
         per-restype vs per-instance entity grouping.
         """
         s = structure_with_protein_motif
-        out, mapping = s.with_unindexed_motif()
+        out = s.with_unindexed_motif()
         old_max_asym = int(s.entity_ids.asym_id_int.max())
         old_max_entity = int(s.entity_ids.entity_id_int.max())
         old_max_ref_uid = int(s.reference.ref_space_uid.max())
@@ -384,7 +384,7 @@ class TestMotifTransforms:
         reads them. We unconditionally write-through (no ``update_labels``
         flag), so they must match the int id fields after unindex."""
         s = structure_with_protein_motif
-        out, _ = s.with_unindexed_motif()
+        out = s.with_unindexed_motif()
         # Biotite coerces int→string for string-typed annotations. Compare
         # as strings on both sides.
         np.testing.assert_array_equal(
@@ -411,7 +411,7 @@ class TestMotifTransforms:
         ``centre_atom_mask[motif > 0] = 1`` patch.
         """
         s = structure_with_protein_motif
-        out, _ = s.with_unindexed_motif()
+        out = s.with_unindexed_motif()
         motif_mask = out.motif.is_motif_related > 0
         assert motif_mask.any()
         assert out.grouping.centre_atom_mask[motif_mask].all()
@@ -423,7 +423,8 @@ class TestMotifTransforms:
         of motif residue. Includes original chain/res_id for downstream
         RMSD stitching (inference output)."""
         s = structure_with_protein_motif
-        out, mapping = s.with_unindexed_motif()
+        out = s.with_unindexed_motif()
+        mapping = out.motif.mapping
 
         # Count unique (restype, ref_space_uid) in the original.
         motif_mask = s.motif.is_motif_related > 0
@@ -437,16 +438,11 @@ class TestMotifTransforms:
             f"mapping len {len(mapping)} != unique instance count "
             f"{len(restypes_and_uids)}"
         )
-        # Every entry has the required keys.
-        keys = {
-            "unindexed_chain_id",
-            "unindexed_res_id",
-            "original_motif_res_id",
-            "original_motif_chain_id",
-            "res_name",
-        }
+        # Every entry is a typed MotifMappingEntry with all five fields populated.
         for entry in mapping:
-            assert set(entry.keys()) == keys
+            assert entry.unindexed_chain_id
+            assert entry.original_motif_chain_id
+            assert entry.res_name
 
     def test_unindex_same_restype_shares_entity_different_asym(
         self, structure_with_protein_motif
@@ -456,7 +452,7 @@ class TestMotifTransforms:
         tokenizing sidechains as a single symmetry group — wrong.
         """
         s = structure_with_protein_motif
-        out, _ = s.with_unindexed_motif()
+        out = s.with_unindexed_motif()
         motif_mask = s.motif.is_motif_related > 0
         for restype in np.unique(s.atoms.res_name[motif_mask]):
             rm = motif_mask & (s.atoms.res_name == restype)

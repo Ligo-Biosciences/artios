@@ -22,8 +22,6 @@ from typing import Any, Optional, Union
 import numpy as np
 import pandas as pd
 import torch
-from biotite.structure.atoms import AtomArray
-from biotite.structure.io import save_structure
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import Dataset
 
@@ -657,70 +655,25 @@ class BaseSingleDataset(Dataset):
     def _apply_motif_processing(
         self, structure: AnnotatedStructure, pdb_id: str
     ) -> AnnotatedStructure:
-        """Apply motif-related processing on an ``AnnotatedStructure``.
+        """Attach a motif overlay and run the structure-level transforms.
 
-        One tiny round-trip through AtomArray is needed because
-        ``MotifMaker.make_motif`` still takes an AtomArray — its signature
-        is outside PR C's scope to change. Everything else is structure
-        methods: attach masks → duplicate backbones → strip non-motif
-        sidechains → un-index. Even when the MotifMaker roll doesn't fire
-        (motif masks stay zero), the sidechain strip still runs — matches
-        legacy behaviour when ``motif_train_rate > 0``.
-        """
-        aa = structure.to_atom_array()
-        aa = self._get_motif(aa)
-        self._save_motif(aa, pdb_id)
-
-        structure = structure.with_motif_annotations(aa.is_motif, aa.is_motif_related)
-        structure = structure.with_duplicated_motif_backbones()
-        structure = structure.without_non_motif_sidechains()
-        structure, _ = structure.with_unindexed_motif()
-        return structure
-
-    def _get_motif(self, atom_array: AtomArray) -> AtomArray:
-        """
-        Generates a motif from the atom array using the MotifMaker if enabled.
-
-        Args:
-            atom_array (AtomArray): Input atom array from which to generate motif
-
-        Returns:
-            AtomArray: Atom array with is_motif and is_motif_related annotations (int masks)
-        # TODO: this method should be completely absorbed into apply motif processing, it's too small by itself.
+        The sidechain strip runs even when ``MotifMaker`` didn't fire
+        (zero-mask overlay) — matches legacy behaviour when
+        ``motif_train_rate > 0``.
         """
         motif_train_rate = self.motif_configs["motif_train_rate"]
-
         if self.motif_maker is not None and np.random.rand() < motif_train_rate:
-            return self.motif_maker.make_motif(atom_array)
+            structure = structure.with_sampled_motif(self.motif_maker)
+        else:
+            n = len(structure.atoms)
+            structure = structure.with_motif_annotations(
+                np.zeros(n, dtype=int), np.zeros(n, dtype=int)
+            )
 
-        atom_array.set_annotation("is_motif", np.zeros(len(atom_array), dtype=int))
-        atom_array.set_annotation(
-            "is_motif_related", np.zeros(len(atom_array), dtype=int)
-        )
-        return atom_array
-
-    def _save_motif(self, atom_array: AtomArray, pdb_id: str) -> None:
-        """
-        Saves the motif to the motif directory. Mainly used for debugging/visualising
-        changes to motif generation algorithm.
-        TODO: we usually do this offline, I'm not sure if an extra method is needed here.
-        """
-        # temp motif dir
-        self.motif_dir = Path(self.bioassembly_dict_dir).parent.parent.parent / "motifs"
-        os.makedirs(self.motif_dir, exist_ok=True)
-
-        if (
-            atom_array.is_motif.sum() == 0
-            or not self.motif_configs["save_motifs_for_debugging"]
-        ):
-            return
-
-        motif_fpath = self.motif_dir / f"{pdb_id}_motif.cif"
-        structure_fpath = self.motif_dir / f"{pdb_id}.cif"
-
-        motif_atom_array = atom_array[atom_array.is_motif > 0]
-        save_structure(motif_fpath, motif_atom_array)
-        save_structure(structure_fpath, atom_array)
+        structure = structure.with_duplicated_motif_backbones()
+        structure = structure.without_non_motif_sidechains()
+        structure = structure.with_unindexed_motif()
+        return structure
 
 
 def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMaker]:

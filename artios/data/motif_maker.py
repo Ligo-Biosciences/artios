@@ -4,14 +4,20 @@ Houses all the logic for generating motifs during model training.
 TODO: make the motif maker config its own dataclass / Pydantic object for cleaner access / initialization.
 """
 
+from __future__ import annotations
+
 from logging import getLogger
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import networkx as nx
 import numpy as np
 from biotite.structure import AtomArray
 
 from artios.common import atom_types
+from artios.data.structure.annotation_v2 import MotifAnnotation
+
+if TYPE_CHECKING:
+    from artios.data.structure.structure import AnnotatedStructure
 
 logger = getLogger(__name__)
 
@@ -128,74 +134,48 @@ class MotifMaker:
         self.supplementary_ligand_distance = supplementary_ligand_distance
         self.supplementary_ligand_prob = supplementary_ligand_prob
 
-    def make_motif(self, atom_array: AtomArray) -> AtomArray:
-        """
-        Annotates the atom array with is_motif attribute. This is the main public function.
+    def sample(self, structure: AnnotatedStructure) -> MotifAnnotation:
+        """Sample a motif overlay from a loaded structure."""
+        aa = structure.to_atom_array()
 
-        Args:
-            atom_array (AtomArray): Input Biotite AtomArray
-
-        Returns:
-            AtomArray: The same atom array with is_motif annotation added (int mask)
-        """
         # TODO: delete this check once we have pocket annotations for the PDB
-        has_pocket_id = "pocket_id" in atom_array.get_annotation_categories()
+        has_pocket_id = "pocket_id" in aa.get_annotation_categories()
 
-        # Generate motif mask
-        if np.random.rand() < self.ligand_motif_prob and atom_array.is_ligand.any():
-            is_motif_mask = self._generate_ligand_motif_mask(atom_array)
+        if np.random.rand() < self.ligand_motif_prob and aa.is_ligand.any():
+            is_motif = self._generate_ligand_motif_mask(aa)
         elif (
             has_pocket_id
             and np.random.rand() < self.pocket_motif_prob
-            and atom_array.pocket_id.any()
+            and aa.pocket_id.any()
         ):
-            is_motif_mask = self._generate_pocket_motif_mask(atom_array)
+            is_motif = self._generate_pocket_motif_mask(aa)
         else:
-            is_motif_mask = self._generate_chain_motif_mask(atom_array)
+            is_motif = self._generate_chain_motif_mask(aa)
 
-        # Validate motif size
-        if is_motif_mask.sum() == 1:
-            # TODO: we should tweak things to make this less frequent.
-            # logger.warning("Motif only has one atom. Setting all is_motif to 0.")
-            is_motif_mask = np.zeros(len(atom_array), dtype=int)
-        elif is_motif_mask.any():
-            num_residues_in_motif = len(np.unique(atom_array[is_motif_mask > 0].res_id))
-            if num_residues_in_motif > self.max_motif_residues:
-                # logger.warning(
-                #     f"Motif has too many residues: {num_residues_in_motif}. "
-                #     f"Setting all is_motif to 0."
-                # )
-                is_motif_mask = np.zeros(len(atom_array), dtype=int)
+        if is_motif.sum() == 1:
+            is_motif = np.zeros(len(aa), dtype=int)
+        elif is_motif.any():
+            num_residues = len(np.unique(aa[is_motif > 0].res_id))
+            if num_residues > self.max_motif_residues:
+                is_motif = np.zeros(len(aa), dtype=int)
 
-        atom_array.set_annotation("is_motif", is_motif_mask)
-
-        is_motif_related = self._get_is_motif_related_mask(atom_array)
-        atom_array.set_annotation("is_motif_related", is_motif_related)
-
-        return atom_array
-
-    def _get_is_motif_related_mask(self, atom_array: AtomArray) -> np.ndarray:
-        """
-        Generates a mask indicating which atoms are related to the motif. This includes the motif
-        atoms themselves and the rest of the atoms which lie in a residue (determined by ref_space_uid)
-        that contains at least one motif atom.
-
-        Args:
-            atom_array (AtomArray): Input Biotite AtomArray
-
-        Returns:
-            np.ndarray: Integer mask (0/1) indicating which atoms are related to the motif
-        """
-        is_motif_related = np.zeros(len(atom_array), dtype=int)
-
-        # Get unique residues in motif
-        unique_ref_space_uids = np.unique(
-            atom_array[atom_array.is_motif > 0].ref_space_uid
+        is_motif_related = self._get_is_motif_related_mask(aa, is_motif)
+        return MotifAnnotation(
+            is_motif=is_motif.astype(int),
+            is_motif_related=is_motif_related.astype(int),
         )
 
-        # Mark all atoms in these residues as related to the motif
-        is_motif_related[np.isin(atom_array.ref_space_uid, unique_ref_space_uids)] = 1
+    def _get_is_motif_related_mask(
+        self, atom_array: AtomArray, is_motif: np.ndarray
+    ) -> np.ndarray:
+        """Mask of atoms sharing a residue (by ``ref_space_uid``) with a motif atom.
 
+        Includes the motif atoms themselves. Takes ``is_motif`` explicitly so
+        the caller need not have stamped it onto ``atom_array`` first.
+        """
+        is_motif_related = np.zeros(len(atom_array), dtype=int)
+        unique_ref_space_uids = np.unique(atom_array.ref_space_uid[is_motif > 0])
+        is_motif_related[np.isin(atom_array.ref_space_uid, unique_ref_space_uids)] = 1
         return is_motif_related
 
     def _sample_bfs_atom_count(self, ligand_graph_size: int) -> int:

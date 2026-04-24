@@ -214,7 +214,6 @@ data_configs = {
         "supplementary_ligand_prob": 0.5,
         "r_min": 5.0,
         "r_max": 8.0,
-        "save_motifs_for_debugging": False,
     },
     "padding": {
         "max_n_template": 4,

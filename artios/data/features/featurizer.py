@@ -30,6 +30,7 @@ from artios.data.features import (
 from artios.data.features.context import FixedResidueContext
 from artios.data.parsing.json import FixedResidue
 from artios.data.structure import AnnotatedStructure
+from artios.data.structure.annotation_v2 import MotifMappingEntry
 from artios.utils.geometry import compute_virtual_cb, random_transform
 
 
@@ -40,7 +41,7 @@ class ContextGenerator:
         *,
         pdb_id: str = "unknown",
         bioassembly_dict_fpath: str = "",
-        original_motif_mapping: list[dict] | None = None,
+        original_motif_mapping: tuple[MotifMappingEntry, ...] | None = None,
         ref_pos_augment: bool = True,
         lig_atom_rename: bool = False,
     ) -> None:

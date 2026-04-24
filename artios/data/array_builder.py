@@ -24,6 +24,7 @@ from artios.data.parsing.json import (
 )
 from artios.data.parsing.motif import Motif, MotifLigand, MotifResidue
 from artios.data.structure import annotation
+from artios.data.structure.annotation_v2 import MotifMappingEntry
 from artios.data.structure.structure import AnnotatedStructure
 from evaluation.utils.constants import DESIGN_CHAIN_ID
 
@@ -51,22 +52,13 @@ def mse_to_met(atom_array: AtomArray) -> AtomArray:
     return atom_array
 
 
-def add_atom_array_attributes(
-    atom_array: AtomArray,
-    has_motif: bool = False,
-) -> tuple[AtomArray, list[dict]]:
-    """Add attributes to the Biotite AtomArray.
+def add_atom_array_attributes(atom_array: AtomArray) -> AtomArray:
+    """Add legacy-annotation attributes to the Biotite AtomArray.
 
-    Args:
-        atom_array: AtomArray to add attributes to
-        has_motif: Whether this array has motif residues that need special handling.
-            When True, runs motif-specific ID unindexing and centre mask updates.
-
-    Returns:
-        tuple containing:
-            - AtomArray: AtomArray with added attributes
-            - list[dict]: Mapping from unindexed chain to original motif residue info
-                (empty list if has_motif is False)
+    Only used by ``packing_input_to_atom_array_v2`` as a scaffold while
+    the packing adapter still depends on the legacy annotation path for
+    ligand ``ref_pos`` preservation. The motif-unindex branch is gone —
+    ``AnnotatedStructure.with_unindexed_motif`` owns that now.
 
     Note: The ordering of how we add the annotations is important.
     """
@@ -82,23 +74,10 @@ def add_atom_array_attributes(
         atom_array, check_final_equiv=False
     )
     atom_array = annotation.add_ref_space_uid(atom_array)
-
-    original_motif_mapping: list[dict] = []
-    if has_motif:
-        atom_array, original_motif_mapping = (
-            annotation.update_ids_to_unindex_motif_residues(
-                atom_array, update_labels=True
-            )
-        )
-
     atom_array = annotation.add_atom_mol_type_mask(atom_array)
-
-    if has_motif:
-        atom_array = annotation.update_centre_atom_mask_to_include_motif(atom_array)
-
     atom_array.set_annotation("is_resolved", [True] * len(atom_array))
 
-    return atom_array, original_motif_mapping
+    return atom_array
 
 
 def set_chain_and_seq_ids(
@@ -176,15 +155,17 @@ def packing_input_to_atom_array_v2(
             if res_id in input_ca_coords:
                 protein_array.coord[i] = input_ca_coords[res_id]
 
-    protein_array.set_annotation("is_motif_related", [False] * len(protein_array))
-    protein_array.set_annotation("is_motif", [False] * len(protein_array))
+    protein_array.set_annotation(
+        "is_motif_related", np.zeros(len(protein_array), dtype=int)
+    )
+    protein_array.set_annotation("is_motif", np.zeros(len(protein_array), dtype=int))
     protein_array.set_annotation(
         "original_motif_res_id", np.full(len(protein_array), -1, dtype=int)
     )
     protein_array.set_annotation(
         "original_motif_chain_id", np.array([""] * len(protein_array))
     )
-    protein_array, _ = add_atom_array_attributes(protein_array, has_motif=False)
+    protein_array = add_atom_array_attributes(protein_array)
 
     if ligand_input is not None:
         combined = protein_array + ligand_input
@@ -211,7 +192,7 @@ def packing_input_to_atom_array_v2(
 
 def backbone_input_to_structure(
     backbone_input: BackboneInput,
-) -> tuple[AnnotatedStructure, list[dict]]:
+) -> tuple[AnnotatedStructure, tuple[MotifMappingEntry, ...]]:
     """Build ``AnnotatedStructure`` from a ``BackboneInput``.
 
     Replaces ``backbone_input_to_atom_array`` + the motif-enabled legacy
@@ -257,15 +238,14 @@ def backbone_input_to_structure(
     structure = AnnotatedStructure.annotate(design_atom_array, sequences)
 
     if has_motif:
-        structure, mapping = structure.with_unindexed_motif()
-    else:
-        mapping = []
-    return structure, mapping
+        structure = structure.with_unindexed_motif()
+        return structure, structure.motif.mapping
+    return structure, ()
 
 
 def sequence_design_input_to_structure(
     atom_array: AtomArray,
-) -> tuple[AnnotatedStructure, list[dict]]:
+) -> tuple[AnnotatedStructure, tuple[MotifMappingEntry, ...]]:
     """Build ``AnnotatedStructure`` from a single model of a pre-annotated stack.
 
     The MPNN path loads an ``AtomArrayStack`` that's already been through
@@ -273,13 +253,13 @@ def sequence_design_input_to_structure(
     ``to_atom_array``. ``from_atom_array`` reconstructs the typed structure
     from those annotations directly — no motif transform needed.
     """
-    return AnnotatedStructure.from_atom_array(atom_array), []
+    return AnnotatedStructure.from_atom_array(atom_array), ()
 
 
 def packing_input_to_structure(
     input_array: AtomArray,
     sequence: ProteinSequence,
-) -> tuple[AnnotatedStructure, list[dict]]:
+) -> tuple[AnnotatedStructure, tuple[MotifMappingEntry, ...]]:
     """Build ``AnnotatedStructure`` for sidechain packing.
 
     Mirrors the legacy ``packing_input_to_atom_array_v2`` + ``from_atom_array``
@@ -292,7 +272,7 @@ def packing_input_to_structure(
     a follow-up refactor eliminates the split-annotation pattern.
     """
     combined = packing_input_to_atom_array_v2(input_array, sequence)
-    return AnnotatedStructure.from_atom_array(combined), []
+    return AnnotatedStructure.from_atom_array(combined), ()
 
 
 def _build_polymer_atom_array(ccd_seqs: list[str]) -> AtomArray:
@@ -475,13 +455,13 @@ def build_motif_residue(motif_residue: MotifResidue, entity_id: int) -> AtomArra
 
     full_residue = full_residue.copy()
 
-    is_motif = np.zeros(len(full_residue), dtype=bool)
+    is_motif = np.zeros(len(full_residue), dtype=int)
 
     for i, atom_name in enumerate(motif_residue.atom_names):
         match_idx = np.where(full_residue.atom_name == atom_name)[0]
         if len(match_idx) > 0:
             full_residue.coord[match_idx[0]] = motif_residue.coords[i]
-            is_motif[match_idx[0]] = True
+            is_motif[match_idx[0]] = 1
         else:
             logger.warning(
                 f"Motif atom {atom_name} not found in CCD component "
@@ -492,7 +472,7 @@ def build_motif_residue(motif_residue: MotifResidue, entity_id: int) -> AtomArra
     # motif res_id annotations to prevent information leakage and avoid train-test discrepancy.
     full_residue.res_id[:] = motif_residue.res_id
     full_residue.set_annotation("is_motif", is_motif)
-    full_residue.set_annotation("is_motif_related", np.ones_like(is_motif, dtype=bool))
+    full_residue.set_annotation("is_motif_related", np.ones_like(is_motif, dtype=int))
 
     # Store original CIF res_id and chain_id for downstream RMSD computation after stitching.
     # This survives through set_chain_and_seq_ids and update_ids_to_unindex_motif_residues.
@@ -539,7 +519,7 @@ def build_motif_ligand(motif_ligand: MotifLigand, entity_id: int) -> AtomArray:
     ligand_info = build_ligand(motif_ligand.full_ligand)
     full_ligand_array = ligand_info.atom_array
 
-    is_motif = np.zeros(len(full_ligand_array), dtype=bool)
+    is_motif = np.zeros(len(full_ligand_array), dtype=int)
 
     match motif_ligand.full_ligand:
         case CCDLigand():
@@ -553,7 +533,7 @@ def build_motif_ligand(motif_ligand: MotifLigand, entity_id: int) -> AtomArray:
                         f"{full_ligand_array.atom_name.tolist()}"
                     )
                 full_ligand_array.coord[match_idx[0]] = motif_ligand.coords[i]
-                is_motif[match_idx[0]] = True
+                is_motif[match_idx[0]] = 1
 
         case SMILESLigand(atom_map=atom_map, smiles=smiles):
             if atom_map is not None:
@@ -579,14 +559,14 @@ def build_motif_ligand(motif_ligand: MotifLigand, entity_id: int) -> AtomArray:
                         f"This is an internal error."
                     )
                 full_ligand_array.coord[match_idx[0]] = motif_ligand.coords[i]
-                is_motif[match_idx[0]] = True
+                is_motif[match_idx[0]] = 1
 
         case _:
             assert_never(motif_ligand.full_ligand)
 
     full_ligand_array.set_annotation("is_motif", is_motif)
     full_ligand_array.set_annotation(
-        "is_motif_related", np.ones_like(is_motif, dtype=bool)
+        "is_motif_related", np.ones_like(is_motif, dtype=int)
     )
 
     # Store original CIF res_id and chain_id for downstream RMSD computation after stitching.

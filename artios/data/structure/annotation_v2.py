@@ -20,7 +20,9 @@ This module will supersede ``annotation.py``; during migration both coexist so
 from __future__ import annotations
 
 import dataclasses
+import functools
 import logging
+import typing
 from collections import Counter
 from dataclasses import dataclass
 from typing import ClassVar
@@ -261,6 +263,19 @@ def _compute_mol_atom_index(mol_id: np.ndarray) -> Int32[np.ndarray, "n_atom"]:
 # ---------------------------------------------------------------------------
 
 
+def _is_atom_array_annotation(annotation) -> bool:
+    """True if ``annotation`` is a jaxtyping ndarray type (or Optional of one).
+
+    Jaxtyping array types carry ``dim_str``; Python built-ins and plain generics
+    don't. ``Int[...] | None`` becomes ``Union[Int[...], NoneType]`` at runtime,
+    so we unwrap unions and check their members.
+    """
+    if hasattr(annotation, "dim_str"):
+        return True
+    args = typing.get_args(annotation)
+    return any(hasattr(a, "dim_str") for a in args)
+
+
 class _AnnotationGroup:
     """Mixin for frozen dataclasses whose field names match AtomArray annotations.
 
@@ -288,6 +303,27 @@ class _AnnotationGroup:
     REQUIRES: ClassVar[tuple[str, ...]] = ()
 
     @classmethod
+    @functools.cache
+    def _atom_array_field_names(cls) -> tuple[str, ...]:
+        """Names of dataclass fields whose values are atom-indexed arrays.
+
+        Detected by whether the jaxtyping annotation is an array type
+        (carries the ``dim_str`` marker). Unwraps ``X | None`` unions so
+        optional jaxtyping fields still count. Non-array fields (e.g.
+        per-residue metadata on ``MotifAnnotation``) skip the atom-array
+        machinery — ignored by serialization, passed through unchanged by
+        ``select`` / ``append_selection``. Assumes all jaxtyping ndarray
+        fields on a group are indexed by atom; revisit if we ever add a
+        token-indexed jaxtyping field.
+        """
+        hints = typing.get_type_hints(cls)
+        return tuple(
+            f.name
+            for f in dataclasses.fields(cls)
+            if _is_atom_array_annotation(hints.get(f.name))
+        )
+
+    @classmethod
     def _require_annotations(cls, atom_array: AtomArray) -> None:
         """Raise if any ``REQUIRES`` entry is missing from ``atom_array``."""
         present = atom_array.get_annotation_categories()
@@ -300,29 +336,33 @@ class _AnnotationGroup:
 
     @classmethod
     def from_atom_array(cls, atom_array: AtomArray):
-        """Read annotations into typed fields."""
+        """Read annotations into typed fields.
+
+        Non-array fields use their dataclass defaults.
+        """
         kwargs = {}
-        for f in dataclasses.fields(cls):
-            val = getattr(atom_array, f.name, None)
+        field_defaults = {f.name: f for f in dataclasses.fields(cls)}
+        for name in cls._atom_array_field_names():
+            val = getattr(atom_array, name, None)
+            f = field_defaults[name]
             if (
                 val is None
                 and f.default is dataclasses.MISSING
                 and f.default_factory is dataclasses.MISSING
             ):
                 raise AttributeError(
-                    f"Required annotation '{f.name}' missing from atom_array"
+                    f"Required annotation '{name}' missing from atom_array"
                 )
-            kwargs[f.name] = val
+            kwargs[name] = val
         return cls(**kwargs)
 
     @classmethod
     def maybe_from_atom_array(cls, atom_array: AtomArray):
-        """Like ``from_atom_array``, but returns ``None`` if all fields are absent.
-        # TODO: Weird method name, should be removed.
+        """Like ``from_atom_array``, but returns ``None`` if all atom-array fields are absent.
 
-        Raises ``ValueError`` on partial presence — either all fields or none.
+        Raises ``ValueError`` on partial presence.
         """
-        names = [f.name for f in dataclasses.fields(cls)]
+        names = cls._atom_array_field_names()
         cats = atom_array.get_annotation_categories()
         present = [n in cats for n in names]
         if not any(present):
@@ -330,56 +370,56 @@ class _AnnotationGroup:
         if not all(present):
             missing = [n for n, p in zip(names, present) if not p]
             raise ValueError(
-                f"{cls.__name__} partially present on atom_array: " f"missing {missing}"
+                f"{cls.__name__} partially present on atom_array: missing {missing}"
             )
         return cls.from_atom_array(atom_array)
 
     def to_atom_array(self, atom_array: AtomArray) -> None:
-        """Write typed fields back as annotations (mutates *atom_array*).
+        """Write atom-array fields back as annotations (mutates *atom_array*).
 
-        Skips fields that are None.
+        Skips fields that are None. Non-array fields are not written.
         """
-        for f in dataclasses.fields(self):
-            val = getattr(self, f.name)
+        for name in self._atom_array_field_names():
+            val = getattr(self, name)
             if val is not None:
-                atom_array.set_annotation(f.name, val)
+                atom_array.set_annotation(name, val)
 
     @classmethod
     def strip_from(cls, atom_array: AtomArray) -> None:
-        """Remove our annotations from *atom_array*."""
-        for f in dataclasses.fields(cls):
-            if f.name in atom_array.get_annotation_categories():
-                atom_array.del_annotation(f.name)
+        """Remove our atom-array annotations from *atom_array*."""
+        for name in cls._atom_array_field_names():
+            if name in atom_array.get_annotation_categories():
+                atom_array.del_annotation(name)
 
     def select(self, indices: np.ndarray):
-        """Slice all fields by *indices*. Returns new instance."""
+        """Slice atom-array fields by *indices*; non-array fields pass through."""
+        atom_fields = set(self._atom_array_field_names())
         return type(self)(
             **{
                 f.name: (
                     getattr(self, f.name)[indices]
-                    if getattr(self, f.name) is not None
-                    else None
+                    if f.name in atom_fields and getattr(self, f.name) is not None
+                    else getattr(self, f.name)
                 )
                 for f in dataclasses.fields(self)
             }
         )
 
     def append_selection(self, mask: np.ndarray):
-        """Append a copy of the rows selected by *mask* to every array field.
+        """Append a copy of *mask*-selected rows to every atom-array field.
 
-        Counterpart to ``select`` — where ``select`` slices a subset out,
-        this slices a subset out *and concatenates it onto the tail*.
-        Every per-atom array grows by ``mask.sum()`` rows in the same order.
+        Counterpart to ``select``. Non-array fields pass through unchanged.
         Used by ``AnnotatedStructure.with_duplicated_motif_backbones`` to
         keep every group's length in lockstep with the atom array when
         motif-residue backbones are physically duplicated.
         """
+        atom_fields = set(self._atom_array_field_names())
         return type(self)(
             **{
                 f.name: (
                     np.concatenate([getattr(self, f.name), getattr(self, f.name)[mask]])
-                    if getattr(self, f.name) is not None
-                    else None
+                    if f.name in atom_fields and getattr(self, f.name) is not None
+                    else getattr(self, f.name)
                 )
                 for f in dataclasses.fields(self)
             }
@@ -778,30 +818,54 @@ class TrainingAnnotations(_AnnotationGroup):
         )
 
 
+@dataclass(frozen=True)
+class MotifMappingEntry:
+    """One motif-residue instance's pre- / post-unindex correspondence.
+
+    Produced by ``AnnotatedStructure.with_unindexed_motif`` and consumed at
+    evaluation time (``evaluation/utils/chain_tracker.py``) to translate
+    between unindexed chain ids on the generated backbone and the original
+    ids in the input motif CIF.
+    """
+
+    unindexed_chain_id: str
+    unindexed_res_id: int
+    original_motif_chain_id: str
+    original_motif_res_id: int
+    res_name: str
+
+
 @typecheck
 @dataclass(frozen=True)
 class MotifAnnotation(_AnnotationGroup):
-    """Per-atom motif masks. Only present when motif is active."""
+    """Per-atom motif masks plus optional per-residue unindex mapping.
+
+    ``mapping`` is populated by ``with_unindexed_motif``; it's per-residue
+    metadata that rides on the structure wrapper, not a per-atom annotation.
+    The base group machinery detects it as non-array (not jaxtyped) and
+    skips it for serialization / slicing.
+    """
 
     FIELD_NAME: ClassVar[str] = "motif"
     REQUIRED: ClassVar[bool] = False
 
     is_motif: Int[np.ndarray, "n_atom"]
     is_motif_related: Int[np.ndarray, "n_atom"]
+    mapping: tuple[MotifMappingEntry, ...] = ()
 
-    # TODO(delete-me): this override exists only because some legacy inference
-    # writers store is_motif/is_motif_related as bool arrays (via ``[False]*n``
-    # on set_annotation) while our contract is Int[...]. It is a boundary
-    # bandaid — nothing else about MotifAnnotation needs a custom reader.
-    # Two ways out, pick when PR C lands:
-    #   1. Delete the legacy writers (PR C8 removes ``add_atom_array_attributes``
-    #      + backbone_input_to_atom_array + packing_input_to_atom_array_v2);
-    #      then no bool values reach this path and the base class reader
-    #      suffices.
-    #   2. Flip the group's dtype to Bool (tracked in the annotation_v2
-    #      module docstring's int→bool migration TODO).
-    # Either way: when you pick one, delete this method. It should NOT become
-    # a permanent fixture.
+    def with_mapping(self, mapping: tuple[MotifMappingEntry, ...]) -> "MotifAnnotation":
+        return MotifAnnotation(
+            is_motif=self.is_motif,
+            is_motif_related=self.is_motif_related,
+            mapping=mapping,
+        )
+
+    # Bool→int coercion for legacy-saved stacks. Post-Phase-7 of
+    # priority_8_motif_first_class.md, all artios writers emit int, but
+    # pre-flip backbone NPZs pulled from Modal volumes still have bool
+    # annotations baked in. Deletable once those fixtures regenerate (or
+    # when the group dtype flips to Bool — tracked in the module
+    # docstring's int→bool migration TODO).
     @classmethod
     def from_atom_array(cls, atom_array: AtomArray) -> "MotifAnnotation":
         is_motif = atom_array.is_motif

@@ -10,6 +10,7 @@ import torch
 from einops import rearrange, repeat
 from torch import Tensor
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 from artios.metrics.rmsd import weighted_rigid_align
 from artios.model.modules.message_passing import gather_nodes
@@ -160,11 +161,17 @@ def composite_nll_loss_msa(
     query) reduces exactly to the non-MSA composite loss — no special
     casing needed.
 
-    **Memory**: the per-chunk ``[R, R]`` joint-logits materialisation is
-    the only significant allocation. At realistic training shapes
-    (B=4, n_msa=64, N=600, K=30, R=32, fp32) the full-n_msa version
-    would be ~19 GB; with ``n_chunk=8`` it is ~2.4 GB per chunk plus
-    another ~2.4 GB for the log-softmax output, so ~5 GB peak.
+    **Memory**: each chunk materialises a ``[B, n_chunk, N, K, R, R]``
+    log-softmax output. ``F.log_softmax`` saves its output for backward,
+    which autograd holds live across *every* chunk until ``.backward()``
+    runs — so without intervention peak scales linearly with ``n_msa``
+    and the chunking buys nothing on the backward path. We fix this by
+    wrapping the chunk body in ``torch.utils.checkpoint.checkpoint``:
+    the saved tensors are discarded at forward time and the chunk is
+    re-run during backward. Peak memory is then ``O(n_chunk)`` — one
+    chunk's worth — at the cost of ~30% more compute on the loss path.
+    At B=4, n_msa=64, N=600, K=30, R=32, fp32, n_chunk=8 this is
+    ~2.4 GB per live chunk.
 
     Args:
         h: Potts fields from the model [B, N, R].
@@ -198,6 +205,29 @@ def composite_nll_loss_msa(
     K = edge_index.shape[-1]
     R = h.shape[-1]
 
+    def _chunk_body(
+        seq_chunk: Tensor,
+        h_c: Tensor,
+        J_c: Tensor,
+        ei_c: Tensor,
+        em_c: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        # Closes over R, K. Isolated so ``checkpoint`` can discard the
+        # chunk's saved tensors (crucially the log_softmax output) and
+        # recompute them on backward.
+        joint_c, mask_c = compute_potts_joint_logits(seq_chunk, h_c, J_c, ei_c, em_c)
+        logp_flat = F.log_softmax(
+            rearrange(joint_c, "... r1 r2 -> ... (r1 r2)"),
+            dim=-1,
+        )
+        logp = rearrange(logp_flat, "... (r1 r2) -> ... r1 r2", r1=R)
+        S_j = gather_nodes(seq_chunk.unsqueeze(-1).float(), ei_c).long()
+        S_j = repeat(S_j, "... n k 1 -> ... n k r 1", r=R)
+        logp_at_sj = torch.gather(logp, -1, S_j).squeeze(-1)  # [B, c, N, K, R]
+        S_i = repeat(seq_chunk.long(), "... n -> ... n k 1", k=K)
+        lp_c = torch.gather(logp_at_sj, -1, S_i).squeeze(-1)  # [B, c, N, K]
+        return lp_c, mask_c
+
     lp_chunks: list[Tensor] = []
     mask_chunks: list[Tensor] = []
 
@@ -211,32 +241,15 @@ def composite_nll_loss_msa(
         ei_c = repeat(edge_index, "b n k -> b m n k", m=c)
         em_c = repeat(edge_mask, "b n k -> b m n k", m=c)
 
-        # BEWARE: this materialises joint_c shape [B, c, N, K, R, R]
-        joint_c, mask_c = compute_potts_joint_logits(seq_chunk, h_c, J_c, ei_c, em_c)
-
-        # Log-softmax over R x R joint states
-        logp_flat = F.log_softmax(
-            rearrange(joint_c, "... r1 r2 -> ... (r1 r2)"),
-            dim=-1,
+        lp_c, mask_c = checkpoint(
+            _chunk_body,
+            seq_chunk,
+            h_c,
+            J_c,
+            ei_c,
+            em_c,
+            use_reentrant=False,
         )
-        logp = rearrange(logp_flat, "... (r1 r2) -> ... r1 r2", r1=R)
-
-        del joint_c
-
-        # Gather neighbour GT states
-        S_j = gather_nodes(seq_chunk.unsqueeze(-1).float(), ei_c).long()
-        S_j = repeat(S_j, "... n k 1 -> ... n k r 1", r=R)
-
-        ### Extract probs corresponding to GT states of the nodes and GT states of
-        ### each of their neighbours.
-        # Index using GT neighbour indices
-        logp_at_sj = torch.gather(logp, -1, S_j).squeeze(-1)  # [B, c, N, K, R]
-        del logp, logp_flat
-        # Index using GT node indices
-        S_i = repeat(seq_chunk.long(), "... n -> ... n k 1", k=K)
-        lp_c = torch.gather(logp_at_sj, -1, S_i).squeeze(-1)
-        del logp_at_sj
-
         lp_chunks.append(lp_c)
         mask_chunks.append(mask_c)
 

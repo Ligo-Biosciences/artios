@@ -22,9 +22,11 @@ import numpy as np
 import pandas as pd
 from biotite.structure import AtomArray
 
-from artios.data.parsing.bioassembly import load_bioassembly
-from artios.data.parsing.cif import DistillationMMCIFParser
-from artios.data.parsing.indexing import make_indices_from_bioassembly
+from artios.data.parsing.bioassembly import (
+    load_bioassembly,
+    load_distillation_bioassembly,
+)
+from artios.data.parsing.indexing import make_indices
 from artios.data.parsing.mmcif_reader import MmcifReader
 from artios.data.structure import AnnotatedStructure, cropping
 
@@ -54,40 +56,26 @@ class DataPipeline(object):
         try:
             if dataset == "WeightedPDB":
                 bioassembly = load_bioassembly(mmcif)
-                if bioassembly is None:
-                    return [], None
-                reader = MmcifReader(mmcif)
-                atom_array_for_poly = bioassembly.structure.to_atom_array()
-                sample_indices_list = make_indices_from_bioassembly(
-                    bioassembly,
-                    poly_res_names=reader._poly_res_names(atom_array_for_poly),
-                    pdb_cluster_file=pdb_cluster_file,
-                )
-                if len(sample_indices_list) == 0:
-                    return [], None
-                return sample_indices_list, bioassembly.structure
             elif dataset == "Distillation":
-                # Distillation path migrates in Phase 6 of the
-                # get_bioassembly decomposition — keep MMCIFParser until
-                # ``load_distillation_bioassembly`` lands.
-                parser = DistillationMMCIFParser(mmcif_file=mmcif)
-                bioassembly_dict = parser.get_structure_dict()
-                sample_indices_list = parser.make_indices(
-                    bioassembly_dict=bioassembly_dict,
-                    pdb_cluster_file=pdb_cluster_file,
-                )
-                if len(sample_indices_list) == 0:
-                    return [], None
-                atom_array = bioassembly_dict["atom_array"]
-                if atom_array is None:
-                    return [], None
-                return sample_indices_list, AnnotatedStructure.from_atom_array(
-                    atom_array
-                )
+                bioassembly = load_distillation_bioassembly(mmcif)
             else:
                 raise NotImplementedError(
                     'Unsupported "dataset", please input either "WeightedPDB" or "Distillation".'
                 )
+
+            if bioassembly is None:
+                return [], None
+
+            reader = MmcifReader(mmcif)
+            atom_array_for_poly = bioassembly.structure.to_atom_array()
+            sample_indices_list = make_indices(
+                bioassembly,
+                poly_res_names=reader._poly_res_names(atom_array_for_poly),
+                pdb_cluster_file=pdb_cluster_file,
+            )
+            if len(sample_indices_list) == 0:
+                return [], None
+            return sample_indices_list, bioassembly.structure
 
         except Exception as e:
             logging.warning("Gen data failed for %s due to %s", mmcif, e)

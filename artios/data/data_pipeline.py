@@ -27,7 +27,7 @@ from artios.data.parsing.bioassembly import (
     load_distillation_bioassembly,
 )
 from artios.data.parsing.indexing import make_indices
-from artios.data.parsing.mmcif_reader import MmcifReader
+from artios.data.parsing.mmcif import MmcifReader
 from artios.data.structure import AnnotatedStructure, cropping
 
 

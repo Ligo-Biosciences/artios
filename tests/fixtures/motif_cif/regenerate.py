@@ -1,7 +1,7 @@
 """Regenerate motif-CIF parity snapshots.
 
 Every ``.cif`` under ``evaluation/inputs/motifs/`` gets parsed via
-``MMCIFParser.get_structure()`` — the lightweight inference-side parse —
+``MmcifReader.atom_array()`` — the lightweight inference-side parse —
 and saved to ``tests/fixtures/motif_cif/<domain>/<stem>.npz``. The
 companion parity test
 (``tests/data_pipeline/test_motif_cif_parse_parity.py``) compares fresh
@@ -11,8 +11,7 @@ Run from the repo root:
 
     uv run python -m tests.fixtures.motif_cif.regenerate
 
-Locked before the ``cif.py`` refactor to baseline current behaviour; any
-refactor step that changes ``get_structure()`` output will turn the
+Any refactor step that changes ``atom_array()`` output will turn the
 parity test red, forcing a deliberate allowlist entry or a revert.
 """
 
@@ -23,7 +22,7 @@ import logging
 import sys
 from pathlib import Path
 
-from artios.data.parsing.cif import MMCIFParser
+from artios.data.parsing.mmcif import MmcifReader
 from artios.utils.file_io import dump_atomarray_to_npz
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -35,13 +34,13 @@ SNAPSHOT_DIR = REPO_ROOT / "tests" / "fixtures" / "motif_cif"
 
 
 def regenerate_one(cif_path: Path) -> Path:
-    """Parse ``cif_path`` with ``MMCIFParser.get_structure()`` and dump
+    """Parse ``cif_path`` with ``MmcifReader.atom_array()`` and dump
     the resulting AtomArray to the sibling snapshot location."""
     rel = cif_path.relative_to(MOTIF_CIF_DIR)
     out_path = SNAPSHOT_DIR / rel.with_suffix(".npz")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    atom_array = MMCIFParser(mmcif_file=cif_path).get_structure()
+    atom_array = MmcifReader(cif_path).atom_array()
     dump_atomarray_to_npz(atom_array, out_path)
 
     size_kb = out_path.stat().st_size / 1024

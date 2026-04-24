@@ -17,7 +17,7 @@ import biotite.structure as struc
 import numpy as np
 
 from artios.data.parsing.json import CCDLigand, MotifSpec, SMILESLigand
-from artios.data.parsing.mmcif_reader import MmcifReader
+from artios.data.parsing.mmcif import MmcifReader
 
 logger = logging.getLogger(__name__)
 

@@ -1,13 +1,11 @@
-"""Unit tests for ``artios.data.parsing.mmcif_reader``.
+"""Unit tests for ``artios.data.parsing.mmcif``.
 
-Layer 4 of the cif.py refactor test plan: the reader owns non-trivial
-logic (altloc filtering, PyMOL-export fallbacks, ``replace_auth_with_label``
-with its historical int/str hazard) so each of those gets a focused test
-alongside the legacy-equivalence pin.
-
-The legacy-equivalence pin is load-bearing: as long as it passes,
-flipping any caller from ``MMCIFParser.get_structure()`` to
-``MmcifReader(path).atom_array()`` is safe.
+The reader owns non-trivial logic — altloc filtering, PyMOL-export
+fallbacks, ``replace_auth_with_label`` with its historical int/str
+hazard — so each gets a focused test. End-to-end byte equivalence on the
+``atom_array()`` output is pinned by ``test_motif_cif_parse_parity.py``
+(motif CIFs) and ``test_load_bioassembly.py`` (PDB CIFs); this file
+covers the per-method invariants those goldens don't isolate.
 """
 
 from __future__ import annotations
@@ -16,30 +14,12 @@ from datetime import date
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from artios.data.parsing.cif import MMCIFParser
-from artios.data.parsing.mmcif_reader import MmcifReader
-from tests._helpers.structure_equality import assert_atom_arrays_equal
+from artios.data.parsing.mmcif import MmcifReader
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CIF_DIR = REPO_ROOT / "tests" / "fixtures" / "cif"
 MOTIF_DIR = REPO_ROOT / "evaluation" / "inputs" / "motifs"
-
-# Pairs: (label, path). Covers one small structure (2g1k) for a fast
-# smoke + several motif shapes to catch PyMOL-export fallbacks and
-# ligand-ligand bond handling.
-SAMPLE_CIFS = [
-    pytest.param(CIF_DIR / "2g1k.cif", id="2g1k"),
-    pytest.param(
-        MOTIF_DIR / "carbonic_anhydrase" / "carbonic_anhydrase_motif_no_h.cif",
-        id="carbonic_anhydrase_motif",
-    ),
-    pytest.param(
-        MOTIF_DIR / "dtz" / "his_arg_dtz.cif",
-        id="dtz_motif",
-    ),
-]
 
 
 # ---------------------------------------------------------------------------
@@ -98,24 +78,6 @@ class TestHeader:
 
 
 # ---------------------------------------------------------------------------
-# atom_array — legacy equivalence pin
-# ---------------------------------------------------------------------------
-
-
-class TestAtomArrayParity:
-    @pytest.mark.parametrize("cif_path", SAMPLE_CIFS)
-    def test_bit_identical_to_legacy_mmcifparser(self, cif_path: Path) -> None:
-        """``MmcifReader(path).atom_array()`` must produce the same
-        ``AtomArray`` (coords + every annotation + bonds) as
-        ``MMCIFParser(path).get_structure()``. This is the load-bearing
-        pin: every caller that migrates from the legacy parser to the
-        reader depends on this equivalence."""
-        legacy = MMCIFParser(cif_path).get_structure()
-        modern = MmcifReader(cif_path).atom_array()
-        assert_atom_arrays_equal(modern, legacy)
-
-
-# ---------------------------------------------------------------------------
 # replace_auth_with_label — bug #2 regression pin
 # ---------------------------------------------------------------------------
 
@@ -134,7 +96,7 @@ class TestReplaceAuthWithLabel:
         """
         from biotite.structure import AtomArray, BondList
 
-        from artios.data.parsing.mmcif_reader import _replace_auth_with_label
+        from artios.data.parsing.mmcif import _replace_auth_with_label
 
         n = 30_000
         aa = AtomArray(n)

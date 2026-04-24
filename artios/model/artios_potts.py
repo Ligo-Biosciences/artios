@@ -60,6 +60,7 @@ class PottsLossConfig:
     label_smoothing: float = 0.0
     active_site_upweight: float = 1.0
     active_site_distance: float = 8.0
+    n_msa_chunk: int = 8
 
 
 class ArtiosPotts(nn.Module):

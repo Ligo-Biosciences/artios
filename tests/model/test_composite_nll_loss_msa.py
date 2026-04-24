@@ -176,6 +176,65 @@ def test_partial_gap_mask_only_excludes_gapped_rows():
 
 
 # ---------------------------------------------------------------------------
+# supervise_query flag: row 0 is dropped before the loss is computed.
+# ---------------------------------------------------------------------------
+
+
+def test_supervise_query_false_drops_row_0():
+    """With ``supervise_query=False`` the loss must match what you'd get
+    from passing only rows 1..M-1 (i.e. slicing the query off manually).
+    This pins the semantic — "don't supervise on the query" — to exactly
+    the slice operation we claim it is."""
+    h, J, edge_index, edge_mask, gt = _make_potts_inputs(B=2, seed=29)
+    B, N = gt.shape
+    R = h.shape[-1]
+    M = 5
+
+    gen = torch.Generator().manual_seed(30)
+    msa_tokens = torch.empty(B, N, M, dtype=torch.long)
+    msa_tokens[..., 0] = gt  # row 0 is the query
+    msa_tokens[..., 1:] = torch.randint(0, R, (B, N, M - 1), generator=gen)
+    msa_gap_mask = torch.zeros(B, N, M, dtype=torch.bool)
+
+    per_pos_no_query = composite_nll_loss_msa(
+        h, J, edge_index, edge_mask, msa_tokens, msa_gap_mask, supervise_query=False
+    )
+    per_pos_homologs_only = composite_nll_loss_msa(
+        h, J, edge_index, edge_mask, msa_tokens[..., 1:], msa_gap_mask[..., 1:]
+    )
+
+    torch.testing.assert_close(
+        per_pos_no_query, per_pos_homologs_only, rtol=1e-6, atol=1e-6
+    )
+
+
+def test_supervise_query_false_differs_from_default_when_homologs_differ():
+    """Sanity check that the flag actually changes the output when row 0
+    carries different information than the homologs. If homologs match
+    the query (trivial case) the two paths would coincide; here they
+    don't, so the flag must make a difference."""
+    h, J, edge_index, edge_mask, gt = _make_potts_inputs(B=2, seed=31)
+    B, N = gt.shape
+    R = h.shape[-1]
+    M = 4
+
+    gen = torch.Generator().manual_seed(32)
+    msa_tokens = torch.empty(B, N, M, dtype=torch.long)
+    msa_tokens[..., 0] = gt
+    msa_tokens[..., 1:] = torch.randint(0, R, (B, N, M - 1), generator=gen)
+    msa_gap_mask = torch.zeros(B, N, M, dtype=torch.bool)
+
+    per_pos_default = composite_nll_loss_msa(
+        h, J, edge_index, edge_mask, msa_tokens, msa_gap_mask
+    )
+    per_pos_no_query = composite_nll_loss_msa(
+        h, J, edge_index, edge_mask, msa_tokens, msa_gap_mask, supervise_query=False
+    )
+
+    assert not torch.allclose(per_pos_default, per_pos_no_query)
+
+
+# ---------------------------------------------------------------------------
 # Silent-bug guard: row content actually affects the loss.
 # ---------------------------------------------------------------------------
 

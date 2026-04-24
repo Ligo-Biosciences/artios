@@ -43,6 +43,7 @@ def _make_configs(
                     "active_site_upweight": 1.0,
                     "active_site_distance": 8.0,
                     "n_msa_chunk": 8,
+                    "supervise_query": True,
                 },
             },
             "artios_mpnn": {

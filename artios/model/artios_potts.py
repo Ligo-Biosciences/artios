@@ -96,7 +96,7 @@ class ArtiosPotts(nn.Module):
             active_site_upweight=potts_loss_cfg.active_site_upweight,
             active_site_distance=potts_loss_cfg.active_site_distance,
             n_msa_chunk=potts_loss_cfg.n_msa_chunk,
-            supervise_query=potts_loss_cfg.get("supervise_query", True),
+            supervise_query=potts_loss_cfg.supervise_query,
         )
 
         masking_sampler_type = MaskingSamplerType(

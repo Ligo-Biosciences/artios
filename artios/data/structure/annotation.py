@@ -675,36 +675,6 @@ def unresolve_low_plddt_residues(
     return atom_array
 
 
-def add_domain_annotation(
-    atom_array: AtomArray,
-    domain_ranges: dict[int, list[tuple[int, int]]],
-) -> AtomArray:
-    """
-    Add domain_id annotation to atom array based on domain residue ranges.
-
-    Args:
-        atom_array (AtomArray): Biotite AtomArray object
-        domain_ranges (dict[int, list[tuple[int, int]]]): Mapping of domain_id to list of (start, end) residue ranges.
-            Example: {1: [(79, 117)], 2: [(119, 153), (170, 200)]}
-
-    Returns:
-        AtomArray: Biotite AtomArray object with "domain_id" annotation added.
-            Values: 0 = no domain, 1+ = domain ID from CIF metadata
-    """
-    # Initialize all atoms with domain_id = 0 (no domain)
-    domain_id = np.zeros(len(atom_array), dtype=int)
-
-    # For each domain, mark atoms whose residues fall within the domain's ranges
-    for did, ranges in domain_ranges.items():
-        for start, end in ranges:
-            # Find atoms whose res_id falls within this range (inclusive)
-            mask = (atom_array.res_id >= start) & (atom_array.res_id <= end)
-            domain_id[mask] = did
-
-    atom_array.set_annotation("domain_id", domain_id)
-    return atom_array
-
-
 def add_pocket_annotation(
     atom_array: AtomArray,
     plddt_cutoff: Optional[float] = None,

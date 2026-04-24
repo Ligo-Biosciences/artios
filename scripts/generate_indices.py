@@ -21,6 +21,7 @@ import pandas as pd
 import ray
 from tqdm import tqdm
 
+from artios.data.parsing.bioassembly import Bioassembly
 from artios.data.parsing.indexing import make_indices
 from artios.data.parsing.mmcif_reader import MmcifReader
 from artios.utils.file_io import load_gzip_pickle
@@ -31,11 +32,12 @@ def get_indices_from_bioassembly(
     bioassembly_pickle_file: Path,
     cluster_file: Optional[Path] = None,
 ) -> list:
-    """Given a mmCIF file and the bioassembly dict generated from it, generate the list of indices to be saved as a CSV file.
+    """Generate training indices from an mmCIF file and its pickled bioassembly dict.
 
-    Uses ``MmcifReader`` for CIF-level metadata; the legacy
-    ``bioassembly_dict`` pickle shape is kept because on-disk pickles
-    predate the typed ``Bioassembly`` dataclass.
+    The on-disk pickle format predates the typed ``Bioassembly``
+    dataclass, so we run it through ``Bioassembly.from_legacy_dict`` to
+    reconstruct a proper ``Bioassembly`` before handing off to the
+    Bioassembly-native ``make_indices``.
 
     Args:
         mmcif_file (Path): Path to the mmCIF file.
@@ -46,19 +48,14 @@ def get_indices_from_bioassembly(
     """
     # TODO: switch to lz4 compression if using newer version of database.
     bioassembly_dict = load_gzip_pickle(bioassembly_pickle_file)
+    bioassembly = Bioassembly.from_legacy_dict(bioassembly_dict)
+    if bioassembly is None:
+        return []
     reader = MmcifReader(mmcif_file)
-    header = reader.header
-    atom_array = bioassembly_dict.get("atom_array")
-    poly_res_names = (
-        reader._poly_res_names(atom_array) if atom_array is not None else {}
-    )
+    atom_array = bioassembly.structure.to_atom_array()
     return make_indices(
-        bioassembly_dict,
-        entity_poly_type=header.entity_poly_type,
-        poly_res_names=poly_res_names,
-        pdb_id=header.pdb_id,
-        release_date=str(header.release_date),
-        resolution=header.resolution,
+        bioassembly,
+        poly_res_names=reader._poly_res_names(atom_array),
         pdb_cluster_file=cluster_file,
     )
 

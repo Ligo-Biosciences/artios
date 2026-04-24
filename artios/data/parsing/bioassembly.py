@@ -60,72 +60,87 @@ class AssemblyOperation:
 
 
 @dataclass(frozen=True)
-class DistillationBioassembly:
-    """Output of ``load_distillation_bioassembly`` — an annotated structure
-    from a distillation CIF.
-
-    Distillation CIFs represent predicted monomer structures; there's no
-    ``pdbx_struct_assembly`` block to expand and the filter gate that
-    prunes multi-chain assemblies doesn't apply. The training pipeline
-    annotates them with ``fragment_id`` + per-fragment ``pocket_id``
-    (instead of the per-assembly ``pocket_id`` the crystal pipeline
-    produces).
-
-    Fields:
-    - ``structure``: the annotated structure. Never ``None`` — when parse
-      or repair fails, ``load_distillation_bioassembly`` returns ``None``
-      rather than a stubbed instance.
-    - ``header``: ``MmcifHeader`` from the CIF (pdb_id, resolution,
-      release_date, methods, entity_poly_type, sequences).
-    - ``num_prot_chains``: how many polypeptide chains survived repair.
-    - ``num_tokens``: post-annotation token count (mirrors
-      ``structure.grouping.n_tokens``).
-    """
-
-    structure: AnnotatedStructure
-    header: MmcifHeader
-    num_prot_chains: int
-    num_tokens: int
-
-    @property
-    def pdb_id(self) -> str:
-        return self.header.pdb_id
-
-
-@dataclass(frozen=True)
 class Bioassembly:
-    """Output of ``load_bioassembly`` — a fully annotated bioassembly
-    plus the header metadata and the counts downstream samplers need.
+    """An annotated structure + CIF metadata + training-sample counts.
+
+    Covers both the crystal-bioassembly path (``load_bioassembly``) and
+    the distillation-monomer path (``load_distillation_bioassembly``) —
+    the two differ only in whether ``pdbx_struct_assembly`` expansion
+    ran, so the two assembly-specific fields below are optional.
 
     Fields:
-    - ``structure``: the annotated bioassembly. Never ``None`` — when
-      parse or expansion fails, ``load_bioassembly`` will return
-      ``None`` rather than a ``Bioassembly`` with a stubbed structure.
-    - ``assembly_id``: which bioassembly in the CIF was expanded.
+    - ``structure``: the annotated structure. Never ``None`` — when the
+      parse / expansion / repair fails, the loaders return ``None``
+      rather than constructing a stubbed ``Bioassembly``.
     - ``header``: ``MmcifHeader`` carrying pdb_id, resolution,
       release_date, methods, entity_poly_type, sequences.
-    - ``num_assembly_polymer_chains``: the oligomeric count for this
-      assembly from ``pdbx_struct_assembly``. ``None`` when the CIF
-      records an unresolved '?' count.
-    - ``num_prot_chains``: how many protein-entity chains made it into
-      the final ``structure``. Useful for weighting code.
-    - ``num_tokens``: post-annotation token count (the same value
-      ``structure.grouping.n_tokens`` carries). Stored for legacy
-      compatibility; may be dropped once callers read the grouping
-      field directly.
+    - ``num_prot_chains``: polypeptide chains that survived repair
+      (crystal path) or the predicted-monomer chain count (distillation).
+    - ``num_tokens``: post-annotation token count — mirrors
+      ``structure.grouping.n_tokens``.
+    - ``assembly_id``: which bioassembly in ``pdbx_struct_assembly_gen``
+      was expanded. ``None`` for distillation (asymmetric-unit only).
+    - ``num_assembly_polymer_chains``: oligomeric count from
+      ``pdbx_struct_assembly``. ``None`` for distillation, and ``None``
+      in the crystal path when the CIF records an unresolved '?' count.
     """
 
     structure: AnnotatedStructure
-    assembly_id: str
     header: MmcifHeader
-    num_assembly_polymer_chains: int | None
     num_prot_chains: int
     num_tokens: int
+    assembly_id: str | None = None
+    num_assembly_polymer_chains: int | None = None
 
     @property
     def pdb_id(self) -> str:
         """Convenience accessor — identical to ``header.pdb_id``."""
         return self.header.pdb_id
+
+    @classmethod
+    def from_legacy_dict(cls, d: dict) -> "Bioassembly | None":
+        """Rebuild a ``Bioassembly`` from a legacy ``get_bioassembly`` dict.
+
+        Backcompat seam for on-disk pickles (``scripts/generate_indices.py``
+        reads ``bioassembly_dict`` pickles saved from an older pipeline).
+        Returns ``None`` if the pickle represents a skipped sample
+        (``atom_array`` is ``None``). Caller is responsible for having
+        access to the CIF if it wants altloc-filtered sequences — the
+        dict's ``sequences`` already carries the altloc-filtered version
+        the crystal pipeline stores.
+
+        Not a preferred API for new code; prefer ``load_bioassembly``.
+        """
+        from datetime import datetime
+
+        atom_array = d.get("atom_array")
+        if atom_array is None:
+            return None
+
+        raw_release_date = d.get("release_date", "9999-12-31")
+        try:
+            release_date = datetime.strptime(raw_release_date, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            # Already a date/datetime object, or something unparseable;
+            # fall through to the sentinel in the hopeless case.
+            release_date = getattr(raw_release_date, "date", lambda: raw_release_date)()
+
+        header = MmcifHeader(
+            pdb_id=d["pdb_id"],
+            resolution=d.get("resolution", -1.0),
+            release_date=release_date,
+            methods=(),  # legacy dict doesn't carry exptl methods
+            entity_poly_type=d["entity_poly_type"],
+            sequences=d["sequences"],
+        )
+        return cls(
+            structure=AnnotatedStructure.from_atom_array(atom_array),
+            header=header,
+            num_prot_chains=d["num_prot_chains"],
+            num_tokens=d["num_tokens"],
+            assembly_id=d.get("assembly_id"),
+            num_assembly_polymer_chains=d.get("num_assembly_polymer_chains"),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -556,8 +571,8 @@ def load_bioassembly(
 
 def load_distillation_bioassembly(
     cif_path: Path | str,
-) -> DistillationBioassembly | None:
-    """Parse + repair + annotate a distillation CIF into a ``DistillationBioassembly``.
+) -> Bioassembly | None:
+    """Parse + repair + annotate a distillation CIF into a ``Bioassembly``.
 
     Sibling to ``load_bioassembly`` for the distillation (predicted
     monomer) pipeline. Differences from the bioassembly path:
@@ -626,11 +641,13 @@ def load_distillation_bioassembly(
 
     structure = AnnotatedStructure.from_atom_array(atom_array)
 
-    return DistillationBioassembly(
+    return Bioassembly(
         structure=structure,
         header=header,
         num_prot_chains=_count_protein_chains(
             atom_array, entity_poly_type=header.entity_poly_type
         ),
         num_tokens=int(atom_array.centre_atom_mask.sum()),
+        # assembly_id and num_assembly_polymer_chains stay None — the
+        # distillation path has no pdbx_struct_assembly expansion.
     )

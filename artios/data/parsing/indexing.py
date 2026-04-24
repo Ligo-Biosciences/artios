@@ -368,15 +368,13 @@ def classify_eval_type(indices_dict: dict[str, Any]) -> dict[str, Any]:
 
 
 def make_indices(
-    bioassembly_dict: dict[str, Any],
-    entity_poly_type: dict[str, str],
+    bioassembly: "Bioassembly",
+    *,
     poly_res_names: dict[str, "np.ndarray | list[str]"],
-    pdb_id: str,
-    release_date: str,
-    resolution: float,
     pdb_cluster_file: Union[Path, str, None] = None,
 ) -> list[dict[str, Any]]:
-    """Produce the flat ``sample_indices_list`` for training.
+    """Produce the flat ``sample_indices_list`` for training from a
+    typed ``Bioassembly``.
 
     Returns one row per chain (``type="chain"``) plus one row per
     interface (``type="interface"``), each carrying the meta fields
@@ -385,31 +383,39 @@ def make_indices(
     ``mol_type_group`` / ``sub_mol_*_type`` / ``eval_type``.
 
     The output matches ``data_weights.py::IndicesSchema`` exactly.
+
+    Args:
+        bioassembly: The typed output of ``load_bioassembly`` (crystal
+            path) or ``load_distillation_bioassembly`` (distillation
+            path). Both share the same dataclass; the distillation case
+            has ``assembly_id is None`` and ``num_assembly_polymer_chains
+            is None`` — passed through to the CSV rows as-is.
+        poly_res_names: ``{label_entity_id: [res_name, ...]}`` — the
+            altloc-filtered canonical sequences. Not cached on
+            ``Bioassembly`` because it's derived from ``atom_array`` +
+            CIF and isn't meaningful after structure rewrites; callers
+            pass it explicitly from ``MmcifReader._poly_res_names``.
+        pdb_cluster_file: Cluster info text file for sequence-based
+            deduplication in ``compute_chain_indices``.
     """
-    atom_array = bioassembly_dict["atom_array"]
-    if atom_array is None:
-        print(
-            f"Warning: make_indices() input atom_array is None, return empty list "
-            f"(PDB Code: {bioassembly_dict['pdb_id']})"
-        )
-        return []
+    atom_array = bioassembly.structure.to_atom_array()
 
     chain_indices = compute_chain_indices(
         atom_array,
-        entity_poly_type=entity_poly_type,
+        entity_poly_type=bioassembly.header.entity_poly_type,
         poly_res_names=poly_res_names,
-        pdb_id=pdb_id,
+        pdb_id=bioassembly.header.pdb_id,
         pdb_cluster_file=pdb_cluster_file,
     )
     interface_indices = compute_interface_indices(atom_array, chain_indices)
 
     meta = {
-        "pdb_id": bioassembly_dict["pdb_id"],
-        "assembly_id": bioassembly_dict["assembly_id"],
-        "release_date": release_date,
-        "num_tokens": bioassembly_dict["num_tokens"],
-        "num_prot_chains": bioassembly_dict["num_prot_chains"],
-        "resolution": resolution,
+        "pdb_id": bioassembly.header.pdb_id,
+        "assembly_id": bioassembly.assembly_id,
+        "release_date": str(bioassembly.header.release_date),
+        "num_tokens": bioassembly.num_tokens,
+        "num_prot_chains": bioassembly.num_prot_chains,
+        "resolution": bioassembly.header.resolution,
     }
 
     sample_indices: list[dict[str, Any]] = []
@@ -458,38 +464,3 @@ def make_indices(
         classify_sub_mol_type(atom_array, lig_polymer_bond_chain_id, row)
         classify_eval_type(row)
     return sample_indices
-
-
-def make_indices_from_bioassembly(
-    bioassembly: "Bioassembly",
-    *,
-    poly_res_names: dict[str, "np.ndarray | list[str]"],
-    pdb_cluster_file: Union[Path, str, None] = None,
-) -> list[dict[str, Any]]:
-    """Typed ``make_indices`` variant: takes a ``Bioassembly`` dataclass
-    instead of the legacy ``dict[str, Any]`` bag.
-
-    Unpacks the Bioassembly fields into the legacy ``make_indices``
-    signature — no duplicate logic — so new callers use the typed path
-    while the pickle-based ``generate_indices.py`` flow keeps reading
-    dicts off disk. ``poly_res_names`` stays an explicit argument
-    because it's derived from ``atom_array + CIF`` at read time and
-    isn't cached on ``Bioassembly``.
-    """
-    atom_array = bioassembly.structure.to_atom_array()
-    bioassembly_dict: dict[str, Any] = {
-        "pdb_id": bioassembly.header.pdb_id,
-        "assembly_id": bioassembly.assembly_id,
-        "num_tokens": bioassembly.num_tokens,
-        "num_prot_chains": bioassembly.num_prot_chains,
-        "atom_array": atom_array,
-    }
-    return make_indices(
-        bioassembly_dict,
-        entity_poly_type=bioassembly.header.entity_poly_type,
-        poly_res_names=poly_res_names,
-        pdb_id=bioassembly.header.pdb_id,
-        release_date=str(bioassembly.header.release_date),
-        resolution=bioassembly.header.resolution,
-        pdb_cluster_file=pdb_cluster_file,
-    )

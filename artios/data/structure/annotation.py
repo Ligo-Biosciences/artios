@@ -18,9 +18,6 @@ from artios.common.constants import (
 )
 from artios.data.chem import ccd
 from artios.data.chem.ccd import RefInfo, get_ccd_ref_info
-from artios.data.engineering.pipeline.thresholds import PRE_POCKET_THRESHOLDS
-from artios.data.fragment import FragmentMaker
-from artios.data.pocket import find_pockets
 from artios.data.utils import get_starts_by
 
 logger = logging.getLogger(__name__)
@@ -731,6 +728,8 @@ def add_pocket_annotation(
         AtomArray: with "pocket_id" annotation added.
             Values: 0 = no pocket, 1+ = pocket ID
     """
+    from artios.data.pocket import find_pockets
+
     if len(atom_array) > max_atoms:
         logger.warning(
             f"Skipping pocket detection: {len(atom_array):,} atoms > {max_atoms:,}"
@@ -773,6 +772,8 @@ def add_pocket_annotation_per_fragment(
         AtomArray: with "pocket_id" annotation added.
             Values: 0 = no pocket, 1+ = globally unique pocket ID
     """
+    from artios.data.pocket import find_pockets
+
     pocket_id = np.zeros(len(atom_array), dtype=int)
 
     fragment_ids = atom_array.fragment_id
@@ -819,5 +820,8 @@ def add_fragment_annotation(atom_array: AtomArray) -> AtomArray:
     Returns:
         atom array with fragment_id annotations with spatially clustered fragments.
     """
+    from artios.data.engineering.pipeline.thresholds import PRE_POCKET_THRESHOLDS
+    from artios.data.fragment import FragmentMaker
+
     maker = FragmentMaker(thresholds=PRE_POCKET_THRESHOLDS)
     return maker.add_fragment_annotation(atom_array)

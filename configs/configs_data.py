@@ -274,10 +274,10 @@ data_configs = {
             "max_n_token": -1,
             "max_resolution": -1.0,
             "use_reference_chains_only": False,
-            "exclusion": {
-                "sub_mol_1_type": ListValue(["excluded_ligand"]),
-                "sub_mol_2_type": ListValue(["excluded_ligand"]),
-            },
+            # "exclusion": {
+            #     "sub_mol_1_type": ListValue(["excluded_ligand"]),
+            #     "sub_mol_2_type": ListValue(["excluded_ligand"]),
+            # },
         },
         **deepcopy(default_weighted_pdb_configs),
     },

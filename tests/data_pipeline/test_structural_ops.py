@@ -150,7 +150,7 @@ class TestOrderAtomsByMolOnGoldenFixtures:
         """``order_atoms_by_mol`` must drop exactly the bonds that
         ``remove_bonds_between_polymer_chains`` would drop — no more, no less.
         """
-        from artios.data.structure.annotation import (
+        from artios.data.structure.annotation_v2 import (
             remove_bonds_between_polymer_chains,
         )
 

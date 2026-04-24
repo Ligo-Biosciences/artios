@@ -487,44 +487,41 @@ class TestAnnotate:
         already carry ``ref_pos``/``ref_charge``/``ref_mask`` annotations;
         production parses do this through
         ``annotation_v2.populate_ccd_reference`` inside
-        ``MMCIFParser.get_bioassembly`` (post step-5 flip). This test
-        exercises the lower-level ``parser.get_structure()`` path, so we
-        run the same helper explicitly here to mirror the production
-        contract.
+        ``load_bioassembly``. This test exercises the lower-level
+        ``MmcifReader.atom_array()`` path, so we run the same helper
+        explicitly here to mirror the production contract.
         """
         from artios.data.filter import Filter, clean_structure
-        from artios.data.parsing.cif import MMCIFParser
-        from artios.data.structure.annotation import unique_chain_and_add_ids
+        from artios.data.parsing import residue_repair
+        from artios.data.parsing.mmcif import MmcifReader
         from artios.data.structure.annotation_v2 import populate_ccd_reference
 
-        parser = MMCIFParser(FIXTURES / "5s8i.cif")
-        atom_array = parser.get_structure()
-        sequences = parser.get_sequences(atom_array)
+        reader = MmcifReader(FIXTURES / "5s8i.cif")
+        entity_poly_type = reader.header.entity_poly_type
+        atom_array = reader.atom_array()
+        sequences = reader.sequences_for(atom_array)
 
         atom_array = clean_structure(
             atom_array,
-            entity_poly_type=parser.entity_poly_type,
+            entity_poly_type=entity_poly_type,
             remove_crystallization_aids=True,
             remove_artifact_ligands=True,
             remove_unbound_metal_ions=True,
         )
-        atom_array = parser.fix_arginine(atom_array)
-        atom_array = parser.mse_to_met(atom_array)
-        atom_array = parser.add_missing_atoms_and_residues(atom_array)
+        atom_array = residue_repair.fix_arginine(atom_array)
+        atom_array = residue_repair.mse_to_met(atom_array)
+        atom_array = residue_repair.add_missing_atoms_and_residues(
+            atom_array,
+            entity_poly_type=entity_poly_type,
+            poly_res_names=reader._poly_res_names(atom_array),
+        )
         atom_array = Filter.remove_element_X(atom_array)
-
-        # unique_chain_and_add_ids writes asym_id_int/entity_id_int/sym_id_int,
-        # which AnnotatedStructure.annotate's EntityIds.compute will re-derive
-        # but need to exist for the populate_ccd_reference pre-pass that we
-        # invoke below. populate_ccd_reference is the v2 replacement for the
-        # legacy add_ref_space_uid + add_ref_info_and_res_perm pair.
-        atom_array = unique_chain_and_add_ids(atom_array)
         atom_array = populate_ccd_reference(atom_array)
 
         return AnnotatedStructure.annotate(
             atom_array,
             sequences,
-            parser.entity_poly_type,
+            entity_poly_type,
             include_ref_conformer=True,
             include_training_masks=True,
         )

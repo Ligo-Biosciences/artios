@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 from artios.data.parsing.bioassembly import Bioassembly
 from artios.data.parsing.indexing import make_indices
-from artios.data.parsing.mmcif_reader import MmcifReader
+from artios.data.parsing.mmcif import MmcifReader
 from artios.utils.file_io import load_gzip_pickle
 
 

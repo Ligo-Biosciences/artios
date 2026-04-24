@@ -36,7 +36,7 @@ from biotite.structure import AtomArray
 from artios.data import filter as filter_module
 from artios.data.filter import Filter
 from artios.data.parsing import _biotite_compat, residue_repair
-from artios.data.parsing.mmcif_reader import MmcifHeader, MmcifReader
+from artios.data.parsing.mmcif import MmcifHeader, MmcifReader
 from artios.data.structure import AnnotatedStructure, annotation_v2
 
 logger = logging.getLogger(__name__)

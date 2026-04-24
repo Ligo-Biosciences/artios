@@ -17,8 +17,7 @@ import logging
 import sys
 from pathlib import Path
 
-from artios.data.parsing.cif import MMCIFParser
-from artios.data.structure import AnnotatedStructure
+from artios.data.parsing.bioassembly import load_bioassembly
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("regenerate")
@@ -45,13 +44,10 @@ def regenerate_one(cif_path: Path, out_name: str) -> Path:
     out_path = STRUCTURES_DIR / f"{out_name}.npz"
 
     log.info("parsing %s", cif_path.name)
-    parser = MMCIFParser(mmcif_file=cif_path)
-    bioassembly = parser.get_bioassembly()
-    atom_array = bioassembly["atom_array"]
-    if atom_array is None:
-        raise RuntimeError(f"{cif_path.name}: get_bioassembly returned no atom_array")
-
-    structure = AnnotatedStructure.from_atom_array(atom_array)
+    bioassembly = load_bioassembly(cif_path)
+    if bioassembly is None:
+        raise RuntimeError(f"{cif_path.name}: load_bioassembly returned None")
+    structure = bioassembly.structure
 
     log.info(
         "  n_atoms=%d n_tokens=%d n_chains=%d",

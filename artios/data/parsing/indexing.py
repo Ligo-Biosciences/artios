@@ -31,7 +31,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import biotite.structure as struc
 import numpy as np
@@ -48,6 +48,9 @@ from artios.data.utils import (
     get_ligand_polymer_bond_mask,
     parse_pdb_cluster_file_to_dict,
 )
+
+if TYPE_CHECKING:
+    from artios.data.parsing.bioassembly import Bioassembly
 
 # Type aliases — see module docstring: kept as ``str`` so bug #1's list-
 # literal assignment stays a valid write. Flip to ``Literal`` in the
@@ -455,3 +458,38 @@ def make_indices(
         classify_sub_mol_type(atom_array, lig_polymer_bond_chain_id, row)
         classify_eval_type(row)
     return sample_indices
+
+
+def make_indices_from_bioassembly(
+    bioassembly: "Bioassembly",
+    *,
+    poly_res_names: dict[str, "np.ndarray | list[str]"],
+    pdb_cluster_file: Union[Path, str, None] = None,
+) -> list[dict[str, Any]]:
+    """Typed ``make_indices`` variant: takes a ``Bioassembly`` dataclass
+    instead of the legacy ``dict[str, Any]`` bag.
+
+    Unpacks the Bioassembly fields into the legacy ``make_indices``
+    signature — no duplicate logic — so new callers use the typed path
+    while the pickle-based ``generate_indices.py`` flow keeps reading
+    dicts off disk. ``poly_res_names`` stays an explicit argument
+    because it's derived from ``atom_array + CIF`` at read time and
+    isn't cached on ``Bioassembly``.
+    """
+    atom_array = bioassembly.structure.to_atom_array()
+    bioassembly_dict: dict[str, Any] = {
+        "pdb_id": bioassembly.header.pdb_id,
+        "assembly_id": bioassembly.assembly_id,
+        "num_tokens": bioassembly.num_tokens,
+        "num_prot_chains": bioassembly.num_prot_chains,
+        "atom_array": atom_array,
+    }
+    return make_indices(
+        bioassembly_dict,
+        entity_poly_type=bioassembly.header.entity_poly_type,
+        poly_res_names=poly_res_names,
+        pdb_id=bioassembly.header.pdb_id,
+        release_date=str(bioassembly.header.release_date),
+        resolution=bioassembly.header.resolution,
+        pdb_cluster_file=pdb_cluster_file,
+    )

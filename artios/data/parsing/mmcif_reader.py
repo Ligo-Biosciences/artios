@@ -35,17 +35,11 @@ import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
 from biotite.structure import AtomArray
-from biotite.structure.io.pdbx import convert as pdbx_convert
 
 from artios.data.chem import ccd
+from artios.data.parsing import _biotite_compat
 
 logger = logging.getLogger(__name__)
-
-# Match the legacy-file behaviour of ignoring metal-coordinate bonds in
-# _struct_conn. This is a no-op if biotite was already patched by cif.py,
-# but importing this module first (or in isolation) must not break that
-# guarantee — the biotite module-level table is shared state.
-pdbx_convert.PDBX_BOND_TYPE_ID_TO_TYPE.pop("metalc", None)
 
 
 @dataclass(frozen=True)
@@ -386,15 +380,15 @@ def _parse_asymmetric_unit(
         if atom_site_name in atom_site:
             extra_fields.add(alt_name)
 
-    model_atom_site = pdbx_convert._filter_model(atom_site, model)
+    model_atom_site = _biotite_compat.filter_model(atom_site, model)
     model_length = model_atom_site.row_count
     atoms = AtomArray(model_length)
     atoms.coord[:, 0] = model_atom_site["Cartn_x"].as_array(np.float32)
     atoms.coord[:, 1] = model_atom_site["Cartn_y"].as_array(np.float32)
     atoms.coord[:, 2] = model_atom_site["Cartn_z"].as_array(np.float32)
-    atoms.box = pdbx_convert._get_box(block)
+    atoms.box = _biotite_compat.get_box(block)
 
-    pdbx_convert._fill_annotations(
+    _biotite_compat.fill_annotations(
         atoms, model_atom_site, extra_fields, use_author_fields
     )
 
@@ -414,7 +408,7 @@ def _parse_asymmetric_unit(
 
     bonds = struc.connect_via_residue_names(atoms, inter_residue=False)
     if "struct_conn" in block:
-        conn_bonds = pdbx_convert._parse_inter_residue_bonds(
+        conn_bonds = _biotite_compat.parse_inter_residue_bonds(
             model_atom_site, block["struct_conn"]
         )
         coord1 = atoms.coord[conn_bonds._bonds[:, 0]]

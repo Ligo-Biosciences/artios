@@ -212,7 +212,6 @@ def composite_nll_loss_msa(
     msa_gap_mask = msa_gap_mask.transpose(-2, -1).contiguous()
 
     if not supervise_query:
-        # Drop row 0 (the query). Only homologs supervise the loss.
         msa_tokens = msa_tokens[:, 1:]
         msa_gap_mask = msa_gap_mask[:, 1:]
 

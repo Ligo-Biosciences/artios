@@ -232,6 +232,9 @@ data_configs = {
         "enabled": False,
         "root": os.path.join(DATA_ROOT_DIR, "mmcif_msa_template"),
         "seq_to_idx_path": os.path.join(DATA_ROOT_DIR, "seq_to_pdb_index.json"),
+        # Number of homolog sequences sampled per training step. Query is
+        # prepended at row 0 separately, so each sample sees n_msa + 1
+        # rows total.
         "n_msa": 64,
         "seed": 42,
         # Per-homolog quality filters. Computed on the cropped chain columns

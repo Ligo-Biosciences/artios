@@ -42,6 +42,7 @@ def _make_configs(
                     "label_smoothing": label_smoothing,
                     "active_site_upweight": 1.0,
                     "active_site_distance": 8.0,
+                    "n_msa_chunk": 8,
                 },
             },
             "artios_mpnn": {

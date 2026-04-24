@@ -429,8 +429,12 @@ class ContextGenerator:
                 These are expensive to serialize and can be disabled for training
                 performance. Defaults to True for backward compatibility.
         """
+        # to_atom_array() — not self.s.atoms — so the atom_array carries v2
+        # group annotations (asym_id_int, ...) and roundtrips through
+        # dump_atomarray_stack → AnnotatedStructure.from_atom_array in the
+        # sequence-design / packing inference paths.
         return BasicContext(
-            atom_array=self.s.atoms if include_arrays else None,
+            atom_array=self.s.to_atom_array() if include_arrays else None,
             token_array=None,
             pdb_id=self.pdb_id,
             bioassembly_dict_fpath=self.bioassembly_dict_fpath,

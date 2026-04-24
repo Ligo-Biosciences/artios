@@ -172,8 +172,16 @@ class TestReferenceConformerCompute:
         # its residue's atoms.
         np.testing.assert_array_equal(result.ref_space_uid, [0, 0, 1, 1])
 
-    def test_ccd_lookup_fills_ref_pos_for_standard_residue(self):
-        """ALA CA ref_pos comes from the CCD entry; mask is 1 for known atoms."""
+    def test_reads_ref_annotations_off_atom_array(self):
+        """``compute(..., include_conformer=True)`` reads ``ref_pos``/
+        ``ref_charge``/``ref_mask`` from the atom_array annotations.
+
+        The upstream builder (``add_reference_features`` for the inference
+        path, ``add_ref_info_and_res_perm`` for CIF parse) populates them;
+        ``compute`` is just responsible for plumbing them into the typed
+        group plus deriving ``ref_space_uid``. The test uses synthetic
+        values to confirm it doesn't silently overwrite.
+        """
         aa = _build_aa(
             chain_id=["A", "A", "A"],
             res_id=[1, 1, 1],
@@ -182,17 +190,37 @@ class TestReferenceConformerCompute:
             element=["N", "C", "C"],
             label_entity_id=["e1"] * 3,
         )
+        expected_ref_pos = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+        expected_ref_charge = np.array([-1, 0, 1], dtype=int)
+        expected_ref_mask = np.array([1, 1, 0], dtype=int)
+        aa.set_annotation("ref_pos", expected_ref_pos)
+        aa.set_annotation("ref_charge", expected_ref_charge)
+        aa.set_annotation("ref_mask", expected_ref_mask)
+
         entity_ids = EntityIds.compute(aa)
         result = ReferenceConformer.compute(aa, entity_ids, include_conformer=True)
 
-        from artios.data.chem.ccd import get_ccd_ref_info
+        np.testing.assert_array_equal(result.ref_pos, expected_ref_pos)
+        np.testing.assert_array_equal(result.ref_charge, expected_ref_charge)
+        np.testing.assert_array_equal(result.ref_mask, expected_ref_mask)
 
-        ala = get_ccd_ref_info("ALA")
-        np.testing.assert_array_equal(result.ref_pos[0], ala.coord[ala.atom_map["N"]])
-        np.testing.assert_array_equal(result.ref_pos[1], ala.coord[ala.atom_map["CA"]])
-        np.testing.assert_array_equal(result.ref_pos[2], ala.coord[ala.atom_map["C"]])
-        # All three atoms are known to CCD → mask=1 everywhere.
-        np.testing.assert_array_equal(result.ref_mask, [1, 1, 1])
+    def test_raises_when_ref_annotations_missing_and_conformer_requested(self):
+        """``compute(..., include_conformer=True)`` on an atom_array that
+        never went through ``add_reference_features`` (or equivalent) must
+        raise — silent zero-fill is what let the UNL ligand bug slip in,
+        and the error message points callers at the right pre-pass.
+        """
+        aa = _build_aa(
+            chain_id=["A"],
+            res_id=[1],
+            res_name=["ALA"],
+            atom_name=["CA"],
+            element=["C"],
+            label_entity_id=["e1"],
+        )
+        entity_ids = EntityIds.compute(aa)
+        with pytest.raises(ValueError, match="add_reference_features"):
+            ReferenceConformer.compute(aa, entity_ids, include_conformer=True)
 
     def test_zero_fallback_when_conformer_disabled(self):
         """include_conformer=False zero-fills pos/charge/mask but still computes uid."""

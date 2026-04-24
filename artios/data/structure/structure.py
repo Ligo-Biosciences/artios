@@ -116,9 +116,17 @@ class AnnotatedStructure:
             atom_array: Cleaned AtomArray with biotite-native fields and
                 ``label_entity_id`` set. Must NOT have been through
                 ``canonicalize_chain_ids`` or ``order_atoms_by_mol`` yet.
+                When ``include_ref_conformer=True``, must also carry
+                ``ref_pos``/``ref_charge``/``ref_mask`` annotations —
+                populate these upstream via ``add_reference_features``
+                (inference path) or ``add_ref_info_and_res_perm``
+                (CIF-parse path) so SMILES-ligand (``UNL``) handling
+                lives next to the per-residue-type dispatch, not here.
             sequences: ``{label_entity_id: canonical_sequence}``.
             entity_poly_type: ``{label_entity_id: poly_type}`` from mmCIF.
-            include_ref_conformer: Fill ref_pos/ref_charge/ref_mask from CCD.
+            include_ref_conformer: If True, read reference conformer
+                annotations off ``atom_array`` (must be pre-populated).
+                If False, zero-fill ``ref_pos``/``ref_charge``/``ref_mask``.
             include_training_masks: Compute plddt_m_rep_atom_mask.
         """
         aa = atom_array.copy()

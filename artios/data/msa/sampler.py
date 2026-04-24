@@ -107,9 +107,11 @@ class MSAQueryInfo:
 class MSA:
     """Sampled MSA for one reference chain, aligned to cropped residues.
 
-    Stored in the MSA-native ``[n_msa, l_chain_cropped]`` layout. MSAContext
-    transposes to ``[n_token, n_msa]`` at featurisation time to stay
-    compatible with artios' n_token-first padding machinery.
+    Stored in the MSA-native ``[n_msa_plus_one, l_chain_cropped]``
+    layout (1 query row at index 0 plus ``n_msa`` homolog rows).
+    MSAContext transposes to ``[n_token, n_msa_plus_one]`` at
+    featurisation time to stay compatible with artios' n_token-first
+    padding machinery.
 
     ``tokens`` values are integer IDs in ``[0, 31]`` from
     ``artios.common.constants.STD_RESIDUES_AND_GAP``: 0..19 canonical AAs
@@ -118,8 +120,11 @@ class MSA:
     query row.
     """
 
-    tokens: np.ndarray  # int8[n_msa, l_chain_cropped] — STD_RESIDUES_AND_GAP IDs
-    gap_mask: np.ndarray  # bool[n_msa, l_chain_cropped] — True where tokens == 31
+    # int8[n_msa_plus_one, l_chain_cropped] — STD_RESIDUES_AND_GAP IDs.
+    # n_msa_plus_one = 1 query + n_msa homologs.
+    tokens: np.ndarray
+    # bool[n_msa_plus_one, l_chain_cropped] — True where tokens == 31.
+    gap_mask: np.ndarray
     msa_chain_asym_id: (
         int  # asym_id_int of the reference chain in the cropped structure
     )
@@ -147,19 +152,24 @@ class MSA:
     def null_for(cls, n_msa: int) -> "MSA":
         """Sentinel MSA for samples with no resolvable protein chain.
 
+        ``n_msa`` here follows the sampler-config convention: number of
+        homologs, *not* total rows. The sentinel therefore has
+        ``n_msa + 1`` rows (matching what the real sampler emits) so
+        every sample produces the same-shape MSAContext regardless of
+        whether a real MSA was found.
+
         Uses ``l_chain_cropped=0`` (empty chain columns). When this is
-        featurised into an MSAContext the scatter is a no-op:
-        ``tokens`` stays gap-filled (31) across the full n_token grid,
-        ``msa_chain_mask`` stays all-False, and the sample contributes
-        zero to the MSA loss through ordinary masking.
+        featurised into an MSAContext the scatter is a no-op and the
+        gt-fill convention makes every row identical to the query — the
+        MSA loss then degrades to the single-sequence composite NLL.
 
         Used in ``dataset.process_one`` to keep every MSA-enabled sample
         producing a same-shape MSAContext so the collate can stack the
         batch without None-vs-tensor ambiguity.
         """
         return cls(
-            tokens=np.full((n_msa, 0), _GAP, dtype=np.int8),
-            gap_mask=np.ones((n_msa, 0), dtype=bool),
+            tokens=np.full((n_msa + 1, 0), _GAP, dtype=np.int8),
+            gap_mask=np.ones((n_msa + 1, 0), dtype=bool),
             msa_chain_asym_id=-1,
             chain_token_indices=np.empty(0, dtype=np.int32),
         )
@@ -185,7 +195,11 @@ class MSASampler:
     ) -> None:
         """
         Args:
-            msa_root / seq_to_idx_path / n_msa / seed: see CLAUDE.md §8.
+            msa_root / seq_to_idx_path / seed: see CLAUDE.md §8.
+            n_msa: number of homolog rows to sample from the filtered
+                a3m per training step. The emitted ``MSA`` has
+                ``n_msa + 1`` rows (query prepended at index 0). Default
+                64 ⇒ 65 total rows per sample.
             min_homolog_identity: reject any homolog whose non-gap identity
                 to the query (computed on cropped chain columns) is strictly
                 below this. ``0.0`` disables the filter.
@@ -281,9 +295,10 @@ class MSASampler:
         # 9. Slice MSA columns down to the cropped chain residues.
         tokens_chain = tokens_full[:, cols_arr]  # [n_rows, l_chain_cropped]
 
-        # 10. Fast-path depth gate: if the a3m itself has fewer rows than
-        # n_msa, no amount of filtering can rescue it.
-        if n_rows < self.n_msa:
+        # 10. Fast-path depth gate: need n_msa homolog rows + 1 query
+        # row. If the a3m itself has fewer rows, no amount of filtering
+        # can rescue it.
+        if n_rows < self.n_msa + 1:
             return None
 
         # 11. Per-homolog quality filters (evaluated on cropped chain columns
@@ -303,12 +318,12 @@ class MSASampler:
         keep = (identity >= self.min_homolog_identity) & (gap_rate <= self.max_gap_rate)
         kept_offsets = np.where(keep)[0] + 1  # offsets into tokens_chain
 
-        # 12. Post-filter depth gate: need n_msa - 1 surviving homologs.
-        if len(kept_offsets) < self.n_msa - 1:
+        # 12. Post-filter depth gate: need n_msa surviving homologs.
+        if len(kept_offsets) < self.n_msa:
             return None
 
-        # 13. Sample n_msa - 1 homologs without replacement; query stays at 0.
-        selected = self._rng.choice(kept_offsets, size=self.n_msa - 1, replace=False)
+        # 13. Sample n_msa homologs without replacement; query stays at 0.
+        selected = self._rng.choice(kept_offsets, size=self.n_msa, replace=False)
         sampled = np.concatenate([[0], selected])
         sampled_tokens = np.ascontiguousarray(tokens_chain[sampled])
         sampled_gap_mask = sampled_tokens == _GAP

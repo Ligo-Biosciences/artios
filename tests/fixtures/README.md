@@ -11,6 +11,8 @@ fixtures/
 ├── cif/                # Raw mmCIF inputs (biotite I/O tests)
 ├── parsing/            # 5s8i triple (.cif/.npz/.pkl.gz) — legacy parsing fixture
 ├── motifs/             # Motif input .json + .cif
+├── motif_cif/          # Locked AtomArray snapshots for motif-CIF parity
+│                       # (one .npz per evaluation/inputs/motifs/**/*.cif)
 └── regenerate.py       # Rebuild structures/*.npz from pdb-samples/enzyme/
 ```
 
@@ -56,3 +58,4 @@ rather than ticking along on stale data.
 | `cif/1bn1.cif` | `tests/utils/test_file_io.py` | Raw CIF for biotite `AtomArray` / `AtomArrayStack` NPZ round-trip tests. |
 | `parsing/5s8i.cif`, `.npz`, `.pkl.gz` | `tests/data_pipeline/test_structure.py`, `test_cropping.py` | Legacy multi-format fixture. Pre-dates the golden-sample pattern — keep until those tests migrate to `load_structure(...)`. |
 | `motifs/*` | `tests/data_pipeline/test_motif_parser.py` | Motif parser inputs (`.json` specs + `.cif` template). |
+| `motif_cif/<domain>/*.npz` | `tests/data_pipeline/test_motif_cif_parse_parity.py` | Locked `AtomArray` snapshots — one per motif CIF under `evaluation/inputs/motifs/`. Baselines the `MMCIFParser.get_structure()` path used at inference time so the `cif.py` refactor can verify field-by-field parity. Regenerate via `uv run python -m tests.fixtures.motif_cif.regenerate`. |

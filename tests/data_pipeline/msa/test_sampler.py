@@ -106,25 +106,26 @@ def test_sequence_not_in_index_returns_none(sample_sampler_setup):
 
 def test_depth_below_n_msa_returns_none(sample_sampler_setup):
     structure, info, build = sample_sampler_setup
-    # a3m has 4 rows; sampler wants 10. Should drop.
+    # a3m has 4 rows; sampler wants 10 homologs + 1 query = 11 rows. Drop.
     sampler = build(a3m_n_rows=4, n_msa=10)
     assert sampler.sample(structure, info) is None
 
 
 def test_success_shapes_and_query_at_row_0(sample_sampler_setup):
     structure, info, build = sample_sampler_setup
+    # n_msa=4 ⇒ 4 homologs + 1 query = 5 rows total.
     sampler = build(a3m_n_rows=10, n_msa=4, seed=0)
     msa = sampler.sample(structure, info)
 
     assert msa is not None
     l_chain = len(info.sequence)
-    assert msa.tokens.shape == (4, l_chain)
-    assert msa.gap_mask.shape == (4, l_chain)
+    assert msa.tokens.shape == (5, l_chain)
+    assert msa.gap_mask.shape == (5, l_chain)
     assert msa.chain_token_indices.shape == (l_chain,)
     assert msa.tokens.dtype == np.int8
 
     # Row 0 is the query; homologs are identical in this fixture.
-    for row in range(1, 4):
+    for row in range(1, 5):
         np.testing.assert_array_equal(msa.tokens[row], msa.tokens[0])
 
     # msa_chain_asym_id resolves to the unique asym_id_int of chain A in the
@@ -259,7 +260,7 @@ def test_max_gap_rate_filters_out_gappy_homologs(sample_sampler_setup, tmp_path)
     sampler = MSASampler(
         msa_root=msa_root,
         seq_to_idx_path=seq_to_idx_path,
-        n_msa=6,  # needs 5 homologs
+        n_msa=5,  # needs 5 homologs
         max_gap_rate=0.5,  # drops the 5 all-gap rows
         seed=0,
     )
@@ -281,7 +282,7 @@ def test_max_gap_rate_returns_none_when_too_few_survive(sample_sampler_setup, tm
     sampler = MSASampler(
         msa_root=msa_root,
         seq_to_idx_path=seq_to_idx_path,
-        n_msa=5,  # needs 4 homologs, only 2 survive
+        n_msa=4,  # needs 4 homologs, only 2 survive
         max_gap_rate=0.5,
     )
     assert sampler.sample(structure, info) is None
@@ -300,13 +301,13 @@ def test_min_homolog_identity_filters_out_low_identity_rows(
     sampler = MSASampler(
         msa_root=msa_root,
         seq_to_idx_path=seq_to_idx_path,
-        n_msa=6,
+        n_msa=5,
         min_homolog_identity=0.5,
         seed=0,
     )
     msa = sampler.sample(structure, info)
     assert msa is not None
-    # With only 5 identity=1.0 homologs surviving and n_msa-1=5, the sampler
+    # With only 5 identity=1.0 homologs surviving and n_msa=5, the sampler
     # must pick all of them — every sampled row should equal the query row.
     for row in range(1, 6):
         np.testing.assert_array_equal(msa.tokens[row], msa.tokens[0])
@@ -324,7 +325,7 @@ def test_min_homolog_identity_returns_none_when_too_few_survive(
     sampler = MSASampler(
         msa_root=msa_root,
         seq_to_idx_path=seq_to_idx_path,
-        n_msa=5,
+        n_msa=4,
         min_homolog_identity=0.5,
     )
     assert sampler.sample(structure, info) is None

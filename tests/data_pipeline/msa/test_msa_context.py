@@ -22,8 +22,14 @@ _GAP = GAP["-"]  # 31
 # ---------------------------------------------------------------------------
 
 
-def _make_msa(n_msa: int = 4, l_chain: int = 5, chain_asym: int = 0) -> MSA:
-    tokens = np.zeros((n_msa, l_chain), dtype=np.int8)
+def _make_msa(n_rows: int = 4, l_chain: int = 5, chain_asym: int = 0) -> MSA:
+    """Build a raw MSA dataclass for plumbing tests.
+
+    ``n_rows`` is the total row count (``n_msa_plus_one``, = 1 query +
+    ``n_msa`` homologs). Decoupled from the sampler-config name because
+    this helper exists to test shape invariants, not sampler semantics.
+    """
+    tokens = np.zeros((n_rows, l_chain), dtype=np.int8)
     tokens[1, 0] = _GAP  # one gap to exercise gap_mask
     gap_mask = tokens == _GAP
     return MSA(
@@ -92,10 +98,11 @@ def test_msa_raises_when_gap_mask_inconsistent_with_tokens():
 
 def test_null_msa_construction_passes_invariants():
     """Null MSA uses l_chain_cropped=0 (empty chain columns). All invariants
-    should pass vacuously."""
+    should pass vacuously. Shape is ``(n_msa + 1, 0)`` to match what the
+    real sampler emits (1 query + n_msa homologs)."""
     null = MSA.null_for(n_msa=64)
-    assert null.tokens.shape == (64, 0)
-    assert null.gap_mask.shape == (64, 0)
+    assert null.tokens.shape == (65, 0)
+    assert null.gap_mask.shape == (65, 0)
     assert null.chain_token_indices.shape == (0,)
     assert null.msa_chain_asym_id == -1
     assert null.tokens.dtype == np.int8
@@ -114,13 +121,13 @@ def test_null_msa_build_context_fills_rows_with_gt_residues(
     """
     s = load_structure("2g1k")
     n_token = s.grouping.n_tokens
-    null = MSA.null_for(n_msa=8)
+    null = MSA.null_for(n_msa=8)  # ⇒ (9, 0) tokens: 1 query + 8 homologs
 
     ctx = ContextGenerator(s, msa=null, pdb_id="2g1k").get_full_context(
         include_arrays=False
     )
     assert ctx.msa is not None
-    assert ctx.msa.tokens.shape == (n_token, 8)
+    assert ctx.msa.tokens.shape == (n_token, 9)
     # Every row is identical to row 0 (the gt residue id per token).
     row0 = ctx.msa.tokens[:, 0]
     assert (ctx.msa.tokens == row0.unsqueeze(-1)).all()
@@ -217,10 +224,12 @@ def _build_full_context(structure) -> FullContext:
     ).get_full_context(include_arrays=False)
 
 
-def _make_msa_context(n_token: int, n_msa: int = 4) -> MSAContext:
-    # Realistic MSAContext with gap-fill everywhere and a few chain tokens
-    # flagged. msa_chain_mask must be bool, fields must be the right dtype.
-    tokens = torch.full((n_token, n_msa), _GAP, dtype=torch.int8)
+def _make_msa_context(n_token: int, n_rows: int = 4) -> MSAContext:
+    """Realistic MSAContext for plumbing tests. ``n_rows`` is the total
+    row count on the tensor dim (``n_msa_plus_one``). Decoupled from the
+    sampler-config name since this helper tests padding/serialisation,
+    not sampler semantics."""
+    tokens = torch.full((n_token, n_rows), _GAP, dtype=torch.int8)
     tokens[0, :] = 0  # one token with all AAs=0 (ALA), gap_mask[0] all False
     gap_mask = tokens == _GAP
     msa_chain_mask = torch.zeros(n_token, dtype=torch.bool)
@@ -244,7 +253,7 @@ def test_full_context_pad_pads_msa_on_token_axis(load_structure):
     ctx = _build_full_context(s)
     n_token = ctx.basic.n_token
     n_atom = ctx.basic.n_atom
-    ctx = dataclasses.replace(ctx, msa=_make_msa_context(n_token, n_msa=4))
+    ctx = dataclasses.replace(ctx, msa=_make_msa_context(n_token, n_rows=4))
 
     padded = ctx.pad(n_max_atoms=n_atom + 10, n_max_tokens=n_token + 7)
 
@@ -265,7 +274,7 @@ def test_full_context_pad_pads_msa_on_token_axis(load_structure):
 def test_full_context_to_unconditional_preserves_msa(load_structure):
     s = load_structure("2g1k")
     ctx = _build_full_context(s)
-    msa = _make_msa_context(ctx.basic.n_token, n_msa=4)
+    msa = _make_msa_context(ctx.basic.n_token, n_rows=4)
     ctx = dataclasses.replace(ctx, msa=msa)
     assert ctx.to_unconditional().msa is msa
 
@@ -273,7 +282,7 @@ def test_full_context_to_unconditional_preserves_msa(load_structure):
 def test_full_context_without_ligand_preserves_msa(load_structure):
     s = load_structure("2g1k")
     ctx = _build_full_context(s)
-    msa = _make_msa_context(ctx.basic.n_token, n_msa=4)
+    msa = _make_msa_context(ctx.basic.n_token, n_rows=4)
     ctx = dataclasses.replace(ctx, msa=msa)
     assert ctx.without_ligand().msa is msa
 
@@ -282,7 +291,7 @@ def test_full_context_to_dict_round_trip_preserves_msa(load_structure):
     s = load_structure("2g1k")
     ctx = _build_full_context(s)
     n_token = ctx.basic.n_token
-    msa = _make_msa_context(n_token, n_msa=4)
+    msa = _make_msa_context(n_token, n_rows=4)
     ctx = dataclasses.replace(ctx, msa=msa)
 
     d = ctx.to_dict()

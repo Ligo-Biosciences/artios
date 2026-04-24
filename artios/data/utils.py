@@ -12,17 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import argparse
 import copy
 import functools
 import os
 import re
 from collections import defaultdict
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import biotite.structure as struc
 import numpy as np
-import torch
 from biotite.structure import AtomArray
 from biotite.structure.io import pdbx
 from biotite.structure.io.pdb import PDBFile
@@ -32,6 +33,9 @@ from artios.common.constants import (
     PRO_STD_RESIDUES,
     RNA_STD_RESIDUES,
 )
+
+if TYPE_CHECKING:
+    import torch
 
 
 def remove_numbers(s: str) -> str:

@@ -24,6 +24,7 @@ from artios.data.structure.annotation_v2 import (
     ReferenceConformer,
     TrainingAnnotations,
     TypeMasks,
+    populate_ccd_reference,
 )
 
 
@@ -239,6 +240,234 @@ class TestReferenceConformerCompute:
         np.testing.assert_array_equal(result.ref_mask, [0, 0])
         # uid is still computed — it's cheap and downstream needs it.
         np.testing.assert_array_equal(result.ref_space_uid, [0, 0])
+
+
+# ---------------------------------------------------------------------------
+# populate_ccd_reference — the pre-pass ReferenceConformer.compute requires
+# ---------------------------------------------------------------------------
+
+
+class TestPopulateCcdReference:
+    """``populate_ccd_reference`` is the single upstream pre-pass that fills
+    ``ref_pos`` / ``ref_charge`` / ``ref_mask`` / ``res_perm`` on an
+    atom_array before ``AnnotatedStructure.annotate(...,
+    include_ref_conformer=True)``. It subsumes both the CIF-path
+    ``annotation.add_ref_info_and_res_perm`` and the inference-path
+    ``array_builder.add_reference_features``; the CCD-vs-UNL dispatch lives
+    here so the rest of the pipeline never has to special-case SMILES
+    ligands.
+    """
+
+    def test_ccd_residue_populated_from_lookup(self):
+        """For a standard residue (ALA), every atom that appears in the
+        CCD component gets ref_pos / ref_charge / ref_mask copied from
+        the CCD entry, keyed by atom name.
+        """
+        aa = _build_aa(
+            chain_id=["A", "A", "A"],
+            res_id=[1, 1, 1],
+            res_name=["ALA", "ALA", "ALA"],
+            atom_name=["N", "CA", "C"],
+            element=["N", "C", "C"],
+            label_entity_id=["e1"] * 3,
+        )
+        from artios.data.chem.ccd import get_ccd_ref_info
+
+        ref_info = get_ccd_ref_info("ALA")
+        assert ref_info is not None, "CCD data missing ALA; fixture prereq unmet"
+
+        populate_ccd_reference(aa)
+
+        for i, atom_name in enumerate(["N", "CA", "C"]):
+            sub_idx = ref_info.atom_map[atom_name]
+            np.testing.assert_array_equal(aa.ref_pos[i], ref_info.coord[sub_idx])
+            assert aa.ref_charge[i] == ref_info.charge[sub_idx]
+            assert aa.ref_mask[i] == ref_info.mask[sub_idx]
+
+    def test_unl_residue_copies_coord_and_masks_resolved(self):
+        """For a UNL SMILES ligand, ``ref_pos`` must equal ``atom_array.coord``
+        and ``ref_mask`` must be 1 for every atom. This is the contract
+        that the backbone diffusion reads for intra-ligand geometry
+        conditioning; it is what the UNL ref_pos regression (commit
+        8a6abcff) pinned in ``test_backbone_input_smiles_ligand.py`` —
+        this test pins the same rule at the pre-pass level so migrating
+        inference onto ``populate_ccd_reference`` stays safe.
+        """
+        aa = _build_aa(
+            chain_id=["L", "L", "L"],
+            res_id=[1, 1, 1],
+            res_name=["UNL", "UNL", "UNL"],
+            atom_name=["C1", "C2", "C3"],
+            element=["C", "C", "C"],
+            label_entity_id=["lig"] * 3,
+        )
+        aa.coord = np.array(
+            [[0.1, 0.2, 0.3], [1.1, 1.2, 1.3], [2.1, 2.2, 2.3]], dtype=np.float32
+        )
+
+        populate_ccd_reference(aa)
+
+        np.testing.assert_allclose(aa.ref_pos, aa.coord)
+        np.testing.assert_array_equal(aa.ref_mask, [1, 1, 1])
+
+    def test_unl_residue_reads_charge_when_present(self):
+        """SMILES ligands often carry a per-atom ``charge`` annotation
+        (written by ``smiles_to_atom_info``). When it exists, the UNL
+        branch must read it — otherwise charged ligands lose their
+        formal-charge feature in the featurizer.
+        """
+        aa = _build_aa(
+            chain_id=["L"] * 2,
+            res_id=[1, 1],
+            res_name=["UNL", "UNL"],
+            atom_name=["C1", "N1"],
+            element=["C", "N"],
+            label_entity_id=["lig"] * 2,
+        )
+        aa.coord = np.zeros((2, 3), dtype=np.float32)
+        aa.set_annotation("charge", np.array([-1, 1], dtype=int))
+
+        populate_ccd_reference(aa)
+
+        np.testing.assert_array_equal(aa.ref_charge, [-1, 1])
+
+    def test_unknown_ccd_code_leaves_zeros(self):
+        """A residue whose name isn't in CCD and isn't UNL gets
+        ``ref_mask = 0`` across the board. The call does NOT raise — this
+        matches the legacy inference-path behaviour and downstream code
+        treats ref_mask=0 atoms as unresolved.
+        """
+        aa = _build_aa(
+            chain_id=["X"] * 2,
+            res_id=[1, 1],
+            res_name=["ZZZ", "ZZZ"],  # deliberately not in CCD
+            atom_name=["X1", "X2"],
+            element=["C", "C"],
+            label_entity_id=["e1"] * 2,
+        )
+
+        populate_ccd_reference(aa)
+
+        np.testing.assert_array_equal(aa.ref_mask, [0, 0])
+        np.testing.assert_array_equal(aa.ref_pos, np.zeros((2, 3)))
+
+    def test_unknown_atom_name_falls_through_to_ref_mask_zero(self):
+        """Bug #4 from the scan: the legacy ``add_ref_feat_info`` raises
+        ``KeyError`` when a residue carries an atom name that's not in the
+        CCD ``atom_map`` (e.g. a modified residue with renamed atoms).
+        The new implementation leaves the slot at ``ref_mask = 0`` and
+        continues — the atom is simply not represented in the reference
+        conformer.
+        """
+        aa = _build_aa(
+            chain_id=["A"] * 3,
+            res_id=[1, 1, 1],
+            res_name=["ALA", "ALA", "ALA"],
+            atom_name=["N", "CA", "CX"],  # CX isn't in the CCD ALA entry
+            element=["N", "C", "C"],
+            label_entity_id=["e1"] * 3,
+        )
+
+        # Must not raise.
+        populate_ccd_reference(aa)
+
+        # First two atoms matched and should have ref_mask=1; the renamed
+        # CX atom falls through to ref_mask=0.
+        assert aa.ref_mask[0] == 1
+        assert aa.ref_mask[1] == 1
+        assert aa.ref_mask[2] == 0
+        np.testing.assert_array_equal(aa.ref_pos[2], np.zeros(3))
+
+    def test_res_perm_emitted_as_underscore_encoded_strings(self):
+        """``res_perm`` rides on the atom_array as a per-atom string
+        annotation of the form ``"0_1_2"`` — the legacy encoding the
+        featurizer's atom-permutation context reads back via ``.split("_")``.
+        This test pins the shape + dtype; the exact permutation content
+        is the CCD's business.
+        """
+        aa = _build_aa(
+            chain_id=["A"] * 5,
+            res_id=[1, 1, 1, 1, 1],
+            res_name=["ALA", "ALA", "ALA", "ALA", "ALA"],
+            atom_name=["N", "CA", "C", "O", "CB"],
+            element=["N", "C", "C", "O", "C"],
+            label_entity_id=["e1"] * 5,
+        )
+
+        populate_ccd_reference(aa)
+
+        res_perm = aa.res_perm
+        assert len(res_perm) == 5
+        assert res_perm.dtype.kind == "U", "res_perm must be numpy string dtype"
+        # Every entry decodes to a non-empty list of ints.
+        for entry in res_perm:
+            parts = entry.split("_")
+            assert len(parts) >= 1
+            for p in parts:
+                int(p)  # will raise if non-integer
+
+    def test_include_res_perm_false_skips_the_annotation(self):
+        """Inference-side callers (``add_reference_features``'s
+        replacement) don't need the permutation array and pass
+        ``include_res_perm=False``; the ``res_perm`` annotation must then
+        be absent so featurizer code gated on its presence can tell the
+        two paths apart.
+        """
+        aa = _build_aa(
+            chain_id=["A"] * 2,
+            res_id=[1, 1],
+            res_name=["ALA", "ALA"],
+            atom_name=["N", "CA"],
+            element=["N", "C"],
+            label_entity_id=["e1"] * 2,
+        )
+
+        populate_ccd_reference(aa, include_res_perm=False)
+
+        assert "res_perm" not in aa.get_annotation_categories()
+        # But the other three are always written.
+        assert "ref_pos" in aa.get_annotation_categories()
+        assert "ref_charge" in aa.get_annotation_categories()
+        assert "ref_mask" in aa.get_annotation_categories()
+
+    def test_matches_legacy_cif_path_output(self):
+        """Equivalence pin: on two standard protein residues
+        ``populate_ccd_reference`` produces the same
+        ``ref_pos``/``ref_charge``/``ref_mask``/``res_perm`` arrays as the
+        legacy ``annotation.add_ref_info_and_res_perm``. Catching a
+        mismatch here makes the diagnosis per-function instead of
+        per-fixture once the CIF golden parity test wires
+        ``populate_ccd_reference`` into the pipeline.
+
+        Scope is deliberately two standard residues: a broader fixture
+        would accidentally exercise a separate legacy bug in
+        ``add_res_perm`` (single-atom residues like monatomic ions lose
+        their perm row in the legacy code). That bug is noted in the
+        scan and will be fixed when the legacy module is deleted — here
+        we only want to pin the shared CCD-lookup path.
+        """
+        from artios.data.structure.annotation import add_ref_info_and_res_perm
+
+        def _fresh() -> AtomArray:
+            aa = _build_aa(
+                chain_id=["A"] * 6,
+                res_id=[1, 1, 1, 2, 2, 2],
+                res_name=["ALA"] * 6,
+                atom_name=["N", "CA", "C", "N", "CA", "C"],
+                element=["N", "C", "C", "N", "C", "C"],
+                label_entity_id=["e1"] * 6,
+            )
+            # Legacy path needs ref_space_uid pre-populated.
+            aa.set_annotation("ref_space_uid", np.array([0, 0, 0, 1, 1, 1], dtype=int))
+            return aa
+
+        legacy = add_ref_info_and_res_perm(_fresh())
+        new = populate_ccd_reference(_fresh())
+
+        np.testing.assert_allclose(new.ref_pos, legacy.ref_pos)
+        np.testing.assert_array_equal(new.ref_charge, legacy.ref_charge)
+        np.testing.assert_array_equal(new.ref_mask, legacy.ref_mask)
+        np.testing.assert_array_equal(new.res_perm, legacy.res_perm)
 
 
 # ---------------------------------------------------------------------------

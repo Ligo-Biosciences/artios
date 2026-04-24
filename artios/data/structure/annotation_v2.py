@@ -28,7 +28,12 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 import numpy as np
-from biotite.structure import AtomArray, get_chain_starts, get_residue_starts
+from biotite.structure import (
+    AtomArray,
+    BondList,
+    get_chain_starts,
+    get_residue_starts,
+)
 from biotite.structure.molecules import get_molecule_indices
 
 from artios.common.constants import (
@@ -39,7 +44,7 @@ from artios.common.constants import (
     STD_RESIDUES,
 )
 from artios.data.chem import ccd
-from artios.data.structure.annotation import remove_bonds_between_polymer_chains
+from artios.data.chem.ccd import RefInfo, get_ccd_ref_info
 from artios.utils.typing import Bool, Float, Int, Int32, Shaped, typecheck
 
 logger = logging.getLogger(__name__)
@@ -63,6 +68,37 @@ class _MolRef:
 # ---------------------------------------------------------------------------
 # Structural ops
 # ---------------------------------------------------------------------------
+
+
+def remove_bonds_between_polymer_chains(
+    atom_array: AtomArray, entity_poly_type: dict[str, str]
+) -> BondList:
+    """Remove bonds that link two polymer chains.
+
+    Used when building per-chain mol groups (``order_atoms_by_mol`` with
+    ``entity_poly_type`` set): polymer-polymer cross-chain bonds — almost
+    always disulfides — otherwise glue two polymer chains into one
+    connected component. Ligand-polymer and ligand-ligand bonds are kept.
+
+    Returns a **copy** of ``atom_array.bonds`` with those bonds filtered
+    out. Does not mutate the input.
+
+    Ported verbatim from ``annotation.py::remove_bonds_between_polymer_chains``;
+    the ``bonds._bonds`` / ``_remove_redundant_bonds`` private-biotite access
+    is tracked in the bug-scan list (#6) and will move into
+    ``_biotite_compat.py`` during step 6 of the refactor.
+    """
+    copy = atom_array.bonds.copy()
+    polymer_mask = np.isin(atom_array.label_entity_id, list(entity_poly_type.keys()))
+    i = copy._bonds[:, 0]
+    j = copy._bonds[:, 1]
+    pp_bond_mask = polymer_mask[i] & polymer_mask[j]
+    diff_chain_mask = atom_array.chain_id[i] != atom_array.chain_id[j]
+    pp_bond_mask = pp_bond_mask & diff_chain_mask
+    copy._bonds = copy._bonds[~pp_bond_mask]
+    copy._remove_redundant_bonds()
+    copy._max_bonds_per_atom = copy._get_max_bonds_per_atom()
+    return copy
 
 
 def canonicalize_chain_ids(atom_array: AtomArray) -> AtomArray:
@@ -235,6 +271,169 @@ def _check_mol_equivalence(
                     f"{name} mismatch between mols {i} and {j} "
                     f"(entity_mol_id={entity_mol_id[start_i]}) in order_atoms_by_mol()"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Reference-conformer pre-pass
+# ---------------------------------------------------------------------------
+
+
+def populate_ccd_reference(
+    atom_array: AtomArray,
+    *,
+    include_res_perm: bool = True,
+) -> AtomArray:
+    """Write ``ref_pos`` / ``ref_charge`` / ``ref_mask`` (and optionally
+    ``res_perm``) annotations on ``atom_array`` from the CCD components
+    dictionary.
+
+    This is the single pre-pass that ``AnnotatedStructure.annotate(...,
+    include_ref_conformer=True)`` requires callers to have run — the
+    reference-conformer group refuses to invent these fields silently
+    because the UNL handling and the CCD lookup logic belong upstream
+    where the per-residue-type dispatch lives.
+
+    Per-residue behaviour:
+
+    - ``res_name == "UNL"`` (SMILES ligand placeholder): the reference
+      **is** whatever ``atom_array.coord`` currently holds — the RDKit
+      conformer coords written by ``array_builder.smiles_to_atom_info``.
+      Copy verbatim and mark every atom as resolved (``ref_mask = 1``).
+      Charges come from ``atom_array.charge`` if that annotation exists,
+      else zero.
+    - ``res_name`` found in CCD: for each atom, look up its position in
+      the component's ``atom_map``. If found → copy the reference coord,
+      charge, and mask from the CCD entry. If the atom name is **not**
+      in the component (e.g. a modified residue whose naming diverged
+      from the CCD canonical), leave ``ref_mask = 0`` for that atom —
+      this is a graceful fallback over the legacy
+      ``add_ref_feat_info`` KeyError (bug scan #4).
+    - ``res_name`` absent from CCD and not ``UNL``: all three fields stay
+      at their zero defaults; a warning is logged.
+
+    ``res_perm`` is a per-atom string encoding of the CCD permutation
+    array (``"_".join(str(j) for j in row)``). Pass
+    ``include_res_perm=False`` for inference-side callers that don't use
+    the permutation pipeline (``array_builder.add_reference_features`` is
+    such a caller).
+
+    This replaces two legacy entry points that the v1 deletion will
+    remove: ``annotation.add_ref_info_and_res_perm`` (CIF path) and
+    ``array_builder.add_reference_features`` (inference path). The UNL
+    branch was previously inference-only; folding it here means the CIF
+    path also handles SMILES ligands correctly if one were ever embedded.
+
+    Args:
+        atom_array: Input atom array. Must carry ``res_name`` and
+            ``atom_name`` annotations. ``coord`` is always read; ``charge``
+            is read only if present (defaults to 0 otherwise).
+        include_res_perm: When True (default), also populate the
+            ``res_perm`` annotation. CIF-parse callers leave this on;
+            inference callers that don't need permutations can set it
+            off.
+
+    Returns:
+        The same atom array with new annotations set (mutates).
+    """
+    n = len(atom_array)
+    ref_pos = np.zeros((n, 3), dtype=np.float64)
+    ref_charge = np.zeros(n, dtype=int)
+    ref_mask = np.zeros(n, dtype=int)
+
+    has_charge = "charge" in atom_array.get_annotation_categories()
+
+    res_perm_rows: list[list[int]] | None = [] if include_res_perm else None
+
+    res_starts = get_residue_starts(atom_array, add_exclusive_stop=True)
+    for start, stop in zip(res_starts[:-1], res_starts[1:]):
+        res_name = atom_array.res_name[start]
+        res_size = stop - start
+
+        if res_name == "UNL":
+            ref_pos[start:stop] = atom_array.coord[start:stop]
+            if has_charge:
+                ref_charge[start:stop] = atom_array.charge[start:stop]
+            ref_mask[start:stop] = 1
+            if res_perm_rows is not None:
+                res_perm_rows.extend([[i] for i in range(res_size)])
+            continue
+
+        ref_info: RefInfo | None = get_ccd_ref_info(res_name)
+        if ref_info is None:
+            logger.warning("populate_ccd_reference: no CCD entry for %r", res_name)
+            if res_perm_rows is not None:
+                res_perm_rows.extend([[i] for i in range(res_size)])
+            continue
+
+        atom_names = atom_array.atom_name[start:stop]
+        sub_idx = [ref_info.atom_map.get(name) for name in atom_names]
+        for local_i, s in enumerate(sub_idx):
+            if s is None:
+                # Atom name not in CCD — leave ref_mask=0 for this slot.
+                continue
+            full_i = start + local_i
+            ref_pos[full_i] = ref_info.coord[s]
+            ref_charge[full_i] = ref_info.charge[s]
+            ref_mask[full_i] = ref_info.mask[s]
+
+        if res_perm_rows is not None:
+            res_perm_rows.extend(
+                _compute_residue_permutations(
+                    atom_names=atom_names,
+                    atom_map=ref_info.atom_map,
+                    perm_array=ref_info.perm,
+                )
+            )
+
+    atom_array.set_annotation("ref_pos", ref_pos)
+    atom_array.set_annotation("ref_charge", ref_charge)
+    atom_array.set_annotation("ref_mask", ref_mask)
+
+    if res_perm_rows is not None:
+        str_res_perm = ["_".join(str(j) for j in row) for row in res_perm_rows]
+        atom_array.set_annotation("res_perm", np.asarray(str_res_perm))
+
+    return atom_array
+
+
+def _compute_residue_permutations(
+    atom_names: np.ndarray,
+    atom_map: dict[str, int],
+    perm_array: np.ndarray,
+) -> list[list[int]]:
+    """Per-residue helper for ``populate_ccd_reference``.
+
+    Produces one integer-list permutation per atom in the residue:
+    ``[[atom_0_perm_0, atom_0_perm_1, ...], [atom_1_perm_0, ...], ...]``.
+
+    Mirrors the filtering that ``annotation.add_res_perm`` performed —
+    restrict the CCD's permutation array to only the atoms actually
+    present in this residue, then relabel CCD-local atom indices into
+    residue-local (0..res_size-1) indices.
+
+    If any atom name isn't in the CCD ``atom_map``, returns trivial
+    identity permutations ``[[i] for i in range(n)]`` — matches the v1
+    fallback for the modified-residue case.
+    """
+    curr_res_atom_idx = list(range(len(atom_names)))
+    perm_ccd_idx = [atom_map.get(name) for name in atom_names]
+    if any(idx is None for idx in perm_ccd_idx):
+        return [[i] for i in curr_res_atom_idx]
+
+    perm_ccd_arr = np.asarray(perm_ccd_idx)
+    ccd_to_local = dict(zip(perm_ccd_idx, curr_res_atom_idx))
+
+    # Keep only rows of the CCD perm array whose atom index appears in
+    # this residue; then keep only columns where every kept row has an
+    # entry that's also in the residue.
+    row_mask = np.isin(perm_array[:, 0], perm_ccd_arr)
+    rows_filtered = perm_array[row_mask]
+    col_mask = np.isin(rows_filtered, perm_ccd_arr).all(axis=0)
+    filtered = rows_filtered[:, col_mask]
+
+    # Relabel CCD-local indices to residue-local indices.
+    remapped = np.vectorize(ccd_to_local.get)(filtered)
+    return remapped.tolist()
 
 
 # ---------------------------------------------------------------------------

@@ -118,12 +118,17 @@ def context_with_restype(device):
 def _attach_msa(
     context,
     *,
-    n_msa: int = 4,
+    n_rows: int = 4,
     gap_everywhere: bool = False,
     msa_chain_mask_all_true: bool = True,
     copy_gt_to_row_0: bool = False,
 ):
     """Return a new FullContext with an MSAContext attached.
+
+    ``n_rows`` is the total MSA row count (= ``n_msa_plus_one`` on the
+    tensor dim = 1 query + ``n_msa`` homologs). Named ``n_rows`` here so
+    the helper is decoupled from the sampler-config convention where
+    ``n_msa`` now means homolog count.
 
     - ``gap_everywhere``: tokens all 31 (null MSA shape).
     - ``msa_chain_mask_all_true``: if False, msa_chain_mask is all False
@@ -137,10 +142,10 @@ def _attach_msa(
     gt = context.token.restype.argmax(dim=-1)  # [B, N]
 
     if gap_everywhere:
-        tokens = torch.full((B, N, n_msa), 31, dtype=torch.int8, device=device)
+        tokens = torch.full((B, N, n_rows), 31, dtype=torch.int8, device=device)
     else:
         # Random tokens in [0, 20) (canonical AAs) to avoid gap collisions.
-        tokens = torch.randint(0, 20, (B, N, n_msa), dtype=torch.int8, device=device)
+        tokens = torch.randint(0, 20, (B, N, n_rows), dtype=torch.int8, device=device)
         if copy_gt_to_row_0:
             tokens[:, :, 0] = gt.to(torch.int8)
 
@@ -183,7 +188,7 @@ def test_pseudo_loss_with_msa_raises(context_with_restype, device):
 def test_msa_loss_is_finite_and_has_gradients(context_with_restype, device):
     model = ArtiosPotts(_make_msa_configs()).to(device)
     model.train()
-    ctx = _attach_msa(context_with_restype, n_msa=4, copy_gt_to_row_0=True)
+    ctx = _attach_msa(context_with_restype, n_rows=4, copy_gt_to_row_0=True)
 
     output = model.main_train_loop(context=ctx, seed=0)
     loss, metrics = model.compute_loss(output=output, context=ctx)
@@ -218,7 +223,7 @@ def test_null_msa_batch_returns_zero_loss_cleanly(context_with_restype, device):
     model.train()
     ctx = _attach_msa(
         context_with_restype,
-        n_msa=4,
+        n_rows=4,
         gap_everywhere=True,
         msa_chain_mask_all_true=False,
     )

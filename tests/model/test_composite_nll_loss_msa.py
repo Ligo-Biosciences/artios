@@ -5,8 +5,8 @@ the same shape and semantics as the non-MSA ``composite_nll_loss`` — so
 ``ArtiosPotts.compute_loss`` can feed it into the exact same
 loss-weight / masked-mean / entity-metrics pipeline. Tests cover:
 
-  - n_msa=1 with row=gt_seq matches the non-MSA composite per-position
-    NLL.
+  - n_msa_plus_one=1 (query only) with row=gt_seq matches the non-MSA
+    composite per-position NLL.
   - All-gap (null) MSA → per_position_nll is 0 (masked_mean with empty
     mask).
   - One row gap at a specific (row, token) excludes only that cell from
@@ -46,11 +46,11 @@ def _make_potts_inputs(
 
 
 # ---------------------------------------------------------------------------
-# Regression: n_msa=1 with row=gt_seq matches non-MSA composite per_position_nll.
+# Regression: n_msa_plus_one=1 (query only) matches non-MSA composite per_position_nll.
 # ---------------------------------------------------------------------------
 
 
-def test_n_msa_1_matches_non_msa_per_position_nll():
+def test_query_only_matches_non_msa_per_position_nll():
     h, J, edge_index, edge_mask, gt = _make_potts_inputs()
     B, N = gt.shape
 
@@ -62,8 +62,9 @@ def test_n_msa_1_matches_non_msa_per_position_nll():
         seq=gt,
     )
 
-    # MSA path with M=1, column 0 = gt, no gaps. MSAContext layout is
-    # [B, N, M] — composite_nll_loss_msa handles the transpose.
+    # MSA path with n_msa_plus_one=1 (just the query), no gaps.
+    # MSAContext layout is [B, N, n_msa_plus_one] —
+    # composite_nll_loss_msa handles the transpose internally.
     msa_tokens = gt.unsqueeze(-1)  # [B, N, 1]
     msa_gap_mask = torch.zeros_like(msa_tokens, dtype=torch.bool)
 
@@ -79,7 +80,7 @@ def test_n_msa_1_matches_non_msa_per_position_nll():
     torch.testing.assert_close(per_pos_msa, per_pos_nonmsa, rtol=1e-5, atol=1e-5)
 
 
-def test_n_msa_many_all_equal_to_gt_matches_non_msa():
+def test_many_msa_rows_all_equal_to_gt_matches_non_msa():
     """If every MSA row is the gt sequence with no gaps, the per-position
     row-average degenerates to the single-sequence composite NLL. Guards
     against a broadcasting bug that would accidentally sum instead of
@@ -214,7 +215,7 @@ def test_row_swap_of_different_content_changes_per_position_nll():
 
 @pytest.mark.parametrize("n_chunk", [1, 2, 3, 8])
 def test_chunked_matches_full_vectorised(n_chunk):
-    """Chunking over n_msa must be an exact refactor, not an approximation."""
+    """Chunking over n_msa_plus_one must be an exact refactor, not an approximation."""
     h, J, edge_index, edge_mask, gt = _make_potts_inputs(B=2, N=7, K=3, R=5, seed=17)
     B, N = gt.shape
     R = h.shape[-1]

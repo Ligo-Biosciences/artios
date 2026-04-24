@@ -19,8 +19,8 @@ def gather_nodes(
     Accepts arbitrary leading batch dims (``*batch``). For the common 3D
     ``[B, N, F]`` case this is behaviourally identical to the prior
     ``dim=1`` / ``"b n k"`` implementation (``dim=-2 == dim=1`` at
-    ndim=3). Used by the MSA loss path which adds an ``n_msa`` leading
-    dim.
+    ndim=3). Used by the MSA loss path which adds an ``n_msa_plus_one``
+    leading dim.
 
     Args:
         h_nodes: Node features

@@ -132,8 +132,8 @@ def composite_nll_loss_msa(
     J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
     edge_index: Int[Tensor, "batch n_token neighbours"],
     edge_mask: Bool[Tensor, "batch n_token neighbours"],
-    msa_tokens: Int[Tensor, "batch n_token n_msa"],
-    msa_gap_mask: Bool[Tensor, "batch n_token n_msa"],
+    msa_tokens: Int[Tensor, "batch n_token n_msa_plus_one"],
+    msa_gap_mask: Bool[Tensor, "batch n_token n_msa_plus_one"],
     n_chunk: int = 8,
     eps: float = 1e-6,
 ) -> Float[Tensor, "batch n_token"]:
@@ -164,13 +164,14 @@ def composite_nll_loss_msa(
     **Memory**: each chunk materialises a ``[B, n_chunk, N, K, R, R]``
     log-softmax output. ``F.log_softmax`` saves its output for backward,
     which autograd holds live across *every* chunk until ``.backward()``
-    runs — so without intervention peak scales linearly with ``n_msa``
-    and the chunking buys nothing on the backward path. We fix this by
-    wrapping the chunk body in ``torch.utils.checkpoint.checkpoint``:
-    the saved tensors are discarded at forward time and the chunk is
-    re-run during backward. Peak memory is then ``O(n_chunk)`` — one
-    chunk's worth — at the cost of ~30% more compute on the loss path.
-    At B=4, n_msa=64, N=600, K=30, R=32, fp32, n_chunk=8 this is
+    runs — so without intervention peak scales linearly with
+    ``n_msa_plus_one`` and the chunking buys nothing on the backward
+    path. We fix this by wrapping the chunk body in
+    ``torch.utils.checkpoint.checkpoint``: the saved tensors are
+    discarded at forward time and the chunk is re-run during backward.
+    Peak memory is then ``O(n_chunk)`` — one chunk's worth — at the
+    cost of ~30% more compute on the loss path. At B=4, n_msa=64
+    (⇒ n_msa_plus_one=65), N=600, K=30, R=32, fp32, n_chunk=8 this is
     ~2.4 GB per live chunk.
 
     Args:
@@ -178,16 +179,17 @@ def composite_nll_loss_msa(
         J: Potts couplings [B, N, K, R, R].
         edge_index: Neighbour indices [B, N, K].
         edge_mask: Valid edge mask [B, N, K].
-        msa_tokens: MSA residue ids in STD_RESIDUES_AND_GAP [B, N, M] —
-            matches ``MSAContext.tokens``. Column 0 is the query; columns
-            1..M-1 are homologs. Non-reference-chain rows carry the gt
-            residue id across every column.
+        msa_tokens: MSA residue ids in STD_RESIDUES_AND_GAP
+            [B, N, n_msa_plus_one] — matches ``MSAContext.tokens``.
+            Column 0 is the query; columns 1..n_msa are homologs.
+            Non-reference-chain rows carry the gt residue id across
+            every column.
         msa_gap_mask: True where ``msa_tokens == 31`` (real homolog gap
-            on a reference-chain position) [B, N, M] — matches
-            ``MSAContext.gap_mask``. False on non-reference-chain rows
-            (they hold gt residues, not gaps).
-        n_chunk: Chunk size along ``n_msa`` for the joint-logits step.
-            Default 8. Reduce if OOM.
+            on a reference-chain position) [B, N, n_msa_plus_one] —
+            matches ``MSAContext.gap_mask``. False on non-reference-chain
+            rows (they hold gt residues, not gaps).
+        n_chunk: Chunk size along the ``n_msa_plus_one`` axis for the
+            joint-logits step. Default 8. Reduce if OOM.
         eps: Numerical-stability epsilon.
 
     Returns:

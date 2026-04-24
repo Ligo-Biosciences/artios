@@ -234,6 +234,48 @@ def test_chunked_matches_full_vectorised(n_chunk):
     torch.testing.assert_close(per_pos_full, per_pos_chunk, rtol=1e-6, atol=1e-6)
 
 
+@pytest.mark.parametrize("n_chunk", [1, 2, 3, 8])
+def test_chunked_gradients_match_full_vectorised(n_chunk):
+    """Gradients on h and J must also be invariant under chunking. Catches
+    a bug where the ``checkpoint`` wrapping silently drops gradient
+    contributions from any chunk (e.g. only the last chunk's grads
+    reach h/J). Same synthetic inputs as the forward-equivalence test;
+    backward through ``per_pos.sum()`` on each chunking choice must
+    produce bit-identical leaf grads within fp32 tolerance."""
+    _, _, edge_index, edge_mask, gt = _make_potts_inputs(B=2, N=7, K=3, R=5, seed=23)
+    B, N = gt.shape
+    gen = torch.Generator().manual_seed(24)
+    R = 5
+    M = 6
+    msa_tokens = torch.randint(0, R, (B, N, M), generator=gen)
+    msa_gap_mask = torch.zeros(B, N, M, dtype=torch.bool)
+
+    # Independent leaf tensors per run so grads don't accumulate across.
+    def _leaves():
+        g = torch.Generator().manual_seed(25)
+        h_ = torch.randn(B, N, R, generator=g, requires_grad=True)
+        J_ = torch.randn(B, N, 3, R, R, generator=g, requires_grad=True)
+        return h_, J_
+
+    h_a, J_a = _leaves()
+    h_b, J_b = _leaves()
+
+    loss_a = composite_nll_loss_msa(
+        h_a, J_a, edge_index, edge_mask, msa_tokens, msa_gap_mask, n_chunk=M
+    ).sum()
+    loss_a.backward()
+
+    loss_b = composite_nll_loss_msa(
+        h_b, J_b, edge_index, edge_mask, msa_tokens, msa_gap_mask, n_chunk=n_chunk
+    ).sum()
+    loss_b.backward()
+
+    assert h_a.grad is not None and h_b.grad is not None
+    assert J_a.grad is not None and J_b.grad is not None
+    torch.testing.assert_close(h_a.grad, h_b.grad, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(J_a.grad, J_b.grad, rtol=1e-5, atol=1e-5)
+
+
 # ---------------------------------------------------------------------------
 # Hand-calculable case vs pen-and-paper.
 # ---------------------------------------------------------------------------

@@ -136,6 +136,7 @@ def composite_nll_loss_msa(
     msa_gap_mask: Bool[Tensor, "batch n_token n_msa_plus_one"],
     n_chunk: int = 8,
     eps: float = 1e-6,
+    supervise_query: bool = True,
 ) -> Float[Tensor, "batch n_token"]:
     """MSA-averaged composite NLL, returning the same per-position tensor
     shape as the non-MSA ``composite_nll_loss``.
@@ -191,6 +192,13 @@ def composite_nll_loss_msa(
         n_chunk: Chunk size along the ``n_msa_plus_one`` axis for the
             joint-logits step. Default 8. Reduce if OOM.
         eps: Numerical-stability epsilon.
+        supervise_query: If True (default), row 0 (the query) contributes
+            to the loss alongside the homologs. If False, row 0 is
+            dropped before the loss is computed — only homologs
+            supervise, which forces the model to generalise to related
+            sequences rather than memorise the specific input. The MPNN
+            already conditions on the (masked) gt sequence, so scoring
+            the query can be a "too-easy" supervision signal.
 
     Returns:
         ``per_position_nll`` [B, N]: per-sample, per-token NLL ready to
@@ -202,6 +210,11 @@ def composite_nll_loss_msa(
     # [B, N, M] -> [B, M, N]
     msa_tokens = msa_tokens.transpose(-2, -1).contiguous().long()
     msa_gap_mask = msa_gap_mask.transpose(-2, -1).contiguous()
+
+    if not supervise_query:
+        # Drop row 0 (the query). Only homologs supervise the loss.
+        msa_tokens = msa_tokens[:, 1:]
+        msa_gap_mask = msa_gap_mask[:, 1:]
 
     M = msa_tokens.shape[1]
     K = edge_index.shape[-1]

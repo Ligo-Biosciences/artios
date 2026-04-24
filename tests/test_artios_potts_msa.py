@@ -35,6 +35,7 @@ def _make_msa_configs(loss_type: str = "composite"):
                     "active_site_upweight": 1.0,
                     "active_site_distance": 8.0,
                     "n_msa_chunk": 8,
+                    "supervise_query": True,
                 },
             },
             "artios_mpnn": {

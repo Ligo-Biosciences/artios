@@ -61,6 +61,7 @@ class PottsLossConfig:
     active_site_upweight: float = 1.0
     active_site_distance: float = 8.0
     n_msa_chunk: int = 8
+    supervise_query: bool = True
 
 
 class ArtiosPotts(nn.Module):
@@ -95,6 +96,7 @@ class ArtiosPotts(nn.Module):
             active_site_upweight=potts_loss_cfg.active_site_upweight,
             active_site_distance=potts_loss_cfg.active_site_distance,
             n_msa_chunk=potts_loss_cfg.n_msa_chunk,
+            supervise_query=potts_loss_cfg.get("supervise_query", True),
         )
 
         masking_sampler_type = MaskingSamplerType(
@@ -518,6 +520,7 @@ class ArtiosPotts(nn.Module):
                         msa_gap_mask=context.msa.gap_mask,
                         n_chunk=self.loss_config.n_msa_chunk,
                         eps=eps,
+                        supervise_query=self.loss_config.supervise_query,
                     )
                 else:
                     per_position_nll = composite_nll_loss(

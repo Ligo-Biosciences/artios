@@ -34,6 +34,7 @@ from artios.data.features import FullContext
 from artios.data.features.featurizer import ContextGenerator
 from artios.data.motif_maker import MotifMaker
 from artios.data.structure import AnnotatedStructure
+from artios.data.structure.annotation_v2 import MotifAnnotation
 from artios.utils.file_io import read_indices_csv
 from artios.utils.geometry import random_transform
 from artios.utils.logger import get_logger
@@ -515,8 +516,9 @@ class BaseSingleDataset(Dataset):
             )
         else:
             n = len(cropped_structure.atoms)
-            cropped_structure = cropped_structure.with_motif_annotations(
-                np.zeros(n, dtype=int), np.zeros(n, dtype=int)
+            zeros = np.zeros(n, dtype=int)
+            cropped_structure = cropped_structure.with_motif(
+                MotifAnnotation(is_motif=zeros, is_motif_related=zeros)
             )
         timings["motif"] = time.time() - tmotif
 
@@ -667,8 +669,9 @@ class BaseSingleDataset(Dataset):
             structure = structure.with_sampled_motif(self.motif_maker)
         else:
             n = len(structure.atoms)
-            structure = structure.with_motif_annotations(
-                np.zeros(n, dtype=int), np.zeros(n, dtype=int)
+            zeros = np.zeros(n, dtype=int)
+            structure = structure.with_motif(
+                MotifAnnotation(is_motif=zeros, is_motif_related=zeros)
             )
 
         structure = structure.with_duplicated_motif_backbones()

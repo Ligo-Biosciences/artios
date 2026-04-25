@@ -12,7 +12,7 @@ import numpy as np
 from biotite.structure import AtomArray
 
 from artios.data.parsing.bioassembly import (
-    _clean_and_repair,
+    _clean_and_fix_residues,
     _count_protein_chains,
 )
 
@@ -54,25 +54,23 @@ def _build_aa(
 
 
 # ---------------------------------------------------------------------------
-# _clean_and_repair
+# _clean_and_fix_residues
 # ---------------------------------------------------------------------------
 
 
-class TestCleanAndRepair:
-    """``_clean_and_repair`` composes four already-tested primitives
-    (``clean_structure``, ``fix_arginine``, ``mse_to_met``,
-    ``add_missing_atoms_and_residues``, ``Filter.remove_element_X``).
-    The contract this step *owns* — not duplicated by the callees — is
-    the empty-after-clean short-circuit: a refactor that drops the
-    ``None``-passthrough would mask an empty array downstream where
-    filters crash with less actionable errors. That's the one test worth
-    keeping at this seam.
+class TestCleanAndFixResidues:
+    """``_clean_and_fix_residues`` composes ``clean_structure`` →
+    ``fix_arginine`` → ``mse_to_met``. The contract this step *owns* —
+    not duplicated by the callees — is the empty-after-clean short-
+    circuit: a refactor that drops the ``None``-passthrough would mask
+    an empty array downstream.
     """
 
     def test_returns_none_when_all_atoms_dropped(self):
         """Water-only input → ``clean_structure`` removes everything →
-        ``_clean_and_repair`` must propagate ``None`` so ``load_bioassembly``
-        reports the skip without crashing in add_missing_atoms_and_residues.
+        ``_clean_and_fix_residues`` must propagate ``None`` so
+        ``load_bioassembly`` reports the skip without crashing in
+        ``add_missing_atoms_and_residues``.
         """
         aa = _build_aa(
             chain_id=["W"] * 3,
@@ -84,11 +82,7 @@ class TestCleanAndRepair:
             hetero=[True] * 3,
         )
 
-        out = _clean_and_repair(
-            aa,
-            entity_poly_type={},
-            poly_res_names_fn=lambda _aa: {},
-        )
+        out = _clean_and_fix_residues(aa, entity_poly_type={})
 
         assert out is None
 

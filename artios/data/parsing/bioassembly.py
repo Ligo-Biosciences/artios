@@ -14,7 +14,6 @@ import dataclasses
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
@@ -27,8 +26,6 @@ from artios.data.parsing.mmcif import MmcifHeader, MmcifReader
 from artios.data.structure import AnnotatedStructure, annotation_v2
 
 logger = logging.getLogger(__name__)
-
-PolyResNamesFn = Callable[[AtomArray], dict[str, list[str]]]
 
 
 @dataclass(frozen=True)
@@ -237,25 +234,21 @@ def get_core_indices(atom_array: AtomArray) -> np.ndarray | None:
 # ---------------------------------------------------------------------------
 
 
-def _clean_and_repair(
+def _clean_and_fix_residues(
     atom_array: AtomArray,
     *,
     entity_poly_type: dict[str, str],
-    poly_res_names_fn: PolyResNamesFn,
 ) -> AtomArray | None:
-    """clean_structure → fix_arginine → mse_to_met →
-    add_missing_atoms_and_residues → remove_element_X.
+    """clean_structure → fix_arginine → mse_to_met.
 
-    Args:
-        atom_array: Raw AtomArray from ``MmcifReader.atom_array()``.
-        entity_poly_type: ``{label_entity_id: poly_type}`` from the CIF.
-        poly_res_names_fn: Called with the post-MSE-conversion AtomArray
-            to yield the altloc-filtered canonical sequence per entity
-            (``MmcifReader._poly_res_names`` is the canonical producer).
+    First half of the pre-expand pipeline. Output residue names match
+    what ``MmcifReader.poly_res_names`` returns (MSE has been renamed to
+    MET on both sides), so the orchestrator can compute
+    ``poly_res_names`` on this output and feed it to
+    ``_fill_missing_and_finalise``.
 
-    Returns:
-        The cleaned+repaired AtomArray, or ``None`` if cleaning dropped
-        every atom (callers treat this as "skip sample").
+    Returns ``None`` if ``clean_structure`` drops every atom (callers
+    treat this as "skip sample").
     """
     atom_array = filter_module.clean_structure(
         atom_array,
@@ -267,14 +260,27 @@ def _clean_and_repair(
     if atom_array is None:
         return None
     atom_array = residue_repair.fix_arginine(atom_array)
-    atom_array = residue_repair.mse_to_met(atom_array)
+    return residue_repair.mse_to_met(atom_array)
+
+
+def _fill_missing_and_finalise(
+    atom_array: AtomArray,
+    *,
+    entity_poly_type: dict[str, str],
+    poly_res_names: dict[str, "np.ndarray | list[str]"],
+) -> AtomArray:
+    """add_missing_atoms_and_residues → remove_element_X.
+
+    Second half of the pre-expand pipeline. ``poly_res_names`` should be
+    computed on the output of ``_clean_and_fix_residues`` so its altloc
+    resolution sees the post-MSE-fix residue names.
+    """
     atom_array = residue_repair.add_missing_atoms_and_residues(
         atom_array,
         entity_poly_type=entity_poly_type,
-        poly_res_names=poly_res_names_fn(atom_array),
+        poly_res_names=poly_res_names,
     )
-    atom_array = Filter.remove_element_X(atom_array)
-    return atom_array
+    return Filter.remove_element_X(atom_array)
 
 
 def _remove_unresolved_mols(structure: AnnotatedStructure) -> AnnotatedStructure:
@@ -458,12 +464,18 @@ def load_bioassembly(
         reader.header, sequences=reader.sequences_for(atom_array)
     )
 
-    atom_array = _clean_and_repair(
-        atom_array,
-        entity_poly_type=header.entity_poly_type,
-        poly_res_names_fn=reader._poly_res_names,
+    atom_array = _clean_and_fix_residues(
+        atom_array, entity_poly_type=header.entity_poly_type
     )
     if atom_array is None or len(atom_array) == 0:
+        return None
+
+    atom_array = _fill_missing_and_finalise(
+        atom_array,
+        entity_poly_type=header.entity_poly_type,
+        poly_res_names=reader.poly_res_names(atom_array),
+    )
+    if len(atom_array) == 0:
         return None
 
     atom_array = expand_assembly(atom_array, reader.cif, assembly_id)
@@ -519,7 +531,7 @@ def load_distillation_bioassembly(
     - Repair order is ``fix_arginine → add_missing → mse_to_met``
       (the bioassembly path flips the last two). ``add_missing_*``
       still needs canonical sequences with MET in place of MSE, which
-      is what ``MmcifReader._poly_res_names`` writes.
+      is what ``MmcifReader.poly_res_names`` writes.
     - No ``expand_assembly`` + no ``_apply_assembly_filters`` —
       distillation is asymmetric-unit only.
     - Training-prep annotations are ``fragment_id`` + per-fragment
@@ -540,7 +552,7 @@ def load_distillation_bioassembly(
     atom_array = residue_repair.add_missing_atoms_and_residues(
         atom_array,
         entity_poly_type=header.entity_poly_type,
-        poly_res_names=reader._poly_res_names(atom_array),
+        poly_res_names=reader.poly_res_names(atom_array),
     )
     if len(atom_array) == 0:
         return None

@@ -521,7 +521,7 @@ class TestAnnotate:
         atom_array = residue_repair.add_missing_atoms_and_residues(
             atom_array,
             entity_poly_type=entity_poly_type,
-            poly_res_names=reader._poly_res_names(atom_array),
+            poly_res_names=reader.poly_res_names(atom_array),
         )
         atom_array = Filter.remove_element_X(atom_array)
         atom_array = populate_ccd_reference(atom_array)

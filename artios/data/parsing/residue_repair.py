@@ -267,7 +267,7 @@ def build_ref_chain_with_atom_array(
             are dropped from the ref chain).
         entity_poly_type: ``{label_entity_id: poly_type}``.
         poly_res_names: ``{label_entity_id: [res_name, ...]}`` — usually
-            from ``MmcifReader._poly_res_names(atom_array)``.
+            from ``MmcifReader.poly_res_names(atom_array)``.
 
     Returns:
         ``{entity_id: ref_chain_atom_array}``.

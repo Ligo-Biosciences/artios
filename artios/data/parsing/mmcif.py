@@ -186,10 +186,9 @@ class MmcifReader:
         through. With one, altloc filtering picks the same residue
         variant that ended up in the parsed structure.
         """
-        poly_res_names = self._poly_res_names(atom_array)
         return {
             eid: ccd.res_names_to_sequence(names)
-            for eid, names in poly_res_names.items()
+            for eid, names in self.poly_res_names(atom_array).items()
         }
 
     def sequences_for(self, atom_array: AtomArray) -> dict[str, str]:
@@ -200,7 +199,17 @@ class MmcifReader:
         """
         return self._sequences(atom_array)
 
-    def _poly_res_names(self, atom_array: AtomArray | None) -> dict[str, list[str]]:
+    def poly_res_names(
+        self, atom_array: AtomArray | None = None
+    ) -> dict[str, list[str]]:
+        """``{entity_id: [res_name, ...]}`` — canonical polymer sequence
+        per entity, with MSE→MET applied and altloc residues resolved.
+
+        When an ``atom_array`` is supplied, altloc-position residues
+        whose canonical identity is ambiguous are resolved to whichever
+        variant matches the parsed structure. Without one, the first
+        variant in ``entity_poly_seq`` is kept.
+        """
         entity_res_names: dict[str, dict[int, str]] = {}
         if atom_array is not None:
             res_starts = struc.get_residue_starts(atom_array, add_exclusive_stop=False)

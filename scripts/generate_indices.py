@@ -55,7 +55,7 @@ def get_indices_from_bioassembly(
     atom_array = bioassembly.structure.to_atom_array()
     return make_indices(
         bioassembly,
-        poly_res_names=reader._poly_res_names(atom_array),
+        poly_res_names=reader.poly_res_names(atom_array),
         pdb_cluster_file=cluster_file,
     )
 

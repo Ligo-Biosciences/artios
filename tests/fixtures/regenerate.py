@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from artios.data.parsing.bioassembly import load_bioassembly
+from artios.data.structure import AnnotatedStructure
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("regenerate")

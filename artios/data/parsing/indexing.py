@@ -130,7 +130,7 @@ def compute_chain_indices(
         entity_poly_type: ``{entity_id: poly_type}`` from
             ``MmcifHeader.entity_poly_type``.
         poly_res_names: ``{entity_id: [res_name, ...]}`` from
-            ``MmcifReader._poly_res_names(atom_array)``.
+            ``MmcifReader.poly_res_names(atom_array)``.
         pdb_id: Entry ID used to form cluster-file keys.
         pdb_cluster_file: Path to the PDB-cluster txt file. ``None``
             skips cluster lookup.
@@ -380,7 +380,7 @@ def make_indices(
             altloc-filtered canonical sequences. Not cached on
             ``Bioassembly`` because it's derived from ``atom_array`` +
             CIF and isn't meaningful after structure rewrites; callers
-            pass it explicitly from ``MmcifReader._poly_res_names``.
+            pass it explicitly from ``MmcifReader.poly_res_names``.
         pdb_cluster_file: Cluster info text file for sequence-based
             deduplication in ``compute_chain_indices``.
     """

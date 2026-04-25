@@ -70,7 +70,7 @@ class DataPipeline(object):
             atom_array_for_poly = bioassembly.structure.to_atom_array()
             sample_indices_list = make_indices(
                 bioassembly,
-                poly_res_names=reader._poly_res_names(atom_array_for_poly),
+                poly_res_names=reader.poly_res_names(atom_array_for_poly),
                 pdb_cluster_file=pdb_cluster_file,
             )
             if len(sample_indices_list) == 0:

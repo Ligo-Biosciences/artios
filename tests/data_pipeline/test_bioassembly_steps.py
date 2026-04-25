@@ -1,11 +1,9 @@
 """Unit tests for the ``bioassembly`` pipeline step functions.
 
-Each step mirrors a contiguous block of the legacy
-``MMCIFParser.get_bioassembly`` and was extracted so the orchestration
-has testable seams. The goldens in ``test_load_bioassembly.py`` pin
-end-to-end parity; these tests pin the small, non-obvious invariants
-each step owns — so a refactor that preserves the end-to-end output but
-breaks an intermediate contract still lights up.
+The goldens in ``test_load_bioassembly.py`` pin end-to-end parity;
+these tests pin the small, non-obvious invariants each step owns — so
+a refactor that preserves the end-to-end output but breaks an
+intermediate contract still lights up.
 """
 
 from __future__ import annotations

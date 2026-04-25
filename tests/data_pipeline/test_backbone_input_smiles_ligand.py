@@ -1,25 +1,19 @@
 """SMILES-ligand backbone-input contract test.
 
 Runs ``backbone_input_to_structure`` on real motif JSONs from
-``evaluation/inputs/artios/`` (the exact templates the evaluation runner
-loads) and pins the invariant that SMILES-specified ligand atoms — which
-land in the atom_array with ``res_name == "UNL"`` — carry their RDKit 3D
-conformer coords through to ``reference.ref_pos`` with ``ref_mask == 1``.
+``evaluation/inputs/artios/`` and pins the invariant that
+SMILES-specified ligand atoms (``res_name == "UNL"``) carry their RDKit
+3D conformer coords through to ``reference.ref_pos`` with
+``ref_mask == 1``.
 
-Why this exists: the priority_8 refactor moved
-``annotate()``-time ``ref_pos`` computation into
-``ReferenceConformer.compute``, which looks up ``ref_pos`` via CCD by
-``res_name``. ``UNL`` is not in CCD, so the compute silently zeros out
-``ref_pos`` / ``ref_mask`` for every UNL atom. The legacy
-``add_reference_features`` had an explicit ``if res_name == "UNL"`` branch
-that copied ``ref_pos`` from ``atom_array.coord`` and set ``ref_mask = 1``;
-the new compute dropped that branch. Downstream the backbone diffusion
-conditions on ``ref_pos`` for ``is_ligand | is_motif_related`` atoms
-(``diffusion_backbone.py``), so zero ``ref_pos`` kills intra-ligand
-geometry conditioning and the sampled ligand comes out as a collapsed
-cluster. Every existing annotation-contract test uses CCD fixtures,
-which exercises the lookup branch and misses this regression — this
-test closes that gap by driving the real SMILES inputs end-to-end.
+The downstream backbone diffusion conditions on ``ref_pos`` for
+``is_ligand | is_motif_related`` atoms (``diffusion_backbone.py``); if
+``ref_pos`` is silently zeroed for UNL — because UNL isn't in the CCD
+``ReferenceConformer.compute`` lookup — intra-ligand geometry
+conditioning dies and the sampled ligand collapses. Other
+annotation-contract tests use CCD fixtures, which exercises the lookup
+branch and misses this regression — this test closes that gap by
+driving real SMILES inputs end-to-end.
 """
 
 from __future__ import annotations

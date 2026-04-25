@@ -1,6 +1,5 @@
 """Annotation groups + their structural and content helpers.
 
-Staging ground for PR B in docs/refactor_plans/data_pipeline_refactor_sequence.md.
 Two kinds of things live here:
 
 1. **Structural ops** (``canonicalize_chain_ids``, ``order_atoms_by_mol``) —
@@ -12,9 +11,6 @@ Two kinds of things live here:
 Shared helpers that are genuinely called from more than one place live at
 module scope (``_mol_boundaries``, ``_compute_mol_atom_index``). Content
 that is used by a single group goes straight into the group's ``compute()``.
-
-This module will supersede ``annotation.py``; during migration both coexist so
-``test_compute_migration_parity.py`` can byte-compare the pipelines.
 """
 
 from __future__ import annotations
@@ -80,16 +76,15 @@ def remove_bonds_between_polymer_chains(
 
     Used when building per-chain mol groups (``order_atoms_by_mol`` with
     ``entity_poly_type`` set): polymer-polymer cross-chain bonds — almost
-    always disulfides — otherwise glue two polymer chains into one
+    always disulfides — would otherwise glue two polymer chains into one
     connected component. Ligand-polymer and ligand-ligand bonds are kept.
 
     Returns a **copy** of ``atom_array.bonds`` with those bonds filtered
     out. Does not mutate the input.
 
-    Ported verbatim from ``annotation.py::remove_bonds_between_polymer_chains``;
-    the ``bonds._bonds`` / ``_remove_redundant_bonds`` private-biotite access
-    is tracked in the bug-scan list (#6) and will move into
-    ``_biotite_compat.py`` during step 6 of the refactor.
+    TODO: ``bonds._bonds`` / ``_remove_redundant_bonds`` is private
+    biotite API; should move into ``_biotite_compat.py`` so a biotite
+    upgrade is a one-file patch.
     """
     copy = atom_array.bonds.copy()
     polymer_mask = np.isin(atom_array.label_entity_id, list(entity_poly_type.keys()))
@@ -440,14 +435,8 @@ def _compute_residue_permutations(
 
 
 # ---------------------------------------------------------------------------
-# Training-prep helpers (step 9 of the cif.py refactor)
+# Training-prep helpers
 # ---------------------------------------------------------------------------
-#
-# These four functions used to live in ``annotation.py`` as free helpers.
-# They're mutually independent of each other and of the typed-group
-# machinery — each takes an atom_array, runs an external pipeline, and
-# writes an annotation. Moving them here lets ``annotation.py`` be
-# deleted in step 10.
 
 
 def unresolve_low_plddt_residues(
@@ -963,24 +952,20 @@ class ReferenceConformer(_AnnotationGroup):
         ``ref_mask`` from the atom_array annotations.
 
         Callers are responsible for populating the reference annotations
-        on the atom_array before ``annotate()``. The inference path uses
-        ``array_builder.add_reference_features`` (which handles SMILES
-        ligands — ``res_name == "UNL"`` — by copying the RDKit conformer
-        coords off ``atom_array.coord``). The CIF-parsing path uses
-        ``annotation.add_ref_info_and_res_perm`` inside ``get_bioassembly``.
-        Per-residue dispatch belongs in those builders, not here — keeping
-        a second CCD-by-``res_name`` lookup inside this group was silently
-        clobbering the UNL case and killing intra-ligand geometry
-        conditioning in the backbone diffusion.
+        before ``annotate()`` — both pipeline entry points
+        (``load_bioassembly`` and ``array_builder``) call
+        ``populate_ccd_reference`` first. Per-residue dispatch belongs
+        in that pre-pass, not here — keeping a second CCD-by-``res_name``
+        lookup inside this group would silently clobber the UNL case
+        and kill intra-ligand geometry conditioning in backbone diffusion.
 
         ``ref_space_uid`` (AF3 SI 2.8 Table 5 — unique int per
         ``(asym_id, res_id)``) is always computed: it depends on
-        ``EntityIds`` rather than on the atom_array annotations, so it has
-        no sensible "read from the atom_array" path.
+        ``EntityIds`` rather than on the atom_array annotations.
 
         When ``include_conformer=False``, ``ref_pos``/``ref_charge``/
         ``ref_mask`` are zero-filled — used by tests that only need
-        ``ref_space_uid`` and don't want to set up a CCD/SMILES pre-pass.
+        ``ref_space_uid``.
         """
         cls._require_annotations(atom_array)
         n = len(atom_array)
@@ -1004,8 +989,7 @@ class ReferenceConformer(_AnnotationGroup):
             raise ValueError(
                 f"ReferenceConformer.compute(..., include_conformer=True) "
                 f"requires the atom_array to already carry {missing} "
-                f"annotations. Run ``add_reference_features`` (inference "
-                f"path) or ``add_ref_info_and_res_perm`` (CIF path) before "
+                f"annotations. Run ``populate_ccd_reference`` before "
                 f"``AnnotatedStructure.annotate``."
             )
 
@@ -1217,12 +1201,10 @@ class MotifAnnotation(_AnnotationGroup):
             mapping=mapping,
         )
 
-    # Bool→int coercion for legacy-saved stacks. Post-Phase-7 of
-    # priority_8_motif_first_class.md, all artios writers emit int, but
-    # pre-flip backbone NPZs pulled from Modal volumes still have bool
-    # annotations baked in. Deletable once those fixtures regenerate (or
-    # when the group dtype flips to Bool — tracked in the module
-    # docstring's int→bool migration TODO).
+    # Bool→int coercion for older-saved stacks. Current writers emit int,
+    # but backbone NPZs on Modal volumes still have bool annotations baked
+    # in. Deletable once those fixtures regenerate, or when the group
+    # dtype flips to Bool (see TypeMasks docstring's mask→bool TODO).
     @classmethod
     def from_atom_array(cls, atom_array: AtomArray) -> "MotifAnnotation":
         is_motif = atom_array.is_motif

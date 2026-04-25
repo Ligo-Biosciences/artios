@@ -13,12 +13,10 @@ is a one-file patch instead of a scavenger hunt. Callers should import
 the public re-exports here and never reach into ``pdbx.convert``
 directly.
 
-Bonds-level private access (``BondList._bonds``, ``_remove_redundant_bonds``,
-``_get_max_bonds_per_atom``) is not wrapped yet — it's scattered
-across ``filter.py`` / ``annotation.py`` / ``annotation_v2.py`` and
-folding it in is tracked as a follow-up in the refactor plan (bug-scan
-finding #6). For now the adapter covers only the pdbx_convert surface,
-which is what the parsing-layer modules touch.
+TODO: bonds-level private access (``BondList._bonds``,
+``_remove_redundant_bonds``, ``_get_max_bonds_per_atom``) is still
+scattered across ``filter.py`` / ``annotation_v2.py``. Folding it in
+here is a follow-up.
 """
 
 from __future__ import annotations

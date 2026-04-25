@@ -1,29 +1,18 @@
 """Typed chain / interface indexing for training sample generation.
 
-Step 7 of the ``cif.py`` refactor. The indexing logic that used to live
-as methods on ``MMCIFParser`` — ``make_chain_indices``,
-``make_interface_indices``, ``add_sub_mol_type``, ``add_eval_type``,
-``make_indices`` — moves here as free functions. The two pre-classification
-shapes (``ChainIndex`` / ``InterfaceIndex``) get frozen dataclasses with
-``to_flat_dict()`` shims that reproduce the legacy key-mangled shape
-``data_weights.py::IndicesSchema`` validates.
+The two pre-classification shapes (``ChainIndex`` / ``InterfaceIndex``)
+are frozen dataclasses with ``to_flat_dict()`` shims that produce the
+key-mangled shape ``data_weights.py::IndicesSchema`` validates.
+``make_indices`` composes both into the per-sample index rows.
 
-**Bug preservation, intentionally.** ``add_sub_mol_type`` at the bottom
-of this module contains bug-scan finding #1: the ``else`` branch assigns
-the *literal list* ``[f"mol_{i}_type"]`` instead of
-``indices_dict[f"mol_{i}_type"]``. That typo fires for ions chains
-(``mol_type == "ions"``) and is written to the training CSV as a garbage
-value. The dedicated fix commit is deferred — ``filter_ion_rows.py``
-strips every ions row before training sees it, so the live impact is
-zero, and the refactor is staying rigorously parity-preserving.
-``MolType`` / ``SubMolType`` / ``EvalType`` are declared as plain ``str``
-aliases instead of ``Literal`` precisely to keep the typo inside the
-dataclass's type contract. When the fix lands, swap them for ``Literal``
-and the typo becomes a type error.
-
-``test_cif_parse_parity::test_ions_chain_sub_mol_type_is_ions`` is the
-regression pin for the fix; it remains ``@pytest.mark.skip`` until the
-follow-up commit.
+**Known bug.** ``add_sub_mol_type`` (a.k.a. ``classify_sub_mol_type``)
+contains a typo: the ``else`` branch assigns the literal list
+``[f"mol_{i}_type"]`` instead of ``indices_dict[f"mol_{i}_type"]``. It
+fires for ions chains (``mol_type == "ions"``) and writes a garbage
+value into the training CSV. ``filter_ion_rows.py`` strips every ions
+row before training sees it, so live impact is zero. ``MolType`` /
+``SubMolType`` / ``EvalType`` are kept as plain ``str`` aliases (not
+``Literal``) so the typo doesn't become a type error before it's fixed.
 """
 
 from __future__ import annotations
@@ -126,8 +115,7 @@ def compute_chain_indices(
 ) -> list[ChainIndex]:
     """Build one ``ChainIndex`` per resolved chain in the bioassembly.
 
-    Logic ports ``MMCIFParser.make_chain_indices`` verbatim. Clustering
-    key resolution follows AF3 SI 2.5.1:
+    Clustering key resolution follows AF3 SI 2.5.1:
     - Short peptides (< 10 residues): cluster by sequence.
     - Longer protein chains: look up ``{pdb_id}_{entity_id}`` in the PDB
       cluster file; fall back to ``"NotInClusterTxt"`` for standard
@@ -265,16 +253,16 @@ def classify_sub_mol_type(
 ) -> dict[str, Any]:
     """Classify each side of ``indices_dict`` into a fine-grained sub-mol-type.
 
-    Ports ``MMCIFParser.add_sub_mol_type`` verbatim. Mutates
-    ``indices_dict`` to add ``sub_mol_1_type`` / ``sub_mol_2_type`` keys.
+    Mutates ``indices_dict`` to add ``sub_mol_1_type`` /
+    ``sub_mol_2_type`` keys.
 
-    Categories (see module docstring for the bug #1 caveat):
+    Categories (see module docstring for the ions-typo caveat):
     - ``prot``: ``prot`` / ``glycosylation_prot`` / ``modified_prot``
     - ``nuc``: ``dna`` / ``rna`` / ``modified_dna`` / ``modified_rna`` /
       ``dna_rna_hybrid``
     - ``ligand``: ``bonded_ligand`` / ``non_bonded_ligand`` / ``glycans`` /
       ``excluded_ligand``
-    - ``ions``: intended to be ``"ions"`` but bug #1 writes a list literal.
+    - ``ions``: intended to be ``"ions"`` but the typo writes a list literal.
     """
     for i in ["1", "2"]:
         if indices_dict[f"entity_{i}_id"] == "":
@@ -324,13 +312,12 @@ def classify_sub_mol_type(
                 indices_dict[f"sub_mol_{i}_type"] = "dna_rna_hybrid"
 
         else:
-            # TODO(bug-scan #1): the intent is
+            # TODO: intended to be
             # ``indices_dict[f"sub_mol_{i}_type"] = indices_dict[f"mol_{i}_type"]``
-            # (scalar string — "ions" for monatomic chains). This line
-            # writes a literal list ``[f"mol_{i}_type"]`` instead. Deferred
-            # until the dedicated bug-fix commit; flipping the type
-            # aliases at the top of this module to ``Literal`` turns this
-            # into a type error and forces the fix.
+            # (scalar "ions" for monatomic chains). This line writes a
+            # literal list instead — see module docstring. Flipping the
+            # type aliases at the top of this module to ``Literal`` turns
+            # the typo into a type error.
             indices_dict[f"sub_mol_{i}_type"] = [f"mol_{i}_type"]
 
         if indices_dict.get(f"sub_mol_{i}_type") is None:
@@ -342,8 +329,7 @@ def classify_eval_type(indices_dict: dict[str, Any]) -> dict[str, Any]:
     """Derive the training-weighting ``eval_type`` from
     ``mol_type_group`` + ``sub_mol_*_type``.
 
-    Ports ``MMCIFParser.add_eval_type`` verbatim. Mutates
-    ``indices_dict`` to add an ``eval_type`` key.
+    Mutates ``indices_dict`` to add an ``eval_type`` key.
     """
     if indices_dict["mol_type_group"] not in ["intra_nuc", "nuc_prot"]:
         eval_type = indices_dict["mol_type_group"]

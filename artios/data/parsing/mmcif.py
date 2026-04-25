@@ -1,24 +1,15 @@
 """Typed, read-only wrapper around a biotite ``pdbx.CIFFile``.
 
-Step 3 of the cif.py refactor. ``MmcifReader`` exposes the header-level
-metadata and the lightweight ``atom_array()`` parse that inference needs
-via ``Motif.from_spec``. It does **not** expand bioassemblies, does not
-run filters, and does not touch annotations — those belong to
-``load_bioassembly`` in ``cif.py`` (added in a later step).
+``MmcifReader`` exposes the header-level metadata and the lightweight
+``atom_array()`` parse used by ``Motif.from_spec`` and
+``load_bioassembly``. It does **not** expand bioassemblies, does not run
+filters, and does not touch annotations — those belong to
+``load_bioassembly``.
 
-Design notes:
-
-- The header is materialised eagerly into a frozen ``MmcifHeader``
-  dataclass; reading costs are trivial next to bioassembly expansion, and
-  eager materialisation means callers can drop the reader once they have
-  what they need.
-- ``atom_array`` mirrors the legacy ``MMCIFParser.get_structure``
-  byte-for-byte. Refactoring the internals (notably, collapsing the
-  biotite private-API calls behind an adapter) is step 6. For now we just
-  lift the body so ``MMCIFParser`` can delegate instead of owning it.
-- ``MMCIFParser`` still exists in ``cif.py`` as a shim that forwards
-  ``get_structure`` to a shared module-level helper, so every legacy
-  import keeps resolving — parity tests pin the behaviour.
+The header is materialised eagerly into a frozen ``MmcifHeader``
+dataclass; reading costs are trivial next to bioassembly expansion, and
+eager materialisation means callers can drop the reader once they have
+what they need.
 """
 
 from __future__ import annotations
@@ -46,26 +37,11 @@ logger = logging.getLogger(__name__)
 class MmcifHeader:
     """Header-level metadata extracted from an mmCIF file.
 
-    - ``pdb_id``: lowercase PDB id from ``_entry.id``; empty string if
-      the entry category is absent.
-    - ``resolution``: first available value from
-      ``refine.ls_d_res_high`` / ``em_3d_reconstruction.resolution`` /
-      ``reflns.d_resolution_high``. ``-1.0`` when none are present
-      (sentinel kept for back-compat with the legacy dict bag).
-    - ``release_date``: ``yyyy-mm-dd`` date from
-      ``pdbx_audit_revision_history``. Sentinel ``9999-12-31`` when
-      absent (same rule the legacy code used — keeps sort order sane).
-    - ``methods``: experimental methods from ``exptl.method``; empty
-      tuple if absent.
-    - ``entity_poly_type``: ``{label_entity_id: poly_type}`` from the
-      ``entity_poly`` category. When that category is missing (e.g.
-      PyMOL exports), the dict is populated via residue-name inference
-      so downstream callers never have to special-case non-PDB CIFs.
-    - ``sequences``: ``{label_entity_id: canonical_sequence}`` — derived
-      from ``entity_poly_seq`` (with the ``MSE → MET`` substitution the
-      rest of the pipeline assumes). Altloc filtering is skipped at this
-      layer; pass an ``atom_array`` to ``MmcifReader.sequences_for`` to
-      get the altloc-aware variant.
+    Sentinels for missing fields: ``resolution = -1.0``,
+    ``release_date = 9999-12-31``, ``methods = ()``. ``sequences`` here
+    is the CIF-declared canonical sequence (no altloc filter); use
+    ``MmcifReader.sequences_for(atom_array)`` for the altloc-aware
+    variant.
     """
 
     pdb_id: str
@@ -77,13 +53,7 @@ class MmcifHeader:
 
 
 class MmcifReader:
-    """Read-only typed access to an mmCIF file.
-
-    Constructed from a path (gzipped or plain). All header fields are
-    materialised eagerly on ``header``; ``atom_array()`` is the
-    lightweight parse used by ``Motif.from_spec`` and the entry point
-    ``load_bioassembly`` will call before annotation.
-    """
+    """Read-only typed access to an mmCIF file."""
 
     def __init__(self, path: Union[Path, str]) -> None:
         self._path = Path(path)
@@ -97,16 +67,9 @@ class MmcifReader:
         with open(path, "rt") as f:
             return pdbx.CIFFile.read(f)
 
-    # -- raw access needed by callers still living on the old API --------
-
     @property
     def cif(self) -> pdbx.CIFFile:
-        """The underlying biotite ``CIFFile``.
-
-        Exposed so the legacy ``MMCIFParser`` (which still owns the
-        heavy pipeline during the refactor) can reuse the same parsed
-        object instead of re-reading the file.
-        """
+        """The underlying biotite ``CIFFile``."""
         return self._cif
 
     # -- header ----------------------------------------------------------
@@ -169,13 +132,12 @@ class MmcifReader:
     # -- polymer-entity metadata -----------------------------------------
 
     def _entity_poly_type(self) -> dict[str, str]:
-        """``{entity_id: poly_type}`` with a fallback for non-PDB CIFs.
+        """``{entity_id: poly_type}``.
 
-        When ``entity_poly`` is absent (e.g. PyMOL exports), the poly type
-        is inferred by comparing ``atom_site`` residue names against the
-        standard protein / DNA / RNA sets. This matches the legacy
-        fallback behaviour so motif CIFs and hand-crafted inputs keep
-        parsing.
+        When the ``entity_poly`` category is absent (e.g. PyMOL exports),
+        the poly type is inferred by comparing ``atom_site`` residue
+        names against the standard protein / DNA / RNA sets so motif CIFs
+        and hand-crafted inputs keep parsing.
         """
         block = self._cif.block
         if "entity_poly" in block:
@@ -220,11 +182,9 @@ class MmcifReader:
     def _sequences(self, atom_array: AtomArray | None = None) -> dict[str, str]:
         """``{entity_id: canonical_sequence}``.
 
-        Called twice during the full pipeline: once without an atom_array
-        (cheap, reads entity_poly_seq straight through) and once with the
-        parsed atom_array so altloc filtering picks the same residue
-        variant that ended up in the structure. Mirrors the legacy
-        ``get_sequences`` shape.
+        Without an atom_array, reads ``entity_poly_seq`` straight
+        through. With one, altloc filtering picks the same residue
+        variant that ended up in the parsed structure.
         """
         poly_res_names = self._poly_res_names(atom_array)
         return {
@@ -306,7 +266,7 @@ class MmcifReader:
             out[entity_id] = np.array(names)
         return out
 
-    # -- atom array (lightweight parse used by Motif.from_spec) ----------
+    # -- atom array ------------------------------------------------------
 
     def atom_array(
         self,
@@ -317,11 +277,11 @@ class MmcifReader:
     ) -> AtomArray:
         """Parse the asymmetric unit of the CIF into an ``AtomArray``.
 
-        Mirrors the legacy ``MMCIFParser.get_structure`` body, including
-        altloc filtering, ``auth_*`` fallbacks for CIFs exported by tools
-        that skip those fields, and the two-pass inter-residue bond
-        inference (once with auth-seq-id, once more after
-        ``replace_auth_with_label`` rewrites ``res_id`` to ``label_seq_id``).
+        Includes altloc filtering, ``auth_*`` fallbacks for CIFs
+        exported by tools that skip those fields, and the two-pass
+        inter-residue bond inference (once with auth-seq-id, once more
+        after ``replace_auth_with_label`` rewrites ``res_id`` to
+        ``label_seq_id``).
 
         Args:
             altloc: ``"first"`` / ``"all"`` / ``"global_largest"`` / an
@@ -329,7 +289,7 @@ class MmcifReader:
             model: 1-based model index.
             bond_length_threshold: Filter for ``struct_conn`` bonds whose
                 inferred length exceeds the threshold (Å). ``None``
-                disables the filter. Default ``2.4`` matches legacy.
+                disables the filter.
         """
         atoms = _parse_asymmetric_unit(
             self._cif,
@@ -348,8 +308,7 @@ class MmcifReader:
 
 
 # ---------------------------------------------------------------------------
-# Module-level helpers used by MmcifReader.atom_array (shared with the
-# legacy MMCIFParser during migration — see cif.py).
+# Module-level helpers used by MmcifReader.atom_array
 # ---------------------------------------------------------------------------
 
 
@@ -433,8 +392,6 @@ def _filter_altloc(atom_array: AtomArray, altloc: str = "first") -> AtomArray:
       that residue.
     - explicit letter (``"A"``, ``"B"``, …): keep only that altloc plus
       '.' atoms.
-
-    Ported from the legacy ``MMCIFParser.filter_altloc``.
     """
     from collections import defaultdict
 
@@ -491,12 +448,9 @@ def _replace_auth_with_label(atom_array: AtomArray) -> AtomArray:
     Polymer chains get their ``label_seq_id`` copied into ``res_id`` as
     an integer; non-polymer chains (``label_seq_id == "."``) are
     renumbered 1..N within the chain so downstream code can index on a
-    contiguous integer.
-
-    Ported from the legacy ``MMCIFParser.replace_auth_with_label`` with
-    one fix: ``res_id`` is built as an integer array from the start, so
-    wide values (>9999) no longer silently truncate through a string
-    dtype (bug-scan finding #2).
+    contiguous integer. ``res_id`` is built as an integer array from the
+    start so wide values (>9999) don't silently truncate through a
+    string dtype.
     """
     atom_array.chain_id = atom_array.label_asym_id.copy()
     n = len(atom_array)

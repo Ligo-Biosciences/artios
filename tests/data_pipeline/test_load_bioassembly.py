@@ -1,14 +1,8 @@
 """Parity tests for ``bioassembly.load_bioassembly`` against committed goldens.
 
-Phase 2 of the ``get_bioassembly`` decomposition. Runs the new
-``load_bioassembly`` free function on the same five CIF fixtures the
-legacy-path parity test uses, and asserts the produced
+Runs ``load_bioassembly`` on five CIF fixtures and asserts the produced
 ``Bioassembly.structure`` matches the committed ``.npz`` goldens
-field-by-field.
-
-Once every caller is migrated (Phase 4) and ``MMCIFParser.get_bioassembly``
-is deleted (Phase 5), the legacy-path parity test goes away and this
-file becomes the canonical CIF-parse regression.
+field-by-field. The canonical CIF-parse regression.
 """
 
 from __future__ import annotations

@@ -1,23 +1,10 @@
-"""Typed bioassembly records + the full ``load_bioassembly`` pipeline.
+"""Typed bioassembly records + the ``load_bioassembly`` pipeline.
 
-Originally step 4 (dataclasses) and step 6 (symmetry expansion) of the
-``cif.py`` refactor; Phase 1-2 of the ``get_bioassembly`` decomposition
-added the pipeline-step free functions and the top-level orchestrator
-so ``MMCIFParser.get_bioassembly`` can collapse to a thin dict adapter.
-
-``Bioassembly`` replaces the ``dict[str, Any]`` bag
-``MMCIFParser.get_bioassembly`` used to return.
-``num_assembly_polymer_chains`` / ``expand_assembly`` / ``get_core_indices``
-are the free functions the parser delegates to; the step functions
-``_clean_and_repair`` / ``_prepare_for_filters`` /
-``_apply_assembly_filters`` / ``_annotate_final`` / ``_count_protein_chains``
-carve the old god method into testable pieces. ``load_bioassembly``
-composes them.
-
-``AssemblyOperation`` is still just a placeholder — the
-``_pdbx_struct_assembly_gen`` row-parsing stays inside ``expand_assembly``
-because biotite's ``_apply_transformations`` consumes the raw
-``CIFCategory`` directly. Typing those rows is a follow-up.
+``load_bioassembly(cif_path)`` is the canonical entry point: parse →
+clean → expand → annotate → filter → pocket → ``Bioassembly``. The
+distillation sibling ``load_distillation_bioassembly`` follows the same
+shape minus the bioassembly expansion. Each pipeline stage is a free
+function so it can be tested in isolation.
 """
 
 from __future__ import annotations
@@ -48,10 +35,9 @@ PolyResNamesFn = Callable[[AtomArray], dict[str, list[str]]]
 class AssemblyOperation:
     """One row of ``_pdbx_struct_assembly_gen`` — a transform instance.
 
-    Step 4 just declares the shape; the row-parsing and symmetry
-    expansion move into this module in step 6 when ``expand_assembly``
-    leaves ``cif.py``. Keeping the dataclass now gives downstream code a
-    stable import target.
+    Placeholder dataclass; the actual row-parsing happens inside
+    ``expand_assembly`` because biotite's ``_apply_transformations``
+    consumes the raw ``CIFCategory`` directly.
     """
 
     assembly_id: str
@@ -61,29 +47,7 @@ class AssemblyOperation:
 
 @dataclass(frozen=True)
 class Bioassembly:
-    """An annotated structure + CIF metadata + training-sample counts.
-
-    Covers both the crystal-bioassembly path (``load_bioassembly``) and
-    the distillation-monomer path (``load_distillation_bioassembly``) —
-    the two differ only in whether ``pdbx_struct_assembly`` expansion
-    ran, so the two assembly-specific fields below are optional.
-
-    Fields:
-    - ``structure``: the annotated structure. Never ``None`` — when the
-      parse / expansion / repair fails, the loaders return ``None``
-      rather than constructing a stubbed ``Bioassembly``.
-    - ``header``: ``MmcifHeader`` carrying pdb_id, resolution,
-      release_date, methods, entity_poly_type, sequences.
-    - ``num_prot_chains``: polypeptide chains that survived repair
-      (crystal path) or the predicted-monomer chain count (distillation).
-    - ``num_tokens``: post-annotation token count — mirrors
-      ``structure.grouping.n_tokens``.
-    - ``assembly_id``: which bioassembly in ``pdbx_struct_assembly_gen``
-      was expanded. ``None`` for distillation (asymmetric-unit only).
-    - ``num_assembly_polymer_chains``: oligomeric count from
-      ``pdbx_struct_assembly``. ``None`` for distillation, and ``None``
-      in the crystal path when the CIF records an unresolved '?' count.
-    """
+    """An annotated structure + CIF metadata + training-sample counts."""
 
     structure: AnnotatedStructure
     header: MmcifHeader
@@ -99,17 +63,12 @@ class Bioassembly:
 
     @classmethod
     def from_legacy_dict(cls, d: dict) -> "Bioassembly | None":
-        """Rebuild a ``Bioassembly`` from a legacy ``get_bioassembly`` dict.
+        """Rebuild a ``Bioassembly`` from an on-disk ``bioassembly_dict`` pickle.
 
-        Backcompat seam for on-disk pickles (``scripts/generate_indices.py``
-        reads ``bioassembly_dict`` pickles saved from an older pipeline).
-        Returns ``None`` if the pickle represents a skipped sample
-        (``atom_array`` is ``None``). Caller is responsible for having
-        access to the CIF if it wants altloc-filtered sequences — the
-        dict's ``sequences`` already carries the altloc-filtered version
-        the crystal pipeline stores.
-
-        Not a preferred API for new code; prefer ``load_bioassembly``.
+        Used by ``scripts/generate_indices.py`` to read pickles produced
+        by an older pipeline. New code should call ``load_bioassembly``
+        directly. Returns ``None`` if the pickle represents a skipped
+        sample (``atom_array`` is ``None``).
         """
         from datetime import datetime
 
@@ -129,7 +88,7 @@ class Bioassembly:
             pdb_id=d["pdb_id"],
             resolution=d.get("resolution", -1.0),
             release_date=release_date,
-            methods=(),  # legacy dict doesn't carry exptl methods
+            methods=(),  # pickle doesn't carry exptl methods
             entity_poly_type=d["entity_poly_type"],
             sequences=d["sequences"],
         )
@@ -144,7 +103,7 @@ class Bioassembly:
 
 
 # ---------------------------------------------------------------------------
-# Symmetry-expansion helpers (step 6 of the cif.py refactor)
+# Symmetry-expansion helpers
 # ---------------------------------------------------------------------------
 
 
@@ -153,8 +112,8 @@ def num_assembly_polymer_chains(
 ) -> int | None:
     """Read the oligomeric count for an assembly from ``pdbx_struct_assembly``.
 
-    - When the category is absent, returns ``1`` (matches legacy
-      behaviour: treat the structure as a single polymer chain).
+    - When the category is absent, returns ``1`` (treat the structure as
+      a single polymer chain).
     - When the CIF records an unresolved ``'?'`` count, returns ``None``
       (callers treat this as "skip sample").
     - When ``assembly_id == "all"``, sums the counts across every row.
@@ -274,17 +233,8 @@ def get_core_indices(atom_array: AtomArray) -> np.ndarray | None:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline step functions (Phase 1 of the get_bioassembly decomposition)
+# Pipeline step functions
 # ---------------------------------------------------------------------------
-#
-# These mirror contiguous blocks of ``MMCIFParser.get_bioassembly``. Each
-# takes an AtomArray in, returns an AtomArray (or None on skip), and has
-# zero hidden state — testable in isolation with a synthesized input.
-#
-# The orchestrator ``load_bioassembly`` (Phase 2) composes them into the
-# final pipeline; until then ``MMCIFParser.get_bioassembly`` calls them in
-# order, preserving the legacy dict-return shape for callers that haven't
-# migrated yet.
 
 
 def _clean_and_repair(
@@ -300,9 +250,8 @@ def _clean_and_repair(
         atom_array: Raw AtomArray from ``MmcifReader.atom_array()``.
         entity_poly_type: ``{label_entity_id: poly_type}`` from the CIF.
         poly_res_names_fn: Called with the post-MSE-conversion AtomArray
-            to yield the altloc-filtered canonical sequence per entity.
-            ``MmcifReader._poly_res_names`` is the canonical producer;
-            the legacy ``MMCIFParser.get_poly_res_names`` works too.
+            to yield the altloc-filtered canonical sequence per entity
+            (``MmcifReader._poly_res_names`` is the canonical producer).
 
     Returns:
         The cleaned+repaired AtomArray, or ``None`` if cleaning dropped
@@ -350,9 +299,9 @@ def _too_many_chains_filter(
 ) -> AnnotatedStructure | None:
     """Structure-native wrapper over ``Filter.too_many_chains_filter``.
 
-    Reuses the legacy clustering logic (CellList + distance-based chain
-    ranking) on a flattened view of the structure, then re-applies the
-    surviving ``mol_id`` set as a mask to slice every group consistently.
+    Runs the clustering logic (CellList + distance-based chain ranking)
+    on a flattened view of the structure, then re-applies the surviving
+    ``mol_id`` set as a mask to slice every group consistently.
     """
     flat = structure.to_atom_array()
     core_indices = np.where(np.isin(flat.chain_id, core_chain_ids))[0]
@@ -391,10 +340,11 @@ def _remove_asymmetric_polymer_ligand_bonds(
     """Remove inter-chain polymer-ligand bonds that aren't symmetric
     across every copy of the entity.
 
-    Mutates bonds only — no atoms are dropped. ``Filter``'s legacy
-    implementation reads only biotite-native atom fields (chain_id,
-    label_entity_id, res_id, res_name, atom_name) + bonds; all on
-    ``structure.atoms`` directly without a flatten round-trip.
+    Mutates bonds only — no atoms are dropped. The underlying
+    ``Filter.remove_asymmetric_polymer_ligand_bonds`` reads only
+    biotite-native atom fields (chain_id, label_entity_id, res_id,
+    res_name, atom_name) + bonds, so we pass ``structure.atoms``
+    directly without a flatten round-trip.
     """
     new_atoms = structure.atoms.copy()
     new_atoms = Filter.remove_asymmetric_polymer_ligand_bonds(
@@ -410,9 +360,9 @@ def _apply_assembly_filters(
     max_chains_num: int = 20,
     max_tokens_num: int = 5120,
 ) -> AnnotatedStructure | None:
-    """Post-annotate filter gate (AnnotatedStructure-native).
+    """Post-annotate filter gate.
 
-    Runs the four bioassembly filters in the legacy order:
+    Runs the four bioassembly filters in order:
     ``remove_unresolved_mols`` → ``too_many_chains_filter`` →
     ``remove_clashing_chains`` → ``remove_asymmetric_polymer_ligand_bonds``.
     Returns ``None`` when ``too_many_chains_filter`` finds no viable
@@ -421,9 +371,7 @@ def _apply_assembly_filters(
     ``core_chain_ids`` is derived once from the ``assembly_1`` annotation
     ``expand_assembly`` writes — it survives ``annotate``'s strip pass
     because no group owns it. ``structure.select_atoms`` preserves
-    chain_id identity, so one derivation is enough (the legacy pipeline
-    re-derived ``core_indices`` between every filter because indices
-    shift, but chain_ids don't).
+    chain_id identity, so one derivation is enough.
     """
     cats = structure.atoms.get_annotation_categories()
     if "assembly_1" in cats:
@@ -464,7 +412,7 @@ def _count_protein_chains(
 
 
 # ---------------------------------------------------------------------------
-# Top-level orchestrator (Phase 2 of the get_bioassembly decomposition)
+# Top-level orchestrators
 # ---------------------------------------------------------------------------
 
 
@@ -478,11 +426,7 @@ def load_bioassembly(
 ) -> Bioassembly | None:
     """Parse + clean + expand + filter + annotate a CIF into a ``Bioassembly``.
 
-    Linear orchestrator in the AF3 ``from_parsed_mmcif`` style —
-    ``MmcifReader`` for parsing, pipeline-step free functions for each
-    stage, ``Bioassembly`` as the typed return. Returns ``None`` on any
-    of three skip cases so callers can branch without reading sentinel
-    dict fields:
+    Returns ``None`` on any of three skip cases:
 
     - Assembly has no polymer chains or exceeds ``max_assembly_chains``.
     - Cleaning drops every atom (empty-after-clean).
@@ -499,7 +443,7 @@ def load_bioassembly(
     Returns:
         A ``Bioassembly`` whose ``structure.training.pocket_id`` is
         populated when pocket detection ran. ``header.sequences`` is the
-        altloc-aware variant (reader.sequences_for(atom_array)).
+        altloc-aware variant (``reader.sequences_for(atom_array)``).
     """
     reader = MmcifReader(cif_path)
     num_chains = num_assembly_polymer_chains(reader.cif, assembly_id)
@@ -508,8 +452,8 @@ def load_bioassembly(
 
     atom_array = reader.atom_array()
     # Swap the header's CIF-declared sequences for the altloc-aware variant
-    # so downstream callers don't have to know about the two-pass pattern
-    # MMCIFParser used to implement implicitly.
+    # so downstream callers don't have to handle the two-pass pattern
+    # explicitly.
     header = dataclasses.replace(
         reader.header, sequences=reader.sequences_for(atom_array)
     )
@@ -590,7 +534,6 @@ def load_distillation_bioassembly(
     )
 
     # Distillation repair: fix_arginine → add_missing → mse_to_met.
-    # Preserve the legacy empty-check after each step.
     atom_array = residue_repair.fix_arginine(atom_array)
     if len(atom_array) == 0:
         return None
@@ -605,10 +548,6 @@ def load_distillation_bioassembly(
     if len(atom_array) == 0:
         return None
 
-    # Annotate — ``canonicalize_chain_ids`` + ``order_atoms_by_mol``
-    # inside ``AnnotatedStructure.annotate`` subsume the legacy
-    # pre-annotate v1 calls (``unique_chain_and_add_ids`` +
-    # ``find_equiv_mol_and_assign_ids``).
     atom_array = annotation_v2.populate_ccd_reference(atom_array)
     structure = AnnotatedStructure.annotate(
         atom_array,

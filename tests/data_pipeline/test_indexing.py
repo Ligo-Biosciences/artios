@@ -1,16 +1,10 @@
 """Focused unit tests for ``artios.data.parsing.indexing``.
 
-Layer 4 of the refactor test plan: the typed ``ChainIndex`` /
-``InterfaceIndex`` dataclasses need schema + to_flat_dict() contract
-tests so any drift against
-``data_weights.py::IndicesSchema`` surfaces here rather than as a cryptic
-pandera validation error in training.
-
-Legacy equivalence is already covered implicitly by
-``test_cif_parse_parity`` (the indexing methods are shim-forwarders, and
-the goldens' pipeline runs through them). This file pins the
-dataclass-specific contracts: flat-dict key mangling, field names,
-frozenness.
+Pins the typed-dataclass contracts (flat-dict key mangling, field
+names, frozenness) on ``ChainIndex`` / ``InterfaceIndex`` so any drift
+against ``data_weights.py::IndicesSchema`` surfaces here rather than as
+a cryptic pandera validation error in training. End-to-end indexing
+output is covered by ``test_load_bioassembly.py`` via the goldens.
 """
 
 from __future__ import annotations

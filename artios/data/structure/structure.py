@@ -1,7 +1,6 @@
 """AnnotatedStructure: typed wrapper around biotite AtomArray.
 
 Replaces stringly-typed annotations on AtomArray with frozen dataclasses.
-See docs/refactor_plans/priority_2_annotated_structure.md for design rationale.
 """
 
 from __future__ import annotations
@@ -153,10 +152,9 @@ class AnnotatedStructure:
 
         for g in _AnnotationGroup.__subclasses__():
             g.strip_from(aa)
-        # TODO(follow-up): stop writing ``centre_atom_mask`` as an AtomArray
-        # annotation in to_atom_array so this string-based delete can go away.
-        # centre_atom_mask already lives on TokenGrouping; the AtomArray copy
-        # only exists for the legacy ContextGenerator / dataset.py motif path.
+        # centre_atom_mask lives on TokenGrouping; strip the AtomArray
+        # copy ``to_atom_array`` writes for ContextGenerator so the
+        # group stays the single source of truth.
         if "centre_atom_mask" in aa.get_annotation_categories():
             aa.del_annotation("centre_atom_mask")
 
@@ -209,16 +207,6 @@ class AnnotatedStructure:
 
     def with_sampled_motif(self, maker) -> AnnotatedStructure:
         return self.with_motif(maker.sample(self))
-
-    def with_motif_annotations(
-        self,
-        is_motif: Int[np.ndarray, "n_atom"],
-        is_motif_related: Int[np.ndarray, "n_atom"],
-    ) -> AnnotatedStructure:
-        """Legacy. Prefer :meth:`with_motif`; deleted in priority_8 Phase 5."""
-        return self.with_motif(
-            MotifAnnotation(is_motif=is_motif, is_motif_related=is_motif_related)
-        )
 
     def with_duplicated_motif_backbones(self) -> AnnotatedStructure:
         """Physically duplicate backbone atoms of motif-related residues.
@@ -530,8 +518,6 @@ class AnnotatedStructure:
             g.strip_from(atoms)
         # centre_atom_mask is recomputed via compute_token_grouping — strip if
         # present on the input so the AtomArray stays a single source of truth.
-        # TODO(PR C): fold the centre_atom_mask write in to_atom_array away once
-        # legacy ContextGenerator and dataset.process_one's motif zigzag are gone.
         if "centre_atom_mask" in atoms.get_annotation_categories():
             atoms.del_annotation("centre_atom_mask")
 

@@ -220,7 +220,7 @@ class TestReferenceConformerCompute:
             label_entity_id=["e1"],
         )
         entity_ids = EntityIds.compute(aa)
-        with pytest.raises(ValueError, match="add_reference_features"):
+        with pytest.raises(ValueError, match="populate_ccd_reference"):
             ReferenceConformer.compute(aa, entity_ids, include_conformer=True)
 
     def test_zero_fallback_when_conformer_disabled(self):
@@ -429,12 +429,6 @@ class TestPopulateCcdReference:
         assert "ref_pos" in aa.get_annotation_categories()
         assert "ref_charge" in aa.get_annotation_categories()
         assert "ref_mask" in aa.get_annotation_categories()
-
-    # test_matches_legacy_cif_path_output was a legacy-equivalence pin
-    # against annotation.add_ref_info_and_res_perm; deleted in step 10 of
-    # the cif.py refactor when the legacy function itself was removed.
-    # populate_ccd_reference is now the source of truth, covered by the
-    # other tests in this class plus the CIF-parse parity goldens.
 
 
 # ---------------------------------------------------------------------------

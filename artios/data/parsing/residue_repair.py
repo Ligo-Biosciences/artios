@@ -1,17 +1,12 @@
 """Residue-level repair passes for biotite ``AtomArray``.
 
-Step 6 of the ``cif.py`` refactor. Lifts the repair logic that used to
-live as methods on ``MMCIFParser`` — ``fix_arginine``, ``mse_to_met``,
-``add_missing_atoms_and_residues``, and their helpers — into free
-functions. They never depended on the parser's CIF state directly;
-``add_missing_atoms_and_residues`` only needed ``entity_poly_type`` and
-the altloc-filtered ``poly_res_names`` dict, both available from
-``MmcifReader``. Passing those in explicitly decouples repair from the
-parser entirely.
+Pure free functions: ``fix_arginine``, ``mse_to_met``,
+``add_missing_atoms_and_residues``, and their helpers. Each takes the
+inputs it needs explicitly (``entity_poly_type`` and the altloc-filtered
+``poly_res_names`` dict are both available from ``MmcifReader``).
 
-Each function is pure on its declared inputs (may mutate ``atom_array``
-in place where the legacy code did; the return value is the mutated
-object for pipeline-chaining callers).
+Functions may mutate ``atom_array`` in place; the return value is the
+mutated object for pipeline-chaining callers.
 """
 
 from __future__ import annotations

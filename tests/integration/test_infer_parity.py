@@ -1,17 +1,8 @@
 """Golden-parity tests for the inference pipelines in ``infer_data_pipeline.py``.
 
-Before refactoring the inference path to route through ``AnnotatedStructure``
-(see ``docs/refactor_plans/priority_7_data_pipeline_unification.md``) we pin
-the tensor output of each inference dataset on a fixed input. After the
-refactor, these tests must pass unchanged — any divergence names the field
-that silently broke.
-
-Training parity is intentionally out of scope: PR 1 touches the inference
-path only, and ``process_one`` already uses ``AnnotatedStructure`` + the new
-``ContextGenerator``. A training parity test becomes relevant if/when we
-remove the ``to_atom_array``/``from_atom_array`` zigzag in ``process_one``.
-
-See ``tests/integration/CLAUDE.md`` for regeneration ergonomics.
+Pins the tensor output of each inference dataset on a fixed input. Any
+divergence names the field that silently broke. See
+``tests/integration/CLAUDE.md`` for regeneration ergonomics.
 """
 
 from __future__ import annotations

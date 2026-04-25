@@ -218,20 +218,20 @@ class AnnotatedStructure:
         unindex step leaves them in their original entity/chain, while the
         originals are diverted into new per-instance chains.
 
-        Requires ``motif`` to be set (call ``with_motif_annotations`` first).
-        If nothing to duplicate (no motif-related backbone atoms) the
+        Requires ``motif`` to be set (call ``with_motif`` first). If
+        nothing to duplicate (no motif-related backbone atoms) the
         original structure is returned unchanged.
         """
         assert (
             self.motif is not None
         ), "with_duplicated_motif_backbones requires motif to be set"
 
-        mol_type = self.type_masks.mol_type
         atom_name = self.atoms.atom_name
         is_backbone = (
-            ((mol_type == "protein") & np.isin(atom_name, BACKBONE_DEFS["protein"]))
-            | ((mol_type == "DNA") & np.isin(atom_name, BACKBONE_DEFS["dna"]))
-            | ((mol_type == "RNA") & np.isin(atom_name, BACKBONE_DEFS["rna"]))
+            (self.type_masks.is_protein > 0)
+            & np.isin(atom_name, BACKBONE_DEFS["protein"])
+            | (self.type_masks.is_dna > 0) & np.isin(atom_name, BACKBONE_DEFS["dna"])
+            | (self.type_masks.is_rna > 0) & np.isin(atom_name, BACKBONE_DEFS["rna"])
         )
         duplicate_mask = is_backbone & (self.motif.is_motif_related > 0)
         if not duplicate_mask.any():

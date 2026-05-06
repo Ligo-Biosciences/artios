@@ -18,7 +18,7 @@ from artios.model.generator import (
     PottsProposal,
     PottsSampler,
 )
-from artios.model.loss import composite_nll_loss, nll_loss
+from artios.model.loss import composite_nll_loss, composite_nll_loss_msa
 from artios.model.modules.mpnn import MPNN
 from artios.model.modules.penalty import (
     PenaltyCollection,
@@ -34,7 +34,6 @@ from artios.model.modules.potts import (
     build_energy_bias_vector,
     build_mutable_mask,
     build_s_init,
-    compute_potts_joint_logits,
     compute_potts_single_logits,
 )
 from artios.model.output import PottsOutput
@@ -61,6 +60,8 @@ class PottsLossConfig:
     label_smoothing: float = 0.0
     active_site_upweight: float = 1.0
     active_site_distance: float = 8.0
+    n_msa_chunk: int = 8
+    supervise_query: bool = True
 
 
 class ArtiosPotts(nn.Module):
@@ -94,6 +95,8 @@ class ArtiosPotts(nn.Module):
             label_smoothing=potts_loss_cfg.label_smoothing,
             active_site_upweight=potts_loss_cfg.active_site_upweight,
             active_site_distance=potts_loss_cfg.active_site_distance,
+            n_msa_chunk=potts_loss_cfg.n_msa_chunk,
+            supervise_query=potts_loss_cfg.supervise_query,
         )
 
         masking_sampler_type = MaskingSamplerType(
@@ -451,6 +454,13 @@ class ArtiosPotts(nn.Module):
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Compute loss from Potts parameters (pseudo or composite likelihood).
 
+        When ``context.msa`` is present, the composite path averages NLL
+        across MSA rows (``composite_nll_loss_msa``) before feeding into
+        the shared per-position-nll pipeline. The returned
+        ``per_position_nll`` has the same semantics as the non-MSA path,
+        so loss-weight scaling, masked-mean reduction, and entity metrics
+        all reuse the same code. Pseudo-likelihood + MSA is rejected.
+
         Args:
             output: PottsOutput containing h, J, masking info, and timestep.
             context: Full context containing ground truth sequence and masks.
@@ -465,7 +475,6 @@ class ArtiosPotts(nn.Module):
 
         _, N = gt_seq.shape
 
-        # Get loss weights
         sampler_weight = self.masking_sampler.get_loss_weights(output.timestep)  # [B]
         eps = 1e-6
 
@@ -486,6 +495,8 @@ class ArtiosPotts(nn.Module):
 
         match self.loss_config.loss_type:
             case PottsLossType.PSEUDO:
+                if context.msa is not None:
+                    raise ValueError("MSA not implemented for pseudo loss.")
                 logits = compute_potts_single_logits(
                     gt_seq,
                     output.h,
@@ -494,28 +505,32 @@ class ArtiosPotts(nn.Module):
                     output.edge_mask,
                 )  # [B, N, R]
 
-                nll = nll_loss(
-                    logits=logits,
-                    labels=labels,
-                    mask=mask,
-                    label_smoothing=self.loss_config.label_smoothing,
-                )  # [B]
                 per_position_nll = -torch.sum(
                     labels * F.log_softmax(logits, dim=-1), dim=-1
                 )  # [B, N]
 
             case PottsLossType.COMPOSITE:
-                joint_logits, edge_mask = compute_potts_joint_logits(
-                    gt_seq, output.h, output.J, output.edge_index, output.edge_mask
-                )
-                nll, per_position_nll = composite_nll_loss(
-                    joint_logits,
-                    gt_seq,
-                    output.edge_index,
-                    edge_mask,
-                    mask,
-                )
-                # get logits for accuracy
+                if context.msa is not None:
+                    per_position_nll = composite_nll_loss_msa(
+                        h=output.h,
+                        J=output.J,
+                        edge_index=output.edge_index,
+                        edge_mask=output.edge_mask,
+                        msa_tokens=context.msa.tokens,
+                        msa_gap_mask=context.msa.gap_mask,
+                        n_chunk=self.loss_config.n_msa_chunk,
+                        eps=eps,
+                        supervise_query=self.loss_config.supervise_query,
+                    )
+                else:
+                    per_position_nll = composite_nll_loss(
+                        h=output.h,
+                        J=output.J,
+                        edge_index=output.edge_index,
+                        edge_mask=output.edge_mask,
+                        seq=gt_seq,
+                    )
+
                 logits = compute_potts_single_logits(
                     gt_seq,
                     output.h,

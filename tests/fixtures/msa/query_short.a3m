@@ -1,0 +1,10 @@
+>query
+MKWVTFISLLFL
+>hit_insertion | lowercase 'aa' is an insertion relative to query
+MaaKWVTFISLLFL
+>hit_gap | single gap in column 3
+MKW-TFISLLFL
+>hit_unknown | X in column 1
+MXWVTFISLLFL
+>hit_identical | same as query
+MKWVTFISLLFL

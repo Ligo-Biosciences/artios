@@ -39,3 +39,6 @@ artios/data/pocket/cache/
 
 # Local planning / scratch docs
 plans/
+
+# Agent secrets
+agents/*/.env

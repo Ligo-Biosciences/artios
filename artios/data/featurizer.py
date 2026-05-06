@@ -451,7 +451,6 @@ class ContextGenerator(object):
             coordinate=torch.Tensor(self.cropped_atom_array.coord).float(),
             centre_coordinate=torch.Tensor(self.centre_atoms.coord),
             backbone_coordinate=self.backbone_atoms_and_mask[0],
-            resolution=float(self.cropped_atom_array.resolution[0]),
         )
 
     def get_basic_context(self, include_arrays: bool = True) -> BasicContext:

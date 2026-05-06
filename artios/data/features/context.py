@@ -452,6 +452,58 @@ class FixedResidueContext(Context):
 
 @typecheck
 @dataclass
+class MSAContext(Context):
+    """MSA features for one reference chain, token-aligned to the cropped structure.
+
+    Shape convention: n_token is the leading non-batch axis so that the
+    existing FeatureType.TOKEN pad_fn (pads the last non-batch dim by
+    n_token_pad) applies uniformly to all fields. The MSA dataclass
+    (artios/data/msa/sampler.py) stores the transposed MSA-native
+    ``[n_msa_plus_one, l_chain]`` layout (one query row at index 0 plus
+    ``n_msa`` homolog rows); ``ContextGenerator._build_msa_context``
+    transposes and scatters chain columns into their n_token positions.
+
+    Vocabulary (same as ``artios.common.constants.STD_RESIDUES_AND_GAP``):
+      - 0..19: canonical amino acids, alphabetical by 3-letter code
+               (ALA=0, ARG=1, ..., VAL=19).
+      - 20: UNK (X / B / Z / J / U / O / any non-canonical character).
+      - 21..30: RNA/DNA slots in the shared vocab — never appear in
+               protein MSAs.
+      - 31: gap ('-').
+
+    Non-reference-chain tokens are gap-filled (31); ``msa_chain_mask``
+    marks which tokens carry real MSA data.
+    """
+
+    tokens: Feature(
+        Int[Tensor, "*batch n_token n_msa_plus_one"],
+        type=FeatureType.TOKEN,
+        encoding=EncodingType.IDENTITY,
+        description=(
+            "Integer token IDs in [0, 31] from STD_RESIDUES_AND_GAP — NOT "
+            "three-letter codes or strings. Axis layout: "
+            "n_token × n_msa_plus_one. Column 0 is the query row; "
+            "columns 1..n_msa are homologs (n_msa_plus_one = n_msa + 1). "
+            "Rows (n_token axis) outside the reference chain are gap-filled "
+            "with 31. Encoding: 0..19 canonical AAs (ALA..VAL alphabetical), "
+            "20 UNK, 31 gap."
+        ),
+    )
+    gap_mask: Mask(
+        Bool[Tensor, "*batch n_token n_msa_plus_one"],
+        type=FeatureType.TOKEN,
+        description="True where tokens == 31 (gap). Materialised for convenience.",
+    )
+    msa_chain_mask: Mask(
+        Bool[Tensor, "*batch n_token"],
+        type=FeatureType.TOKEN,
+        description="True on tokens belonging to the reference MSA chain.",
+    )
+    msa_chain_asym_id: int | list[int]  # becomes list[int] after batching
+
+
+@typecheck
+@dataclass
 class CoordinateContext(Context):
     """Coordinate features."""
 
@@ -516,6 +568,7 @@ class FullContext:
     # NOTE: Temporarily optional - expensive to compute, currently unused
     atom_perm: AtomPermContext = field(default_factory=AtomPermContext)
     fixed_residues: FixedResidueContext | None = None
+    msa: MSAContext | None = None
 
     def pad(self, n_max_atoms: int, n_max_tokens: int) -> FullContext:
         """Pad all features to n_max_tokens/n_max_atoms."""
@@ -626,6 +679,7 @@ class FullContext:
             coordinate=self.coordinate,
             basic=self.basic,
             fixed_residues=self.fixed_residues,
+            msa=self.msa,
         )
 
     def without_ligand(self) -> FullContext:
@@ -692,6 +746,7 @@ class FullContext:
             coordinate=new_coordinate,
             basic=self.basic,
             fixed_residues=self.fixed_residues,
+            msa=self.msa,
         )
 
     @classmethod
@@ -753,6 +808,11 @@ class FullContext:
         if "fixed_residues" in d:
             fixed_residues = FixedResidueContext.from_dict(d["fixed_residues"])
 
+        # Optional: MSAContext
+        msa = None
+        if "msa" in d:
+            msa = MSAContext.from_dict(d["msa"])
+
         return cls(
             token=token,
             reference=reference,
@@ -765,4 +825,5 @@ class FullContext:
             coordinate=coordinate,
             basic=basic_context,
             fixed_residues=fixed_residues,
+            msa=msa,
         )

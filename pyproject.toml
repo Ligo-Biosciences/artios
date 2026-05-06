@@ -87,6 +87,11 @@ dev = [
     "ipykernel",
     "notebook",
 ]
+train-bot = [
+    "slack-bolt>=1.21",
+    "claude-agent-sdk>=0.1.66",
+    "python-dotenv>=1.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/Ligo-Biosciences/artios-ligand"

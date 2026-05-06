@@ -10,6 +10,7 @@ from sklearn.neighbors import KDTree  # TODO: switch to scipy
 
 from artios.common.constants import (
     BACKBONE_DEFS,
+    GAP,
     STD_RESIDUES,
     STD_RESIDUES_AND_GAP,
     get_all_elems,
@@ -29,9 +30,13 @@ from artios.data.features import (
 )
 from artios.data.features.context import FixedResidueContext
 from artios.data.parsing.json import FixedResidue
+from artios.data.features.context import MSAContext
+from artios.data.msa import MSA
 from artios.data.structure import AnnotatedStructure
 from artios.data.structure.annotation_v2 import MotifMappingEntry
 from artios.utils.geometry import compute_virtual_cb, random_transform
+
+_GAP_TOKEN = GAP["-"]  # 31
 
 
 class ContextGenerator:
@@ -44,6 +49,7 @@ class ContextGenerator:
         original_motif_mapping: tuple[MotifMappingEntry, ...] | None = None,
         ref_pos_augment: bool = True,
         lig_atom_rename: bool = False,
+        msa: MSA | None = None,
     ) -> None:
         self.s = structure
         self.pdb_id = pdb_id
@@ -51,6 +57,7 @@ class ContextGenerator:
         self.ref_pos_augment = ref_pos_augment
         self.lig_atom_rename = lig_atom_rename
         self.original_motif_mapping = original_motif_mapping
+        self.msa = msa
 
         self.atom_to_token_idx = torch.from_numpy(
             self.s.grouping.atom_token_index
@@ -473,11 +480,62 @@ class ContextGenerator:
             fixed_restype=fixed_restype,
         )
 
+    def _build_msa_context(self) -> MSAContext | None:
+        """Expand the compact MSA ([n_msa_plus_one, l_chain_cropped]) to
+        the token-aligned ``MSAContext`` ([n_token, n_msa_plus_one]).
+
+        Every token position is seeded with its own ground-truth residue
+        id (from ``cano_seq_resname``) across all ``n_msa_plus_one`` rows;
+        then the reference-chain columns are overwritten with the real MSA
+        data via ``chain_token_indices``. This has two effects the
+        pure-gap-fill alternative did not:
+
+        - Non-reference-chain tokens (ligands, ions, nucleic acids,
+          other protein chains) carry their true residue id in every row
+          rather than a gap sentinel. The Potts loss at those positions
+          is then a meaningful NLL against the true residue, not
+          ``log P(gap, gap | ...)``.
+        - For null-MSA samples (``MSA.null_for``, ``l_chain_cropped=0``)
+          every row ends up identical to the query — the MSA loss
+          gracefully degrades to the single-sequence composite NLL.
+
+        ``gap_mask`` (``tokens == 31``) is consequently True only on
+        reference-chain columns where a particular homolog actually has a
+        gap; never on non-reference-chain positions. ``msa_chain_mask``
+        stays as it was — a metadata flag identifying which tokens
+        received real homolog data, useful for diagnostics but no longer
+        required by the loss path.
+        """
+        if self.msa is None:
+            return None
+
+        n_token = self.s.grouping.n_tokens
+        n_msa_plus_one = self.msa.tokens.shape[0]
+
+        centre = self.centre_atom_indices
+        restype_codes = self.s.derived.cano_seq_resname[centre]
+        restype_onehot = self.restype_onehot_encoded(restype_codes)
+        gt_tokens = restype_onehot.argmax(dim=-1).to(torch.int8).numpy()
+
+        tokens = np.broadcast_to(gt_tokens[:, None], (n_token, n_msa_plus_one)).copy()
+        tokens[self.msa.chain_token_indices, :] = self.msa.tokens.T
+        gap_mask = tokens == _GAP_TOKEN
+
+        msa_chain_mask = np.zeros(n_token, dtype=bool)
+        msa_chain_mask[self.msa.chain_token_indices] = True
+
+        return MSAContext(
+            tokens=torch.from_numpy(tokens),
+            gap_mask=torch.from_numpy(gap_mask),
+            msa_chain_mask=torch.from_numpy(msa_chain_mask),
+            msa_chain_asym_id=int(self.msa.msa_chain_asym_id),
+        )
+
     def get_full_context(
         self,
         include_arrays: bool = True,
         fixed_residues: list[FixedResidue] | None = None,
-    ) -> FullContext:
+    ) -> FullContext:        
         """Get all context required for design pipeline.
 
         Args:
@@ -502,6 +560,7 @@ class ContextGenerator:
             fixed_residues=self.get_fixed_residue_context(fixed_residues)
             if fixed_residues
             else None,
+            msa=self._build_msa_context(),
         )
 
     def get_atom_permutation_list(

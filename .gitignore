@@ -42,3 +42,6 @@ model_selection_data/
 
 # Local planning / scratch docs
 plans/
+
+# Agent secrets
+agents/*/.env

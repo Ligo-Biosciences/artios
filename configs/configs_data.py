@@ -226,6 +226,25 @@ data_configs = {
         "atom_bin_ends": ListValue([1536, 1728]),
         "token_bin_ends": ListValue([440, 600]),
     },
+    # v1 MSA pipeline. Default disabled — existing runs unchanged. See
+    # artios/data/msa/CLAUDE.md for the design contract.
+    "msa": {
+        "enabled": False,
+        "root": os.path.join(DATA_ROOT_DIR, "mmcif_msa_template"),
+        "seq_to_idx_path": os.path.join(DATA_ROOT_DIR, "seq_to_pdb_index.json"),
+        # Number of homolog sequences sampled per training step. Query is
+        # prepended at row 0 separately, so each sample sees n_msa + 1
+        # rows total.
+        "n_msa": 64,
+        "seed": 42,
+        # Per-homolog quality filters. Computed on the cropped chain columns
+        # actually used by the Potts loss. Defaults disable both.
+        # - min_homolog_identity: reject homologs whose non-gap identity to
+        #   the query is below this threshold.
+        # - max_gap_rate: reject homologs whose gap fraction exceeds this.
+        "min_homolog_identity": 0.0,
+        "max_gap_rate": 1.0,
+    },
     "train_sets": ListValue(
         [
             "weightedPDB_before2021_wopb_nometalc_0925",

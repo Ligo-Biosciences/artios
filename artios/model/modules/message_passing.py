@@ -11,10 +11,16 @@ from artios.utils.typing import Float, Int, Shaped, typecheck
 
 @typecheck
 def gather_nodes(
-    h_nodes: Shaped[Tensor, "batch nodes features"],
-    edge_idx: Shaped[Tensor, "batch nodes neighbours"],
-) -> Shaped[Tensor, "batch nodes neighbours features"]:
+    h_nodes: Shaped[Tensor, "*batch nodes features"],
+    edge_idx: Shaped[Tensor, "*batch nodes neighbours"],
+) -> Shaped[Tensor, "*batch nodes neighbours features"]:
     """Gather node features at specified neighbor indices.
+
+    Accepts arbitrary leading batch dims (``*batch``). For the common 3D
+    ``[B, N, F]`` case this is behaviourally identical to the prior
+    ``dim=1`` / ``"b n k"`` implementation (``dim=-2 == dim=1`` at
+    ndim=3). Used by the MSA loss path which adds an ``n_msa_plus_one``
+    leading dim.
 
     Args:
         h_nodes: Node features
@@ -23,15 +29,15 @@ def gather_nodes(
     Returns:
         Neighbor node features
     """
-    # Flatten neighbor indices
-    edges_flat = rearrange(edge_idx, "b n k -> b (n k)")
+    # Flatten neighbor indices along the last two dims of edge_idx.
+    edges_flat = rearrange(edge_idx, "... n k -> ... (n k)")
 
-    # Gather
+    # Gather along the "nodes" axis, which is the second-to-last of h_nodes.
     edges_flat = expand_at_dim(edges_flat, dim=-1, n=h_nodes.shape[-1])
-    neighbors = torch.gather(h_nodes, 1, edges_flat)
+    neighbors = torch.gather(h_nodes, -2, edges_flat)
 
-    # Split
-    neighbors = rearrange(neighbors, "b (n k) f -> b n k f", k=edge_idx.size(-1))
+    # Split back into (n, k).
+    neighbors = rearrange(neighbors, "... (n k) f -> ... n k f", k=edge_idx.shape[-1])
     return neighbors
 
 

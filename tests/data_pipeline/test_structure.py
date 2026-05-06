@@ -19,6 +19,7 @@ from artios.data.structure import (
     compute_token_grouping,
     compute_token_grouping_vectorized,
 )
+from artios.data.structure.annotation_v2 import MotifAnnotation
 from artios.utils.file_io import load_atomarray_from_npz
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "parsing"
@@ -169,6 +170,316 @@ class TestSelection:
 
 
 # ---------------------------------------------------------------------------
+# Motif transformations
+# ---------------------------------------------------------------------------
+
+
+class TestMotifTransforms:
+    """Tests for the first-class motif transforms on AnnotatedStructure."""
+
+    def test_with_motif_replaces_existing_group(self, structure):
+        """Calling with_motif twice should replace, not compound.
+
+        Catches a bug where the method mistakenly merges/appends instead of
+        overwriting — leaving stale masks on the structure.
+        """
+        n = len(structure.atoms)
+        first = np.zeros(n, dtype=int)
+        first[:5] = 1
+        s1 = structure.with_motif(
+            MotifAnnotation(is_motif=first, is_motif_related=first)
+        )
+        assert s1.motif is not None and s1.motif.is_motif.sum() == 5
+
+        second = np.zeros(n, dtype=int)
+        second[-3:] = 1
+        s2 = s1.with_motif(MotifAnnotation(is_motif=second, is_motif_related=second))
+        # Second call fully replaces — mask shape is the NEW mask, not a merge.
+        assert s2.motif.is_motif.sum() == 3
+        assert (s2.motif.is_motif[:5] == 0).all()
+        assert (s2.motif.is_motif[-3:] == 1).all()
+
+    def test_with_motif_rejects_wrong_length(self, structure):
+        """__post_init__ must enforce cross-group length consistency — a
+        motif mask shorter than n_atom would yield silently-wrong
+        featurization downstream (out-of-bounds indexing or mis-aligned
+        per-atom lookups)."""
+        bad = np.zeros(len(structure.atoms) - 1, dtype=int)
+        with pytest.raises(AssertionError):
+            structure.with_motif(MotifAnnotation(is_motif=bad, is_motif_related=bad))
+
+    def test_with_motif_does_not_mutate_source(self, structure):
+        """Transform returns a new structure; the original must stay motif-free
+        so callers can apply different masks from the same base."""
+        assert structure.motif is None
+        mask = np.zeros(len(structure.atoms), dtype=int)
+        structure.with_motif(MotifAnnotation(is_motif=mask, is_motif_related=mask))
+        assert structure.motif is None, "with_motif mutated source"
+
+    # --- with_duplicated_motif_backbones ------------------------------------
+
+    @pytest.fixture
+    def structure_with_protein_motif(self, structure):
+        """5s8i has a protein chain — mark its first 3 residues as motif."""
+        n = len(structure.atoms)
+        is_motif = np.zeros(n, dtype=int)
+        # Pick first protein chain's first 3 residues
+        protein_mask = structure.type_masks.mol_type == "protein"
+        first_chain = structure.atoms.chain_id[protein_mask][0]
+        target = structure.atoms.chain_id == first_chain
+        target_res_ids = np.unique(structure.atoms.res_id[target])[:3]
+        is_motif[target & np.isin(structure.atoms.res_id, target_res_ids)] = 1
+        # is_motif_related: everything sharing ref_space_uid with a motif atom
+        is_motif_related = np.zeros(n, dtype=int)
+        motif_uids = np.unique(structure.reference.ref_space_uid[is_motif > 0])
+        is_motif_related[np.isin(structure.reference.ref_space_uid, motif_uids)] = 1
+        return structure.with_motif(
+            MotifAnnotation(is_motif=is_motif, is_motif_related=is_motif_related)
+        )
+
+    def test_duplicated_backbones_requires_motif_set(self, structure):
+        """Calling without a motif group should refuse rather than silently
+        no-op — the caller forgot to attach masks."""
+        assert structure.motif is None
+        with pytest.raises(AssertionError, match="motif"):
+            structure.with_duplicated_motif_backbones()
+
+    def test_duplicated_backbones_noop_when_no_motif_backbone(self, structure):
+        """Empty mask → return self unchanged (no atoms duplicated)."""
+        n = len(structure.atoms)
+        zeros = np.zeros(n, dtype=int)
+        s = structure.with_motif(
+            MotifAnnotation(is_motif=zeros, is_motif_related=zeros)
+        )
+        out = s.with_duplicated_motif_backbones()
+        assert out is s, "no-op path should return identical instance"
+
+    def test_duplicated_backbones_atom_count_and_coord_share(
+        self, structure_with_protein_motif
+    ):
+        """Atom count grows by exactly the number of motif-related backbone
+        atoms; duplicates share coordinates with their originals row-for-row.
+
+        Catches two classes of bug: (a) wrong mask (e.g. including
+        sidechains, off-by-one in BACKBONE_DEFS) produces the wrong count;
+        (b) coord drift between original and duplicate (e.g. accidental
+        copy of a stale buffer) breaks downstream scaffold geometry.
+        """
+        s = structure_with_protein_motif
+        n_before = len(s.atoms)
+        out = s.with_duplicated_motif_backbones()
+        n_after = len(out.atoms)
+        from artios.common.constants import BACKBONE_DEFS
+
+        expected_dup = (
+            (s.type_masks.mol_type == "protein")
+            & np.isin(s.atoms.atom_name, BACKBONE_DEFS["protein"])
+            & (s.motif.is_motif_related > 0)
+        ).sum()
+        assert n_after - n_before == expected_dup
+        # Duplicates appended at end — coords must match originals at
+        # equivalent positions.
+        dup_mask = (
+            (s.type_masks.mol_type == "protein")
+            & np.isin(s.atoms.atom_name, BACKBONE_DEFS["protein"])
+            & (s.motif.is_motif_related > 0)
+        )
+        np.testing.assert_array_equal(
+            out.atoms.coord[n_before:], s.atoms.coord[dup_mask]
+        )
+
+    def test_duplicated_backbones_scaffold_vs_motif_masks(
+        self, structure_with_protein_motif
+    ):
+        """Duplicates have is_motif = is_motif_related = 0 (scaffold status);
+        originals keep their mask. This is the whole point of the
+        duplication — scaffold the polymer backbone while still per-atom
+        tokenizing the motif sidechains later."""
+        s = structure_with_protein_motif
+        n_before = len(s.atoms)
+        out = s.with_duplicated_motif_backbones()
+        # Originals (prefix) unchanged.
+        np.testing.assert_array_equal(out.motif.is_motif[:n_before], s.motif.is_motif)
+        np.testing.assert_array_equal(
+            out.motif.is_motif_related[:n_before], s.motif.is_motif_related
+        )
+        # Tail (dupes) all zero.
+        assert (out.motif.is_motif[n_before:] == 0).all()
+        assert (out.motif.is_motif_related[n_before:] == 0).all()
+
+    def test_duplicated_backbones_retokenizes_with_motif_atoms_as_centres(
+        self, structure_with_protein_motif
+    ):
+        """The re-tokenization step must flag every motif-related atom as a
+        centre atom (per-atom tokens for motif sidechains). Without this,
+        featurization would treat motif sidechain atoms as part of their
+        parent residue token instead of atomic tokens."""
+        s = structure_with_protein_motif
+        out = s.with_duplicated_motif_backbones()
+        motif_atoms = out.motif.is_motif_related > 0
+        assert motif_atoms.any(), "test fixture has no motif atoms — useless"
+        assert (
+            out.grouping.centre_atom_mask[motif_atoms]
+        ).all(), "re-tokenization lost the motif→centre promotion"
+
+    def test_duplicated_backbones_preserves_bonds(self, structure_with_protein_motif):
+        """The post-duplication BondList must include the original bonds plus
+        copies of the intra-duplicated-set bonds. A silently empty bonds
+        field after concat would break downstream featurization paths that
+        use bond connectivity (e.g. ligand graph featurization)."""
+        s = structure_with_protein_motif
+        out = s.with_duplicated_motif_backbones()
+        assert out.atoms.bonds is not None
+        # Every pre-duplication bond still present in post-duplication.
+        before = (
+            s.atoms.bonds.as_array() if s.atoms.bonds is not None else np.empty((0, 3))
+        )
+        after = out.atoms.bonds.as_array()
+        assert len(after) >= len(before), "duplication dropped bonds"
+
+    # --- with_unindexed_motif -----------------------------------------------
+
+    def test_unindex_requires_motif_set(self, structure):
+        with pytest.raises(AssertionError, match="motif"):
+            structure.with_unindexed_motif()
+
+    def test_unindex_noop_when_no_motif_related(self, structure):
+        """Empty motif → return self, empty mapping on the annotation."""
+        n = len(structure.atoms)
+        zeros = np.zeros(n, dtype=int)
+        s = structure.with_motif(
+            MotifAnnotation(is_motif=zeros, is_motif_related=zeros)
+        )
+        out = s.with_unindexed_motif()
+        assert out is s
+        assert out.motif.mapping == ()
+
+    def test_unindex_protein_motif_remaps_ids(self, structure_with_protein_motif):
+        """Protein motif residues each become their own asym/sym/ref_uid; same
+        restype shares the new entity. res_id resets to 1.
+
+        Catches off-by-one in counter starts (`max() + 1`) and the
+        per-restype vs per-instance entity grouping.
+        """
+        s = structure_with_protein_motif
+        out = s.with_unindexed_motif()
+        old_max_asym = int(s.entity_ids.asym_id_int.max())
+        old_max_entity = int(s.entity_ids.entity_id_int.max())
+        old_max_ref_uid = int(s.reference.ref_space_uid.max())
+
+        motif_mask = s.motif.is_motif_related > 0
+
+        # New asym/entity/ref_uid on every motif atom are STRICTLY greater
+        # than the previous maxes — no id collision.
+        assert (out.entity_ids.asym_id_int[motif_mask] > old_max_asym).all()
+        assert (out.entity_ids.entity_id_int[motif_mask] > old_max_entity).all()
+        assert (out.reference.ref_space_uid[motif_mask] > old_max_ref_uid).all()
+
+        # res_id of every protein motif atom becomes 1.
+        assert (out.atoms.res_id[motif_mask] == 1).all()
+
+        # Non-motif atoms unchanged.
+        np.testing.assert_array_equal(
+            out.entity_ids.asym_id_int[~motif_mask],
+            s.entity_ids.asym_id_int[~motif_mask],
+        )
+        np.testing.assert_array_equal(
+            out.atoms.res_id[~motif_mask], s.atoms.res_id[~motif_mask]
+        )
+
+    def test_unindex_label_fields_always_written(self, structure_with_protein_motif):
+        """label_* fields must reflect the new ids — inference CIF output
+        reads them. We unconditionally write-through (no ``update_labels``
+        flag), so they must match the int id fields after unindex."""
+        s = structure_with_protein_motif
+        out = s.with_unindexed_motif()
+        # Biotite coerces int→string for string-typed annotations. Compare
+        # as strings on both sides.
+        np.testing.assert_array_equal(
+            out.atoms.label_asym_id.astype(str),
+            out.entity_ids.asym_id_int.astype(str),
+        )
+        np.testing.assert_array_equal(
+            out.atoms.label_entity_id.astype(str),
+            out.entity_ids.entity_id_int.astype(str),
+        )
+        np.testing.assert_array_equal(
+            out.atoms.label_seq_id.astype(str), out.atoms.res_id.astype(str)
+        )
+        np.testing.assert_array_equal(
+            out.atoms.auth_asym_id.astype(str),
+            out.entity_ids.asym_id_int.astype(str),
+        )
+
+    def test_unindex_retokenizes_motif_atoms_as_centres(
+        self, structure_with_protein_motif
+    ):
+        """Re-tokenization with ``is_motif_related`` should promote every
+        motif atom to a centre atom — replaces the legacy
+        ``centre_atom_mask[motif > 0] = 1`` patch.
+        """
+        s = structure_with_protein_motif
+        out = s.with_unindexed_motif()
+        motif_mask = out.motif.is_motif_related > 0
+        assert motif_mask.any()
+        assert out.grouping.centre_atom_mask[motif_mask].all()
+
+    def test_unindex_mapping_entries_per_residue_instance(
+        self, structure_with_protein_motif
+    ):
+        """One mapping entry per *instance* (unique ref_space_uid × restype)
+        of motif residue. Includes original chain/res_id for downstream
+        RMSD stitching (inference output)."""
+        s = structure_with_protein_motif
+        out = s.with_unindexed_motif()
+        mapping = out.motif.mapping
+
+        # Count unique (restype, ref_space_uid) in the original.
+        motif_mask = s.motif.is_motif_related > 0
+        restypes_and_uids = set(
+            zip(
+                s.atoms.res_name[motif_mask],
+                s.reference.ref_space_uid[motif_mask],
+            )
+        )
+        assert len(mapping) == len(restypes_and_uids), (
+            f"mapping len {len(mapping)} != unique instance count "
+            f"{len(restypes_and_uids)}"
+        )
+        # Every entry is a typed MotifMappingEntry with all five fields populated.
+        for entry in mapping:
+            assert entry.unindexed_chain_id
+            assert entry.original_motif_chain_id
+            assert entry.res_name
+
+    def test_unindex_same_restype_shares_entity_different_asym(
+        self, structure_with_protein_motif
+    ):
+        """The key design property: residues of the same restype get the
+        *same* new entity_id but different asym_id. If this inverts we'd be
+        tokenizing sidechains as a single symmetry group — wrong.
+        """
+        s = structure_with_protein_motif
+        out = s.with_unindexed_motif()
+        motif_mask = s.motif.is_motif_related > 0
+        for restype in np.unique(s.atoms.res_name[motif_mask]):
+            rm = motif_mask & (s.atoms.res_name == restype)
+            if rm.sum() == 0:
+                continue
+            new_entities = np.unique(out.entity_ids.entity_id_int[rm])
+            assert (
+                len(new_entities) == 1
+            ), f"restype {restype} got {len(new_entities)} entities — expected 1"
+            # Asym per instance: count distinct ref_space_uid × distinct asym
+            old_uids = np.unique(s.reference.ref_space_uid[rm])
+            new_asyms = np.unique(out.entity_ids.asym_id_int[rm])
+            assert len(new_asyms) == len(old_uids), (
+                f"restype {restype}: {len(new_asyms)} new asyms != "
+                f"{len(old_uids)} instances"
+            )
+
+
+# ---------------------------------------------------------------------------
 # AnnotatedStructure.annotate() — end-to-end from CIF
 # ---------------------------------------------------------------------------
 
@@ -178,30 +489,47 @@ class TestAnnotate:
 
     @pytest.fixture
     def annotated_from_cif(self):
-        """Clean atom_array (no custom annotations) → annotate() → AnnotatedStructure."""
-        from artios.data.filter import Filter, clean_structure
-        from artios.data.parsing.cif import MMCIFParser
+        """Clean atom_array → reference annotations → annotate() → AnnotatedStructure.
 
-        parser = MMCIFParser(FIXTURES / "5s8i.cif")
-        atom_array = parser.get_structure()
-        sequences = parser.get_sequences(atom_array)
+        ``annotate(include_ref_conformer=True)`` requires the atom_array to
+        already carry ``ref_pos``/``ref_charge``/``ref_mask`` annotations;
+        production parses do this through
+        ``annotation_v2.populate_ccd_reference`` inside
+        ``load_bioassembly``. This test exercises the lower-level
+        ``MmcifReader.atom_array()`` path, so we run the same helper
+        explicitly here to mirror the production contract.
+        """
+        from artios.data.filter import Filter, clean_structure
+        from artios.data.parsing import residue_repair
+        from artios.data.parsing.mmcif import MmcifReader
+        from artios.data.structure.annotation_v2 import populate_ccd_reference
+
+        reader = MmcifReader(FIXTURES / "5s8i.cif")
+        entity_poly_type = reader.header.entity_poly_type
+        atom_array = reader.atom_array()
+        sequences = reader.sequences_for(atom_array)
 
         atom_array = clean_structure(
             atom_array,
-            entity_poly_type=parser.entity_poly_type,
+            entity_poly_type=entity_poly_type,
             remove_crystallization_aids=True,
             remove_artifact_ligands=True,
             remove_unbound_metal_ions=True,
         )
-        atom_array = parser.fix_arginine(atom_array)
-        atom_array = parser.mse_to_met(atom_array)
-        atom_array = parser.add_missing_atoms_and_residues(atom_array)
+        atom_array = residue_repair.fix_arginine(atom_array)
+        atom_array = residue_repair.mse_to_met(atom_array)
+        atom_array = residue_repair.add_missing_atoms_and_residues(
+            atom_array,
+            entity_poly_type=entity_poly_type,
+            poly_res_names=reader.poly_res_names(atom_array),
+        )
         atom_array = Filter.remove_element_X(atom_array)
+        atom_array = populate_ccd_reference(atom_array)
 
         return AnnotatedStructure.annotate(
             atom_array,
             sequences,
-            parser.entity_poly_type,
+            entity_poly_type,
             include_ref_conformer=True,
             include_training_masks=True,
         )
@@ -415,22 +743,19 @@ class TestGoldenRoundTrip:
         _assert_structures_equal(original, rebuilt)
 
     def test_cif_pipeline_matches_golden(self, load_structure, name):
-        """Re-run the production pipeline (CIF → get_bioassembly → from_atom_array)
-        and compare to the saved golden — drift in cleaning, ordering, or any
+        """Re-run the production pipeline (CIF → load_bioassembly) and
+        compare to the saved golden — drift in cleaning, ordering, or any
         of the ~30 annotation steps fails this test at the exact field.
 
         This is the widest CIF→pipeline-output coverage we have; pairs with
         the save/load round-trip (structural) and to_atom_array invertibility
         (group schemas) to pin the three layers.
         """
-        from artios.data.parsing.cif import MMCIFParser
+        from artios.data.parsing.bioassembly import load_bioassembly
 
-        parser = MMCIFParser(mmcif_file=CIF_DIR / f"{name}.cif")
-        bioassembly = parser.get_bioassembly()
-        atom_array = bioassembly["atom_array"]
-        assert atom_array is not None, f"{name}: get_bioassembly returned None"
-        fresh = AnnotatedStructure.from_atom_array(atom_array)
-        _assert_structures_equal(fresh, load_structure(name))
+        bioassembly = load_bioassembly(CIF_DIR / f"{name}.cif")
+        assert bioassembly is not None, f"{name}: load_bioassembly returned None"
+        _assert_structures_equal(bioassembly.structure, load_structure(name))
 
 
 @pytest.mark.parametrize("name", GOLDEN_FIXTURES)
@@ -450,3 +775,32 @@ def test_to_atom_array_does_not_mutate_source(load_structure, name):
         before_cats == after_cats
     ), f"atoms annotations changed: {before_cats ^ after_cats}"
     assert len(s.atoms) == before_n
+
+
+@pytest.mark.parametrize("name", GOLDEN_FIXTURES)
+def test_basic_context_atom_array_roundtrips_through_from_atom_array(
+    load_structure, name
+):
+    """``BasicContext.atom_array`` must carry the annotations needed to
+    reconstruct an equivalent ``AnnotatedStructure`` via ``from_atom_array``.
+
+    This pins the contract between the featurizer and the sequence-design /
+    packing inference paths. ``_save_backbone_to_npz`` persists whatever
+    annotations are on ``context.basic.atom_array``; downstream,
+    ``MPNNDataset`` / ``PackingDataset`` reload the stack and call
+    ``AnnotatedStructure.from_atom_array`` on each model. If the featurizer
+    ever returns ``self.s.atoms`` (the biotite-native view stripped by
+    ``from_atom_array``) instead of ``self.s.to_atom_array()`` (the
+    re-annotated view), this round-trip raises
+    ``AttributeError: Required annotation 'asym_id_int' missing``. This
+    regression guards against that.
+    """
+    from artios.data.features.featurizer import ContextGenerator
+
+    original = load_structure(name)
+    basic = ContextGenerator(
+        original, pdb_id=name, ref_pos_augment=False
+    ).get_basic_context(include_arrays=True)
+
+    rebuilt = AnnotatedStructure.from_atom_array(basic.atom_array)
+    _assert_structures_equal(original, rebuilt)

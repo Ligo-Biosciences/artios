@@ -4,9 +4,6 @@ Reads pairs from the fixture files, runs both implementations, reports
 per-length-bucket wall-clock and accuracy deltas.
 
     python -m artios.metrics.alignment.benchmark --help
-
-Filled out in Phase 4; Phase 1 ships a skeleton that only reports timings for
-`tm_score` itself so we can track regressions early.
 """
 
 from __future__ import annotations

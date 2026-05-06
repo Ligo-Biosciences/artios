@@ -27,7 +27,6 @@ from biotite.structure import (  # ty: ignore[unresolved-import]
 )
 
 from artios.utils.logger import get_logger
-from artios.utils.torch_utils import map_values_to_list
 
 logger = get_logger(__name__)
 
@@ -224,6 +223,8 @@ def save_json(data: dict, output_fpath: Union[str, Path], indent: int = 4):
         output_fpath (Union[str, Path]): The output file path.
         indent (int, optional): The indentation level for the JSON file. Defaults to 4.
     """
+    from artios.utils.torch_utils import map_values_to_list
+
     data_json = data.copy()
     data_json = map_values_to_list(data_json)
     with open(output_fpath, "w") as f:

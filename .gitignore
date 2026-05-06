@@ -37,6 +37,9 @@ reference-dists/
 # Pocket detection training cache
 artios/data/pocket/cache/
 
+# Downloaded model-selection run data (parquets, search JSONs, plots, structures)
+model_selection_data/
+
 # Local planning / scratch docs
 plans/
 

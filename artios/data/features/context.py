@@ -516,7 +516,6 @@ class CoordinateContext(Context):
         type=FeatureType.TOKEN,
         description="Coordinates of centre atoms",
     )
-    resolution: float | list[float]
     # NOTE: Temporarily optional - expensive to compute, only needed for MPNN
     backbone_coordinate: Feature(
         Float[Tensor, "*batch n_token 5 3"],
@@ -727,7 +726,6 @@ class FullContext:
             coordinate=self.coordinate.coordinate * not_lig.unsqueeze(-1),
             centre_coordinate=self.coordinate.centre_coordinate
             * not_lig_tok.unsqueeze(-1),
-            resolution=self.coordinate.resolution,
             backbone_coordinate=self.coordinate.backbone_coordinate,
         )
 
@@ -749,18 +747,15 @@ class FullContext:
     def from_dict(
         cls,
         d: dict[str, dict[str, Tensor]],
-        resolution: float | list[float] = 0.0,
         basic_context: BasicContext | None = None,
     ) -> FullContext:
         """Create FullContext from nested dictionary of tensors.
 
         This is the inverse of `to_dict()`. Since `to_dict()` only saves tensor
-        fields, non-tensor fields (BasicContext, resolution) must be provided
-        separately or will use defaults.
+        fields, BasicContext must be provided separately or will use defaults.
 
         Args:
             d: Nested dictionary mapping context names to dicts of tensors.
-            resolution: Resolution value for CoordinateContext.
             basic_context: Optional BasicContext. If None, creates placeholder.
 
         Returns:
@@ -779,9 +774,7 @@ class FullContext:
         motif = MotifContext.from_dict(d.get("motif", {}))
         index = IndexContext.from_dict(d.get("index", {}))
         entity = EntityContext.from_dict(d.get("entity", {}))
-        coordinate = CoordinateContext.from_dict(
-            d.get("coordinate", {}), resolution=resolution
-        )
+        coordinate = CoordinateContext.from_dict(d.get("coordinate", {}))
 
         # BasicContext requires non-tensor fields - use placeholder if not provided
         if basic_context is None:

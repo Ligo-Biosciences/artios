@@ -70,9 +70,6 @@ class DataPipeline(object):
             if atom_array is None:
                 return [], None
 
-            atom_array.set_annotation(
-                "resolution", [parser.resolution] * len(atom_array)
-            )
             structure = AnnotatedStructure.from_atom_array(atom_array)
             return sample_indices_list, structure
 

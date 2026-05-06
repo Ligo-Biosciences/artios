@@ -267,20 +267,20 @@ data_configs = {
                 DATA_ROOT_DIR,
                 "indices/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",  # .gz
             ),
-            # "pdb_exclusion_lists": [
-            #     os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
-            #     os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
-            #     os.path.join(DATA_ROOT_DIR, "excluded_fibril_pdbs.txt"),
-            # ],
+            "pdb_exclusion_lists": [
+                os.path.join(DATA_ROOT_DIR, "excluded_membrane_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_ribosome_pdbs.txt"),
+                os.path.join(DATA_ROOT_DIR, "excluded_fibril_pdbs.txt"),
+            ],
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
             "max_n_token": -1,
             "max_resolution": -1.0,
             "use_reference_chains_only": False,
-            # "exclusion": {
-            #     "sub_mol_1_type": ListValue(["excluded_ligand"]),
-            #     "sub_mol_2_type": ListValue(["excluded_ligand"]),
-            # },
+            "exclusion": {
+                "sub_mol_1_type": ListValue(["excluded_ligand"]),
+                "sub_mol_2_type": ListValue(["excluded_ligand"]),
+            },
         },
         **deepcopy(default_weighted_pdb_configs),
     },

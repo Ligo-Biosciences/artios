@@ -22,6 +22,7 @@ from artios.data.structure import (
 from artios.utils.file_io import load_atomarray_from_npz
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "parsing"
+CIF_DIR = Path(__file__).parent.parent / "fixtures" / "cif"
 
 
 @pytest.fixture
@@ -36,10 +37,8 @@ def legacy_data():
 
 
 @pytest.fixture
-def structure(atom_array, legacy_data):
-    return AnnotatedStructure.from_atom_array(
-        atom_array, resolution=float(legacy_data["resolution"])
-    )
+def structure(atom_array):
+    return AnnotatedStructure.from_atom_array(atom_array)
 
 
 # ---------------------------------------------------------------------------
@@ -85,8 +84,8 @@ class TestTokenGrouping:
         aa = structure.to_atom_array()
         type_masks = TypeMasks.from_atom_array(aa)
 
-        g_orig = compute_token_grouping(aa, type_masks, motif=None)
-        g_vec = compute_token_grouping_vectorized(aa, type_masks, motif=None)
+        g_orig = compute_token_grouping(aa, mol_type=type_masks.mol_type)
+        g_vec = compute_token_grouping_vectorized(aa, mol_type=type_masks.mol_type)
 
         assert g_orig.n_tokens == g_vec.n_tokens
         np.testing.assert_array_equal(g_orig.atom_token_index, g_vec.atom_token_index)
@@ -203,17 +202,14 @@ class TestAnnotate:
             atom_array,
             sequences,
             parser.entity_poly_type,
-            resolution=parser.resolution,
             include_ref_conformer=True,
             include_training_masks=True,
         )
 
     @pytest.fixture
-    def annotated_from_npz(self, atom_array, legacy_data):
+    def annotated_from_npz(self, atom_array):
         """Legacy pipeline output (npz) → from_atom_array() → AnnotatedStructure."""
-        return AnnotatedStructure.from_atom_array(
-            atom_array, resolution=float(legacy_data["resolution"])
-        )
+        return AnnotatedStructure.from_atom_array(atom_array)
 
     def test_annotate_matches_from_atom_array(
         self, annotated_from_cif, annotated_from_npz
@@ -224,7 +220,6 @@ class TestAnnotate:
 
         assert len(a.atoms) == len(b.atoms)
         assert a.grouping.n_tokens == b.grouping.n_tokens
-        assert a.resolution == pytest.approx(b.resolution)
 
         for path, left, right in [
             (
@@ -373,7 +368,6 @@ def _assert_structures_equal(a: AnnotatedStructure, b: AnnotatedStructure) -> No
     every typed field and the underlying AtomArray explicitly.
     """
     assert len(a.atoms) == len(b.atoms), "atom count differs"
-    assert a.resolution == b.resolution, "resolution differs"
 
     # Typed annotation groups (required).
     for name in _ANNOTATION_GROUP_FIELDS:
@@ -417,8 +411,26 @@ class TestGoldenRoundTrip:
         """
         original = load_structure(name)
         aa = original.to_atom_array()
-        rebuilt = AnnotatedStructure.from_atom_array(aa, resolution=original.resolution)
+        rebuilt = AnnotatedStructure.from_atom_array(aa)
         _assert_structures_equal(original, rebuilt)
+
+    def test_cif_pipeline_matches_golden(self, load_structure, name):
+        """Re-run the production pipeline (CIF → get_bioassembly → from_atom_array)
+        and compare to the saved golden — drift in cleaning, ordering, or any
+        of the ~30 annotation steps fails this test at the exact field.
+
+        This is the widest CIF→pipeline-output coverage we have; pairs with
+        the save/load round-trip (structural) and to_atom_array invertibility
+        (group schemas) to pin the three layers.
+        """
+        from artios.data.parsing.cif import MMCIFParser
+
+        parser = MMCIFParser(mmcif_file=CIF_DIR / f"{name}.cif")
+        bioassembly = parser.get_bioassembly()
+        atom_array = bioassembly["atom_array"]
+        assert atom_array is not None, f"{name}: get_bioassembly returned None"
+        fresh = AnnotatedStructure.from_atom_array(atom_array)
+        _assert_structures_equal(fresh, load_structure(name))
 
 
 @pytest.mark.parametrize("name", GOLDEN_FIXTURES)

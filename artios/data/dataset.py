@@ -455,12 +455,6 @@ class BaseSingleDataset(Dataset):
         timings["get_bioassembly"] = time.time() - t0
 
         # --- MSA query info (must be extracted pre-crop) ---
-        # Try chain_1 first (the sample's nominal primary), then chain_2 for
-        # interface samples, then scan the rest of the complex. Supersedes
-        # CLAUDE.md §11's strict chain_1-only rule: a large fraction of
-        # weightedPDB is ligand_prot / ions_prot / nuc_prot interfaces where
-        # chain_1 is non-protein but the complex still has a usable protein
-        # chain we'd otherwise throw away.
         msa_query_info: Optional[MSAQueryInfo] = None
         if self.msa_sampler is not None:
             preferred_chain_ids: list[str] = [sample_indice.chain_1_id]
@@ -550,16 +544,7 @@ class BaseSingleDataset(Dataset):
         # --- Featurize ---
         structure = AnnotatedStructure.from_atom_array(cropped_atom_array)
 
-        # --- MSA sample (post-crop so chain asym_id matches the cropped structure) ---
-        # When the sampler is enabled, always hand a populated MSA down to
-        # ContextGenerator — either the real one, or MSA.null_for(n_msa) for
-        # samples where no protein chain was resolvable / the sampler bailed.
-        # null_for emits ``n_msa + 1`` rows to match the real sampler's
-        # shape, so every sample produces a same-shape MSAContext and the
-        # dataloader collate can stack the batch without None/tensor
-        # mixing. Null MSAs have l_chain_cropped=0, so their MSAContext
-        # is gt-filled at every (token, row) — the loss degrades to the
-        # single-sequence composite NLL.
+        # --- MSA sample ---
         msa: Optional[MSA] = None
         if self.msa_sampler is not None:
             t_msa = time.time()

@@ -149,7 +149,6 @@ def create_test_context(
         coordinate=torch.randn(batch_size, n_atoms, 3, device=device),
         centre_coordinate=torch.randn(batch_size, n_tokens, 3, device=device),
         backbone_coordinate=torch.randn(batch_size, n_tokens, 5, 3, device=device),
-        resolution=1.5,
     )
 
     # AtomPermContext

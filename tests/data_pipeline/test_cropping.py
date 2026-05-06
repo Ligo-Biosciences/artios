@@ -1,7 +1,5 @@
 """Tests for artios.data.cropping."""
 
-import gzip
-import pickle
 from pathlib import Path
 
 import numpy as np
@@ -19,11 +17,7 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "parsing"
 @pytest.fixture
 def structure():
     atom_array = load_atomarray_from_npz(FIXTURES / "5s8i.npz")
-    with gzip.open(FIXTURES / "5s8i.pkl.gz", "rb") as f:
-        legacy = pickle.load(f)
-    return AnnotatedStructure.from_atom_array(
-        atom_array, resolution=float(legacy["resolution"])
-    )
+    return AnnotatedStructure.from_atom_array(atom_array)
 
 
 def _centre(s: AnnotatedStructure):

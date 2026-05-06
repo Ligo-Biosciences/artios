@@ -14,6 +14,7 @@ from torch.utils.checkpoint import checkpoint
 
 from artios.metrics.rmsd import weighted_rigid_align
 from artios.model.modules.message_passing import gather_nodes
+from artios.model.modules.potts import compute_potts_joint_logits
 from artios.model.utils import masked_mean
 from artios.utils.typing import Bool, Float, Int, typecheck
 
@@ -205,8 +206,6 @@ def composite_nll_loss_msa(
         be consumed by the same pipeline as the non-MSA
         ``composite_nll_loss``.
     """
-    from artios.model.modules.potts import compute_potts_joint_logits
-
     # [B, N, M] -> [B, M, N]
     msa_tokens = msa_tokens.transpose(-2, -1).contiguous().long()
     msa_gap_mask = msa_gap_mask.transpose(-2, -1).contiguous()
@@ -311,8 +310,6 @@ def composite_nll_loss(
     Returns:
         Per-position composite NLL [B, N].
     """
-    from artios.model.modules.potts import compute_potts_joint_logits
-
     joint_logits, edge_no_self_mask = compute_potts_joint_logits(
         seq, h, J, edge_index, edge_mask
     )

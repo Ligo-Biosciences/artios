@@ -101,7 +101,6 @@ def add_atom_array_attributes(
     if has_motif:
         atom_array = annotation.update_centre_atom_mask_to_include_motif(atom_array)
 
-    atom_array.set_annotation("resolution", np.ones(len(atom_array)))
     atom_array.set_annotation("is_resolved", [True] * len(atom_array))
 
     return atom_array, original_motif_mapping

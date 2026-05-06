@@ -28,9 +28,12 @@ from artios.data.features import (
     ReferenceConformerContext,
     TokenContext,
 )
+from artios.data.features.context import FixedResidueContext
+from artios.data.parsing.json import FixedResidue
 from artios.data.features.context import MSAContext
 from artios.data.msa import MSA
 from artios.data.structure import AnnotatedStructure
+from artios.data.structure.annotation_v2 import MotifMappingEntry
 from artios.utils.geometry import compute_virtual_cb, random_transform
 
 _GAP_TOKEN = GAP["-"]  # 31
@@ -43,7 +46,7 @@ class ContextGenerator:
         *,
         pdb_id: str = "unknown",
         bioassembly_dict_fpath: str = "",
-        original_motif_mapping: list[dict] | None = None,
+        original_motif_mapping: tuple[MotifMappingEntry, ...] | None = None,
         ref_pos_augment: bool = True,
         lig_atom_rename: bool = False,
         msa: MSA | None = None,
@@ -433,8 +436,12 @@ class ContextGenerator:
                 These are expensive to serialize and can be disabled for training
                 performance. Defaults to True for backward compatibility.
         """
+        # to_atom_array() — not self.s.atoms — so the atom_array carries v2
+        # group annotations (asym_id_int, ...) and roundtrips through
+        # dump_atomarray_stack → AnnotatedStructure.from_atom_array in the
+        # sequence-design / packing inference paths.
         return BasicContext(
-            atom_array=self.s.atoms if include_arrays else None,
+            atom_array=self.s.to_atom_array() if include_arrays else None,
             token_array=None,
             pdb_id=self.pdb_id,
             bioassembly_dict_fpath=self.bioassembly_dict_fpath,
@@ -444,6 +451,33 @@ class ContextGenerator:
             n_token=self.s.grouping.n_tokens,
             n_atom=len(self.s.atoms),
             original_motif_mapping=self.original_motif_mapping,
+        )
+
+    def get_fixed_residue_context(
+        self, fixed_residues: list[FixedResidue]
+    ) -> FixedResidueContext:
+        """Build the fixed-residue context from a list of ``FixedResidue``.
+
+        Used by MPNN sequence design to pin residue identity at specific
+        res_id positions. Mirrors the legacy ContextGenerator method.
+        """
+        n_token = self.s.grouping.n_tokens
+        centre_res_ids = self.s.atoms.res_id[self.s.centre_atom_indices].astype(int)
+
+        fixed_map = {fr.res_id: fr.res_name for fr in fixed_residues}
+
+        fixed_mask = torch.zeros(n_token, dtype=torch.bool)
+        fixed_restype = torch.zeros(n_token, 32)
+        for i, res_id in enumerate(centre_res_ids):
+            if int(res_id) in fixed_map:
+                fixed_mask[i] = True
+                fixed_restype[i] = self.restype_onehot_encoded(
+                    [fixed_map[int(res_id)]]
+                )[0]
+
+        return FixedResidueContext(
+            fixed_mask=fixed_mask,
+            fixed_restype=fixed_restype,
         )
 
     def _build_msa_context(self) -> MSAContext | None:
@@ -497,13 +531,19 @@ class ContextGenerator:
             msa_chain_asym_id=int(self.msa.msa_chain_asym_id),
         )
 
-    def get_full_context(self, include_arrays: bool = True) -> FullContext:
+    def get_full_context(
+        self,
+        include_arrays: bool = True,
+        fixed_residues: list[FixedResidue] | None = None,
+    ) -> FullContext:        
         """Get all context required for design pipeline.
 
         Args:
             include_arrays: If True, include atom_array and token_array in BasicContext.
                 These are expensive to serialize and can be disabled for training
                 performance. Defaults to True for backward compatibility.
+            fixed_residues: Optional list of ``FixedResidue`` to pin identity
+                at specific positions during MPNN sequence design.
         """
         return FullContext(
             token=self.get_token_context(),
@@ -517,6 +557,9 @@ class ContextGenerator:
             entity=self.get_entity_context(),
             coordinate=self.get_coordinate_context(),
             basic=self.get_basic_context(include_arrays=include_arrays),
+            fixed_residues=self.get_fixed_residue_context(fixed_residues)
+            if fixed_residues
+            else None,
             msa=self._build_msa_context(),
         )
 

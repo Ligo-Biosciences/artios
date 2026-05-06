@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import json
 import os
 import random
@@ -22,19 +23,18 @@ from typing import Any, Optional, Union
 import numpy as np
 import pandas as pd
 import torch
-from biotite.structure.atoms import AtomArray
-from biotite.structure.io import save_structure
 from ml_collections.config_dict import ConfigDict
 from torch.utils.data import Dataset
 
 from artios.common import ccd_sets
-from artios.common.constants import BACKBONE_DEFS, EvaluationChainInterface
+from artios.common.constants import EvaluationChainInterface
 from artios.data.data_pipeline import DataPipeline
 from artios.data.data_weights import get_sample_weights
 from artios.data.features import FullContext
 from artios.data.features.featurizer import ContextGenerator
-from artios.data.filter import Filter
 from artios.data.motif_maker import MotifMaker
+from artios.data.structure import AnnotatedStructure
+from artios.data.structure.annotation_v2 import MotifAnnotation
 from artios.data.msa import MSA, MSAQueryInfo, MSASampler
 from artios.data.structure import AnnotatedStructure, annotation
 from artios.utils.file_io import read_indices_csv
@@ -467,6 +467,7 @@ class BaseSingleDataset(Dataset):
 
         # --- Select ---
         if self.use_reference_chains_only:
+            # TODO: when is this path ever used? We can just delete this.
             ref_chain_ids = [sample_indice.chain_1_id, sample_indice.chain_2_id]
             if sample_indice.type == "chain":
                 ref_chain_ids.pop(-1)
@@ -509,36 +510,31 @@ class BaseSingleDataset(Dataset):
             keep = ~np.isin(cropped_structure.atoms.res_name, list(ccd_sets.GLYCANS))
             cropped_structure = cropped_structure.select_atoms(keep)
 
-        # Bridge: convert back to fully-annotated AtomArray for post-crop ops
-        # that still operate on raw arrays (motif processing, augmentation).
-        # Reconstructed into AnnotatedStructure at featurize step below.
-        cropped_atom_array = cropped_structure.to_atom_array()
-
         # --- Augment (post-crop) ---
         t_aug = time.time()
-        cropped_atom_array.coord = random_transform(
-            points=cropped_atom_array.coord,
+        new_atoms = cropped_structure.atoms.copy()
+        new_atoms.coord = random_transform(
+            points=new_atoms.coord,
             max_translation=1.0,
             apply_augmentation=True,
             centralize=True,
-            mask=cropped_atom_array.is_resolved,
+            mask=cropped_structure.training.is_resolved,
         )
+        cropped_structure = dataclasses.replace(cropped_structure, atoms=new_atoms)
         timings["augmentation"] = time.time() - t_aug
 
         # --- Motif ---
         tmotif = time.time()
         if self.motif_configs["motif_train_rate"] > 0.0:
-            cropped_atom_array = self._apply_motif_processing(
-                cropped_atom_array, pdb_id=pdb_id
+            cropped_structure = self._apply_motif_processing(
+                cropped_structure, pdb_id=pdb_id
             )
         else:
-            cropped_atom_array.set_annotation(
-                "is_motif", np.zeros(len(cropped_atom_array), dtype=int)
+            n = len(cropped_structure.atoms)
+            zeros = np.zeros(n, dtype=int)
+            cropped_structure = cropped_structure.with_motif(
+                MotifAnnotation(is_motif=zeros, is_motif_related=zeros)
             )
-            cropped_atom_array.set_annotation(
-                "is_motif_related", np.zeros(len(cropped_atom_array), dtype=int)
-            )
-
         timings["motif"] = time.time() - tmotif
 
         # --- Featurize ---
@@ -556,7 +552,7 @@ class BaseSingleDataset(Dataset):
 
         t4 = time.time()
         context = ContextGenerator(
-            structure,
+            cropped_structure,
             ref_pos_augment=self.ref_pos_augment,
             lig_atom_rename=self.lig_atom_rename,
             bioassembly_dict_fpath=npz_path,
@@ -645,6 +641,7 @@ class BaseSingleDataset(Dataset):
 
         Returns:
             A tuple containing the evaluation type, cluster ID, chain 1 mask, and chain 2 mask.
+        # TODO: really horrible looking method this.
         """
         if self.group_by_pdb_id:
             assert isinstance(self.indices_list, list)
@@ -687,143 +684,29 @@ class BaseSingleDataset(Dataset):
 
         return eval_type, cluster_id, chain_1_mask, chain_2_mask
 
-    def _apply_motif_processing(self, atom_array: AtomArray, pdb_id: str) -> AtomArray:
-        """
-        Applies all motif-related processing to the atom array.
+    def _apply_motif_processing(
+        self, structure: AnnotatedStructure, pdb_id: str
+    ) -> AnnotatedStructure:
+        """Attach a motif overlay and run the structure-level transforms.
 
-        This method consolidates all motif operations:
-        1. Generate motif annotations via MotifMaker
-        2. Optionally save motif for debugging
-        3. Duplicate backbone atoms for motif residues
-        4. Remove non-motif residue sidechains
-        5. Update IDs to un-index motif residues
-        6. Update centre atom mask to include motif atoms
-
-        Args:
-            atom_array: Input atom array to process
-            pdb_id: PDB ID for saving motif files
-
-        Returns:
-            Processed atom array with motif annotations and modifications
-        """
-        atom_array = self._get_motif(atom_array)
-        self._save_motif(atom_array, pdb_id)
-        atom_array = self._duplicate_motif_backbone_atoms(atom_array)
-        atom_array = Filter.remove_non_motif_residue_sidechains(atom_array)
-        atom_array = self._update_ids_to_unindex_motif_residues(atom_array)
-        atom_array = self._update_centre_atom_mask_to_include_motif(atom_array)
-        return atom_array
-
-    def _get_motif(self, atom_array: AtomArray) -> AtomArray:
-        """
-        Generates a motif from the atom array using the MotifMaker if enabled.
-
-        Args:
-            atom_array (AtomArray): Input atom array from which to generate motif
-
-        Returns:
-            AtomArray: Atom array with is_motif and is_motif_related annotations (int masks)
+        The sidechain strip runs even when ``MotifMaker`` didn't fire
+        (zero-mask overlay) — matches legacy behaviour when
+        ``motif_train_rate > 0``.
         """
         motif_train_rate = self.motif_configs["motif_train_rate"]
-
         if self.motif_maker is not None and np.random.rand() < motif_train_rate:
-            return self.motif_maker.make_motif(atom_array)
-
-        atom_array.set_annotation("is_motif", np.zeros(len(atom_array), dtype=int))
-        atom_array.set_annotation(
-            "is_motif_related", np.zeros(len(atom_array), dtype=int)
-        )
-        return atom_array
-
-    def _save_motif(self, atom_array: AtomArray, pdb_id: str) -> None:
-        """
-        Saves the motif to the motif directory. Mainly used for debugging/visualising
-        changes to motif generation algorithm.
-        """
-        # temp motif dir
-        self.motif_dir = Path(self.bioassembly_dict_dir).parent.parent.parent / "motifs"
-        os.makedirs(self.motif_dir, exist_ok=True)
-
-        if (
-            atom_array.is_motif.sum() == 0
-            or not self.motif_configs["save_motifs_for_debugging"]
-        ):
-            return
-
-        motif_fpath = self.motif_dir / f"{pdb_id}_motif.cif"
-        structure_fpath = self.motif_dir / f"{pdb_id}.cif"
-
-        motif_atom_array = atom_array[atom_array.is_motif > 0]
-        save_structure(motif_fpath, motif_atom_array)
-        save_structure(structure_fpath, atom_array)
-
-    @staticmethod
-    def _duplicate_motif_backbone_atoms(atom_array: AtomArray) -> AtomArray:
-        """
-        Duplicates backbone atoms of motif-related residues, setting their is_motif and
-        is_motif_related annotations to False. This allows us to un-index
-        the motif sidechains without breaking the backbone.
-
-        Args:
-            atom_array (AtomArray): AtomArray with is_motif and is_motif_related annotations.
-
-        Returns:
-            AtomArray: AtomArray with duplicated backbone atoms of motif-related residues.
-        """
-        is_motif_related = atom_array.is_motif_related
-        is_backbone = (
-            (
-                (atom_array.mol_type == "protein")
-                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["protein"]))
+            structure = structure.with_sampled_motif(self.motif_maker)
+        else:
+            n = len(structure.atoms)
+            zeros = np.zeros(n, dtype=int)
+            structure = structure.with_motif(
+                MotifAnnotation(is_motif=zeros, is_motif_related=zeros)
             )
-            | (
-                (atom_array.mol_type == "DNA")
-                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["dna"]))
-            )
-            | (
-                (atom_array.mol_type == "RNA")
-                & (np.isin(atom_array.atom_name, BACKBONE_DEFS["rna"]))
-            )
-        )
 
-        duplicate_mask = is_backbone & (is_motif_related > 0)
-
-        if not duplicate_mask.any():
-            return atom_array
-
-        duplicated_atoms = atom_array[duplicate_mask].copy()
-        duplicated_atoms.is_motif = np.zeros(len(duplicated_atoms), dtype=int)
-        duplicated_atoms.is_motif_related = np.zeros(len(duplicated_atoms), dtype=int)
-
-        return atom_array + duplicated_atoms
-
-    @staticmethod
-    def _update_ids_to_unindex_motif_residues(atom_array: AtomArray) -> AtomArray:
-        """
-        Updates entity_id_int, sym_id_int, asym_id_int, res_id and ref_space_uid to un-index
-        the sidechains of motif residues. Motif-related residues are grouped by
-        residue identity into new entities, with each residue instance
-        becoming its own chain. Each atom within a motif residue gets a unique res_id since we
-        are going to be tokenizing the sidechains per-atom.
-
-        Args:
-            atom_array (AtomArray): AtomArray with is_motif_related annotation
-
-        Returns:
-            AtomArray: AtomArray with updated IDs for motif-related residues
-        """
-        # Discard the mapping for training - only needed for inference RMSD computation
-        atom_array, _ = annotation.update_ids_to_unindex_motif_residues(atom_array)
-        return atom_array
-
-    @staticmethod
-    def _update_centre_atom_mask_to_include_motif(atom_array: AtomArray) -> AtomArray:
-        """
-        Updates the centre_atom_mask of the atom array to include all motif
-        related atoms. This is important as the Featurizer looks at the
-        centre atom indices to retrieve the correct chain, res IDs etc.
-        """
-        return annotation.update_centre_atom_mask_to_include_motif(atom_array)
+        structure = structure.with_duplicated_motif_backbones()
+        structure = structure.without_non_motif_sidechains()
+        structure = structure.with_unindexed_motif()
+        return structure
 
 
 def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMaker]:
@@ -840,19 +723,18 @@ def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMak
     """
     data_config = configs.data
 
-    motif_config = data_config["motif_training"]
-    motif_train_rate = motif_config["motif_train_rate"]
+    motif_config = dict(data_config["motif_training"])
+    # motif_train_rate is a dataset-level training schedule knob (how often to
+    # invoke the maker), not a MotifMaker sampling field. Strip before passing.
+    motif_train_rate = motif_config.pop("motif_train_rate")
     if not 0 <= motif_train_rate <= 1.0:
         raise ValueError("motif_train_rate must be between 0 and 1")
 
     # Check for dataset-specific overrides
     if dataset_name in data_config and "motif_training" in data_config[dataset_name]:
-        # Merge dataset-specific config with global config
-        dataset_motif_config = {
-            **motif_config,
-            **data_config[dataset_name]["motif_training"],
-        }
-        return MotifMaker(**dataset_motif_config)
+        override = dict(data_config[dataset_name]["motif_training"])
+        override.pop("motif_train_rate", None)
+        return MotifMaker(**{**motif_config, **override})
 
     return MotifMaker(**motif_config)
 

@@ -15,7 +15,6 @@ import numpy as np
 import pytest
 from biotite.structure import AtomArray, BondList
 
-from artios.data.parsing.cif import MMCIFParser
 from artios.data.structure.annotation_v2 import (
     canonicalize_chain_ids,
     order_atoms_by_mol,
@@ -124,9 +123,14 @@ class TestOrderAtomsByMolOnGoldenFixtures:
     """
 
     def _load_aa(self, name: str) -> tuple[AtomArray, dict | None]:
-        parser = MMCIFParser(mmcif_file=CIF_DIR / f"{name}.cif")
-        bio = parser.get_bioassembly()
-        return bio["atom_array"], parser.entity_poly_type
+        from artios.data.parsing.bioassembly import load_bioassembly
+
+        bioassembly = load_bioassembly(CIF_DIR / f"{name}.cif")
+        assert bioassembly is not None
+        return (
+            bioassembly.structure.to_atom_array(),
+            bioassembly.header.entity_poly_type,
+        )
 
     def test_permutation_preserves_atom_multiset(self, name: str):
         """Same atoms out, just reordered — no add/remove."""
@@ -150,7 +154,7 @@ class TestOrderAtomsByMolOnGoldenFixtures:
         """``order_atoms_by_mol`` must drop exactly the bonds that
         ``remove_bonds_between_polymer_chains`` would drop — no more, no less.
         """
-        from artios.data.structure.annotation import (
+        from artios.data.structure.annotation_v2 import (
             remove_bonds_between_polymer_chains,
         )
 

@@ -1,6 +1,5 @@
 """Annotation groups + their structural and content helpers.
 
-Staging ground for PR B in docs/refactor_plans/data_pipeline_refactor_sequence.md.
 Two kinds of things live here:
 
 1. **Structural ops** (``canonicalize_chain_ids``, ``order_atoms_by_mol``) —
@@ -12,21 +11,28 @@ Two kinds of things live here:
 Shared helpers that are genuinely called from more than one place live at
 module scope (``_mol_boundaries``, ``_compute_mol_atom_index``). Content
 that is used by a single group goes straight into the group's ``compute()``.
-
-This module will supersede ``annotation.py``; during migration both coexist so
-``test_compute_migration_parity.py`` can byte-compare the pipelines.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import functools
 import logging
+import typing
 from collections import Counter
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from artios.data.structure.structure import AnnotatedStructure
 
 import numpy as np
-from biotite.structure import AtomArray, get_chain_starts, get_residue_starts
+from biotite.structure import (
+    AtomArray,
+    BondList,
+    get_chain_starts,
+    get_residue_starts,
+)
 from biotite.structure.molecules import get_molecule_indices
 
 from artios.common.constants import (
@@ -38,7 +44,6 @@ from artios.common.constants import (
 )
 from artios.data.chem import ccd
 from artios.data.chem.ccd import RefInfo, get_ccd_ref_info
-from artios.data.structure.annotation import remove_bonds_between_polymer_chains
 from artios.utils.typing import Bool, Float, Int, Int32, Shaped, typecheck
 
 logger = logging.getLogger(__name__)
@@ -62,6 +67,36 @@ class _MolRef:
 # ---------------------------------------------------------------------------
 # Structural ops
 # ---------------------------------------------------------------------------
+
+
+def remove_bonds_between_polymer_chains(
+    atom_array: AtomArray, entity_poly_type: dict[str, str]
+) -> BondList:
+    """Remove bonds that link two polymer chains.
+
+    Used when building per-chain mol groups (``order_atoms_by_mol`` with
+    ``entity_poly_type`` set): polymer-polymer cross-chain bonds — almost
+    always disulfides — would otherwise glue two polymer chains into one
+    connected component. Ligand-polymer and ligand-ligand bonds are kept.
+
+    Returns a **copy** of ``atom_array.bonds`` with those bonds filtered
+    out. Does not mutate the input.
+
+    TODO: ``bonds._bonds`` / ``_remove_redundant_bonds`` is private
+    biotite API; should move into ``_biotite_compat.py`` so a biotite
+    upgrade is a one-file patch.
+    """
+    copy = atom_array.bonds.copy()
+    polymer_mask = np.isin(atom_array.label_entity_id, list(entity_poly_type.keys()))
+    i = copy._bonds[:, 0]
+    j = copy._bonds[:, 1]
+    pp_bond_mask = polymer_mask[i] & polymer_mask[j]
+    diff_chain_mask = atom_array.chain_id[i] != atom_array.chain_id[j]
+    pp_bond_mask = pp_bond_mask & diff_chain_mask
+    copy._bonds = copy._bonds[~pp_bond_mask]
+    copy._remove_redundant_bonds()
+    copy._max_bonds_per_atom = copy._get_max_bonds_per_atom()
+    return copy
 
 
 def canonicalize_chain_ids(atom_array: AtomArray) -> AtomArray:
@@ -237,6 +272,320 @@ def _check_mol_equivalence(
 
 
 # ---------------------------------------------------------------------------
+# Reference-conformer pre-pass
+# ---------------------------------------------------------------------------
+
+
+def populate_ccd_reference(
+    atom_array: AtomArray,
+    *,
+    include_res_perm: bool = True,
+) -> AtomArray:
+    """Write ``ref_pos`` / ``ref_charge`` / ``ref_mask`` (and optionally
+    ``res_perm``) annotations on ``atom_array`` from the CCD components
+    dictionary.
+
+    This is the single pre-pass that ``AnnotatedStructure.annotate(...,
+    include_ref_conformer=True)`` requires callers to have run — the
+    reference-conformer group refuses to invent these fields silently
+    because the UNL handling and the CCD lookup logic belong upstream
+    where the per-residue-type dispatch lives.
+
+    Per-residue behaviour:
+
+    - ``res_name == "UNL"`` (SMILES ligand placeholder): the reference
+      **is** whatever ``atom_array.coord`` currently holds — the RDKit
+      conformer coords written by ``array_builder.smiles_to_atom_info``.
+      Copy verbatim and mark every atom as resolved (``ref_mask = 1``).
+      Charges come from ``atom_array.charge`` if that annotation exists,
+      else zero.
+    - ``res_name`` found in CCD: for each atom, look up its position in
+      the component's ``atom_map``. If found → copy the reference coord,
+      charge, and mask from the CCD entry. If the atom name is **not**
+      in the component (e.g. a modified residue whose naming diverged
+      from the CCD canonical), leave ``ref_mask = 0`` for that atom —
+      this is a graceful fallback over the legacy
+      ``add_ref_feat_info`` KeyError (bug scan #4).
+    - ``res_name`` absent from CCD and not ``UNL``: all three fields stay
+      at their zero defaults; a warning is logged.
+
+    ``res_perm`` is a per-atom string encoding of the CCD permutation
+    array (``"_".join(str(j) for j in row)``). Pass
+    ``include_res_perm=False`` for inference-side callers that don't use
+    the permutation pipeline (``array_builder.add_reference_features`` is
+    such a caller).
+
+    This replaces two legacy entry points that the v1 deletion will
+    remove: ``annotation.add_ref_info_and_res_perm`` (CIF path) and
+    ``array_builder.add_reference_features`` (inference path). The UNL
+    branch was previously inference-only; folding it here means the CIF
+    path also handles SMILES ligands correctly if one were ever embedded.
+
+    Args:
+        atom_array: Input atom array. Must carry ``res_name`` and
+            ``atom_name`` annotations. ``coord`` is always read; ``charge``
+            is read only if present (defaults to 0 otherwise).
+        include_res_perm: When True (default), also populate the
+            ``res_perm`` annotation. CIF-parse callers leave this on;
+            inference callers that don't need permutations can set it
+            off.
+
+    Returns:
+        The same atom array with new annotations set (mutates).
+    """
+    n = len(atom_array)
+    ref_pos = np.zeros((n, 3), dtype=np.float64)
+    ref_charge = np.zeros(n, dtype=int)
+    ref_mask = np.zeros(n, dtype=int)
+
+    has_charge = "charge" in atom_array.get_annotation_categories()
+
+    res_perm_rows: list[list[int]] | None = [] if include_res_perm else None
+
+    res_starts = get_residue_starts(atom_array, add_exclusive_stop=True)
+    for start, stop in zip(res_starts[:-1], res_starts[1:]):
+        res_name = atom_array.res_name[start]
+        res_size = stop - start
+
+        if res_name == "UNL":
+            ref_pos[start:stop] = atom_array.coord[start:stop]
+            if has_charge:
+                ref_charge[start:stop] = atom_array.charge[start:stop]
+            ref_mask[start:stop] = 1
+            if res_perm_rows is not None:
+                res_perm_rows.extend([[i] for i in range(res_size)])
+            continue
+
+        ref_info: RefInfo | None = get_ccd_ref_info(res_name)
+        if ref_info is None:
+            logger.warning("populate_ccd_reference: no CCD entry for %r", res_name)
+            if res_perm_rows is not None:
+                res_perm_rows.extend([[i] for i in range(res_size)])
+            continue
+
+        atom_names = atom_array.atom_name[start:stop]
+        sub_idx = [ref_info.atom_map.get(name) for name in atom_names]
+        for local_i, s in enumerate(sub_idx):
+            if s is None:
+                # Atom name not in CCD — leave ref_mask=0 for this slot.
+                continue
+            full_i = start + local_i
+            ref_pos[full_i] = ref_info.coord[s]
+            ref_charge[full_i] = ref_info.charge[s]
+            ref_mask[full_i] = ref_info.mask[s]
+
+        if res_perm_rows is not None:
+            res_perm_rows.extend(
+                _compute_residue_permutations(
+                    atom_names=atom_names,
+                    atom_map=ref_info.atom_map,
+                    perm_array=ref_info.perm,
+                )
+            )
+
+    atom_array.set_annotation("ref_pos", ref_pos)
+    atom_array.set_annotation("ref_charge", ref_charge)
+    atom_array.set_annotation("ref_mask", ref_mask)
+
+    if res_perm_rows is not None:
+        str_res_perm = ["_".join(str(j) for j in row) for row in res_perm_rows]
+        atom_array.set_annotation("res_perm", np.asarray(str_res_perm))
+
+    return atom_array
+
+
+def _compute_residue_permutations(
+    atom_names: np.ndarray,
+    atom_map: dict[str, int],
+    perm_array: np.ndarray,
+) -> list[list[int]]:
+    """Per-residue helper for ``populate_ccd_reference``.
+
+    Produces one integer-list permutation per atom in the residue:
+    ``[[atom_0_perm_0, atom_0_perm_1, ...], [atom_1_perm_0, ...], ...]``.
+
+    Mirrors the filtering that ``annotation.add_res_perm`` performed —
+    restrict the CCD's permutation array to only the atoms actually
+    present in this residue, then relabel CCD-local atom indices into
+    residue-local (0..res_size-1) indices.
+
+    If any atom name isn't in the CCD ``atom_map``, returns trivial
+    identity permutations ``[[i] for i in range(n)]`` — matches the v1
+    fallback for the modified-residue case.
+    """
+    curr_res_atom_idx = list(range(len(atom_names)))
+    perm_ccd_idx = [atom_map.get(name) for name in atom_names]
+    if any(idx is None for idx in perm_ccd_idx):
+        return [[i] for i in curr_res_atom_idx]
+
+    perm_ccd_arr = np.asarray(perm_ccd_idx)
+    ccd_to_local = dict(zip(perm_ccd_idx, curr_res_atom_idx))
+
+    # Keep only rows of the CCD perm array whose atom index appears in
+    # this residue; then keep only columns where every kept row has an
+    # entry that's also in the residue.
+    row_mask = np.isin(perm_array[:, 0], perm_ccd_arr)
+    rows_filtered = perm_array[row_mask]
+    col_mask = np.isin(rows_filtered, perm_ccd_arr).all(axis=0)
+    filtered = rows_filtered[:, col_mask]
+
+    # Relabel CCD-local indices to residue-local indices.
+    remapped = np.vectorize(ccd_to_local.get)(filtered)
+    return remapped.tolist()
+
+
+# ---------------------------------------------------------------------------
+# Training-prep helpers
+# ---------------------------------------------------------------------------
+
+
+def unresolve_low_plddt_residues(
+    atom_array: AtomArray, plddt_threshold: float = 80.0
+) -> AtomArray:
+    """Mask residues with pLDDT below ``plddt_threshold`` as
+    ``is_resolved = False`` on the atom_array.
+
+    Used in the distillation path so low-confidence predicted residues
+    don't contribute to the loss.
+    """
+    plddt = atom_array.b_factor
+    is_high_plddt = plddt > plddt_threshold
+    atom_array.set_annotation("is_resolved", is_high_plddt & atom_array.is_resolved)
+    return atom_array
+
+
+def add_pocket_annotation(
+    structure: "AnnotatedStructure",
+    plddt_cutoff: float | None = None,
+    max_atoms: int = 20_000,
+) -> "AnnotatedStructure":
+    """Run Pocketeer and return a new ``AnnotatedStructure`` with
+    ``training.pocket_id`` populated.
+
+    Skips detection for structures above ``max_atoms`` atoms (Delaunay
+    tessellation is O(n²) memory; zero-fill the annotation instead so
+    downstream code doesn't fail on missing keys).
+    """
+    # Lazy import — pocket.py pulls in pocketeer which isn't installed
+    # in every image.
+    from artios.data.pocket import find_pockets
+
+    n = len(structure.atoms)
+    if n > max_atoms:
+        logger.warning("Skipping pocket detection: %d atoms > %d", n, max_atoms)
+        pocket_id = np.zeros(n, dtype=int)
+    else:
+        pockets = find_pockets(structure.atoms, plddt_cutoff=plddt_cutoff)
+        pocket_id = np.zeros(n, dtype=int)
+        for i, pocket in enumerate(pockets):
+            atom_indices: set[int] = set()
+            for sphere in pocket.spheres:
+                atom_indices.update(sphere.atom_indices)
+            pocket_id[list(atom_indices)] = i + 1
+
+    return dataclasses.replace(
+        structure,
+        training=dataclasses.replace(structure.training, pocket_id=pocket_id),
+    )
+
+
+def add_pocket_annotation_per_fragment(
+    structure: "AnnotatedStructure", plddt_cutoff: float | None = None
+) -> "AnnotatedStructure":
+    """Run Pocketeer independently on each fragment; return a new
+    ``AnnotatedStructure`` with ``training.pocket_id`` populated.
+
+    Distillation pipeline: the atom-density filter inside Pocketeer
+    behaves differently on a single fragment vs the full structure, so
+    per-fragment detection gives more consistent results across samples.
+
+    Requires ``structure.training.fragment_id`` to be set already
+    (``add_fragment_annotation`` runs first). Each fragment with
+    ``id != -1`` gets its own pocket detection pass; pocket ids are
+    numbered globally across the structure.
+    """
+    from artios.data.pocket import find_pockets
+
+    if structure.training.fragment_id is None:
+        raise ValueError(
+            "add_pocket_annotation_per_fragment: fragment_id is not set; "
+            "run add_fragment_annotation first."
+        )
+
+    n = len(structure.atoms)
+    pocket_id = np.zeros(n, dtype=int)
+    fragment_ids = structure.training.fragment_id
+    unique_frags = np.unique(fragment_ids)
+    unique_frags = unique_frags[unique_frags != -1]
+
+    next_pocket_id = 1
+    for frag_id in unique_frags:
+        frag_mask = fragment_ids == frag_id
+        full_indices = np.where(frag_mask)[0]
+        frag_atoms = structure.atoms[frag_mask]
+        pockets = find_pockets(frag_atoms, plddt_cutoff=plddt_cutoff)
+        for pocket in pockets:
+            local_atom_indices: set[int] = set()
+            for sphere in pocket.spheres:
+                local_atom_indices.update(sphere.atom_indices)
+            pocket_id[full_indices[list(local_atom_indices)]] = next_pocket_id
+            next_pocket_id += 1
+
+    return dataclasses.replace(
+        structure,
+        training=dataclasses.replace(structure.training, pocket_id=pocket_id),
+    )
+
+
+def add_fragment_annotation(structure: "AnnotatedStructure") -> "AnnotatedStructure":
+    """Spectral-bisection + spatial-clustering fragment detection on
+    ``AnnotatedStructure``.
+
+    Fragments failing any non-None threshold (``min_plddt``,
+    ``min_length``, the Rg length bound, ``min_sse_entropy``, etc.) are
+    marked with ``fragment_id = -1``. Ref: AF3 SI 5.9.3.
+
+    ``FragmentMaker`` still mutates an ``AtomArray`` in place — we pass
+    a copy of ``structure.atoms`` so the frozen structure stays
+    immutable, then extract the ``fragment_id`` annotation onto
+    ``training.fragment_id``.
+    """
+    from artios.data.engineering.pipeline.thresholds import PRE_POCKET_THRESHOLDS
+    from artios.data.fragment import FragmentMaker
+
+    maker = FragmentMaker(thresholds=PRE_POCKET_THRESHOLDS)
+    scratch = structure.atoms.copy()
+    maker.add_fragment_annotation(scratch)
+    return dataclasses.replace(
+        structure,
+        training=dataclasses.replace(
+            structure.training, fragment_id=scratch.fragment_id
+        ),
+    )
+
+
+def remove_disordered_fragments(
+    structure: "AnnotatedStructure",
+) -> "AnnotatedStructure":
+    """Drop atoms whose ``fragment_id`` is ``-1`` (disordered / filtered
+    out by ``add_fragment_annotation``).
+
+    Structure-level counterpart to ``Filter.remove_disordered_fragments``;
+    lives here so the distillation training-prep chain
+    (``add_fragment_annotation → remove_disordered_fragments →
+    add_pocket_annotation_per_fragment``) stays on ``AnnotatedStructure``
+    end-to-end.
+    """
+    if structure.training.fragment_id is None:
+        raise ValueError(
+            "remove_disordered_fragments: fragment_id is not set; "
+            "run add_fragment_annotation first."
+        )
+    mask = structure.training.fragment_id != -1
+    return structure.select_atoms(mask)
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers (multi-caller internals)
 # ---------------------------------------------------------------------------
 
@@ -259,6 +608,19 @@ def _compute_mol_atom_index(mol_id: np.ndarray) -> Int32[np.ndarray, "n_atom"]:
 # ---------------------------------------------------------------------------
 # Annotation groups
 # ---------------------------------------------------------------------------
+
+
+def _is_atom_array_annotation(annotation) -> bool:
+    """True if ``annotation`` is a jaxtyping ndarray type (or Optional of one).
+
+    Jaxtyping array types carry ``dim_str``; Python built-ins and plain generics
+    don't. ``Int[...] | None`` becomes ``Union[Int[...], NoneType]`` at runtime,
+    so we unwrap unions and check their members.
+    """
+    if hasattr(annotation, "dim_str"):
+        return True
+    args = typing.get_args(annotation)
+    return any(hasattr(a, "dim_str") for a in args)
 
 
 class _AnnotationGroup:
@@ -288,6 +650,27 @@ class _AnnotationGroup:
     REQUIRES: ClassVar[tuple[str, ...]] = ()
 
     @classmethod
+    @functools.cache
+    def _atom_array_field_names(cls) -> tuple[str, ...]:
+        """Names of dataclass fields whose values are atom-indexed arrays.
+
+        Detected by whether the jaxtyping annotation is an array type
+        (carries the ``dim_str`` marker). Unwraps ``X | None`` unions so
+        optional jaxtyping fields still count. Non-array fields (e.g.
+        per-residue metadata on ``MotifAnnotation``) skip the atom-array
+        machinery — ignored by serialization, passed through unchanged by
+        ``select`` / ``append_selection``. Assumes all jaxtyping ndarray
+        fields on a group are indexed by atom; revisit if we ever add a
+        token-indexed jaxtyping field.
+        """
+        hints = typing.get_type_hints(cls)
+        return tuple(
+            f.name
+            for f in dataclasses.fields(cls)
+            if _is_atom_array_annotation(hints.get(f.name))
+        )
+
+    @classmethod
     def _require_annotations(cls, atom_array: AtomArray) -> None:
         """Raise if any ``REQUIRES`` entry is missing from ``atom_array``."""
         present = atom_array.get_annotation_categories()
@@ -300,28 +683,33 @@ class _AnnotationGroup:
 
     @classmethod
     def from_atom_array(cls, atom_array: AtomArray):
-        """Read annotations into typed fields."""
+        """Read annotations into typed fields.
+
+        Non-array fields use their dataclass defaults.
+        """
         kwargs = {}
-        for f in dataclasses.fields(cls):
-            val = getattr(atom_array, f.name, None)
+        field_defaults = {f.name: f for f in dataclasses.fields(cls)}
+        for name in cls._atom_array_field_names():
+            val = getattr(atom_array, name, None)
+            f = field_defaults[name]
             if (
                 val is None
                 and f.default is dataclasses.MISSING
                 and f.default_factory is dataclasses.MISSING
             ):
                 raise AttributeError(
-                    f"Required annotation '{f.name}' missing from atom_array"
+                    f"Required annotation '{name}' missing from atom_array"
                 )
-            kwargs[f.name] = val
+            kwargs[name] = val
         return cls(**kwargs)
 
     @classmethod
     def maybe_from_atom_array(cls, atom_array: AtomArray):
-        """Like ``from_atom_array``, but returns ``None`` if all fields are absent.
+        """Like ``from_atom_array``, but returns ``None`` if all atom-array fields are absent.
 
-        Raises ``ValueError`` on partial presence — either all fields or none.
+        Raises ``ValueError`` on partial presence.
         """
-        names = [f.name for f in dataclasses.fields(cls)]
+        names = cls._atom_array_field_names()
         cats = atom_array.get_annotation_categories()
         present = [n in cats for n in names]
         if not any(present):
@@ -329,35 +717,56 @@ class _AnnotationGroup:
         if not all(present):
             missing = [n for n, p in zip(names, present) if not p]
             raise ValueError(
-                f"{cls.__name__} partially present on atom_array: " f"missing {missing}"
+                f"{cls.__name__} partially present on atom_array: missing {missing}"
             )
         return cls.from_atom_array(atom_array)
 
     def to_atom_array(self, atom_array: AtomArray) -> None:
-        """Write typed fields back as annotations (mutates *atom_array*).
+        """Write atom-array fields back as annotations (mutates *atom_array*).
 
-        Skips fields that are None.
+        Skips fields that are None. Non-array fields are not written.
         """
-        for f in dataclasses.fields(self):
-            val = getattr(self, f.name)
+        for name in self._atom_array_field_names():
+            val = getattr(self, name)
             if val is not None:
-                atom_array.set_annotation(f.name, val)
+                atom_array.set_annotation(name, val)
 
     @classmethod
     def strip_from(cls, atom_array: AtomArray) -> None:
-        """Remove our annotations from *atom_array*."""
-        for f in dataclasses.fields(cls):
-            if f.name in atom_array.get_annotation_categories():
-                atom_array.del_annotation(f.name)
+        """Remove our atom-array annotations from *atom_array*."""
+        for name in cls._atom_array_field_names():
+            if name in atom_array.get_annotation_categories():
+                atom_array.del_annotation(name)
 
     def select(self, indices: np.ndarray):
-        """Slice all fields by *indices*. Returns new instance."""
+        """Slice atom-array fields by *indices*; non-array fields pass through."""
+        atom_fields = set(self._atom_array_field_names())
         return type(self)(
             **{
                 f.name: (
                     getattr(self, f.name)[indices]
-                    if getattr(self, f.name) is not None
-                    else None
+                    if f.name in atom_fields and getattr(self, f.name) is not None
+                    else getattr(self, f.name)
+                )
+                for f in dataclasses.fields(self)
+            }
+        )
+
+    def append_selection(self, mask: np.ndarray):
+        """Append a copy of *mask*-selected rows to every atom-array field.
+
+        Counterpart to ``select``. Non-array fields pass through unchanged.
+        Used by ``AnnotatedStructure.with_duplicated_motif_backbones`` to
+        keep every group's length in lockstep with the atom array when
+        motif-residue backbones are physically duplicated.
+        """
+        atom_fields = set(self._atom_array_field_names())
+        return type(self)(
+            **{
+                f.name: (
+                    np.concatenate([getattr(self, f.name), getattr(self, f.name)[mask]])
+                    if f.name in atom_fields and getattr(self, f.name) is not None
+                    else getattr(self, f.name)
                 )
                 for f in dataclasses.fields(self)
             }
@@ -472,7 +881,11 @@ class TypeMasks(_AnnotationGroup):
 
     # mol_type is numpy str_ (e.g. "protein"|"rna"|"dna"|"ligand"); jaxtyping
     # has no string-specific marker, so Shaped enforces shape only.
+    # chain_mol_type is the per-chain majority vote (same dtype); is_* masks
+    # are derived from it, but chain_mol_type itself is exposed as a field
+    # because motif_maker.py consumes it directly as a string annotation.
     mol_type: Shaped[np.ndarray, "n_atom"]
+    chain_mol_type: Shaped[np.ndarray, "n_atom"]
     is_protein: Int[np.ndarray, "n_atom"]
     is_ligand: Int[np.ndarray, "n_atom"]
     is_dna: Int[np.ndarray, "n_atom"]
@@ -480,12 +893,13 @@ class TypeMasks(_AnnotationGroup):
 
     @classmethod
     def compute(cls, atom_array: AtomArray, sequences: dict[str, str]) -> TypeMasks:
-        """Compute mol_type + is_{protein,ligand,dna,rna} masks.
+        """Compute mol_type + chain_mol_type + is_{protein,ligand,dna,rna} masks.
 
         ``sequences`` is ``{label_entity_id: canonical_sequence}``; entities
         absent from this dict are treated as ligand. mol_type is per-residue
-        from the CCD lookup; is_* masks are chain-level (each chain's most
-        frequent mol_type wins — matches the legacy AF3 pipeline).
+        from the CCD lookup; chain_mol_type and is_* masks are chain-level
+        (each chain's most frequent mol_type wins — matches the legacy AF3
+        pipeline).
         """
         cls._require_annotations(atom_array)
         n = len(atom_array)
@@ -506,6 +920,7 @@ class TypeMasks(_AnnotationGroup):
 
         return cls(
             mol_type=mol_type,
+            chain_mol_type=chain_mol_type,
             is_protein=(chain_mol_type == "protein").astype(int),
             is_ligand=(chain_mol_type == "ligand").astype(int),
             is_dna=(chain_mol_type == "dna").astype(int),
@@ -516,10 +931,10 @@ class TypeMasks(_AnnotationGroup):
 @typecheck
 @dataclass(frozen=True)
 class ReferenceConformer(_AnnotationGroup):
-    """Per-atom reference conformer data from CCD."""
+    """Per-atom reference conformer data."""
 
     FIELD_NAME: ClassVar[str] = "reference"
-    REQUIRES: ClassVar[tuple[str, ...]] = ("res_id", "res_name", "atom_name")
+    REQUIRES: ClassVar[tuple[str, ...]] = ("res_id",)
 
     ref_pos: Float[np.ndarray, "n_atom 3"]
     ref_charge: Int[np.ndarray, "n_atom"]
@@ -533,15 +948,24 @@ class ReferenceConformer(_AnnotationGroup):
         entity_ids: EntityIds,
         include_conformer: bool = True,
     ) -> ReferenceConformer:
-        """Compute ref_space_uid + CCD reference conformer (or zero fallback).
+        """Compute ``ref_space_uid`` and read ``ref_pos``/``ref_charge``/
+        ``ref_mask`` from the atom_array annotations.
 
-        ref_space_uid: AF3 SI 2.8 Table 5 — unique int per (asym_id, res_id).
-        ref_pos/charge/mask: CCD lookup keyed by res_name + atom_name.
-        Residues whose res_name lacks a CCD entry get zero-filled pos/charge/mask
-        (and ref_mask=0 signals "not present" to downstream).
+        Callers are responsible for populating the reference annotations
+        before ``annotate()`` — both pipeline entry points
+        (``load_bioassembly`` and ``array_builder``) call
+        ``populate_ccd_reference`` first. Per-residue dispatch belongs
+        in that pre-pass, not here — keeping a second CCD-by-``res_name``
+        lookup inside this group would silently clobber the UNL case
+        and kill intra-ligand geometry conditioning in backbone diffusion.
 
-        When ``include_conformer=False``, ref_space_uid is still computed
-        (it's cheap and used downstream); pos/charge/mask fall back to zeros.
+        ``ref_space_uid`` (AF3 SI 2.8 Table 5 — unique int per
+        ``(asym_id, res_id)``) is always computed: it depends on
+        ``EntityIds`` rather than on the atom_array annotations.
+
+        When ``include_conformer=False``, ``ref_pos``/``ref_charge``/
+        ``ref_mask`` are zero-filled — used by tests that only need
+        ``ref_space_uid``.
         """
         cls._require_annotations(atom_array)
         n = len(atom_array)
@@ -559,41 +983,20 @@ class ReferenceConformer(_AnnotationGroup):
                 ref_space_uid=ref_space_uid,
             )
 
-        # Key CCD info by res_name directly — all atoms in a residue share the
-        # same CCD entry; the legacy code keyed by ref_space_uid, storing the
-        # same tuple repeatedly for each residue instance.
-        ccd_info: dict = {}
-        for ccd_id in np.unique(atom_array.res_name):
-            ref_result: RefInfo | None = get_ccd_ref_info(ccd_id)
-            if ref_result:
-                ccd_info[ccd_id] = (
-                    ref_result.atom_map,
-                    ref_result.coord,
-                    ref_result.charge,
-                    ref_result.mask,
-                )
-
-        # TODO: per-atom Python loop; vectorise via (res_name, atom_name) →
-        # flat index lookup built once from ccd_info. Bottleneck >~50k atoms.
-        ref_pos = np.zeros((n, 3))
-        ref_charge = np.zeros(n, dtype=int)
-        ref_mask = np.zeros(n, dtype=int)
-        for i, (res_name, atom_name) in enumerate(
-            zip(atom_array.res_name, atom_array.atom_name)
-        ):
-            ref_data = ccd_info.get(res_name)
-            if ref_data is None:
-                continue
-            atom_map, coord, charge, mask = ref_data
-            sub_idx = atom_map[atom_name]
-            ref_pos[i] = coord[sub_idx]
-            ref_charge[i] = charge[sub_idx]
-            ref_mask[i] = mask[sub_idx]
+        cats = atom_array.get_annotation_categories()
+        missing = [f for f in ("ref_pos", "ref_charge", "ref_mask") if f not in cats]
+        if missing:
+            raise ValueError(
+                f"ReferenceConformer.compute(..., include_conformer=True) "
+                f"requires the atom_array to already carry {missing} "
+                f"annotations. Run ``populate_ccd_reference`` before "
+                f"``AnnotatedStructure.annotate``."
+            )
 
         return cls(
-            ref_pos=ref_pos,
-            ref_charge=ref_charge,
-            ref_mask=ref_mask,
+            ref_pos=atom_array.ref_pos,
+            ref_charge=atom_array.ref_charge.astype(int),
+            ref_mask=atom_array.ref_mask.astype(int),
             ref_space_uid=ref_space_uid,
         )
 
@@ -633,6 +1036,8 @@ class DerivedAnnotations(_AnnotationGroup):
 
         cano_seq_resname = np.empty(n, dtype="U3")
         modified_res_mask = np.zeros(n, dtype=int)
+
+        # TODO: the code quality here is not the best, needs improving.
 
         res_starts = get_residue_starts(atom_array, add_exclusive_stop=True)
         for start, stop in zip(res_starts[:-1], res_starts[1:]):
@@ -754,13 +1159,58 @@ class TrainingAnnotations(_AnnotationGroup):
         )
 
 
+@dataclass(frozen=True)
+class MotifMappingEntry:
+    """One motif-residue instance's pre- / post-unindex correspondence.
+
+    Produced by ``AnnotatedStructure.with_unindexed_motif`` and consumed at
+    evaluation time (``evaluation/utils/chain_tracker.py``) to translate
+    between unindexed chain ids on the generated backbone and the original
+    ids in the input motif CIF.
+    """
+
+    unindexed_chain_id: str
+    unindexed_res_id: int
+    original_motif_chain_id: str
+    original_motif_res_id: int
+    res_name: str
+
+
 @typecheck
 @dataclass(frozen=True)
 class MotifAnnotation(_AnnotationGroup):
-    """Per-atom motif masks. Only present when motif is active."""
+    """Per-atom motif masks plus optional per-residue unindex mapping.
+
+    ``mapping`` is populated by ``with_unindexed_motif``; it's per-residue
+    metadata that rides on the structure wrapper, not a per-atom annotation.
+    The base group machinery detects it as non-array (not jaxtyped) and
+    skips it for serialization / slicing.
+    """
 
     FIELD_NAME: ClassVar[str] = "motif"
     REQUIRED: ClassVar[bool] = False
 
     is_motif: Int[np.ndarray, "n_atom"]
     is_motif_related: Int[np.ndarray, "n_atom"]
+    mapping: tuple[MotifMappingEntry, ...] = ()
+
+    def with_mapping(self, mapping: tuple[MotifMappingEntry, ...]) -> "MotifAnnotation":
+        return MotifAnnotation(
+            is_motif=self.is_motif,
+            is_motif_related=self.is_motif_related,
+            mapping=mapping,
+        )
+
+    # Bool→int coercion for older-saved stacks. Current writers emit int,
+    # but backbone NPZs on Modal volumes still have bool annotations baked
+    # in. Deletable once those fixtures regenerate, or when the group
+    # dtype flips to Bool (see TypeMasks docstring's mask→bool TODO).
+    @classmethod
+    def from_atom_array(cls, atom_array: AtomArray) -> "MotifAnnotation":
+        is_motif = atom_array.is_motif
+        is_motif_related = atom_array.is_motif_related
+        if is_motif.dtype == bool:
+            is_motif = is_motif.astype(int)
+        if is_motif_related.dtype == bool:
+            is_motif_related = is_motif_related.astype(int)
+        return cls(is_motif=is_motif, is_motif_related=is_motif_related)

@@ -21,7 +21,9 @@ import pandas as pd
 import ray
 from tqdm import tqdm
 
-from artios.data.parsing.cif import MMCIFParser
+from artios.data.parsing.bioassembly import Bioassembly
+from artios.data.parsing.indexing import make_indices
+from artios.data.parsing.mmcif import MmcifReader
 from artios.utils.file_io import load_gzip_pickle
 
 
@@ -30,7 +32,12 @@ def get_indices_from_bioassembly(
     bioassembly_pickle_file: Path,
     cluster_file: Optional[Path] = None,
 ) -> list:
-    """Given a mmCIF file and the bioassembly dict generated from it, generate the list of indices to be saved as a CSV file.
+    """Generate training indices from an mmCIF file and its pickled bioassembly dict.
+
+    The on-disk pickle format predates the typed ``Bioassembly``
+    dataclass, so we run it through ``Bioassembly.from_legacy_dict`` to
+    reconstruct a proper ``Bioassembly`` before handing off to the
+    Bioassembly-native ``make_indices``.
 
     Args:
         mmcif_file (Path): Path to the mmCIF file.
@@ -41,8 +48,16 @@ def get_indices_from_bioassembly(
     """
     # TODO: switch to lz4 compression if using newer version of database.
     bioassembly_dict = load_gzip_pickle(bioassembly_pickle_file)
-    parser = MMCIFParser(mmcif_file)
-    return parser.make_indices(bioassembly_dict, cluster_file)
+    bioassembly = Bioassembly.from_legacy_dict(bioassembly_dict)
+    if bioassembly is None:
+        return []
+    reader = MmcifReader(mmcif_file)
+    atom_array = bioassembly.structure.to_atom_array()
+    return make_indices(
+        bioassembly,
+        poly_res_names=reader.poly_res_names(atom_array),
+        pdb_cluster_file=cluster_file,
+    )
 
 
 def gen_indices_from_mmcifs(

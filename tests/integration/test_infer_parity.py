@@ -1,17 +1,8 @@
 """Golden-parity tests for the inference pipelines in ``infer_data_pipeline.py``.
 
-Before refactoring the inference path to route through ``AnnotatedStructure``
-(see ``docs/refactor_plans/priority_7_data_pipeline_unification.md``) we pin
-the tensor output of each inference dataset on a fixed input. After the
-refactor, these tests must pass unchanged — any divergence names the field
-that silently broke.
-
-Training parity is intentionally out of scope: PR 1 touches the inference
-path only, and ``process_one`` already uses ``AnnotatedStructure`` + the new
-``ContextGenerator``. A training parity test becomes relevant if/when we
-remove the ``to_atom_array``/``from_atom_array`` zigzag in ``process_one``.
-
-See ``tests/integration/CLAUDE.md`` for regeneration ergonomics.
+Pins the tensor output of each inference dataset on a fixed input. Any
+divergence names the field that silently broke. See
+``tests/integration/CLAUDE.md`` for regeneration ergonomics.
 """
 
 from __future__ import annotations
@@ -24,7 +15,13 @@ from typing import Any
 import numpy as np
 import pytest
 
-from artios.data.parsing.json import BackboneInput, NPZFile, SequenceDesignInput
+from artios.data.parsing.json import (
+    BackboneInput,
+    FastaFile,
+    NPZFile,
+    PackingInput,
+    SequenceDesignInput,
+)
 from artios.utils.seed import seed_everything
 
 from .conftest import assert_full_context_matches, dump_full_context
@@ -172,4 +169,49 @@ class TestMPNNDatasetParity:
     def test_run_is_deterministic(self):
         if not self.NPZ.exists():
             pytest.skip(f"MPNN fixture {self.NPZ} not present")
+        _assert_deterministic(self._run)
+
+
+class TestPackingDatasetParity:
+    """Pin ``PackingDataset[0]`` FullContext tensors on a real backbone stack.
+
+    Shares the MPNN stack npz but pairs it with a committed deterministic
+    FASTA (``sequences.fasta`` — 10 identical ACDE...VWY x8 sequences). The
+    pre-refactor golden is generated with the legacy ``packing_input_to_atom_array_v2``
+    → ``AtomArrayTokenizer`` → old ``ContextGenerator`` path; post-refactor
+    (P7) it must match byte-for-byte.
+    """
+
+    NPZ = GOLDEN_DIR / "mpnn" / "backbone.npz"
+    FASTA = GOLDEN_DIR / "packing" / "sequences.fasta"
+    GOLDEN = GOLDEN_DIR / "packing" / "context.npz"
+
+    def _run(self) -> Any:
+        from artios.data.infer_data_pipeline import PackingDataset
+
+        packing_input = PackingInput(
+            name="packing-parity",
+            npz_file=NPZFile(path=self.NPZ),
+            fasta_file=FastaFile(path=self.FASTA),
+        )
+        _seed()
+        return PackingDataset(packing_input)[0]
+
+    def test_fixture_present(self):
+        if not self.NPZ.exists():
+            pytest.skip(
+                f"Packing test reuses MPNN fixture {self.NPZ}; pull with "
+                "`modal volume get artios-evaluation "
+                "v2.6-afdb-mgnify-fine-tune-ckpt-sweep/batches/batch_0/"
+                "batch_0_backbone.npz " + str(self.NPZ) + "`"
+            )
+
+    def test_packing_dataset_matches_golden(self, regenerate_golden):
+        if not self.NPZ.exists():
+            pytest.skip(f"Packing test needs MPNN fixture {self.NPZ}")
+        _assert_round_trip(self.GOLDEN, self._run(), regenerate_golden)
+
+    def test_run_is_deterministic(self):
+        if not self.NPZ.exists():
+            pytest.skip(f"Packing test needs MPNN fixture {self.NPZ}")
         _assert_deterministic(self._run)

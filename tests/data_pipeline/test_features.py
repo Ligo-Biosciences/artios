@@ -49,24 +49,21 @@ class TestContextToFromDict:
         assert restored.perms == perms
 
     def test_coordinate_context_roundtrip(self) -> None:
-        """CoordinateContext should roundtrip, preserving resolution."""
+        """CoordinateContext should roundtrip."""
         n_atoms = 20
         n_tokens = 5
-        resolution = 2.5
 
         coord = CoordinateContext(
             coordinate=torch.randn(n_atoms, 3),
             centre_coordinate=torch.randn(n_tokens, 3),
             backbone_coordinate=torch.randn(n_tokens, 5, 3),
-            resolution=resolution,
         )
 
         d = coord.to_dict()
-        restored = CoordinateContext.from_dict(d, resolution=resolution)
+        restored = CoordinateContext.from_dict(d)
 
         assert torch.allclose(coord.coordinate, restored.coordinate)
         assert torch.allclose(coord.centre_coordinate, restored.centre_coordinate)
-        assert restored.resolution == resolution
 
     def test_mask_context_roundtrip(self) -> None:
         """MaskContext should roundtrip through to_dict/from_dict."""
@@ -110,9 +107,8 @@ class TestFullContextToFromDict:
     def test_roundtrip_preserves_tensor_values(self, context: FullContext) -> None:
         """Roundtrip should preserve tensor values."""
         d = context.to_dict()
-        resolution = context.coordinate.resolution
 
-        restored = FullContext.from_dict(d, resolution=resolution)
+        restored = FullContext.from_dict(d)
 
         # Check tensor equality
         assert torch.equal(context.token.token_index, restored.token.token_index)
@@ -131,7 +127,7 @@ class TestFullContextToFromDict:
         )
 
         d = context.to_dict()
-        restored = FullContext.from_dict(d, resolution=1.5)
+        restored = FullContext.from_dict(d)
 
         # BasicContext should be inferred from tensor shapes
         assert isinstance(restored.basic, BasicContext)
@@ -152,7 +148,7 @@ class TestBatchedContext:
         )
 
         d = context.to_dict()
-        restored = FullContext.from_dict(d, resolution=context.coordinate.resolution)
+        restored = FullContext.from_dict(d)
 
         # Check shapes are preserved
         assert restored.token.token_index.shape == (8, 20)

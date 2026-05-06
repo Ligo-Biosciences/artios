@@ -51,15 +51,13 @@ def regenerate_one(cif_path: Path, out_name: str) -> Path:
     if atom_array is None:
         raise RuntimeError(f"{cif_path.name}: get_bioassembly returned no atom_array")
 
-    atom_array.set_annotation("resolution", [parser.resolution] * len(atom_array))
     structure = AnnotatedStructure.from_atom_array(atom_array)
 
     log.info(
-        "  n_atoms=%d n_tokens=%d n_chains=%d resolution=%.2f",
+        "  n_atoms=%d n_tokens=%d n_chains=%d",
         len(structure.atoms),
         structure.grouping.n_tokens,
         len(set(structure.atoms.chain_id)),
-        structure.resolution,
     )
 
     structure.save(out_path)

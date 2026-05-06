@@ -16,6 +16,7 @@ from scipy.spatial.distance import cdist
 
 from artios.data.structure import AnnotatedStructure
 
+# TODO: switch to jaxtyping for numpy arrays here.
 IntArray = NDArray[np.int64]
 BoolArray = NDArray[np.bool_]
 FloatArray = NDArray[np.floating]

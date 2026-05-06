@@ -423,7 +423,6 @@ class ContextGenerator:
                 self.s.token_centre_coords.astype(np.float32)
             ),
             backbone_coordinate=self.backbone_atoms_and_mask[0],
-            resolution=self.s.resolution,
         )
 
     def get_basic_context(self, include_arrays: bool = True) -> BasicContext:

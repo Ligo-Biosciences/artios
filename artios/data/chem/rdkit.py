@@ -56,10 +56,14 @@ def smiles_to_rdkit_mol(
     sanitize: bool = True,
     timeout: int = 5,
     generate_conformers: bool = True,
+    random_seed: int | None = None,
 ) -> Chem.Mol:
     """Generate an RDKit molecule from a SMILES string.
 
-    Optionally generates and minimizes a 3D conformer.
+    Optionally generates and minimizes a 3D conformer. `random_seed`
+    pins ETKDG's random initialisation so callers (typically tests)
+    can get a reproducible conformer; defaults to None = random per
+    call.
     """
     mol = Chem.MolFromSmiles(smiles, sanitize=sanitize)
     if mol is None:
@@ -77,6 +81,8 @@ def smiles_to_rdkit_mol(
     etkdg.useRandomCoords = True
     etkdg.optimizerForceTol = 1e-3
     etkdg.timeout = timeout
+    if random_seed is not None:
+        etkdg.randomSeed = random_seed
     AllChem.EmbedMolecule(mol, params=etkdg)
 
     if mol.GetNumConformers() > 0:

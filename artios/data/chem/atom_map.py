@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from itertools import permutations
 
 import numpy as np
 from rdkit import Chem
@@ -287,3 +288,155 @@ def infer_atom_map_with_disambiguation(
         full_smiles,
         top_k=1,
     )[0]
+
+
+def enumerate_pick_permutation_candidates(
+    motif_elements: tuple[str, ...],
+    motif_coords: np.ndarray,
+    motif_atom_names: tuple[str, ...],
+    full_smiles: str,
+    pick_indices: tuple[int, ...],
+    *,
+    top_k: int = 9,
+    n_conformers: int = 10,
+    random_seed: int | None = None,
+) -> list[AtomMapResult]:
+    """Rank permutations of operator-picked SMILES atoms by Kabsch RMSD.
+
+    Replaces the substructure-search-based
+    `enumerate_atom_map_candidates` for the human-in-the-loop flow
+    where the operator has already selected which SMILES atoms ARE
+    the motif atoms (just not which-is-which CIF name). The combina-
+    torial space is `len(picks)!`, and we score every permutation
+    rather than searching subsets — RMSD is meaningful here because
+    the search ambiguity (which subset of SMILES atoms is the motif?)
+    has been resolved by the operator pick.
+
+    Algorithm:
+      1. Validate that `pick_indices` element multiset matches the
+         motif's. (Wrong elements = wrong picks.)
+      2. Generate `n_conformers` independent ETKDG conformers of the
+         full SMILES.
+      3. Enumerate all `len(picks)!` permutations. For each
+         permutation `perm`, treat `perm[i]` as the SMILES atom
+         intended for `motif_atom_names[i]`. For each conformer,
+         Kabsch-align the perm's coords to the motif coords and
+         record the RMSD; take the min RMSD across conformers as the
+         permutation's score (best-case conformer match).
+      4. Sort permutations by score ascending, take top-K.
+      5. For each top-K permutation, build the labelled SMILES +
+         atom_map via `_label_match_preserving_input_smiles`.
+
+    Args:
+      motif_elements / motif_coords / motif_atom_names: from the
+        motif CIF's ligand atoms, in CIF order.
+      full_smiles: the operator-provided SMILES.
+      pick_indices: RDKit heavy-atom indices in the full SMILES,
+        operator-supplied, in any order. Must be the same length as
+        `motif_atom_names`.
+      top_k: number of permutation candidates to return.
+      n_conformers: how many ETKDG conformers to score against.
+      random_seed: if set, seeds the first conformer; subsequent
+        conformers are seeded `seed+1`, `seed+2`, … for reproducibility.
+
+    Raises:
+      ValueError on input mismatches (wrong pick count, element
+      mismatch, unparseable SMILES, conformer generation failure).
+    """
+    n_motif = len(motif_atom_names)
+    if len(motif_elements) != n_motif or motif_coords.shape != (n_motif, 3):
+        raise ValueError(
+            f"Inconsistent motif inputs: elements={len(motif_elements)}, "
+            f"names={n_motif}, coords={motif_coords.shape}"
+        )
+    if len(pick_indices) != n_motif:
+        raise ValueError(
+            f"Operator picked {len(pick_indices)} atoms but the motif has "
+            f"{n_motif}. Counts must match."
+        )
+
+    full_mol_2d = Chem.MolFromSmiles(full_smiles)
+    if full_mol_2d is None:
+        raise ValueError(f"Failed to parse SMILES: {full_smiles!r}")
+
+    n_atoms = full_mol_2d.GetNumAtoms()
+    for idx in pick_indices:
+        if idx < 0 or idx >= n_atoms:
+            raise ValueError(
+                f"Pick atom index {idx} out of range for SMILES with "
+                f"{n_atoms} heavy atoms."
+            )
+
+    pick_elements = tuple(
+        full_mol_2d.GetAtomWithIdx(int(i)).GetSymbol() for i in pick_indices
+    )
+    if sorted(pick_elements) != sorted(motif_elements):
+        raise ValueError(
+            f"Element mismatch: operator picks have elements "
+            f"{sorted(pick_elements)}, motif has {sorted(motif_elements)}. "
+            f"The operator selected atoms of the wrong element(s)."
+        )
+
+    conformer_coords_list: list[np.ndarray] = []
+    for i in range(n_conformers):
+        seed = None if random_seed is None else random_seed + i
+        mol = smiles_to_rdkit_mol(
+            full_smiles, generate_conformers=True, random_seed=seed
+        )
+        if mol.GetNumConformers() == 0:
+            continue
+        conformer_coords_list.append(mol.GetConformer().GetPositions())
+    if not conformer_coords_list:
+        raise ValueError(
+            f"All {n_conformers} ETKDG attempts failed for SMILES: {full_smiles!r}"
+        )
+
+    motif_coords_arr = np.asarray(motif_coords, dtype=float)
+    pick_indices_list = list(int(i) for i in pick_indices)
+
+    scored: list[tuple[tuple[int, ...], float, float]] = []
+    for perm in permutations(pick_indices_list):
+        # Element check per-permutation: motif_atom_names[i] must have
+        # the same element as the SMILES atom at perm[i]. Skip
+        # permutations that violate (the multiset matches globally,
+        # but a particular ordering may still pair O→N etc.).
+        valid = True
+        for i in range(n_motif):
+            if full_mol_2d.GetAtomWithIdx(perm[i]).GetSymbol() != motif_elements[i]:
+                valid = False
+                break
+        if not valid:
+            continue
+
+        per_conf: list[tuple[float, float]] = []
+        for conf_coords in conformer_coords_list:
+            target = conf_coords[list(perm)]
+            per_conf.append(_kabsch_align(motif_coords_arr, target))
+        rmsd, max_disp = min(per_conf, key=lambda t: t[0])
+        scored.append((perm, rmsd, max_disp))
+
+    if not scored:
+        raise ValueError(
+            "No permutation paired the operator picks to the motif "
+            "atom names with element matches — this shouldn't happen "
+            "after the multiset check above."
+        )
+
+    scored.sort(key=lambda x: x[1])
+    n_total = len(scored)
+    results: list[AtomMapResult] = []
+    for perm, rmsd, max_disp in scored[:top_k]:
+        labelled_smiles, atom_map = _label_match_preserving_input_smiles(
+            full_smiles, perm, motif_atom_names
+        )
+        results.append(
+            AtomMapResult(
+                matched_indices=perm,
+                labelled_smiles=labelled_smiles,
+                atom_map=atom_map,
+                rmsd=rmsd,
+                max_atom_displacement=max_disp,
+                n_candidate_matches=n_total,
+            )
+        )
+    return results

@@ -318,39 +318,47 @@ def _aa_reach_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
 
 def hbond_density_penalty(
     S: Float[Tensor, "batch n_token num_residue_types"],
-    backbone_coords: Float[Tensor, "batch n_token 4 3"],
+    backbone_coords: Float[Tensor, "batch n_token 5 3"],
     chain_id: Int[Tensor, "batch n_token"],
     token_mask: Bool[Tensor, "batch n_token"],
-    target_density: float = 0.27,
+    target_density: float = 0.35,
+    tolerance: float = 0.10,
     distance_cutoff: float = 15.0,
     sharpness: float = 2.0,
     sequence_separation: int = 1,
     num_natural_aas: int = 20,
 ) -> Float[Tensor, "batch"]:
-    """One-sided quadratic on the per-residue sc-sc H-bond density shortfall.
+    """Two-sided dead-zone quadratic on per-residue sc-sc H-bond density.
 
     Per-pair score is ``M[aa_i, aa_j] * sigmoid((cutoff - d_ij) / sharpness)``,
     summed over upper-triangular intra-chain pairs (|i - j| ≥ sequence_separation)
     and divided by the AA residue count. ``M`` is the empirical pair propensity
     from ``artios.common.hbond_propensities``; ``d_ij`` is between virtual
-    sidechain functional tips at ``CA + reach[aa] * (CB - CA) / ||CB - CA||``,
-    with CB via ProteinMPNN ideal geometry on (N, CA, C).
+    sidechain functional tips at ``CA + reach[aa] * (CB - CA) / ||CB - CA||``.
+    The featurizer already populates the CB slot of ``backbone_coords`` with
+    the ProteinMPNN virtual Cβ (even for GLY positions), so we read it
+    directly rather than recomputing.
 
-    Defaults yield Cohen's d ≈ 1.8 on beta-pdb naturals vs Artios-Potts esterase
-    designs (AF2 pLDDT ≥ 70) and Pearson r ≈ 0.7 against atomic ``detect_hydrogen_bonds``.
+    Penalty is zero inside the band ``[target − tolerance, target + tolerance]``
+    and quadratic in the deviation from the nearer band edge outside it. This
+    leaves a wide range of physically acceptable densities unpenalized while
+    pushing samples that are clearly too sparse (or too saturated) back toward
+    the band.
 
     Args:
         S: Sequence tensor [B, N, R]; only the first ``num_natural_aas`` channels matter.
-        backbone_coords: [B, N, 4, 3] in (N, CA, C, O); O is unused.
+        backbone_coords: [B, N, 5, 3] in (N, CA, C, O, CB); only CA and CB are used.
         chain_id: [B, N]; cross-chain pairs are excluded.
         token_mask: [B, N] valid-token mask.
-        target_density: Per-residue density floor (~0.27 ≈ beta-pdb natural mean).
+        target_density: Per-residue density target (default 0.35).
+        tolerance: Half-width of the zero-penalty band around ``target_density``.
+            Default 0.10 gives an acceptable window of [0.25, 0.45].
         distance_cutoff, sharpness: Soft sigmoid distance gate parameters, Å.
         sequence_separation: Minimum |i - j| for a pair to count.
         num_natural_aas: Number of natural amino acid types (default 20).
 
     Returns:
-        Per-sample penalty [B]. Higher = farther below target.
+        Per-sample penalty [B]. Higher = farther outside the band.
     """
     B, N, _ = S.shape
     device = S.device
@@ -360,18 +368,8 @@ def hbond_density_penalty(
     reach = _aa_reach_tensor(device, dtype)  # [Q]
     chem_matrix = _aa_pair_propensity_tensor(device, dtype)  # [Q, Q]
 
-    # ProteinMPNN ideal-geometry virtual CB from (N, CA, C).
-    bb_n = backbone_coords[..., 0, :]
     ca = backbone_coords[..., 1, :]
-    bb_c = backbone_coords[..., 2, :]
-    n_to_ca = ca - bb_n
-    ca_to_c = bb_c - ca
-    cb = (
-        ca
-        + 0.568 * n_to_ca
-        - 0.54068 * ca_to_c
-        - 0.5827 * torch.cross(n_to_ca, ca_to_c, dim=-1)
-    )
+    cb = backbone_coords[..., 4, :]
     cb_dir = cb - ca
     cb_dir = cb_dir / (cb_dir.norm(dim=-1, keepdim=True) + 1e-8)
 
@@ -405,9 +403,10 @@ def hbond_density_penalty(
     density = (chem_pair * distance_gate * pair_mask).sum(
         dim=(-2, -1)
     ) / n_aa_residues.clamp(min=1)
-    shortfall = (density - target_density).clamp(max=0)
-    # Zero out empty-AA samples; without the multiplier they'd carry a phantom target².
-    return shortfall.square() * (n_aa_residues > 0).to(dtype)
+    # Two-sided dead zone: deviation outside [target − tol, target + tol] only.
+    excess = ((density - target_density).abs() - tolerance).clamp(min=0)
+    # Zero out empty-AA samples; without the multiplier they'd carry a phantom (target − tol)².
+    return excess.square() * (n_aa_residues > 0).to(dtype)
 
 
 def composition_chi_squared_penalty(

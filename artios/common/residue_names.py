@@ -161,8 +161,12 @@ POLYMER_TYPES_WITH_GAP: tuple[str, ...] = PROTEIN_TYPES + (GAP,) + NUCLEIC_TYPES
 POLYMER_TYPES_WITH_UNKNOWN_AND_GAP: tuple[str, ...] = (
     PROTEIN_TYPES_WITH_UNKNOWN + (GAP,) + NUCLEIC_TYPES_WITH_UNKNOWN
 )
+# Token-space order matching the legacy artios.common.constants.STD_RESIDUES_AND_GAP
+# the model emits: AAs (0-19), UNK (20), RNA A/G/C/U (21-24), DNA DA/DG/DC/DT (25-28),
+# RNA-unk N (29), DNA-unk DN (30), gap "-" (31). Look up tokens against this tuple
+# whenever you need to interpret the 32-channel restype dimension.
 POLYMER_TYPES_WITH_ALL_UNKS_AND_GAP: tuple[str, ...] = (
-    PROTEIN_TYPES_WITH_UNKNOWN + (GAP,) + NUCLEIC_TYPES_WITH_2_UNKS
+    PROTEIN_TYPES_WITH_UNKNOWN + NUCLEIC_TYPES_WITH_2_UNKS + (GAP,)
 )
 
 POLYMER_TYPES_ORDER = {restype: i for i, restype in enumerate(POLYMER_TYPES)}

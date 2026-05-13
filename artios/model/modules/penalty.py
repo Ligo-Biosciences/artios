@@ -1,13 +1,21 @@
+import functools
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
 import torch
+from einops import rearrange
 from torch import Tensor
 
 from artios.common import residue_names
 from artios.common.constants import AROMATIC_INDICES, CHARGED_INDICES
+from artios.common.hbond_propensities import (
+    as_matrix as _hbond_pair_matrix,
+)
+from artios.common.hbond_propensities import (
+    reach_array as _sidechain_reach_array,
+)
 from artios.common.residue_stats import OrganismAAFrequencies
 from artios.utils.typing import Bool, Float, Int
 
@@ -288,6 +296,120 @@ def _frequencies_to_tensor(
     )
 
 
+@functools.lru_cache(maxsize=None)
+def _aa_pair_propensity_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
+    """Empirical sc-sc H-bond propensity, 20×20, in PROTEIN_TYPES order. Cached per (device, dtype)."""
+    return torch.tensor(
+        _hbond_pair_matrix(order=residue_names.PROTEIN_TYPES),
+        device=device,
+        dtype=dtype,
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def _aa_reach_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
+    """Per-AA sidechain reach (Å), 20-element, in PROTEIN_TYPES order. Cached per (device, dtype)."""
+    return torch.tensor(
+        _sidechain_reach_array(order=residue_names.PROTEIN_TYPES),
+        device=device,
+        dtype=dtype,
+    )
+
+
+def hbond_density_penalty(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    backbone_coords: Float[Tensor, "batch n_token 4 3"],
+    chain_id: Int[Tensor, "batch n_token"],
+    token_mask: Bool[Tensor, "batch n_token"],
+    target_density: float = 0.27,
+    distance_cutoff: float = 15.0,
+    sharpness: float = 2.0,
+    sequence_separation: int = 1,
+    num_natural_aas: int = 20,
+) -> Float[Tensor, "batch"]:
+    """One-sided quadratic on the per-residue sc-sc H-bond density shortfall.
+
+    Per-pair score is ``M[aa_i, aa_j] * sigmoid((cutoff - d_ij) / sharpness)``,
+    summed over upper-triangular intra-chain pairs (|i - j| ≥ sequence_separation)
+    and divided by the AA residue count. ``M`` is the empirical pair propensity
+    from ``artios.common.hbond_propensities``; ``d_ij`` is between virtual
+    sidechain functional tips at ``CA + reach[aa] * (CB - CA) / ||CB - CA||``,
+    with CB via ProteinMPNN ideal geometry on (N, CA, C).
+
+    Defaults yield Cohen's d ≈ 1.8 on beta-pdb naturals vs Artios-Potts esterase
+    designs (AF2 pLDDT ≥ 70) and Pearson r ≈ 0.7 against atomic ``detect_hydrogen_bonds``.
+
+    Args:
+        S: Sequence tensor [B, N, R]; only the first ``num_natural_aas`` channels matter.
+        backbone_coords: [B, N, 4, 3] in (N, CA, C, O); O is unused.
+        chain_id: [B, N]; cross-chain pairs are excluded.
+        token_mask: [B, N] valid-token mask.
+        target_density: Per-residue density floor (~0.27 ≈ beta-pdb natural mean).
+        distance_cutoff, sharpness: Soft sigmoid distance gate parameters, Å.
+        sequence_separation: Minimum |i - j| for a pair to count.
+        num_natural_aas: Number of natural amino acid types (default 20).
+
+    Returns:
+        Per-sample penalty [B]. Higher = farther below target.
+    """
+    B, N, _ = S.shape
+    device = S.device
+    dtype = S.dtype
+    Q = num_natural_aas
+
+    reach = _aa_reach_tensor(device, dtype)  # [Q]
+    chem_matrix = _aa_pair_propensity_tensor(device, dtype)  # [Q, Q]
+
+    # ProteinMPNN ideal-geometry virtual CB from (N, CA, C).
+    bb_n = backbone_coords[..., 0, :]
+    ca = backbone_coords[..., 1, :]
+    bb_c = backbone_coords[..., 2, :]
+    n_to_ca = ca - bb_n
+    ca_to_c = bb_c - ca
+    cb = (
+        ca
+        + 0.568 * n_to_ca
+        - 0.54068 * ca_to_c
+        - 0.5827 * torch.cross(n_to_ca, ca_to_c, dim=-1)
+    )
+    cb_dir = cb - ca
+    cb_dir = cb_dir / (cb_dir.norm(dim=-1, keepdim=True) + 1e-8)
+
+    S_aa = S[..., :Q]
+    per_res_reach = (S_aa * reach).sum(dim=-1)
+    centre = ca + per_res_reach.unsqueeze(-1) * cb_dir  # [B, N, 3]
+
+    # Bilinear-in-S pair chemistry: chem_pair[b, i, j] = S_i^T M S_j.
+    chem_pair = (S_aa @ chem_matrix) @ S_aa.transpose(-1, -2)  # [B, N, N]
+
+    diff = rearrange(centre, "b n c -> b n 1 c") - rearrange(centre, "b n c -> b 1 n c")
+    distance_gate = torch.sigmoid((distance_cutoff - diff.norm(dim=-1)) / sharpness)
+
+    # Non-AA tokens (UNK, gap, nucleotides) have S_aa all zero — exclude them from
+    # the denominator too, otherwise they dilute the per-AA-residue density.
+    aa_token_mask = token_mask & (S_aa.sum(dim=-1) > 0)
+    n_aa_residues = aa_token_mask.to(dtype).sum(dim=-1)  # [B]
+
+    intra_pair = torch.triu(
+        torch.ones(N, N, dtype=torch.bool, device=device),
+        diagonal=sequence_separation,
+    )
+    same_chain = rearrange(chain_id, "b n -> b n 1") == rearrange(
+        chain_id, "b n -> b 1 n"
+    )
+    both_aa = rearrange(aa_token_mask, "b n -> b n 1") & rearrange(
+        aa_token_mask, "b n -> b 1 n"
+    )
+    pair_mask = (same_chain & both_aa & intra_pair).to(dtype)
+
+    density = (chem_pair * distance_gate * pair_mask).sum(
+        dim=(-2, -1)
+    ) / n_aa_residues.clamp(min=1)
+    shortfall = (density - target_density).clamp(max=0)
+    # Zero out empty-AA samples; without the multiplier they'd carry a phantom target².
+    return shortfall.square() * (n_aa_residues > 0).to(dtype)
+
+
 def composition_chi_squared_penalty(
     S: Float[Tensor, "batch n_token num_residue_types"],
     protein_mutable_mask: Bool[Tensor, "batch n_token"],
@@ -333,3 +455,58 @@ def composition_chi_squared_penalty(
 
     has_positions = n_eff.squeeze(-1) > 0
     return penalty * has_positions.float()
+
+
+_POS_CHARGE_INDICES = tuple(
+    residue_names.PROTEIN_TYPES.index(r) for r in ("LYS", "ARG")
+)
+_NEG_CHARGE_INDICES = tuple(
+    residue_names.PROTEIN_TYPES.index(r) for r in ("ASP", "GLU")
+)
+
+
+def net_charge_penalty(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    token_mask: Bool[Tensor, "batch n_token"],
+    target_per_residue: float = -0.013,
+    num_natural_aas: int = 20,
+) -> Float[Tensor, "batch"]:
+    """Symmetric quadratic on per-residue protein net charge.
+
+    At pH 7 with HIS partial protonation ignored::
+
+        net_charge_per_residue = (#K + #R − #D − #E) / n_residues
+        penalty                = (net_charge_per_residue − target)²
+
+    Per-residue makes the function chain-count-invariant — a 170-residue
+    monomer and a 1500-residue dimer at the same charge density score
+    identically. Linear in S, so autograd gives correct gradients on soft
+    (or one-hot) inputs without a straight-through estimator.
+
+    The default ``target_per_residue ≈ -0.013`` matches the natural
+    beta-pdb reference mean (≈ -1.3 per 100 residues).
+
+    Args:
+        S: One-hot (or soft) sequence tensor [B, N, R].
+        token_mask: Valid token mask [B, N].
+        target_per_residue: Target net charge per residue.
+        num_natural_aas: Number of natural amino acid types (default 20).
+
+    Returns:
+        Per-sample penalty [B]. Higher = farther from target.
+    """
+    Q = num_natural_aas
+    S_aa = S[..., :Q]
+    mask = token_mask.to(S.dtype)
+
+    pos_share = S_aa[..., list(_POS_CHARGE_INDICES)].sum(dim=-1)  # [B, N]
+    neg_share = S_aa[..., list(_NEG_CHARGE_INDICES)].sum(dim=-1)  # [B, N]
+
+    pos_count = (pos_share * mask).sum(dim=-1)  # [B]
+    neg_count = (neg_share * mask).sum(dim=-1)  # [B]
+
+    n_residues = mask.sum(dim=-1)  # [B]
+    net_per_res = (pos_count - neg_count) / (n_residues + 1e-8)
+
+    penalty = (net_per_res - target_per_residue).square()
+    return penalty * (n_residues > 0).to(S.dtype)

@@ -26,6 +26,8 @@ from artios.model.modules.penalty import (
     charged_enrichment_penalty,
     complexity_lcp,
     composition_chi_squared_penalty,
+    hbond_density_penalty,
+    net_charge_penalty,
 )
 from artios.model.modules.potts import (
     GraphPotts,
@@ -144,6 +146,11 @@ class ArtiosPotts(nn.Module):
         self.composition_penalty_weight = sampling_cfg.composition_penalty_weight
         self.composition_organism = Organism(sampling_cfg.composition_organism)
         self.composition_tolerance_k = sampling_cfg.composition_tolerance_k
+        self.net_charge_penalty_weight = sampling_cfg.net_charge_penalty_weight
+        self.net_charge_target_per_residue = sampling_cfg.net_charge_target_per_residue
+        self.hbond_density_penalty_weight = sampling_cfg.hbond_density_penalty_weight
+        self.hbond_density_target = sampling_cfg.hbond_density_target
+        self.hbond_density_tolerance = sampling_cfg.hbond_density_tolerance
 
     def _build_masked_inputs(self, context: FullContext) -> tuple[Tensor, Tensor]:
         """Build masked restypes and is_masked from the context's fixed residues."""
@@ -341,6 +348,36 @@ class ArtiosPotts(nn.Module):
                 )
 
             penalty_dict["composition"] = composition_penalty
+
+        if self.net_charge_penalty_weight > 0:
+            charge_mask = mutable_mask & context.entity.is_protein_token
+            charge_target = self.net_charge_target_per_residue
+
+            def net_charge_penalty_fn(S: torch.Tensor) -> torch.Tensor:
+                return self.net_charge_penalty_weight * net_charge_penalty(
+                    S, charge_mask, target_per_residue=charge_target
+                )
+
+            penalty_dict["net_charge"] = net_charge_penalty_fn
+
+        if self.hbond_density_penalty_weight > 0:
+            hbond_bb = context.coordinate.backbone_coordinate
+            hbond_chain = context.token.asym_id
+            hbond_token_mask = context.mask.token_mask
+            hbond_target = self.hbond_density_target
+            hbond_tolerance = self.hbond_density_tolerance
+
+            def hbond_density_penalty_fn(S: torch.Tensor) -> torch.Tensor:
+                return self.hbond_density_penalty_weight * hbond_density_penalty(
+                    S,
+                    hbond_bb,
+                    hbond_chain,
+                    hbond_token_mask,
+                    target_density=hbond_target,
+                    tolerance=hbond_tolerance,
+                )
+
+            penalty_dict["hbond_density"] = hbond_density_penalty_fn
 
         penalty = PenaltyCollection(penalty_dict) if penalty_dict else None
 

@@ -217,17 +217,27 @@ class TestNetChargePenalty:
 
 
 def _backbone_for_residues(positions: torch.Tensor) -> torch.Tensor:
-    """Build a [1, N, 4, 3] backbone where each residue's CA is at the given
-    position, with N and C placed ±1Å in x/y so that the virtual-CB direction
-    is well-defined (non-degenerate cross product).
+    """Build a [1, N, 5, 3] backbone in (N, CA, C, O, CB) order. CA is the
+    caller-supplied position; N and C are offset along orthogonal axes so
+    the ProteinMPNN virtual-CB formula has a non-degenerate cross product.
+
+    CB is computed in-line using the same ideal-geometry formula the data
+    pipeline uses (artios.utils.geometry.compute_virtual_cb), so the test
+    fixture matches what the featurizer would produce for real structures.
     """
     ca = positions  # [N, 3]
-    n_off = torch.tensor([-1.0, 0.0, 0.0])
-    c_off = torch.tensor([0.0, 1.0, 0.0])
-    bb_n = ca + n_off
-    bb_c = ca + c_off
+    bb_n = ca + torch.tensor([-1.0, 0.0, 0.0])
+    bb_c = ca + torch.tensor([0.0, 1.0, 0.0])
     bb_o = ca + torch.tensor([0.0, 0.0, 1.0])
-    return torch.stack([bb_n, ca, bb_c, bb_o], dim=-2).unsqueeze(0)
+    n_to_ca = ca - bb_n
+    ca_to_c = bb_c - ca
+    cb = (
+        ca
+        + 0.568 * n_to_ca
+        - 0.54068 * ca_to_c
+        - 0.5827 * torch.cross(n_to_ca, ca_to_c, dim=-1)
+    )
+    return torch.stack([bb_n, ca, bb_c, bb_o, cb], dim=-2).unsqueeze(0)
 
 
 class TestHbondDensityPenalty:
@@ -254,9 +264,9 @@ class TestHbondDensityPenalty:
 
     def test_all_ala_yields_target_squared(self):
         """ALA has reach=0 and zero pair propensity, so density=0 →
-        shortfall=target_density → penalty=target². The non-AA path
-        returns 0 instead, so this also confirms we picked up the AA
-        flag properly."""
+        excess=target_density → penalty=target² (with tolerance=0).
+        The non-AA path returns 0 instead, so this also confirms we picked
+        up the AA flag properly."""
         seq = ["ALA"] * 10
         S = _one_hot(seq)
         # Pack residues tightly so the distance gate would saturate if the
@@ -274,6 +284,7 @@ class TestHbondDensityPenalty:
             chain,
             mask,
             target_density=target,
+            tolerance=0.0,
         )
         torch.testing.assert_close(
             out,
@@ -305,6 +316,7 @@ class TestHbondDensityPenalty:
             same_chain,
             mask,
             target_density=target,
+            tolerance=0.0,
         )
         p_diff = hbond_density_penalty(
             S,
@@ -312,6 +324,7 @@ class TestHbondDensityPenalty:
             diff_chain,
             mask,
             target_density=target,
+            tolerance=0.0,
         )
 
         # Cross-chain → zero density → full target² shortfall.
@@ -343,6 +356,7 @@ class TestHbondDensityPenalty:
             chain,
             mask,
             target_density=target,
+            tolerance=0.0,
             sequence_separation=1,
         )
         # sequence_separation=len(seq) -> upper-tri is empty.
@@ -352,6 +366,7 @@ class TestHbondDensityPenalty:
             chain,
             mask,
             target_density=target,
+            tolerance=0.0,
             sequence_separation=len(seq),
         )
         torch.testing.assert_close(
@@ -381,6 +396,7 @@ class TestHbondDensityPenalty:
                 chain,
                 mask,
                 target_density=target,
+                tolerance=0.0,
             ).item()
             penalties.append(p)
 
@@ -418,6 +434,7 @@ class TestHbondDensityPenalty:
             chain_short,
             mask_short,
             target_density=0.27,
+            tolerance=0.0,
         )
         p_long = hbond_density_penalty(
             S_long,
@@ -425,6 +442,7 @@ class TestHbondDensityPenalty:
             chain_long,
             mask_long,
             target_density=0.27,
+            tolerance=0.0,
         )
         torch.testing.assert_close(p_short, p_long, rtol=1e-5, atol=1e-7)
 
@@ -453,6 +471,7 @@ class TestHbondDensityPenalty:
             chain,
             mask,
             target_density=0.27,
+            tolerance=0.0,
         ).sum()
         loss.backward()
 
@@ -461,6 +480,77 @@ class TestHbondDensityPenalty:
         # the function is effectively constant in S and the penalty cannot
         # drive sampling.
         assert S.grad.abs().sum().item() > 1e-6
+
+    def test_dead_zone_kicks_in_two_sided(self):
+        """Penalty must be 0 inside [target − tol, target + tol] and
+        quadratic in the deviation from the band edge outside it.
+
+        We construct three samples by directly feeding pre-computed
+        densities through the penalty path — easier than spending many
+        residues to land each density precisely.
+        """
+        target, tol = 0.35, 0.10
+
+        # Use 2 ALA residues (density=0) and check the algebraic mapping
+        # by sweeping target_density to hit specific (density - target)
+        # offsets. ALA density is always 0, so this isolates the dead
+        # zone math from the spatial computation.
+        S = _one_hot(["ALA"] * 5)
+        bb = _backbone_for_residues(torch.zeros(5, 3))
+        chain = torch.zeros(1, 5, dtype=torch.long)
+        mask = torch.ones(1, 5, dtype=torch.bool)
+
+        # density=0, target=0.08, tolerance=0.10 -> deviation 0.08 < tol
+        # -> inside dead zone -> penalty 0.
+        p_inside = hbond_density_penalty(
+            S,
+            bb,
+            chain,
+            mask,
+            target_density=0.08,
+            tolerance=tol,
+        )
+        torch.testing.assert_close(
+            p_inside,
+            torch.zeros(1),
+            rtol=0.0,
+            atol=1e-7,
+        )
+
+        # density=0, target=0.35, tolerance=0.10 -> deviation 0.35,
+        # excess = 0.35 - 0.10 = 0.25 -> penalty 0.0625.
+        p_below = hbond_density_penalty(
+            S,
+            bb,
+            chain,
+            mask,
+            target_density=target,
+            tolerance=tol,
+        )
+        torch.testing.assert_close(
+            p_below,
+            torch.tensor([0.25**2]),
+            rtol=1e-6,
+            atol=1e-7,
+        )
+
+        # Symmetric upper side: synthesize via a target *below* the
+        # density (density=0 > target=-0.20). |0 - (-0.20)| = 0.20,
+        # excess = 0.20 - 0.10 = 0.10 -> penalty 0.01.
+        p_above = hbond_density_penalty(
+            S,
+            bb,
+            chain,
+            mask,
+            target_density=-0.20,
+            tolerance=tol,
+        )
+        torch.testing.assert_close(
+            p_above,
+            torch.tensor([0.10**2]),
+            rtol=1e-6,
+            atol=1e-7,
+        )
 
     def test_matches_manual_two_residue_density(self):
         """Pair (SER, TYR) at distance d on the same chain: density should
@@ -494,18 +584,10 @@ class TestHbondDensityPenalty:
         positions = torch.tensor([[0.0, 0.0, 0.0], [d, 0.0, 0.0]])
         bb = _backbone_for_residues(positions)
 
-        # Recompute virtual-tip positions exactly as the function does.
+        # The function reads CA from index 1 and CB from index 4 of the
+        # backbone tensor. Reproduce its virtual-tip math here.
         ca = bb[..., 1, :]
-        n = bb[..., 0, :]
-        c = bb[..., 2, :]
-        n_to_ca = ca - n
-        ca_to_c = c - ca
-        cb = (
-            ca
-            + 0.568 * n_to_ca
-            - 0.54068 * ca_to_c
-            - 0.5827 * torch.cross(n_to_ca, ca_to_c, dim=-1)
-        )
+        cb = bb[..., 4, :]
         cb_dir = (cb - ca) / (cb - ca).norm(dim=-1, keepdim=True)
         tip_0 = ca[0, 0] + ser_reach * cb_dir[0, 0]
         tip_1 = ca[0, 1] + tyr_reach * cb_dir[0, 1]
@@ -524,6 +606,7 @@ class TestHbondDensityPenalty:
             chain,
             mask,
             target_density=target,
+            tolerance=0.0,
             distance_cutoff=cutoff,
             sharpness=sharpness,
             sequence_separation=1,

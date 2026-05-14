@@ -4,7 +4,7 @@ from einops import repeat
 from scipy.spatial.transform import Rotation
 from torch import Tensor
 
-from artios.utils.typing import Bool, Float, typecheck
+from artios.utils.typing import Bool, Float, Int, typecheck
 
 # =============================================================================
 # Torch geometry utilities
@@ -255,3 +255,90 @@ def compute_virtual_cb(
     cross = np.cross(n_ca, ca_c)
     cb_coord = ca_coord + 0.568 * n_ca - 0.54068 * ca_c - 0.5827 * cross
     return cb_coord
+
+
+# =============================================================================
+# Backbone-only burial and (SSE × burial) bucket assignment
+# =============================================================================
+
+
+def cb_neighbor_count(
+    backbone_coords: Float[Tensor, "*batch n_token 5 3"],
+    token_mask: Bool[Tensor, "*batch n_token"],
+    radius: float = 10.0,
+) -> Int[Tensor, "*batch n_token"]:
+    """Per-residue count of other residues' Cβ within ``radius`` Å.
+
+    Uses the Cβ slot of ``backbone_coords`` directly (the featurizer fills
+    a virtual Cβ for GLY via :func:`compute_virtual_cb`). The neighbour
+    graph is undirected, all-chain, and excludes (i, i) self-pairs.
+    Padded/masked positions contribute 0 to others' counts and themselves
+    receive 0; downstream consumers should re-mask if needed.
+
+    Args:
+        backbone_coords: ``[*batch, N, 5, 3]`` in (N, CA, C, O, CB) order.
+        token_mask: ``[*batch, N]`` valid-token mask.
+        radius: distance cutoff in Å. Pairs with ``d <= radius`` count.
+
+    Returns:
+        ``[*batch, N]`` long tensor of neighbor counts.
+    """
+    cb = backbone_coords[..., 4, :]  # [..., N, 3]
+    diff = cb.unsqueeze(-2) - cb.unsqueeze(-3)  # [..., N, N, 3]
+    d2 = (diff * diff).sum(dim=-1)
+    within = d2 <= float(radius) ** 2  # [..., N, N] bool
+
+    N = cb.shape[-2]
+    eye = torch.eye(N, dtype=torch.bool, device=cb.device)
+    pair_mask = token_mask.unsqueeze(-1) & token_mask.unsqueeze(-2) & ~eye
+    counts = (within & pair_mask).sum(dim=-1).to(torch.long)
+    return counts * token_mask.to(counts.dtype)
+
+
+# Bucket index layout: bucket = sse_label * 2 + (0 if buried else 1)
+#   0: α-buried
+#   1: α-exposed
+#   2: β-buried
+#   3: β-exposed
+#   4: coil-buried
+#   5: coil-exposed
+#  -1: masked / invalid (chain padding, missing backbone, short sequences)
+NUM_SSE_BURIAL_BUCKETS = 6
+SSE_BURIAL_MASKED = -1
+
+
+def compute_sse_burial_buckets(
+    backbone_coords: Float[Tensor, "*batch n_token 5 3"],
+    token_mask: Bool[Tensor, "*batch n_token"],
+    nb_radius: float = 10.0,
+    nb_threshold: int = 22,
+) -> Int[Tensor, "*batch n_token"]:
+    """Combine DSSP (alpha/beta/coil) with CB-neighbor burial into a single
+    bucket index per residue, suitable for use as a static index in the
+    composition penalty.
+
+    The backbone is fixed during Potts sampling so this function should be
+    called once per inference and the result captured into the penalty closure.
+
+    Args:
+        backbone_coords: ``[*batch, N, 5, 3]`` in (N, CA, C, O, CB) order.
+        token_mask: ``[*batch, N]`` valid-token mask.
+        nb_radius: radius for the Cβ neighbour count, Å.
+        nb_threshold: CB-neighbor count threshold for "buried" classification.
+
+    Returns:
+        ``[*batch, N]`` long tensor of bucket indices in
+        ``{0..5}`` for valid residues, ``-1`` for masked positions.
+    """
+    # Import lazily so geometry.py doesn't depend on data/engineering on first
+    # import path. compute_dssp_torch is pure-torch and side-effect free.
+    from artios.utils.dssp_torch import SSE_MASKED, compute_dssp_torch
+
+    sse = compute_dssp_torch(backbone_coords[..., :4, :], token_mask)
+    nb = cb_neighbor_count(backbone_coords, token_mask, radius=nb_radius)
+
+    buried = nb >= int(nb_threshold)
+    bucket = sse * 2 + (~buried).to(torch.long)
+
+    valid = token_mask & (sse != SSE_MASKED)
+    return torch.where(valid, bucket, torch.full_like(bucket, SSE_BURIAL_MASKED))

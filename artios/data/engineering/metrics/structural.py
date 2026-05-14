@@ -5,7 +5,7 @@ import numpy as np
 from scipy.spatial.distance import pdist, squareform
 
 from artios.common.constants import HYDROPHOBIC_RESIDUES
-from artios.data.engineering.metrics.dssp import compute_dssp
+from artios.utils.dssp import compute_dssp
 
 
 def compute_mean_sasa(atom_array: struc.AtomArray) -> float:

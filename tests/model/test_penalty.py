@@ -28,10 +28,12 @@ import torch
 
 from artios.common import residue_names
 from artios.model.modules.penalty import (
+    _NUM_SSE_BURIAL_BUCKETS,
     _aa_pair_propensity_tensor,
     _aa_reach_tensor,
     hbond_density_penalty,
     net_charge_penalty,
+    sse_burial_composition_penalty,
 )
 
 _AA = residue_names.PROTEIN_TYPES
@@ -488,3 +490,169 @@ class TestHbondDensityPenalty:
             rtol=1e-5,
             atol=1e-6,
         )
+
+
+# ---------------------------------------------------------------------------
+# sse_burial_composition_penalty
+# ---------------------------------------------------------------------------
+
+
+def _scatter_one_hot(
+    seq_per_bucket: dict[int, list[str]],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build ``(S, bucket_idx, token_mask)`` from a {bucket: [aa, aa, …]} spec."""
+    positions: list[tuple[int, str]] = []
+    for b, seq in seq_per_bucket.items():
+        for aa in seq:
+            positions.append((b, aa))
+    N = len(positions)
+    S = torch.zeros(1, N, 20)
+    bidx = torch.zeros(1, N, dtype=torch.long)
+    for i, (b, aa) in enumerate(positions):
+        S[0, i, _IDX[aa]] = 1.0
+        bidx[0, i] = b
+    mask = torch.ones(1, N, dtype=torch.bool)
+    return S, bidx, mask
+
+
+class TestSSEBurialCompositionPenalty:
+    """χ² σ²-weighted composition penalty over 6 SSE×burial buckets.
+
+    All tests use the real (μ, σ) from :mod:`artios.common.sse_burial_stats` —
+    the penalty pulls those internally via cached tensor accessors.
+    """
+
+    def test_target_distribution_yields_zero_penalty(self):
+        """A sample where each bucket's composition matches μ exactly must
+        score 0. Pins the χ² zero-point: natural composition is the energy
+        floor of the penalty.
+
+        Constructs a soft-S tensor that places μ_b as the per-position AA
+        distribution in every position of bucket b, so the bucket mean = μ_b.
+        """
+        from artios.common.sse_burial_stats import as_mu_matrix
+
+        mu = torch.tensor(as_mu_matrix(), dtype=torch.float32)  # [6, 20]
+
+        # 10 positions per bucket, all assigned the bucket's μ row as soft-S.
+        N_per = 10
+        K = _NUM_SSE_BURIAL_BUCKETS
+        N = N_per * K
+        S = torch.zeros(1, N, 20)
+        bidx = torch.zeros(1, N, dtype=torch.long)
+        for b in range(K):
+            start = b * N_per
+            S[0, start : start + N_per, :] = mu[b]
+            bidx[0, start : start + N_per] = b
+        mask = torch.ones(1, N, dtype=torch.bool)
+
+        out = sse_burial_composition_penalty(S, bidx, mask)
+        torch.testing.assert_close(out, torch.zeros(1), rtol=0, atol=1e-5)
+
+    def test_ignore_minus_one_bucket(self):
+        """Positions with bucket_idx == -1 contribute 0 regardless of S.
+
+        Two samples that agree on the bucketed residue but differ at the
+        bucket=-1 position must score identically.
+        """
+        S_a = torch.zeros(1, 2, 20)
+        S_a[0, 0, _IDX["ALA"]] = 1.0
+        S_a[0, 1, _IDX["ALA"]] = 1.0
+        S_b = torch.zeros(1, 2, 20)
+        S_b[0, 0, _IDX["ALA"]] = 1.0
+        S_b[0, 1, _IDX["TRP"]] = 1.0
+        bidx = torch.tensor([[0, -1]])
+        mask = torch.ones(1, 2, dtype=torch.bool)
+        pa = sse_burial_composition_penalty(S_a, bidx, mask).item()
+        pb = sse_burial_composition_penalty(S_b, bidx, mask).item()
+        assert pa == pytest.approx(pb)
+
+    def test_token_mask_false_also_ignores_position(self):
+        """``token_mask = False`` must remove a position from its bucket count
+        the same way ``bucket_idx = -1`` does — both are valid mask paths."""
+        # Same physical residue placement, two different masking strategies.
+        S = torch.zeros(1, 2, 20)
+        S[0, 0, _IDX["ALA"]] = 1.0
+        S[0, 1, _IDX["TRP"]] = 1.0
+        bidx_path = torch.tensor([[0, -1]])
+        mask_path = torch.tensor([[True, True]])
+        via_bidx = sse_burial_composition_penalty(S, bidx_path, mask_path).item()
+
+        bidx_alt = torch.tensor([[0, 0]])
+        mask_alt = torch.tensor([[True, False]])
+        via_mask = sse_burial_composition_penalty(S, bidx_alt, mask_alt).item()
+        assert via_bidx == pytest.approx(via_mask)
+
+    def test_alanine_collapse_in_alpha_buried_penalised(self):
+        """100% ALA in bucket-0 (α-buried) — μ_α-buried_ALA ≈ 0.15 — gives a
+        positive penalty, and the per-position gradient peaks on the ALA
+        channel (pushing the sampler AWAY from ALA in that bucket).
+
+        Catches a sign-flip regression on the χ² term and pins bucket-0 →
+        α-buried in the index convention.
+        """
+        S, bidx, mask = _scatter_one_hot({0: ["ALA"] * 20})
+        S = S.clone().detach().requires_grad_(True)
+        out = sse_burial_composition_penalty(S, bidx, mask)
+        assert out.item() > 0
+        out.sum().backward()
+        ala_grad = S.grad[0, :, _IDX["ALA"]]
+        max_grad_per_pos = S.grad[0].max(dim=-1).values
+        torch.testing.assert_close(ala_grad, max_grad_per_pos)
+        # And the gradient on ALA must be strictly positive (push down).
+        assert (ala_grad > 0).all()
+
+    def test_aromatic_deficit_pushed_up(self):
+        """100% ALA in α-buried means PHE freq = 0, but μ_α-buried_PHE ≈ 0.077,
+        so the χ² gradient on the PHE channel must be strictly negative —
+        increasing PHE probability LOWERS the penalty (penalty *encourages* PHE).
+        Pins the sign convention: deficit → negative gradient → up-push.
+        """
+        S, bidx, mask = _scatter_one_hot({0: ["ALA"] * 20})
+        S = S.clone().detach().requires_grad_(True)
+        out = sse_burial_composition_penalty(S, bidx, mask)
+        out.sum().backward()
+        phe_grad = S.grad[0, :, _IDX["PHE"]]
+        assert (phe_grad < 0).all(), (
+            f"PHE gradient should be negative everywhere in bucket 0, "
+            f"got {phe_grad.tolist()}"
+        )
+
+    def test_gradient_matches_finite_difference(self):
+        """End-to-end autograd vs central differences in float64.
+
+        Catches refactors that accidentally detach part of the graph (e.g.
+        wrapping ``counts`` in ``no_grad``) — autograd would silently
+        return zeros and the χ² penalty would lose all sensitivity to S.
+        """
+        torch.manual_seed(0)
+        N, K = 30, _NUM_SSE_BURIAL_BUCKETS
+        dtype = torch.float64
+        S = torch.rand(1, N, 21, dtype=dtype)
+        S = S / S.sum(dim=-1, keepdim=True)
+        bidx = torch.randint(0, K, (1, N))
+        bidx[0, ::7] = -1  # sprinkle ignored positions
+        mask = torch.ones(1, N, dtype=torch.bool)
+
+        S_grad = S.clone().detach().requires_grad_(True)
+        out = sse_burial_composition_penalty(S_grad, bidx, mask)
+        out.sum().backward()
+        ana = S_grad.grad
+
+        eps = 1e-5
+        for q in (_IDX["ALA"], _IDX["PHE"], _IDX["GLU"]):
+            for i in (0, 7, 15, 29):
+                Sp = S.clone()
+                Sm = S.clone()
+                Sp[0, i, q] += eps
+                Sm[0, i, q] -= eps
+                fp = sse_burial_composition_penalty(Sp, bidx, mask)
+                fm = sse_burial_composition_penalty(Sm, bidx, mask)
+                num = (fp - fm) / (2 * eps)
+                torch.testing.assert_close(
+                    ana[0, i, q],
+                    num.squeeze(),
+                    rtol=1e-5,
+                    atol=1e-7,
+                    msg=f"finite-diff mismatch at i={i}, q={q}",
+                )

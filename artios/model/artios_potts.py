@@ -151,9 +151,13 @@ class ArtiosPotts(nn.Module):
         self.net_charge_penalty_weight = sampling_cfg.net_charge_penalty_weight
         self.net_charge_target_per_residue = sampling_cfg.net_charge_target_per_residue
         self.hbond_density_penalty_weight = sampling_cfg.hbond_density_penalty_weight
-        self.sse_burial_penalty_weight = sampling_cfg.sse_burial_penalty_weight
-        self.sse_burial_nb_radius = sampling_cfg.sse_burial_nb_radius
-        self.sse_burial_nb_threshold = sampling_cfg.sse_burial_nb_threshold
+        self.per_sse_composition_penalty_weight = (
+            sampling_cfg.per_sse_composition_penalty_weight
+        )
+        self.per_sse_composition_nb_radius = sampling_cfg.per_sse_composition_nb_radius
+        self.per_sse_composition_nb_threshold = (
+            sampling_cfg.per_sse_composition_nb_threshold
+        )
 
     def _build_masked_inputs(self, context: FullContext) -> tuple[Tensor, Tensor]:
         """Build masked restypes and is_masked from the context's fixed residues."""
@@ -378,18 +382,18 @@ class ArtiosPotts(nn.Module):
 
             penalty_dict["hbond_density"] = hbond_density_penalty_fn
 
-        if self.sse_burial_penalty_weight > 0:
+        if self.per_sse_composition_penalty_weight > 0:
             # Backbone is fixed throughout Potts sampling, so bucket
             # assignment is precomputed once here and captured in the closure
             # below. DSSP + CB-NB are both backbone-only / token-mask-aware.
             bucket_idx = compute_sse_burial_buckets(
                 context.coordinate.backbone_coordinate,
                 context.mask.token_mask,
-                nb_radius=self.sse_burial_nb_radius,
-                nb_threshold=self.sse_burial_nb_threshold,
+                nb_radius=self.per_sse_composition_nb_radius,
+                nb_threshold=self.per_sse_composition_nb_threshold,
             )
             sse_burial_mask = mutable_mask & context.entity.is_protein_token
-            sse_burial_weight = self.sse_burial_penalty_weight
+            sse_burial_weight = self.per_sse_composition_penalty_weight
 
             def sse_burial_penalty_fn(S: torch.Tensor) -> torch.Tensor:
                 return sse_burial_weight * sse_burial_composition_penalty(

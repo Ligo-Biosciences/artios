@@ -93,9 +93,9 @@ def _make_configs(
                         "net_charge_penalty_weight": 0.0,
                         "net_charge_target_per_residue": -0.013,
                         "hbond_density_penalty_weight": 0.0,
-                        "sse_burial_penalty_weight": 0.0,
-                        "sse_burial_nb_radius": 10.0,
-                        "sse_burial_nb_threshold": 22,
+                        "per_sse_composition_penalty_weight": 0.0,
+                        "per_sse_composition_nb_radius": 10.0,
+                        "per_sse_composition_nb_threshold": 22,
                         "ensemble_size": 1,
                         "ensemble_noise_scale": 0.3,
                         "cfg_scale": 1.0,
@@ -264,7 +264,7 @@ class TestArtiosPottsForward:
     def test_sse_burial_penalty_registered_when_weighted(
         self, pseudo_configs, context, device
     ):
-        """sse_burial_penalty_weight > 0 ⇒ the ``"sse_burial"`` closure is
+        """per_sse_composition_penalty_weight > 0 ⇒ the ``"sse_burial"`` closure is
         registered in the inference-time PenaltyCollection (and "lcp" is not
         present, since we zero out the complexity weight to isolate).
 
@@ -276,7 +276,7 @@ class TestArtiosPottsForward:
         """
         cfg = pseudo_configs
         sampling = cfg.artios_mpnn.potts.sampling
-        sampling.sse_burial_penalty_weight = 1.0
+        sampling.per_sse_composition_penalty_weight = 1.0
         sampling.complexity_penalty_weight = 0.0
         sampling.track_u_i = True
 
@@ -287,7 +287,7 @@ class TestArtiosPottsForward:
         assert out.penalty_names == ["sse_burial"]
 
     def test_sse_burial_disabled_by_default(self, pseudo_configs, context, device):
-        """Default config has sse_burial_penalty_weight = 0 ⇒ no ``"sse_burial"``
+        """Default config has per_sse_composition_penalty_weight = 0 ⇒ no ``"sse_burial"``
         closure must be registered (even with tracking on)."""
         cfg = pseudo_configs
         sampling = cfg.artios_mpnn.potts.sampling

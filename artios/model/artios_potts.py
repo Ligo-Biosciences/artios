@@ -149,8 +149,6 @@ class ArtiosPotts(nn.Module):
         self.net_charge_penalty_weight = sampling_cfg.net_charge_penalty_weight
         self.net_charge_target_per_residue = sampling_cfg.net_charge_target_per_residue
         self.hbond_density_penalty_weight = sampling_cfg.hbond_density_penalty_weight
-        self.hbond_density_target = sampling_cfg.hbond_density_target
-        self.hbond_density_tolerance = sampling_cfg.hbond_density_tolerance
 
     def _build_masked_inputs(self, context: FullContext) -> tuple[Tensor, Tensor]:
         """Build masked restypes and is_masked from the context's fixed residues."""
@@ -364,8 +362,6 @@ class ArtiosPotts(nn.Module):
             hbond_bb = context.coordinate.backbone_coordinate
             hbond_chain = context.token.asym_id
             hbond_token_mask = context.mask.token_mask
-            hbond_target = self.hbond_density_target
-            hbond_tolerance = self.hbond_density_tolerance
 
             def hbond_density_penalty_fn(S: torch.Tensor) -> torch.Tensor:
                 return self.hbond_density_penalty_weight * hbond_density_penalty(
@@ -373,8 +369,6 @@ class ArtiosPotts(nn.Module):
                     hbond_bb,
                     hbond_chain,
                     hbond_token_mask,
-                    target_density=hbond_target,
-                    tolerance=hbond_tolerance,
                 )
 
             penalty_dict["hbond_density"] = hbond_density_penalty_fn

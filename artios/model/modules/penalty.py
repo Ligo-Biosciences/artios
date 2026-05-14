@@ -321,46 +321,52 @@ def hbond_density_penalty(
     backbone_coords: Float[Tensor, "batch n_token 5 3"],
     chain_id: Int[Tensor, "batch n_token"],
     token_mask: Bool[Tensor, "batch n_token"],
-    target_density: float = 0.35,
-    tolerance: float = 0.10,
-    distance_cutoff: float = 15.0,
+    distance_cutoff: float = 5.0,
     sharpness: float = 2.0,
     sequence_separation: int = 1,
     num_natural_aas: int = 20,
 ) -> Float[Tensor, "batch"]:
-    """Two-sided dead-zone quadratic on per-residue sc-sc H-bond density.
+    """Open-ended sc-sc H-bond *encourager* — minus the expected H-bond score.
 
-    Per-pair score is ``M[aa_i, aa_j] * sigmoid((cutoff - d_ij) / sharpness)``,
-    summed over upper-triangular intra-chain pairs (|i - j| ≥ sequence_separation)
-    and divided by the AA residue count. ``M`` is the empirical pair propensity
-    from ``artios.common.hbond_propensities``; ``d_ij`` is between virtual
-    sidechain functional tips at ``CA + reach[aa] * (CB - CA) / ||CB - CA||``.
-    The featurizer already populates the CB slot of ``backbone_coords`` with
-    the ProteinMPNN virtual Cβ (even for GLY positions), so we read it
-    directly rather than recomputing.
+    Penalty per sample is::
 
-    Penalty is zero inside the band ``[target − tolerance, target + tolerance]``
-    and quadratic in the deviation from the nearer band edge outside it. This
-    leaves a wide range of physically acceptable densities unpenalized while
-    pushing samples that are clearly too sparse (or too saturated) back toward
-    the band.
+        U = − Σ_{i < j, same chain, |i−j| ≥ sequence_separation}
+                M[aa_i, aa_j] · sigmoid((cutoff − d_ij) / sharpness)
+
+    ``M`` is the empirical sc–sc H-bond pair propensity (symmetric, 20×20) from
+    ``artios.common.hbond_propensities``. ``d_ij`` is the distance between
+    virtual sidechain functional tips at ``CA + reach[aa] · (CB − CA)/||CB − CA||``;
+    the featurizer fills CB even for GLY (ProteinMPNN virtual Cβ).
+
+    There is no target, no tolerance, no dead-zone, and no squared form:
+    every additional in-range, chemically compatible neighbor lowers the
+    energy by a fixed amount. The per-position gradient is
+
+        ∂U/∂S[i, r] = − Σ_{j ≠ i, valid} M[r, aa_j] · gate_ij
+
+    which scales with the number of in-range neighbors, not with 1/N. Large
+    proteins get a proportionally larger total penalty but the same
+    per-position pull, which is what the DLMC sampler consumes.
+
+    The default ``distance_cutoff = 5 Å`` was chosen so the gate fires only
+    when virtual tips are within plausible sc-sc H-bond geometry — wider
+    cutoffs (8–15 Å) preserve Spearman correlation with biotite-detected
+    H-bonds but spread the gradient thin across many distant pairs (see
+    ``docs/potential_improvements/hbond_density_penalty_scale.md``).
 
     Args:
         S: Sequence tensor [B, N, R]; only the first ``num_natural_aas`` channels matter.
         backbone_coords: [B, N, 5, 3] in (N, CA, C, O, CB); only CA and CB are used.
         chain_id: [B, N]; cross-chain pairs are excluded.
         token_mask: [B, N] valid-token mask.
-        target_density: Per-residue density target (default 0.35).
-        tolerance: Half-width of the zero-penalty band around ``target_density``.
-            Default 0.10 gives an acceptable window of [0.25, 0.45].
         distance_cutoff, sharpness: Soft sigmoid distance gate parameters, Å.
-        sequence_separation: Minimum |i - j| for a pair to count.
+        sequence_separation: Minimum |i − j| for a pair to count.
         num_natural_aas: Number of natural amino acid types (default 20).
 
     Returns:
-        Per-sample penalty [B]. Higher = farther outside the band.
+        Per-sample penalty [B]; more negative = more sc-sc H-bonds expected.
     """
-    B, N, _ = S.shape
+    _, N, _ = S.shape
     device = S.device
     dtype = S.dtype
     Q = num_natural_aas
@@ -383,10 +389,10 @@ def hbond_density_penalty(
     diff = rearrange(centre, "b n c -> b n 1 c") - rearrange(centre, "b n c -> b 1 n c")
     distance_gate = torch.sigmoid((distance_cutoff - diff.norm(dim=-1)) / sharpness)
 
-    # Non-AA tokens (UNK, gap, nucleotides) have S_aa all zero — exclude them from
-    # the denominator too, otherwise they dilute the per-AA-residue density.
+    # Non-AA tokens (UNK, gap, nucleotides) have S_aa all zero and contribute
+    # 0 to chem_pair anyway; gating pair_mask on aa_token_mask keeps the
+    # pair set semantically clean (and matches LCP's treatment).
     aa_token_mask = token_mask & (S_aa.sum(dim=-1) > 0)
-    n_aa_residues = aa_token_mask.to(dtype).sum(dim=-1)  # [B]
 
     intra_pair = torch.triu(
         torch.ones(N, N, dtype=torch.bool, device=device),
@@ -400,13 +406,8 @@ def hbond_density_penalty(
     )
     pair_mask = (same_chain & both_aa & intra_pair).to(dtype)
 
-    density = (chem_pair * distance_gate * pair_mask).sum(
-        dim=(-2, -1)
-    ) / n_aa_residues.clamp(min=1)
-    # Two-sided dead zone: deviation outside [target − tol, target + tol] only.
-    excess = ((density - target_density).abs() - tolerance).clamp(min=0)
-    # Zero out empty-AA samples; without the multiplier they'd carry a phantom (target − tol)².
-    return excess.square() * (n_aa_residues > 0).to(dtype)
+    hbond_score = (chem_pair * distance_gate * pair_mask).sum(dim=(-2, -1))
+    return -hbond_score
 
 
 def composition_chi_squared_penalty(

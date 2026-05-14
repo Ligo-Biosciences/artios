@@ -93,8 +93,6 @@ def _make_configs(
                         "net_charge_penalty_weight": 0.0,
                         "net_charge_target_per_residue": -0.013,
                         "hbond_density_penalty_weight": 0.0,
-                        "hbond_density_target": 0.35,
-                        "hbond_density_tolerance": 0.10,
                         "ensemble_size": 1,
                         "ensemble_noise_scale": 0.3,
                         "cfg_scale": 1.0,

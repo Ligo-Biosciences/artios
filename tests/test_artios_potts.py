@@ -93,8 +93,9 @@ def _make_configs(
                         "net_charge_penalty_weight": 0.0,
                         "net_charge_target_per_residue": -0.013,
                         "hbond_density_penalty_weight": 0.0,
-                        "hbond_density_target": 0.35,
-                        "hbond_density_tolerance": 0.10,
+                        "sse_burial_penalty_weight": 0.0,
+                        "sse_burial_nb_radius": 10.0,
+                        "sse_burial_nb_threshold": 22,
                         "ensemble_size": 1,
                         "ensemble_noise_scale": 0.3,
                         "cfg_scale": 1.0,
@@ -259,6 +260,48 @@ class TestArtiosPottsForward:
 
         assert torch.allclose(out_train.h, out_eval.h)
         assert torch.allclose(out_train.J, out_eval.J)
+
+    def test_sse_burial_penalty_registered_when_weighted(
+        self, pseudo_configs, context, device
+    ):
+        """sse_burial_penalty_weight > 0 ⇒ the ``"sse_burial"`` closure is
+        registered in the inference-time PenaltyCollection (and "lcp" is not
+        present, since we zero out the complexity weight to isolate).
+
+        Catches wiring regressions: missing import, wrong config field name,
+        or a closure that raises during precompute and silently swallows.
+
+        ``track_u_i = True`` is the cheapest way to make the sampler expose
+        ``penalty_names`` on the output (otherwise it stays None).
+        """
+        cfg = pseudo_configs
+        sampling = cfg.artios_mpnn.potts.sampling
+        sampling.sse_burial_penalty_weight = 1.0
+        sampling.complexity_penalty_weight = 0.0
+        sampling.track_u_i = True
+
+        model = ArtiosPotts(cfg).to(device)
+        model.eval()
+        with torch.no_grad():
+            out = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+        assert out.penalty_names == ["sse_burial"]
+
+    def test_sse_burial_disabled_by_default(self, pseudo_configs, context, device):
+        """Default config has sse_burial_penalty_weight = 0 ⇒ no ``"sse_burial"``
+        closure must be registered (even with tracking on)."""
+        cfg = pseudo_configs
+        sampling = cfg.artios_mpnn.potts.sampling
+        sampling.complexity_penalty_weight = 0.0
+        sampling.track_u_i = True
+
+        model = ArtiosPotts(cfg).to(device)
+        model.eval()
+        with torch.no_grad():
+            out = model.forward(context=context, mode=Mode.INFERENCE, seed=42)
+        # With every other penalty also zeroed by default, the collection
+        # should be empty (penalty_names=None) when weight is 0.
+        if out.penalty_names is not None:
+            assert "sse_burial" not in out.penalty_names
 
     def test_reproducibility_with_seed(self, pseudo_configs, context, device):
         m1 = ArtiosPotts(pseudo_configs).to(device)

@@ -12,10 +12,12 @@ sampling. The bugs we care about catching:
   that.
 - token_mask leakage: padded positions are counted toward the residue
   count or the charge tally.
-- H-bond density gate: cross-chain pairs slip past the chain filter, or
+- H-bond gate: cross-chain pairs slip past the chain filter, or
   near-sequence pairs slip past ``sequence_separation``.
-- Phantom-target bug: an empty-AA sample returns ``target²`` instead of 0
-  (the explicit ``(n_aa_residues > 0)`` multiplier in the implementation).
+- ÷N attenuation regression: the open-ended encourager form dropped the
+  per-residue normalization so the per-position gradient is O(neighbors)
+  rather than O(neighbors/N). A regression to "÷N" would silently make
+  the penalty too weak to steer sampling on realistic protein lengths.
 - Soft-S gradients: the penalties are linear (charge) and bilinear (hbond)
   in S, so autograd should give finite, signed gradients — a refactor that
   detaches anywhere would silently break gradient-based sampling.
@@ -241,176 +243,100 @@ def _backbone_for_residues(positions: torch.Tensor) -> torch.Tensor:
 
 
 class TestHbondDensityPenalty:
-    def test_zero_when_no_aa_tokens(self):
-        """Empty/non-AA samples return exactly 0, not target².
+    """The penalty is an open-ended encourager: ``U = −Σ chem_pair · gate``
+    over intra-chain upper-tri pairs. More compatible neighbors in range
+    ⇒ lower (more negative) penalty; no target, no tolerance, no dead-zone."""
 
-        Regression pin for the explicit ``(n_aa_residues > 0)`` multiplier
-        on the return.
-        """
+    def test_zero_when_no_aa_tokens(self):
+        """Empty/non-AA samples return 0 (no pairs in pair_mask)."""
         N = 5
         S = torch.zeros(1, N, 20)  # no AA channel set anywhere
         bb = _backbone_for_residues(torch.zeros(N, 3))
         chain = torch.zeros(1, N, dtype=torch.long)
         mask = torch.ones(1, N, dtype=torch.bool)
 
-        out = hbond_density_penalty(
-            S,
-            bb,
-            chain,
-            mask,
-            target_density=0.27,
-        )
+        out = hbond_density_penalty(S, bb, chain, mask)
         torch.testing.assert_close(out, torch.zeros(1), rtol=0.0, atol=0.0)
 
-    def test_all_ala_yields_target_squared(self):
-        """ALA has reach=0 and zero pair propensity, so density=0 →
-        excess=target_density → penalty=target² (with tolerance=0).
-        The non-AA path returns 0 instead, so this also confirms we picked
-        up the AA flag properly."""
+    def test_all_ala_yields_zero(self):
+        """ALA has zero pair propensity, so chem_pair = 0 everywhere and
+        the penalty is 0 even when residues are packed inside the distance
+        gate. Pins that chem_pair (not the distance gate) is what gates
+        H-bond compatibility."""
         seq = ["ALA"] * 10
         S = _one_hot(seq)
-        # Pack residues tightly so the distance gate would saturate if the
-        # chemistry matrix weren't zero — proves chem_pair gating is doing
-        # the work, not the distance gate.
         positions = torch.zeros(len(seq), 3)
         bb = _backbone_for_residues(positions)
         chain = torch.zeros(1, len(seq), dtype=torch.long)
         mask = torch.ones(1, len(seq), dtype=torch.bool)
-        target = 0.27
 
-        out = hbond_density_penalty(
-            S,
-            bb,
-            chain,
-            mask,
-            target_density=target,
-            tolerance=0.0,
-        )
-        torch.testing.assert_close(
-            out,
-            torch.tensor([target * target]),
-            rtol=1e-5,
-            atol=1e-7,
-        )
+        out = hbond_density_penalty(S, bb, chain, mask)
+        torch.testing.assert_close(out, torch.zeros(1), rtol=0.0, atol=1e-7)
 
     def test_cross_chain_pairs_excluded(self):
-        """Two close H-bond-capable residues on different chains must not
-        contribute. Build a SER-SER pair (positive pair propensity, nonzero
-        reach) and check that same-chain → penalty < target² but
-        different-chain → penalty == target²."""
+        """A SER-SER pair on the same chain produces a strictly negative
+        penalty (encouragement); the same pair on different chains
+        produces 0 (no cross-chain credit)."""
         seq = ["SER", "SER"]
         S = _one_hot(seq)
-        # Place 8Å apart so the distance gate (cutoff 15, sharpness 2) is
-        # firmly on.
         positions = torch.tensor([[0.0, 0.0, 0.0], [8.0, 0.0, 0.0]])
         bb = _backbone_for_residues(positions)
         mask = torch.ones(1, 2, dtype=torch.bool)
-        target = 0.27
 
         same_chain = torch.zeros(1, 2, dtype=torch.long)
         diff_chain = torch.tensor([[0, 1]], dtype=torch.long)
 
-        p_same = hbond_density_penalty(
-            S,
-            bb,
-            same_chain,
-            mask,
-            target_density=target,
-            tolerance=0.0,
-        )
-        p_diff = hbond_density_penalty(
-            S,
-            bb,
-            diff_chain,
-            mask,
-            target_density=target,
-            tolerance=0.0,
-        )
+        p_same = hbond_density_penalty(S, bb, same_chain, mask)
+        p_diff = hbond_density_penalty(S, bb, diff_chain, mask)
 
-        # Cross-chain → zero density → full target² shortfall.
-        torch.testing.assert_close(
-            p_diff,
-            torch.tensor([target * target]),
-            rtol=1e-5,
-            atol=1e-7,
-        )
-        # Same-chain SER-SER should pull the penalty strictly below target²
-        # (positive propensity contribution).
-        assert p_same.item() < p_diff.item() - 1e-6
+        torch.testing.assert_close(p_diff, torch.zeros(1), rtol=0.0, atol=1e-7)
+        assert (
+            p_same.item() < -1e-6
+        ), f"same-chain SER-SER should encourage, got {p_same.item()}"
 
     def test_sequence_separation_excludes_near_neighbours(self):
-        """With ``sequence_separation`` raised above the chain length, no
-        pairs qualify and penalty falls back to target²."""
+        """Raising ``sequence_separation`` above the chain length empties
+        the upper-tri pair set, so the penalty collapses to 0 even though
+        the residues are H-bond capable and within distance range."""
         seq = ["SER"] * 4
         S = _one_hot(seq)
         positions = torch.tensor([[i * 4.0, 0.0, 0.0] for i in range(len(seq))])
         bb = _backbone_for_residues(positions)
         chain = torch.zeros(1, len(seq), dtype=torch.long)
         mask = torch.ones(1, len(seq), dtype=torch.bool)
-        target = 0.27
 
-        # sequence_separation=1 (default) -> many pairs contribute.
-        p_close = hbond_density_penalty(
-            S,
-            bb,
-            chain,
-            mask,
-            target_density=target,
-            tolerance=0.0,
-            sequence_separation=1,
-        )
-        # sequence_separation=len(seq) -> upper-tri is empty.
-        p_far = hbond_density_penalty(
-            S,
-            bb,
-            chain,
-            mask,
-            target_density=target,
-            tolerance=0.0,
-            sequence_separation=len(seq),
-        )
-        torch.testing.assert_close(
-            p_far,
-            torch.tensor([target * target]),
-            rtol=1e-5,
-            atol=1e-7,
-        )
-        assert p_close.item() < p_far.item() - 1e-6
+        p_close = hbond_density_penalty(S, bb, chain, mask, sequence_separation=1)
+        p_far = hbond_density_penalty(S, bb, chain, mask, sequence_separation=len(seq))
+
+        torch.testing.assert_close(p_far, torch.zeros(1), rtol=0.0, atol=1e-7)
+        assert p_close.item() < -1e-6
 
     def test_distance_gate_is_monotonic(self):
-        """Same residue pair, moved apart, must produce a monotonically
-        non-decreasing penalty (density drops as distance grows)."""
+        """Same SER-SER pair moved apart must produce a monotonically
+        non-decreasing penalty (encouragement weakens as the soft gate
+        closes), converging to 0 at large separation."""
         seq = ["SER", "SER"]
         S = _one_hot(seq)
         chain = torch.zeros(1, 2, dtype=torch.long)
         mask = torch.ones(1, 2, dtype=torch.bool)
-        target = 0.27
 
         penalties = []
         for d in [3.0, 8.0, 15.0, 25.0]:
             positions = torch.tensor([[0.0, 0.0, 0.0], [d, 0.0, 0.0]])
             bb = _backbone_for_residues(positions)
-            p = hbond_density_penalty(
-                S,
-                bb,
-                chain,
-                mask,
-                target_density=target,
-                tolerance=0.0,
-            ).item()
+            p = hbond_density_penalty(S, bb, chain, mask).item()
             penalties.append(p)
 
         assert all(
             penalties[i] <= penalties[i + 1] + 1e-7 for i in range(len(penalties) - 1)
         ), f"penalty not monotonic in distance: {penalties}"
-        # Sanity: at 25Å the sigmoid is ~0 so we're back at target².
-        assert abs(penalties[-1] - target * target) < 1e-3
+        # At 25Å the sigmoid is ~0 so the encouragement vanishes.
+        assert abs(penalties[-1]) < 1e-3
 
     def test_token_mask_excludes_invalid_positions(self):
-        """Padded positions must drop out of both the pair sum and the
-        residue-count denominator. We verify by comparing a 3-SER chain
-        to a 3-SER + 3-masked-SER configuration — same density expected.
-        """
+        """Padded positions must drop out of the pair sum entirely — same
+        chain + same residues + same coords with 3 valid vs 3 valid + 3
+        masked (far away) should produce identical penalty."""
         S_short = _one_hot(["SER"] * 3)
         pos_short = torch.tensor([[i * 4.0, 0.0, 0.0] for i in range(3)])
         bb_short = _backbone_for_residues(pos_short)
@@ -428,29 +354,14 @@ class TestHbondDensityPenalty:
             [[True, True, True, False, False, False]],
         )
 
-        p_short = hbond_density_penalty(
-            S_short,
-            bb_short,
-            chain_short,
-            mask_short,
-            target_density=0.27,
-            tolerance=0.0,
-        )
-        p_long = hbond_density_penalty(
-            S_long,
-            bb_long,
-            chain_long,
-            mask_long,
-            target_density=0.27,
-            tolerance=0.0,
-        )
+        p_short = hbond_density_penalty(S_short, bb_short, chain_short, mask_short)
+        p_long = hbond_density_penalty(S_long, bb_long, chain_long, mask_long)
         torch.testing.assert_close(p_short, p_long, rtol=1e-5, atol=1e-7)
 
     def test_gradient_flows_on_soft_inputs(self):
         """Autograd through the bilinear chem term must produce finite,
         signed gradients. Catches any silent detach in the chem matmul or
         the virtual-CB construction."""
-        # Mix-soft input so chem_pair has support across multiple AA pairs.
         S = torch.zeros(1, 4, 20)
         for i in range(4):
             S[0, i, _IDX["SER"]] = 0.5
@@ -465,101 +376,72 @@ class TestHbondDensityPenalty:
         chain = torch.zeros(1, 4, dtype=torch.long)
         mask = torch.ones(1, 4, dtype=torch.bool)
 
-        loss = hbond_density_penalty(
-            S,
-            bb,
-            chain,
-            mask,
-            target_density=0.27,
-            tolerance=0.0,
-        ).sum()
+        loss = hbond_density_penalty(S, bb, chain, mask).sum()
         loss.backward()
 
         assert torch.isfinite(S.grad).all(), "non-finite gradient on soft input"
-        # At least one AA channel must have non-zero gradient — otherwise
-        # the function is effectively constant in S and the penalty cannot
-        # drive sampling.
         assert S.grad.abs().sum().item() > 1e-6
 
-    def test_dead_zone_kicks_in_two_sided(self):
-        """Penalty must be 0 inside [target − tol, target + tol] and
-        quadratic in the deviation from the band edge outside it.
+    def test_more_compatible_neighbors_lower_penalty(self):
+        """Open-ended encourager invariant: adding an in-range H-bond-capable
+        neighbor must strictly lower (more negative) the penalty. The old
+        squared/dead-zone form could saturate; the linear form should not."""
+        chain = torch.zeros(1, 4, dtype=torch.long)
+        mask = torch.ones(1, 4, dtype=torch.bool)
+        # Four residues in a tight line so every pair is within the gate.
+        positions = torch.tensor([[i * 4.0, 0.0, 0.0] for i in range(4)])
+        bb = _backbone_for_residues(positions)
 
-        We construct three samples by directly feeding pre-computed
-        densities through the penalty path — easier than spending many
-        residues to land each density precisely.
-        """
-        target, tol = 0.35, 0.10
+        # Mix in increasingly many SER, replacing ALA (zero propensity).
+        scores = []
+        for k in range(5):  # 0..4 SER among 4 residues
+            seq = ["SER"] * k + ["ALA"] * (4 - k)
+            S = _one_hot(seq)
+            scores.append(hbond_density_penalty(S, bb, chain, mask).item())
 
-        # Use 2 ALA residues (density=0) and check the algebraic mapping
-        # by sweeping target_density to hit specific (density - target)
-        # offsets. ALA density is always 0, so this isolates the dead
-        # zone math from the spatial computation.
-        S = _one_hot(["ALA"] * 5)
-        bb = _backbone_for_residues(torch.zeros(5, 3))
-        chain = torch.zeros(1, 5, dtype=torch.long)
-        mask = torch.ones(1, 5, dtype=torch.bool)
+        # Strictly monotonically decreasing as more SER are added.
+        assert all(
+            scores[i + 1] < scores[i] - 1e-6 for i in range(len(scores) - 1)
+        ), f"penalty not strictly decreasing with more H-bond-capable residues: {scores}"
 
-        # density=0, target=0.08, tolerance=0.10 -> deviation 0.08 < tol
-        # -> inside dead zone -> penalty 0.
-        p_inside = hbond_density_penalty(
-            S,
-            bb,
-            chain,
-            mask,
-            target_density=0.08,
-            tolerance=tol,
-        )
-        torch.testing.assert_close(
-            p_inside,
-            torch.zeros(1),
-            rtol=0.0,
-            atol=1e-7,
-        )
+    def test_grad_magnitude_independent_of_chain_length(self):
+        """Regression for the ÷N attenuation that motivated this rewrite.
 
-        # density=0, target=0.35, tolerance=0.10 -> deviation 0.35,
-        # excess = 0.35 - 0.10 = 0.25 -> penalty 0.0625.
-        p_below = hbond_density_penalty(
-            S,
-            bb,
-            chain,
-            mask,
-            target_density=target,
-            tolerance=tol,
-        )
-        torch.testing.assert_close(
-            p_below,
-            torch.tensor([0.25**2]),
-            rtol=1e-6,
-            atol=1e-7,
-        )
+        Doubling the chain (with the same per-position neighborhood) must
+        not shrink the per-position gradient — that was the dominant scale
+        bug in the old form. Compare max|∂U/∂S| across N=10 vs N=20 of the
+        same residue type; they should be within a small constant factor."""
+        chain_10 = torch.zeros(1, 10, dtype=torch.long)
+        mask_10 = torch.ones(1, 10, dtype=torch.bool)
+        positions_10 = torch.tensor([[i * 4.0, 0.0, 0.0] for i in range(10)])
+        bb_10 = _backbone_for_residues(positions_10)
+        S_10 = _one_hot(["SER"] * 10).requires_grad_(True)
+        hbond_density_penalty(S_10, bb_10, chain_10, mask_10).sum().backward()
+        # Middle-positioned residue has both flanks fully populated.
+        max_grad_10 = S_10.grad[0, 5].abs().max().item()
 
-        # Symmetric upper side: synthesize via a target *below* the
-        # density (density=0 > target=-0.20). |0 - (-0.20)| = 0.20,
-        # excess = 0.20 - 0.10 = 0.10 -> penalty 0.01.
-        p_above = hbond_density_penalty(
-            S,
-            bb,
-            chain,
-            mask,
-            target_density=-0.20,
-            tolerance=tol,
-        )
-        torch.testing.assert_close(
-            p_above,
-            torch.tensor([0.10**2]),
-            rtol=1e-6,
-            atol=1e-7,
+        chain_20 = torch.zeros(1, 20, dtype=torch.long)
+        mask_20 = torch.ones(1, 20, dtype=torch.bool)
+        positions_20 = torch.tensor([[i * 4.0, 0.0, 0.0] for i in range(20)])
+        bb_20 = _backbone_for_residues(positions_20)
+        S_20 = _one_hot(["SER"] * 20).requires_grad_(True)
+        hbond_density_penalty(S_20, bb_20, chain_20, mask_20).sum().backward()
+        max_grad_20 = S_20.grad[0, 10].abs().max().item()
+
+        # The N=20 case has more neighbors in range, so its per-position
+        # gradient should be ≥ the N=10 case — NOT smaller by ~N as the
+        # old ÷n_aa_residues form caused.
+        assert max_grad_20 >= 0.5 * max_grad_10, (
+            f"per-position gradient shrank with N: N=10 → {max_grad_10:.4g}, "
+            f"N=20 → {max_grad_20:.4g}; ÷N attenuation may have returned"
         )
 
-    def test_matches_manual_two_residue_density(self):
-        """Pair (SER, TYR) at distance d on the same chain: density should
-        equal ``M[SER, TYR] * sigmoid((cutoff-d)/sharpness) / 2``. This
-        pins the formula end-to-end against the published reference
-        propensity matrix and reach array, and catches off-by-one in
-        upper-tri counting (a symmetric loop would double-count this pair).
-        """
-        target = 0.05  # below achievable so we land in the shortfall regime
+    def test_matches_manual_two_residue_score(self):
+        """End-to-end formula pin: a single SER-TYR pair at distance d on
+        the same chain should yield exactly
+        ``−M[SER, TYR] · sigmoid((cutoff − tip_d)/sharpness)``. Catches
+        off-by-one in upper-tri counting (a symmetric loop would
+        double-count this pair), wrong matrix lookup, and any stray ÷N."""
         cutoff = 15.0
         sharpness = 2.0
         d = 6.0
@@ -568,9 +450,6 @@ class TestHbondDensityPenalty:
         chain = torch.zeros(1, 2, dtype=torch.long)
         mask = torch.ones(1, 2, dtype=torch.bool)
 
-        # Need the actual virtual-tip distance, not the CA-CA distance, to
-        # match the implementation. Compute it analytically the same way
-        # the function does.
         ser_reach = _aa_reach_tensor(torch.device("cpu"), torch.float32)[
             _IDX["SER"]
         ].item()
@@ -578,14 +457,10 @@ class TestHbondDensityPenalty:
             _IDX["TYR"]
         ].item()
 
-        # Place SER at origin, TYR offset along x. Build matching CB dirs:
-        # use the same backbone offsets as _backbone_for_residues so both
-        # residues' virtual tips lie along a known axis.
         positions = torch.tensor([[0.0, 0.0, 0.0], [d, 0.0, 0.0]])
         bb = _backbone_for_residues(positions)
 
-        # The function reads CA from index 1 and CB from index 4 of the
-        # backbone tensor. Reproduce its virtual-tip math here.
+        # Reproduce the function's virtual-tip math to get the exact gate input.
         ca = bb[..., 1, :]
         cb = bb[..., 4, :]
         cb_dir = (cb - ca) / (cb - ca).norm(dim=-1, keepdim=True)
@@ -596,17 +471,13 @@ class TestHbondDensityPenalty:
         matrix = _aa_pair_propensity_tensor(torch.device("cpu"), torch.float32)
         gate = torch.sigmoid(torch.tensor((cutoff - actual_d) / sharpness)).item()
         m_st = matrix[_IDX["SER"], _IDX["TYR"]].item()
-        expected_density = m_st * gate / 2.0  # 2 residues
-        expected_shortfall = min(expected_density - target, 0.0)
-        expected = expected_shortfall**2
+        expected = -m_st * gate  # single upper-tri pair, no ÷N, no dead-zone
 
         out = hbond_density_penalty(
             S,
             bb,
             chain,
             mask,
-            target_density=target,
-            tolerance=0.0,
             distance_cutoff=cutoff,
             sharpness=sharpness,
             sequence_separation=1,

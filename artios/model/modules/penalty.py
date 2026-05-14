@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from einops import rearrange
 from torch import Tensor
+from torch.nn import functional as F
 
 from artios.common import residue_names
 from artios.common.constants import AROMATIC_INDICES, CHARGED_INDICES
@@ -17,6 +18,15 @@ from artios.common.hbond_propensities import (
     reach_array as _sidechain_reach_array,
 )
 from artios.common.residue_stats import OrganismAAFrequencies
+from artios.common.sse_burial_stats import (
+    SSE_BURIAL_BUCKETS,
+)
+from artios.common.sse_burial_stats import (
+    as_mu_matrix as _sse_burial_mu_matrix,
+)
+from artios.common.sse_burial_stats import (
+    as_sigma_matrix as _sse_burial_sigma_matrix,
+)
 from artios.utils.typing import Bool, Float, Int
 
 
@@ -510,3 +520,94 @@ def net_charge_penalty(
 
     penalty = (net_per_res - target_per_residue).square()
     return penalty * (n_residues > 0).to(S.dtype)
+
+
+# Matches artios.utils.geometry.NUM_SSE_BURIAL_BUCKETS and the row count of
+# the (μ, σ) tables in artios.common.sse_burial_stats.
+_NUM_SSE_BURIAL_BUCKETS = len(SSE_BURIAL_BUCKETS)
+
+
+@functools.lru_cache(maxsize=None)
+def _sse_burial_mu_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
+    """Natural per-bucket per-AA μ, shape ``[6, 20]`` in PROTEIN_TYPES order.
+
+    Cached per (device, dtype) — mirrors ``_aa_pair_propensity_tensor``.
+    """
+    return torch.tensor(
+        _sse_burial_mu_matrix(order=residue_names.PROTEIN_TYPES),
+        device=device,
+        dtype=dtype,
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def _sse_burial_sigma_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
+    """Natural per-bucket per-AA σ, shape ``[6, 20]`` in PROTEIN_TYPES order.
+
+    Cached per (device, dtype).
+    """
+    return torch.tensor(
+        _sse_burial_sigma_matrix(order=residue_names.PROTEIN_TYPES),
+        device=device,
+        dtype=dtype,
+    )
+
+
+def sse_burial_composition_penalty(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    bucket_idx: Int[Tensor, "batch n_token"],
+    token_mask: Bool[Tensor, "batch n_token"],
+    num_natural_aas: int = 20,
+) -> Float[Tensor, "batch"]:
+    """σ²-weighted regression-to-mean composition penalty per (SSE × burial) bucket.
+
+    For each of the 6 buckets (α/β/coil × buried/exposed), computes the
+    per-bucket AA frequency in the sample and penalises deviation from a
+    natural reference (μ, σ) under a no-dead-zone χ² statistic::
+
+        p_{b,q}  =  Σ_{i: bucket_i = b}  S_{i,q}  /  N_b
+        L        =  Σ_{b, q}  (p_{b,q} − μ_{b,q})² / σ_{b,q}²
+
+    Reference (μ, σ) are loaded from :mod:`artios.common.sse_burial_stats` —
+    per-structure mean and standard deviation of AA frequency across natural
+    monomers. Rare AAs (small σ) get amplified gradient force per unit
+    deviation, so an aromatic deficit pushes the sampler as hard as an
+    alanine surplus despite the much smaller absolute frequency gap.
+
+    Positions with ``bucket_idx == -1`` (chain padding, missing backbone,
+    DSSP-too-short, or otherwise masked) and buckets that end up empty in a
+    sample contribute 0. p is linear in S so autograd is exact.
+
+    Args:
+        S: ``[B, N, R]`` one-hot or soft sequence; only the first
+            ``num_natural_aas`` channels are read.
+        bucket_idx: ``[B, N]`` int from
+            :func:`artios.utils.geometry.compute_sse_burial_buckets` — values
+            in ``{0..5}`` or ``-1`` for ignore. Backbone is fixed during
+            Potts sampling, so this should be precomputed once per inference.
+        token_mask: ``[B, N]`` valid-token mask.
+        num_natural_aas: Number of natural AA types (default 20).
+
+    Returns:
+        Per-sample penalty ``[B]``; larger = farther from the natural
+        per-bucket composition.
+    """
+    Q = num_natural_aas
+    K = _NUM_SSE_BURIAL_BUCKETS
+
+    mu = _sse_burial_mu_tensor(S.device, S.dtype)  # [K, Q]
+    sigma = _sse_burial_sigma_tensor(S.device, S.dtype)  # [K, Q]
+
+    S_aa = S[..., :Q]
+    valid = (token_mask & (bucket_idx >= 0)).to(S.dtype)  # [B, N]
+    bucket_one_hot = F.one_hot(bucket_idx.clamp(min=0), num_classes=K).to(S.dtype)
+    bucket_one_hot = bucket_one_hot * valid.unsqueeze(-1)  # [B, N, K]
+
+    counts = bucket_one_hot.transpose(-1, -2) @ S_aa  # [B, K, Q]
+    n_per_bucket = bucket_one_hot.sum(dim=1)  # [B, K]
+
+    p = counts / (n_per_bucket.unsqueeze(-1) + 1e-8)  # [B, K, Q]
+    z_squared = ((p - mu) / (sigma + 1e-8)) ** 2  # [B, K, Q]
+    per_bucket = z_squared.sum(dim=-1)  # [B, K]
+
+    return (per_bucket * (n_per_bucket > 0).to(S.dtype)).sum(dim=-1)

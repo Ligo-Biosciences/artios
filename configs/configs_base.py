@@ -250,6 +250,10 @@ model_configs = {
                 "complexity_penalty_weight": 0.6,
                 "complexity_window_size": 30,
                 "complexity_entropy_min": 2.32,
+                "complexity_nat_prior_penalty_weight": 0.0,
+                "complexity_nat_prior_window_size": 30,
+                "complexity_nat_prior_perp_min": 16.1,
+                "complexity_nat_prior_organism": "swissprot",
                 "exclude_cys": True,
                 "exclude_met": True,
                 "energy_bias": {

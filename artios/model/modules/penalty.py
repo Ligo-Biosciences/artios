@@ -190,6 +190,101 @@ def complexity_lcp(
     return U
 
 
+def complexity_lcp_natural_prior(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    log_pi: Float[Tensor, "num_natural_aas"],
+    chain_id: Int[Tensor, "batch n_token"],
+    token_mask: Bool[Tensor, "batch n_token"],
+    window_size: int = 30,
+    nat_perp_min: float = 14.0,
+    num_natural_aas: int = 20,
+    min_coverage: float = 0.9,
+) -> Float[Tensor, "batch"]:
+    """Natural-prior LCP — Shannon-perplexity floor with a natural reference.
+
+    Identical sliding-window structure to :func:`complexity_lcp`, but the
+    reference distribution is the natural AA marginal ``π`` rather than the
+    uniform implicit reference. For each window centred at position ``i``:
+
+        CE[i] = -Σ_k p_k[i] · log(π_k)              (cross-entropy)
+        Pp[i] = exp(CE[i])                          ∈ [exp(min surprisal), exp(max surprisal)]
+
+    The penalty fires when ``Pp[i]`` falls below ``nat_perp_min`` —
+    equivalent to the window using common (low-surprisal) AAs more than the
+    natural background would predict. Because CE is *linear* in ``S``, the
+    penalty is quadratic in ``S`` and autograd-exact; no straight-through
+    estimator is needed.
+
+    Compared to :func:`complexity_lcp`:
+      * Reference distribution: π_natural instead of uniform.
+      * Differentiability: autograd exact, no STE block.
+      * Compute cost: O(N·W·Q) (one factor of Q cheaper than LCP's STE).
+      * Target failure mode: over-use of common AAs, not low Shannon entropy.
+
+    Args:
+        S: ``[B, N, R]`` one-hot or soft sequence. Only the first
+            ``num_natural_aas`` channels matter.
+        log_pi: ``[Q]`` log of natural AA frequencies in PROTEIN_TYPES
+            order. Precompute once from a reference set.
+        chain_id: ``[B, N]``; cross-chain windows are excluded.
+        token_mask: ``[B, N]`` valid-token mask.
+        window_size: Sliding-window width (default 30).
+        nat_perp_min: Natural-prior perplexity floor — windows whose
+            ``exp(CE)`` falls below this are penalised. Calibrate against
+            the natural distribution to match a desired offence rate.
+        num_natural_aas: Number of natural AA types (default 20).
+        min_coverage: Minimum window valid-fraction to count.
+
+    Returns:
+        Per-sample penalty ``[B]``. Higher = more low-surprisal-AA-heavy
+        windows.
+    """
+    B, N, _ = S.shape
+    device = S.device
+    dtype = S.dtype
+    Q = num_natural_aas
+
+    if N < window_size:
+        window_size = N
+    half_w = window_size // 2
+
+    # Per-residue surprisal: -log(π_{aa_j}). Linear in S.
+    S_aa = S[..., :Q]
+    surprisal = -(S_aa * log_pi).sum(dim=-1)  # [B, N]
+
+    mask_i_float = token_mask.to(dtype)
+    surprisal_masked = surprisal * mask_i_float  # invalid positions contribute 0
+
+    # Same windowing machinery as complexity_lcp.
+    offsets = torch.arange(window_size, device=device) - half_w
+    edge_idx = torch.arange(N, device=device)[None, :, None] + offsets[None, None, :]
+    valid_boundary = (edge_idx >= 0) & (edge_idx < N)
+    edge_idx = edge_idx.clamp(min=0, max=N - 1).expand(B, -1, -1)
+    W = edge_idx.shape[-1]
+    edge_flat = edge_idx.reshape(B, N * W)
+
+    chain_j = torch.gather(chain_id, 1, edge_flat).reshape(B, N, W)
+    chain_i = chain_id[:, :, None]
+    mask_j = torch.gather(token_mask.long(), 1, edge_flat).reshape(B, N, W).bool()
+    mask_ij = (
+        valid_boundary & (chain_i == chain_j) & mask_j & token_mask[:, :, None]
+    ).to(dtype)
+
+    surprisal_neighbors = torch.gather(surprisal_masked, 1, edge_flat).reshape(B, N, W)
+    window_sum = (mask_ij * surprisal_neighbors).sum(dim=-1)  # [B, N]
+    window_count = mask_ij.sum(dim=-1)  # [B, N]
+
+    mask_coverage = window_count > int(min_coverage * window_size)
+    mask_i_valid = ((window_count > 0) & token_mask & mask_coverage).to(dtype)
+
+    ce_per_window = window_sum / (window_count + 1e-8)  # [B, N]
+    perp_natural = torch.exp(ce_per_window)  # [B, N]
+
+    U = (nat_perp_min - perp_natural).clamp(min=0).square()
+    U = mask_i_valid * U  # [B, N]
+    return U.sum(dim=1)  # [B]
+
+
 def aromatic_enrichment_penalty(
     S: Float[Tensor, "batch n_token num_residue_types"],
     active_site_mask: Bool[Tensor, "batch n_token"],
@@ -304,6 +399,19 @@ def _frequencies_to_tensor(
     return torch.tensor(
         [freq_map[res] for res in residue_order], device=device, dtype=torch.float32
     )
+
+
+def build_natural_log_pi(
+    organism_freqs: OrganismAAFrequencies,
+    device: torch.device,
+) -> Tensor:
+    """Build log natural AA frequency tensor in PROTEIN_TYPES order.
+
+    Convenience helper for plugging an organism reference into
+    :func:`complexity_lcp_natural_prior`. Returns a ``[Q]``-shaped float32
+    log-probability tensor ready to be passed as ``log_pi``.
+    """
+    return _frequencies_to_tensor(organism_freqs.mean, device).clamp(min=1e-8).log()
 
 
 @functools.lru_cache(maxsize=None)

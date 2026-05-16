@@ -401,6 +401,19 @@ def _frequencies_to_tensor(
     )
 
 
+def build_natural_log_pi(
+    organism_freqs: OrganismAAFrequencies,
+    device: torch.device,
+) -> Tensor:
+    """Build log natural AA frequency tensor in PROTEIN_TYPES order.
+
+    Convenience helper for plugging an organism reference into
+    :func:`complexity_lcp_natural_prior`. Returns a ``[Q]``-shaped float32
+    log-probability tensor ready to be passed as ``log_pi``.
+    """
+    return _frequencies_to_tensor(organism_freqs.mean, device).clamp(min=1e-8).log()
+
+
 @functools.lru_cache(maxsize=None)
 def _aa_pair_propensity_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
     """Empirical sc-sc H-bond propensity, 20×20, in PROTEIN_TYPES order. Cached per (device, dtype)."""

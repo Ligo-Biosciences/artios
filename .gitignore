@@ -40,6 +40,9 @@ artios/data/pocket/cache/
 # Downloaded model-selection run data (parquets, search JSONs, plots, structures)
 model_selection_data/
 
+# Downloaded run data (AF2 PDBs, dataframes, search JSONs)
+downloads/
+
 # Local planning / scratch docs
 plans/
 

@@ -23,8 +23,10 @@ from artios.model.modules.mpnn import MPNN
 from artios.model.modules.penalty import (
     PenaltyCollection,
     aromatic_enrichment_penalty,
+    build_natural_log_pi,
     charged_enrichment_penalty,
     complexity_lcp,
+    complexity_lcp_natural_prior,
     composition_chi_squared_penalty,
     hbond_density_penalty,
     net_charge_penalty,
@@ -135,6 +137,16 @@ class ArtiosPotts(nn.Module):
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
         self.complexity_entropy_min = sampling_cfg.complexity_entropy_min
+        self.complexity_nat_prior_penalty_weight = (
+            sampling_cfg.complexity_nat_prior_penalty_weight
+        )
+        self.complexity_nat_prior_window_size = (
+            sampling_cfg.complexity_nat_prior_window_size
+        )
+        self.complexity_nat_prior_perp_min = sampling_cfg.complexity_nat_prior_perp_min
+        self.complexity_nat_prior_organism = Organism(
+            sampling_cfg.complexity_nat_prior_organism
+        )
         self.exclude_cys = sampling_cfg.exclude_cys
         self.exclude_met = sampling_cfg.exclude_met
         self.energy_bias = dict(sampling_cfg.energy_bias)
@@ -324,6 +336,28 @@ class ArtiosPotts(nn.Module):
                 )
 
             penalty_dict["lcp"] = lcp_penalty
+
+        if self.complexity_nat_prior_penalty_weight > 0:
+            chain_id = context.token.asym_id
+            token_mask = context.mask.token_mask
+            nat_lcp_weight = self.complexity_nat_prior_penalty_weight
+            nat_lcp_window_size = self.complexity_nat_prior_window_size
+            nat_lcp_perp_min = self.complexity_nat_prior_perp_min
+            nat_log_pi = build_natural_log_pi(
+                AA_FREQUENCIES[self.complexity_nat_prior_organism], device
+            )
+
+            def nat_prior_lcp_penalty(S: torch.Tensor) -> torch.Tensor:
+                return nat_lcp_weight * complexity_lcp_natural_prior(
+                    S,
+                    log_pi=nat_log_pi,
+                    chain_id=chain_id,
+                    token_mask=token_mask,
+                    window_size=nat_lcp_window_size,
+                    nat_perp_min=nat_lcp_perp_min,
+                )
+
+            penalty_dict["nat_prior_lcp"] = nat_prior_lcp_penalty
 
         if self.aromatic_penalty_weight > 0:
 

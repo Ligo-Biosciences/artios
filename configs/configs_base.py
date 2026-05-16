@@ -274,6 +274,12 @@ model_configs = {
                     "Y": 0.0,
                     "V": 0.0,
                 },
+                "group_energy_bias": {
+                    "hydrophobic": 0.0,
+                    "aromatic": 0.0,
+                    "anionic": 0.0,
+                    "cationic": 0.0,
+                },
                 "aromatic_penalty_weight": 0.0,
                 "aromatic_target_fraction": 0.25,
                 "active_site_distance_cutoff": 10.0,

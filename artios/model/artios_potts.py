@@ -35,6 +35,7 @@ from artios.model.modules.potts import (
     GraphPottsParameterisation,
     build_alphabet_mask,
     build_energy_bias_vector,
+    build_group_energy_bias_vector,
     build_mutable_mask,
     build_s_init,
     compute_potts_single_logits,
@@ -138,6 +139,7 @@ class ArtiosPotts(nn.Module):
         self.exclude_cys = sampling_cfg.exclude_cys
         self.exclude_met = sampling_cfg.exclude_met
         self.energy_bias = dict(sampling_cfg.energy_bias)
+        self.group_energy_bias = dict(sampling_cfg.group_energy_bias)
         self.ensemble_size = sampling_cfg.ensemble_size
         self.ensemble_noise_scale = sampling_cfg.ensemble_noise_scale
         self.aromatic_penalty_weight = sampling_cfg.aromatic_penalty_weight
@@ -286,6 +288,9 @@ class ArtiosPotts(nn.Module):
             mutable_mask, R, self.exclude_cys, self.exclude_met
         )
         energy_bias = build_energy_bias_vector(self.energy_bias, R, device)
+        group_energy_bias = build_group_energy_bias_vector(
+            self.group_energy_bias, R, device
+        )
         S_init = build_s_init(
             h,
             self.potts_sampler.temperature_init,
@@ -303,6 +308,11 @@ class ArtiosPotts(nn.Module):
             h = h + energy_bias
             if h_uncond is not None:
                 h_uncond = h_uncond + energy_bias
+
+        if group_energy_bias is not None:
+            h = h + group_energy_bias
+            if h_uncond is not None:
+                h_uncond = h_uncond + group_energy_bias
 
         ### Penalty logic
         penalty_dict: dict[str, callable] = {}

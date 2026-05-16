@@ -94,6 +94,12 @@ def _make_msa_configs(loss_type: str = "composite"):
                         "active_site_only_cfg": False,
                         "granular_active_site_coloring": False,
                         "energy_bias": {aa: 0.0 for aa in "ARNDCQEGHILKMFPSTWYV"},
+                        "group_energy_bias": {
+                            "hydrophobic": 0.0,
+                            "aromatic": 0.0,
+                            "anionic": 0.0,
+                            "cationic": 0.0,
+                        },
                         "track_trajectory": False,
                         "trajectory_interval": 1,
                         "track_u_i": False,

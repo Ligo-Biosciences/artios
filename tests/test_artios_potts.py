@@ -102,6 +102,12 @@ def _make_configs(
                         "active_site_only_cfg": False,
                         "granular_active_site_coloring": False,
                         "energy_bias": {aa: 0.0 for aa in "ARNDCQEGHILKMFPSTWYV"},
+                        "group_energy_bias": {
+                            "hydrophobic": 0.0,
+                            "aromatic": 0.0,
+                            "anionic": 0.0,
+                            "cationic": 0.0,
+                        },
                         "track_trajectory": track_trajectory,
                         "trajectory_interval": trajectory_interval,
                         "track_u_i": track_u_i,

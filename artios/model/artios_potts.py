@@ -28,9 +28,7 @@ from artios.model.modules.penalty import (
     complexity_lcp,
     complexity_lcp_natural_prior,
     composition_chi_squared_penalty,
-    hbond_density_penalty,
     net_charge_penalty,
-    sse_burial_composition_penalty,
 )
 from artios.model.modules.potts import (
     GraphPotts,
@@ -45,7 +43,6 @@ from artios.model.modules.potts import (
 from artios.model.output import PottsOutput
 from artios.model.utils import Mode, build_backbone_ligand_proximity_mask, masked_mean
 from artios.utils.casting import disable_autocast
-from artios.utils.geometry import compute_sse_burial_buckets
 
 ALPHABET_BIAS = 1e4
 logger = logging.getLogger(__name__)
@@ -164,14 +161,6 @@ class ArtiosPotts(nn.Module):
         self.composition_tolerance_k = sampling_cfg.composition_tolerance_k
         self.net_charge_penalty_weight = sampling_cfg.net_charge_penalty_weight
         self.net_charge_target_per_residue = sampling_cfg.net_charge_target_per_residue
-        self.hbond_density_penalty_weight = sampling_cfg.hbond_density_penalty_weight
-        self.per_sse_composition_penalty_weight = (
-            sampling_cfg.per_sse_composition_penalty_weight
-        )
-        self.per_sse_composition_nb_radius = sampling_cfg.per_sse_composition_nb_radius
-        self.per_sse_composition_nb_threshold = (
-            sampling_cfg.per_sse_composition_nb_threshold
-        )
 
     def _build_masked_inputs(self, context: FullContext) -> tuple[Tensor, Tensor]:
         """Build masked restypes and is_masked from the context's fixed residues."""
@@ -410,43 +399,6 @@ class ArtiosPotts(nn.Module):
                 )
 
             penalty_dict["net_charge"] = net_charge_penalty_fn
-
-        if self.hbond_density_penalty_weight > 0:
-            hbond_bb = context.coordinate.backbone_coordinate
-            hbond_chain = context.token.asym_id
-            hbond_token_mask = context.mask.token_mask
-
-            def hbond_density_penalty_fn(S: torch.Tensor) -> torch.Tensor:
-                return self.hbond_density_penalty_weight * hbond_density_penalty(
-                    S,
-                    hbond_bb,
-                    hbond_chain,
-                    hbond_token_mask,
-                )
-
-            penalty_dict["hbond_density"] = hbond_density_penalty_fn
-
-        if self.per_sse_composition_penalty_weight > 0:
-            # Backbone is fixed throughout Potts sampling, so bucket
-            # assignment is precomputed once here and captured in the closure
-            # below. DSSP + CB-NB are both backbone-only / token-mask-aware.
-            bucket_idx = compute_sse_burial_buckets(
-                context.coordinate.backbone_coordinate,
-                context.mask.token_mask,
-                nb_radius=self.per_sse_composition_nb_radius,
-                nb_threshold=self.per_sse_composition_nb_threshold,
-            )
-            sse_burial_mask = mutable_mask & context.entity.is_protein_token
-            sse_burial_weight = self.per_sse_composition_penalty_weight
-
-            def sse_burial_penalty_fn(S: torch.Tensor) -> torch.Tensor:
-                return sse_burial_weight * sse_burial_composition_penalty(
-                    S,
-                    bucket_idx=bucket_idx,
-                    token_mask=sse_burial_mask,
-                )
-
-            penalty_dict["sse_burial"] = sse_burial_penalty_fn
 
         penalty = PenaltyCollection(penalty_dict) if penalty_dict else None
 

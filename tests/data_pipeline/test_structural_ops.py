@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from biotite.structure import AtomArray, BondList
 
-from artios.data.structure.annotation_v2 import (
+from artios.data.structure.annotation import (
     canonicalize_chain_ids,
     order_atoms_by_mol,
 )
@@ -154,7 +154,7 @@ class TestOrderAtomsByMolOnGoldenFixtures:
         """``order_atoms_by_mol`` must drop exactly the bonds that
         ``remove_bonds_between_polymer_chains`` would drop — no more, no less.
         """
-        from artios.data.structure.annotation_v2 import (
+        from artios.data.structure.annotation import (
             remove_bonds_between_polymer_chains,
         )
 

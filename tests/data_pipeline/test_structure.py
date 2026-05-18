@@ -19,7 +19,7 @@ from artios.data.structure import (
     compute_token_grouping,
     compute_token_grouping_vectorized,
 )
-from artios.data.structure.annotation_v2 import MotifAnnotation
+from artios.data.structure.annotation import MotifAnnotation
 from artios.utils.file_io import load_atomarray_from_npz
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "parsing"
@@ -494,7 +494,7 @@ class TestAnnotate:
         ``annotate(include_ref_conformer=True)`` requires the atom_array to
         already carry ``ref_pos``/``ref_charge``/``ref_mask`` annotations;
         production parses do this through
-        ``annotation_v2.populate_ccd_reference`` inside
+        ``annotation.populate_ccd_reference`` inside
         ``load_bioassembly``. This test exercises the lower-level
         ``MmcifReader.atom_array()`` path, so we run the same helper
         explicitly here to mirror the production contract.
@@ -502,7 +502,7 @@ class TestAnnotate:
         from artios.data.filter import Filter, clean_structure
         from artios.data.parsing import residue_repair
         from artios.data.parsing.mmcif import MmcifReader
-        from artios.data.structure.annotation_v2 import populate_ccd_reference
+        from artios.data.structure.annotation import populate_ccd_reference
 
         reader = MmcifReader(FIXTURES / "5s8i.cif")
         entity_poly_type = reader.header.entity_poly_type

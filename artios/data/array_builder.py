@@ -23,7 +23,7 @@ from artios.data.parsing.json import (
     SMILESLigand,
 )
 from artios.data.parsing.motif import Motif, MotifLigand, MotifResidue
-from artios.data.structure.annotation_v2 import MotifMappingEntry
+from artios.data.structure.annotation import MotifMappingEntry
 from artios.data.structure.structure import AnnotatedStructure
 
 logger = logging.getLogger(__name__)

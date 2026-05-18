@@ -28,12 +28,11 @@ from artios.data.features import (
     ReferenceConformerContext,
     TokenContext,
 )
-from artios.data.features.context import FixedResidueContext
-from artios.data.parsing.json import FixedResidue
-from artios.data.features.context import MSAContext
+from artios.data.features.context import FixedResidueContext, MSAContext
 from artios.data.msa import MSA
+from artios.data.parsing.json import FixedResidue
 from artios.data.structure import AnnotatedStructure
-from artios.data.structure.annotation_v2 import MotifMappingEntry
+from artios.data.structure.annotation import MotifMappingEntry
 from artios.utils.geometry import compute_virtual_cb, random_transform
 
 _GAP_TOKEN = GAP["-"]  # 31
@@ -535,7 +534,7 @@ class ContextGenerator:
         self,
         include_arrays: bool = True,
         fixed_residues: list[FixedResidue] | None = None,
-    ) -> FullContext:        
+    ) -> FullContext:
         """Get all context required for design pipeline.
 
         Args:

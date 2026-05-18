@@ -313,7 +313,7 @@ STD_RESIDUES_AND_GAP = STD_RESIDUES | GAP  # used in restype encoding
 
 MASK_TOKEN = {"<mask>": len(STD_RESIDUES_AND_GAP)}  # index 32, for masked diffusion
 
-AROMATIC_INDICES = [PRO_STD_RESIDUES[res] for res in ("HIS", "PHE", "TRP", "TYR")]
+AROMATIC_INDICES = [PRO_STD_RESIDUES[res] for res in ("PHE", "TRP", "TYR")]
 CHARGED_INDICES = [PRO_STD_RESIDUES[res] for res in ("ASP", "GLU", "ARG", "LYS", "HIS")]
 
 rna_order_with_x = {

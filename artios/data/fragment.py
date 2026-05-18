@@ -11,7 +11,6 @@ from biotite.structure import AtomArray
 from scipy.sparse import csr_matrix
 from scipy.spatial import KDTree
 
-from artios.data.engineering.metrics.dssp import compute_dssp
 from artios.data.engineering.metrics.structural import (
     compute_corrected_contact_order,
     compute_hydrophobic_sasa_fraction,
@@ -24,6 +23,7 @@ from artios.data.engineering.pipeline.thresholds import (
     RG_UPPER_BOUND_COEFF,
     FragmentThresholds,
 )
+from artios.utils.dssp import compute_dssp
 
 logger = getLogger(__name__)
 

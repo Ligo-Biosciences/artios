@@ -1,21 +1,13 @@
-import functools
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
 import torch
-from einops import rearrange
 from torch import Tensor
 
 from artios.common import residue_names
 from artios.common.constants import AROMATIC_INDICES, CHARGED_INDICES
-from artios.common.hbond_propensities import (
-    as_matrix as _hbond_pair_matrix,
-)
-from artios.common.hbond_propensities import (
-    reach_array as _sidechain_reach_array,
-)
 from artios.common.residue_stats import OrganismAAFrequencies
 from artios.utils.typing import Bool, Float, Int
 
@@ -180,6 +172,101 @@ def complexity_lcp(
     return U
 
 
+def complexity_lcp_natural_prior(
+    S: Float[Tensor, "batch n_token num_residue_types"],
+    log_pi: Float[Tensor, "num_natural_aas"],
+    chain_id: Int[Tensor, "batch n_token"],
+    token_mask: Bool[Tensor, "batch n_token"],
+    window_size: int = 30,
+    nat_perp_min: float = 14.0,
+    num_natural_aas: int = 20,
+    min_coverage: float = 0.9,
+) -> Float[Tensor, "batch"]:
+    """Natural-prior LCP — Shannon-perplexity floor with a natural reference.
+
+    Identical sliding-window structure to :func:`complexity_lcp`, but the
+    reference distribution is the natural AA marginal ``π`` rather than the
+    uniform implicit reference. For each window centred at position ``i``:
+
+        CE[i] = -Σ_k p_k[i] · log(π_k)              (cross-entropy)
+        Pp[i] = exp(CE[i])                          ∈ [exp(min surprisal), exp(max surprisal)]
+
+    The penalty fires when ``Pp[i]`` falls below ``nat_perp_min`` —
+    equivalent to the window using common (low-surprisal) AAs more than the
+    natural background would predict. Because CE is *linear* in ``S``, the
+    penalty is quadratic in ``S`` and autograd-exact; no straight-through
+    estimator is needed.
+
+    Compared to :func:`complexity_lcp`:
+      * Reference distribution: π_natural instead of uniform.
+      * Differentiability: autograd exact, no STE block.
+      * Compute cost: O(N·W·Q) (one factor of Q cheaper than LCP's STE).
+      * Target failure mode: over-use of common AAs, not low Shannon entropy.
+
+    Args:
+        S: ``[B, N, R]`` one-hot or soft sequence. Only the first
+            ``num_natural_aas`` channels matter.
+        log_pi: ``[Q]`` log of natural AA frequencies in PROTEIN_TYPES
+            order. Precompute once from a reference set.
+        chain_id: ``[B, N]``; cross-chain windows are excluded.
+        token_mask: ``[B, N]`` valid-token mask.
+        window_size: Sliding-window width (default 30).
+        nat_perp_min: Natural-prior perplexity floor — windows whose
+            ``exp(CE)`` falls below this are penalised. Calibrate against
+            the natural distribution to match a desired offence rate.
+        num_natural_aas: Number of natural AA types (default 20).
+        min_coverage: Minimum window valid-fraction to count.
+
+    Returns:
+        Per-sample penalty ``[B]``. Higher = more low-surprisal-AA-heavy
+        windows.
+    """
+    B, N, _ = S.shape
+    device = S.device
+    dtype = S.dtype
+    Q = num_natural_aas
+
+    if N < window_size:
+        window_size = N
+    half_w = window_size // 2
+
+    # Per-residue surprisal: -log(π_{aa_j}). Linear in S.
+    S_aa = S[..., :Q]
+    surprisal = -(S_aa * log_pi).sum(dim=-1)  # [B, N]
+
+    mask_i_float = token_mask.to(dtype)
+    surprisal_masked = surprisal * mask_i_float  # invalid positions contribute 0
+
+    # Same windowing machinery as complexity_lcp.
+    offsets = torch.arange(window_size, device=device) - half_w
+    edge_idx = torch.arange(N, device=device)[None, :, None] + offsets[None, None, :]
+    valid_boundary = (edge_idx >= 0) & (edge_idx < N)
+    edge_idx = edge_idx.clamp(min=0, max=N - 1).expand(B, -1, -1)
+    W = edge_idx.shape[-1]
+    edge_flat = edge_idx.reshape(B, N * W)
+
+    chain_j = torch.gather(chain_id, 1, edge_flat).reshape(B, N, W)
+    chain_i = chain_id[:, :, None]
+    mask_j = torch.gather(token_mask.long(), 1, edge_flat).reshape(B, N, W).bool()
+    mask_ij = (
+        valid_boundary & (chain_i == chain_j) & mask_j & token_mask[:, :, None]
+    ).to(dtype)
+
+    surprisal_neighbors = torch.gather(surprisal_masked, 1, edge_flat).reshape(B, N, W)
+    window_sum = (mask_ij * surprisal_neighbors).sum(dim=-1)  # [B, N]
+    window_count = mask_ij.sum(dim=-1)  # [B, N]
+
+    mask_coverage = window_count > int(min_coverage * window_size)
+    mask_i_valid = ((window_count > 0) & token_mask & mask_coverage).to(dtype)
+
+    ce_per_window = window_sum / (window_count + 1e-8)  # [B, N]
+    perp_natural = torch.exp(ce_per_window)  # [B, N]
+
+    U = (nat_perp_min - perp_natural).clamp(min=0).square()
+    U = mask_i_valid * U  # [B, N]
+    return U.sum(dim=1)  # [B]
+
+
 def aromatic_enrichment_penalty(
     S: Float[Tensor, "batch n_token num_residue_types"],
     active_site_mask: Bool[Tensor, "batch n_token"],
@@ -296,117 +383,17 @@ def _frequencies_to_tensor(
     )
 
 
-@functools.lru_cache(maxsize=None)
-def _aa_pair_propensity_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
-    """Empirical sc-sc H-bond propensity, 20×20, in PROTEIN_TYPES order. Cached per (device, dtype)."""
-    return torch.tensor(
-        _hbond_pair_matrix(order=residue_names.PROTEIN_TYPES),
-        device=device,
-        dtype=dtype,
-    )
+def build_natural_log_pi(
+    organism_freqs: OrganismAAFrequencies,
+    device: torch.device,
+) -> Tensor:
+    """Build log natural AA frequency tensor in PROTEIN_TYPES order.
 
-
-@functools.lru_cache(maxsize=None)
-def _aa_reach_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
-    """Per-AA sidechain reach (Å), 20-element, in PROTEIN_TYPES order. Cached per (device, dtype)."""
-    return torch.tensor(
-        _sidechain_reach_array(order=residue_names.PROTEIN_TYPES),
-        device=device,
-        dtype=dtype,
-    )
-
-
-def hbond_density_penalty(
-    S: Float[Tensor, "batch n_token num_residue_types"],
-    backbone_coords: Float[Tensor, "batch n_token 5 3"],
-    chain_id: Int[Tensor, "batch n_token"],
-    token_mask: Bool[Tensor, "batch n_token"],
-    target_density: float = 0.35,
-    tolerance: float = 0.10,
-    distance_cutoff: float = 15.0,
-    sharpness: float = 2.0,
-    sequence_separation: int = 1,
-    num_natural_aas: int = 20,
-) -> Float[Tensor, "batch"]:
-    """Two-sided dead-zone quadratic on per-residue sc-sc H-bond density.
-
-    Per-pair score is ``M[aa_i, aa_j] * sigmoid((cutoff - d_ij) / sharpness)``,
-    summed over upper-triangular intra-chain pairs (|i - j| ≥ sequence_separation)
-    and divided by the AA residue count. ``M`` is the empirical pair propensity
-    from ``artios.common.hbond_propensities``; ``d_ij`` is between virtual
-    sidechain functional tips at ``CA + reach[aa] * (CB - CA) / ||CB - CA||``.
-    The featurizer already populates the CB slot of ``backbone_coords`` with
-    the ProteinMPNN virtual Cβ (even for GLY positions), so we read it
-    directly rather than recomputing.
-
-    Penalty is zero inside the band ``[target − tolerance, target + tolerance]``
-    and quadratic in the deviation from the nearer band edge outside it. This
-    leaves a wide range of physically acceptable densities unpenalized while
-    pushing samples that are clearly too sparse (or too saturated) back toward
-    the band.
-
-    Args:
-        S: Sequence tensor [B, N, R]; only the first ``num_natural_aas`` channels matter.
-        backbone_coords: [B, N, 5, 3] in (N, CA, C, O, CB); only CA and CB are used.
-        chain_id: [B, N]; cross-chain pairs are excluded.
-        token_mask: [B, N] valid-token mask.
-        target_density: Per-residue density target (default 0.35).
-        tolerance: Half-width of the zero-penalty band around ``target_density``.
-            Default 0.10 gives an acceptable window of [0.25, 0.45].
-        distance_cutoff, sharpness: Soft sigmoid distance gate parameters, Å.
-        sequence_separation: Minimum |i - j| for a pair to count.
-        num_natural_aas: Number of natural amino acid types (default 20).
-
-    Returns:
-        Per-sample penalty [B]. Higher = farther outside the band.
+    Convenience helper for plugging an organism reference into
+    :func:`complexity_lcp_natural_prior`. Returns a ``[Q]``-shaped float32
+    log-probability tensor ready to be passed as ``log_pi``.
     """
-    B, N, _ = S.shape
-    device = S.device
-    dtype = S.dtype
-    Q = num_natural_aas
-
-    reach = _aa_reach_tensor(device, dtype)  # [Q]
-    chem_matrix = _aa_pair_propensity_tensor(device, dtype)  # [Q, Q]
-
-    ca = backbone_coords[..., 1, :]
-    cb = backbone_coords[..., 4, :]
-    cb_dir = cb - ca
-    cb_dir = cb_dir / (cb_dir.norm(dim=-1, keepdim=True) + 1e-8)
-
-    S_aa = S[..., :Q]
-    per_res_reach = (S_aa * reach).sum(dim=-1)
-    centre = ca + per_res_reach.unsqueeze(-1) * cb_dir  # [B, N, 3]
-
-    # Bilinear-in-S pair chemistry: chem_pair[b, i, j] = S_i^T M S_j.
-    chem_pair = (S_aa @ chem_matrix) @ S_aa.transpose(-1, -2)  # [B, N, N]
-
-    diff = rearrange(centre, "b n c -> b n 1 c") - rearrange(centre, "b n c -> b 1 n c")
-    distance_gate = torch.sigmoid((distance_cutoff - diff.norm(dim=-1)) / sharpness)
-
-    # Non-AA tokens (UNK, gap, nucleotides) have S_aa all zero — exclude them from
-    # the denominator too, otherwise they dilute the per-AA-residue density.
-    aa_token_mask = token_mask & (S_aa.sum(dim=-1) > 0)
-    n_aa_residues = aa_token_mask.to(dtype).sum(dim=-1)  # [B]
-
-    intra_pair = torch.triu(
-        torch.ones(N, N, dtype=torch.bool, device=device),
-        diagonal=sequence_separation,
-    )
-    same_chain = rearrange(chain_id, "b n -> b n 1") == rearrange(
-        chain_id, "b n -> b 1 n"
-    )
-    both_aa = rearrange(aa_token_mask, "b n -> b n 1") & rearrange(
-        aa_token_mask, "b n -> b 1 n"
-    )
-    pair_mask = (same_chain & both_aa & intra_pair).to(dtype)
-
-    density = (chem_pair * distance_gate * pair_mask).sum(
-        dim=(-2, -1)
-    ) / n_aa_residues.clamp(min=1)
-    # Two-sided dead zone: deviation outside [target − tol, target + tol] only.
-    excess = ((density - target_density).abs() - tolerance).clamp(min=0)
-    # Zero out empty-AA samples; without the multiplier they'd carry a phantom (target − tol)².
-    return excess.square() * (n_aa_residues > 0).to(dtype)
+    return _frequencies_to_tensor(organism_freqs.mean, device).clamp(min=1e-8).log()
 
 
 def composition_chi_squared_penalty(

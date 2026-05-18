@@ -13,7 +13,7 @@ import torch
 
 from artios.data.collate.collate import CollateContexts
 from artios.data.features.context import BasicContext
-from artios.data.structure.annotation_v2 import MotifMappingEntry
+from artios.data.structure.annotation import MotifMappingEntry
 
 
 def _make_basic_context(

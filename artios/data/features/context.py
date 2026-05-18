@@ -27,7 +27,7 @@ from biotite.structure import AtomArray
 from torch import Tensor
 
 from artios.data.collate.padding import pad_tensor
-from artios.data.structure.annotation_v2 import MotifMappingEntry
+from artios.data.structure.annotation import MotifMappingEntry
 from artios.data.structure.tokenizer import TokenArray
 from artios.utils.typing import Bool, Float, Int, typecheck
 

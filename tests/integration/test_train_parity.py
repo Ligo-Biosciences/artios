@@ -35,7 +35,7 @@ import numpy as np
 
 from artios.data.features.featurizer import ContextGenerator
 from artios.data.structure import AnnotatedStructure
-from artios.data.structure.annotation_v2 import MotifAnnotation
+from artios.data.structure.annotation import MotifAnnotation
 from artios.utils.seed import seed_everything
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"

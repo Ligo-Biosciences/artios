@@ -2,7 +2,7 @@
 
 Pins the tensor output of each inference dataset on a fixed input. Any
 divergence names the field that silently broke. See
-``tests/integration/CLAUDE.md`` for regeneration ergonomics.
+``tests/integration/AGENTS.md`` for regeneration ergonomics.
 """
 
 from __future__ import annotations
@@ -14,12 +14,11 @@ from typing import Any
 
 import numpy as np
 import pytest
+from biotite.structure import AtomArray
 
 from artios.data.parsing.json import (
     BackboneInput,
-    FastaFile,
     NPZFile,
-    PackingInput,
     SequenceDesignInput,
 )
 from artios.utils.seed import seed_everything
@@ -96,10 +95,8 @@ class TestMotifDatasetParity:
     """Pin ``MotifDataset[0]`` FullContext tensors on the carbonic-anhydrase motif.
 
     The motif-critical inference path: exercises ``build_motif`` →
-    ``add_atom_array_attributes`` → ``AtomArrayTokenizer`` → old
-    ``ContextGenerator``. PR 1 of the P7 refactor replaces this with
     ``AnnotatedStructure.annotate()`` → ``.with_unindexed_motif()`` → new
-    ``ContextGenerator``; the golden stays the same.
+    ``ContextGenerator``. The golden pins that the unified path stays stable.
     """
 
     GOLDEN = GOLDEN_DIR / "backbone_motif_ccd" / "context.npz"
@@ -131,9 +128,8 @@ class TestMPNNDatasetParity:
     Input: a ``batch_0_backbone.npz`` pulled from the ``artios-evaluation``
     modal volume (v2.6 finetune sweep). Exercises the non-motif inference
     featurizer path — no ``build_motif`` involvement, just
-    ``AtomArrayTokenizer`` → old ``ContextGenerator`` on an already-annotated
-    AtomArrayStack. PR 1 replaces it with ``AnnotatedStructure.from_atom_array``
-    → new ``ContextGenerator``.
+    ``AnnotatedStructure.from_atom_array`` → new ``ContextGenerator`` on an
+    already-annotated AtomArrayStack.
     """
 
     NPZ = GOLDEN_DIR / "mpnn" / "backbone.npz"
@@ -172,46 +168,25 @@ class TestMPNNDatasetParity:
         _assert_deterministic(self._run)
 
 
-class TestPackingDatasetParity:
-    """Pin ``PackingDataset[0]`` FullContext tensors on a real backbone stack.
+class TestPackingDatasetDisabled:
+    """Packing is intentionally disabled at runtime while its adapter is rebuilt.
 
-    Shares the MPNN stack npz but pairs it with a committed deterministic
-    FASTA (``sequences.fasta`` — 10 identical ACDE...VWY x8 sequences). The
-    pre-refactor golden is generated with the legacy ``packing_input_to_atom_array_v2``
-    → ``AtomArrayTokenizer`` → old ``ContextGenerator`` path; post-refactor
-    (P7) it must match byte-for-byte.
+    The contract is import-safety: importing shared inference modules must keep
+    working for backbone/MPNN/Potts/evaluation flows, but actually invoking
+    packing should raise at the packing adapter boundary.
     """
 
-    NPZ = GOLDEN_DIR / "mpnn" / "backbone.npz"
-    FASTA = GOLDEN_DIR / "packing" / "sequences.fasta"
-    GOLDEN = GOLDEN_DIR / "packing" / "context.npz"
-
-    def _run(self) -> Any:
-        from artios.data.infer_data_pipeline import PackingDataset
-
-        packing_input = PackingInput(
-            name="packing-parity",
-            npz_file=NPZFile(path=self.NPZ),
-            fasta_file=FastaFile(path=self.FASTA),
+    def test_packing_adapter_raises_only_when_called(self):
+        from artios.data.array_builder import packing_input_to_structure
+        from artios.data.infer_data_pipeline import (
+            MotifDataset,
+            MPNNDataset,
+            PackingDataset,
         )
-        _seed()
-        return PackingDataset(packing_input)[0]
 
-    def test_fixture_present(self):
-        if not self.NPZ.exists():
-            pytest.skip(
-                f"Packing test reuses MPNN fixture {self.NPZ}; pull with "
-                "`modal volume get artios-evaluation "
-                "v2.6-afdb-mgnify-fine-tune-ckpt-sweep/batches/batch_0/"
-                "batch_0_backbone.npz " + str(self.NPZ) + "`"
-            )
+        assert MotifDataset is not None
+        assert MPNNDataset is not None
+        assert PackingDataset is not None
 
-    def test_packing_dataset_matches_golden(self, regenerate_golden):
-        if not self.NPZ.exists():
-            pytest.skip(f"Packing test needs MPNN fixture {self.NPZ}")
-        _assert_round_trip(self.GOLDEN, self._run(), regenerate_golden)
-
-    def test_run_is_deterministic(self):
-        if not self.NPZ.exists():
-            pytest.skip(f"Packing test needs MPNN fixture {self.NPZ}")
-        _assert_deterministic(self._run)
+        with pytest.raises(NotImplementedError, match="Packing input construction"):
+            packing_input_to_structure(AtomArray(0), [])

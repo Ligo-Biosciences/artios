@@ -29,7 +29,7 @@ import numpy as np
 from biotite.structure import AtomArray, BondList
 
 from artios.data.structure import AnnotatedStructure
-from artios.data.structure.annotation_v2 import _AnnotationGroup
+from artios.data.structure.annotation import _AnnotationGroup
 
 log = logging.getLogger(__name__)
 

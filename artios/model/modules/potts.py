@@ -11,10 +11,24 @@ from einops import rearrange, repeat
 from torch import Tensor, nn
 from typing_extensions import assert_never
 
+from artios.common.constants import (
+    ANIONIC_RESIDUES,
+    AROMATIC_RESIDUES,
+    CATIONIC_RESIDUES,
+    HYDROPHOBIC_RESIDUES,
+    mmcif_restype_3to1,
+)
 from artios.common.residue_names import PROTEIN_TYPES_ONE_LETTER_TO_INT
 from artios.model.modules.message_passing import gather_nodes
 from artios.model.modules.primitives import Linear
 from artios.utils.typing import Bool, Float, Int, typecheck
+
+RESIDUE_GROUPS: dict[str, frozenset[str]] = {
+    "hydrophobic": frozenset(mmcif_restype_3to1[r] for r in HYDROPHOBIC_RESIDUES),
+    "aromatic": frozenset(mmcif_restype_3to1[r] for r in AROMATIC_RESIDUES),
+    "anionic": frozenset(mmcif_restype_3to1[r] for r in ANIONIC_RESIDUES),
+    "cationic": frozenset(mmcif_restype_3to1[r] for r in CATIONIC_RESIDUES),
+}
 
 
 class GraphPottsParameterisation(Enum):
@@ -124,6 +138,34 @@ def build_energy_bias_vector(
             continue
         idx = PROTEIN_TYPES_ONE_LETTER_TO_INT[code]
         bias[idx] = value
+        any_nonzero = True
+    return bias if any_nonzero else None
+
+
+def build_group_energy_bias_vector(
+    group_bias: dict[str, float],
+    num_residue_types: int,
+    device: torch.device,
+) -> Tensor | None:
+    """Build a per-residue energy bias vector from group-level biases.
+
+    Each group's bias is applied to every member residue of that group. Biases
+    accumulate for residues belonging to multiple groups (e.g. HIS is both
+    aromatic and cationic).
+    """
+    bias = torch.zeros(num_residue_types, device=device)
+    any_nonzero = False
+    for group, value in group_bias.items():
+        if value == 0.0:
+            continue
+        if group not in RESIDUE_GROUPS:
+            raise ValueError(
+                f"Unknown residue group '{group}'. "
+                f"Expected one of {sorted(RESIDUE_GROUPS)}."
+            )
+        for code in RESIDUE_GROUPS[group]:
+            idx = PROTEIN_TYPES_ONE_LETTER_TO_INT[code]
+            bias[idx] = bias[idx] + value
         any_nonzero = True
     return bias if any_nonzero else None
 

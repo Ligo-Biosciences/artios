@@ -7,6 +7,7 @@ Supports:
 
 from __future__ import annotations
 
+import copy
 import json
 from enum import Enum
 from pathlib import Path
@@ -14,8 +15,16 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-# from artios.data.chem.ccd import is_valid_ccd_code
 from artios.data.chem.rdkit import is_valid_smiles, parse_smiles
+
+# Placeholder design length used when validating an artios input JSON
+# whose `spec.design[0].length` is the conventional empty string `""`
+# (defers to the CLI's `--evaluation.common.design_lengths`). We need
+# *some* int to make the Pydantic field-type check pass; the value is
+# only used at validation time and never written to disk.
+PSEUDO_DESIGN_LENGTH = 42
+
+# from artios.data.chem.ccd import is_valid_ccd_code
 
 # ---------------------------------------------------------------------------
 # Inference input models
@@ -107,6 +116,42 @@ def parse_input_dict(
                     spec_with_name["fasta_file"] = {"path": fasta_file_value}
 
             return PackingInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
+
+
+def parse_backbone_input(
+    input_dict: dict[str, Any], design_length: int
+) -> BackboneInput:
+    """Parse a backbone-task input dict into a `BackboneInput` model.
+
+    Injects `design_length` into `spec.design[0].length` before parsing
+    so the validation passes when the on-disk JSON has the conventional
+    `""` (defer-to-CLI) sentinel. The mutation is on a deep copy; the
+    caller's dict is unchanged.
+
+    Raises:
+        ValueError: if the dict isn't a valid backbone input.
+        pydantic.ValidationError: from `parse_input_dict`.
+    """
+    input_data = copy.deepcopy(input_dict)
+    input_data["spec"]["design"][0]["length"] = design_length
+    parsed = parse_input_dict(input_data)
+    if not isinstance(parsed, BackboneInput):
+        raise ValueError(f"Expected BackboneInput, got {type(parsed).__name__}")
+    return parsed
+
+
+def validate_artios_input_json(input_dict: dict[str, Any]) -> None:
+    """Validate an artios input JSON dict against the BackboneInput schema.
+
+    Same checks `run_batch_modal_inference.py` runs at launch — pulled
+    earlier into the authoring loop so the eval-bot agent can catch
+    schema errors before writing the file.
+
+    Raises:
+        ValueError: if the dict isn't a valid backbone input.
+        pydantic.ValidationError: surfaced from Pydantic.
+    """
+    parse_backbone_input(input_dict, design_length=PSEUDO_DESIGN_LENGTH)
 
 
 # ---------------------------------------------------------------------------

@@ -23,10 +23,11 @@ from artios.model.modules.mpnn import MPNN
 from artios.model.modules.penalty import (
     PenaltyCollection,
     aromatic_enrichment_penalty,
+    build_natural_log_pi,
     charged_enrichment_penalty,
     complexity_lcp,
+    complexity_lcp_natural_prior,
     composition_chi_squared_penalty,
-    hbond_density_penalty,
     net_charge_penalty,
 )
 from artios.model.modules.potts import (
@@ -34,6 +35,7 @@ from artios.model.modules.potts import (
     GraphPottsParameterisation,
     build_alphabet_mask,
     build_energy_bias_vector,
+    build_group_energy_bias_vector,
     build_mutable_mask,
     build_s_init,
     compute_potts_single_logits,
@@ -133,9 +135,20 @@ class ArtiosPotts(nn.Module):
         self.complexity_penalty_weight = sampling_cfg.complexity_penalty_weight
         self.complexity_window_size = sampling_cfg.complexity_window_size
         self.complexity_entropy_min = sampling_cfg.complexity_entropy_min
+        self.complexity_nat_prior_penalty_weight = (
+            sampling_cfg.complexity_nat_prior_penalty_weight
+        )
+        self.complexity_nat_prior_window_size = (
+            sampling_cfg.complexity_nat_prior_window_size
+        )
+        self.complexity_nat_prior_perp_min = sampling_cfg.complexity_nat_prior_perp_min
+        self.complexity_nat_prior_organism = Organism(
+            sampling_cfg.complexity_nat_prior_organism
+        )
         self.exclude_cys = sampling_cfg.exclude_cys
         self.exclude_met = sampling_cfg.exclude_met
         self.energy_bias = dict(sampling_cfg.energy_bias)
+        self.group_energy_bias = dict(sampling_cfg.group_energy_bias)
         self.ensemble_size = sampling_cfg.ensemble_size
         self.ensemble_noise_scale = sampling_cfg.ensemble_noise_scale
         self.aromatic_penalty_weight = sampling_cfg.aromatic_penalty_weight
@@ -148,9 +161,6 @@ class ArtiosPotts(nn.Module):
         self.composition_tolerance_k = sampling_cfg.composition_tolerance_k
         self.net_charge_penalty_weight = sampling_cfg.net_charge_penalty_weight
         self.net_charge_target_per_residue = sampling_cfg.net_charge_target_per_residue
-        self.hbond_density_penalty_weight = sampling_cfg.hbond_density_penalty_weight
-        self.hbond_density_target = sampling_cfg.hbond_density_target
-        self.hbond_density_tolerance = sampling_cfg.hbond_density_tolerance
 
     def _build_masked_inputs(self, context: FullContext) -> tuple[Tensor, Tensor]:
         """Build masked restypes and is_masked from the context's fixed residues."""
@@ -279,6 +289,9 @@ class ArtiosPotts(nn.Module):
             mutable_mask, R, self.exclude_cys, self.exclude_met
         )
         energy_bias = build_energy_bias_vector(self.energy_bias, R, device)
+        group_energy_bias = build_group_energy_bias_vector(
+            self.group_energy_bias, R, device
+        )
         S_init = build_s_init(
             h,
             self.potts_sampler.temperature_init,
@@ -296,6 +309,11 @@ class ArtiosPotts(nn.Module):
             h = h + energy_bias
             if h_uncond is not None:
                 h_uncond = h_uncond + energy_bias
+
+        if group_energy_bias is not None:
+            h = h + group_energy_bias
+            if h_uncond is not None:
+                h_uncond = h_uncond + group_energy_bias
 
         ### Penalty logic
         penalty_dict: dict[str, callable] = {}
@@ -317,6 +335,28 @@ class ArtiosPotts(nn.Module):
                 )
 
             penalty_dict["lcp"] = lcp_penalty
+
+        if self.complexity_nat_prior_penalty_weight > 0:
+            chain_id = context.token.asym_id
+            token_mask = context.mask.token_mask
+            nat_lcp_weight = self.complexity_nat_prior_penalty_weight
+            nat_lcp_window_size = self.complexity_nat_prior_window_size
+            nat_lcp_perp_min = self.complexity_nat_prior_perp_min
+            nat_log_pi = build_natural_log_pi(
+                AA_FREQUENCIES[self.complexity_nat_prior_organism], device
+            )
+
+            def nat_prior_lcp_penalty(S: torch.Tensor) -> torch.Tensor:
+                return nat_lcp_weight * complexity_lcp_natural_prior(
+                    S,
+                    log_pi=nat_log_pi,
+                    chain_id=chain_id,
+                    token_mask=token_mask,
+                    window_size=nat_lcp_window_size,
+                    nat_perp_min=nat_lcp_perp_min,
+                )
+
+            penalty_dict["nat_prior_lcp"] = nat_prior_lcp_penalty
 
         if self.aromatic_penalty_weight > 0:
 
@@ -359,25 +399,6 @@ class ArtiosPotts(nn.Module):
                 )
 
             penalty_dict["net_charge"] = net_charge_penalty_fn
-
-        if self.hbond_density_penalty_weight > 0:
-            hbond_bb = context.coordinate.backbone_coordinate
-            hbond_chain = context.token.asym_id
-            hbond_token_mask = context.mask.token_mask
-            hbond_target = self.hbond_density_target
-            hbond_tolerance = self.hbond_density_tolerance
-
-            def hbond_density_penalty_fn(S: torch.Tensor) -> torch.Tensor:
-                return self.hbond_density_penalty_weight * hbond_density_penalty(
-                    S,
-                    hbond_bb,
-                    hbond_chain,
-                    hbond_token_mask,
-                    target_density=hbond_target,
-                    tolerance=hbond_tolerance,
-                )
-
-            penalty_dict["hbond_density"] = hbond_density_penalty_fn
 
         penalty = PenaltyCollection(penalty_dict) if penalty_dict else None
 

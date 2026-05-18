@@ -1,32 +1,14 @@
-import functools
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
 import torch
-from einops import rearrange
 from torch import Tensor
-from torch.nn import functional as F
 
 from artios.common import residue_names
 from artios.common.constants import AROMATIC_INDICES, CHARGED_INDICES
-from artios.common.hbond_propensities import (
-    as_matrix as _hbond_pair_matrix,
-)
-from artios.common.hbond_propensities import (
-    reach_array as _sidechain_reach_array,
-)
 from artios.common.residue_stats import OrganismAAFrequencies
-from artios.common.sse_burial_stats import (
-    SSE_BURIAL_BUCKETS,
-)
-from artios.common.sse_burial_stats import (
-    as_mu_matrix as _sse_burial_mu_matrix,
-)
-from artios.common.sse_burial_stats import (
-    as_sigma_matrix as _sse_burial_sigma_matrix,
-)
 from artios.utils.typing import Bool, Float, Int
 
 
@@ -414,120 +396,6 @@ def build_natural_log_pi(
     return _frequencies_to_tensor(organism_freqs.mean, device).clamp(min=1e-8).log()
 
 
-@functools.lru_cache(maxsize=None)
-def _aa_pair_propensity_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
-    """Empirical sc-sc H-bond propensity, 20×20, in PROTEIN_TYPES order. Cached per (device, dtype)."""
-    return torch.tensor(
-        _hbond_pair_matrix(order=residue_names.PROTEIN_TYPES),
-        device=device,
-        dtype=dtype,
-    )
-
-
-@functools.lru_cache(maxsize=None)
-def _aa_reach_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
-    """Per-AA sidechain reach (Å), 20-element, in PROTEIN_TYPES order. Cached per (device, dtype)."""
-    return torch.tensor(
-        _sidechain_reach_array(order=residue_names.PROTEIN_TYPES),
-        device=device,
-        dtype=dtype,
-    )
-
-
-def hbond_density_penalty(
-    S: Float[Tensor, "batch n_token num_residue_types"],
-    backbone_coords: Float[Tensor, "batch n_token 5 3"],
-    chain_id: Int[Tensor, "batch n_token"],
-    token_mask: Bool[Tensor, "batch n_token"],
-    distance_cutoff: float = 5.0,
-    sharpness: float = 2.0,
-    sequence_separation: int = 1,
-    num_natural_aas: int = 20,
-) -> Float[Tensor, "batch"]:
-    """Open-ended sc-sc H-bond *encourager* — minus the expected H-bond score.
-
-    Penalty per sample is::
-
-        U = − Σ_{i < j, same chain, |i−j| ≥ sequence_separation}
-                M[aa_i, aa_j] · sigmoid((cutoff − d_ij) / sharpness)
-
-    ``M`` is the empirical sc–sc H-bond pair propensity (symmetric, 20×20) from
-    ``artios.common.hbond_propensities``. ``d_ij`` is the distance between
-    virtual sidechain functional tips at ``CA + reach[aa] · (CB − CA)/||CB − CA||``;
-    the featurizer fills CB even for GLY (ProteinMPNN virtual Cβ).
-
-    There is no target, no tolerance, no dead-zone, and no squared form:
-    every additional in-range, chemically compatible neighbor lowers the
-    energy by a fixed amount. The per-position gradient is
-
-        ∂U/∂S[i, r] = − Σ_{j ≠ i, valid} M[r, aa_j] · gate_ij
-
-    which scales with the number of in-range neighbors, not with 1/N. Large
-    proteins get a proportionally larger total penalty but the same
-    per-position pull, which is what the DLMC sampler consumes.
-
-    The default ``distance_cutoff = 5 Å`` was chosen so the gate fires only
-    when virtual tips are within plausible sc-sc H-bond geometry — wider
-    cutoffs (8–15 Å) preserve Spearman correlation with biotite-detected
-    H-bonds but spread the gradient thin across many distant pairs (see
-    ``docs/potential_improvements/hbond_density_penalty_scale.md``).
-
-    Args:
-        S: Sequence tensor [B, N, R]; only the first ``num_natural_aas`` channels matter.
-        backbone_coords: [B, N, 5, 3] in (N, CA, C, O, CB); only CA and CB are used.
-        chain_id: [B, N]; cross-chain pairs are excluded.
-        token_mask: [B, N] valid-token mask.
-        distance_cutoff, sharpness: Soft sigmoid distance gate parameters, Å.
-        sequence_separation: Minimum |i − j| for a pair to count.
-        num_natural_aas: Number of natural amino acid types (default 20).
-
-    Returns:
-        Per-sample penalty [B]; more negative = more sc-sc H-bonds expected.
-    """
-    _, N, _ = S.shape
-    device = S.device
-    dtype = S.dtype
-    Q = num_natural_aas
-
-    reach = _aa_reach_tensor(device, dtype)  # [Q]
-    chem_matrix = _aa_pair_propensity_tensor(device, dtype)  # [Q, Q]
-
-    ca = backbone_coords[..., 1, :]
-    cb = backbone_coords[..., 4, :]
-    cb_dir = cb - ca
-    cb_dir = cb_dir / (cb_dir.norm(dim=-1, keepdim=True) + 1e-8)
-
-    S_aa = S[..., :Q]
-    per_res_reach = (S_aa * reach).sum(dim=-1)
-    centre = ca + per_res_reach.unsqueeze(-1) * cb_dir  # [B, N, 3]
-
-    # Bilinear-in-S pair chemistry: chem_pair[b, i, j] = S_i^T M S_j.
-    chem_pair = (S_aa @ chem_matrix) @ S_aa.transpose(-1, -2)  # [B, N, N]
-
-    diff = rearrange(centre, "b n c -> b n 1 c") - rearrange(centre, "b n c -> b 1 n c")
-    distance_gate = torch.sigmoid((distance_cutoff - diff.norm(dim=-1)) / sharpness)
-
-    # Non-AA tokens (UNK, gap, nucleotides) have S_aa all zero and contribute
-    # 0 to chem_pair anyway; gating pair_mask on aa_token_mask keeps the
-    # pair set semantically clean (and matches LCP's treatment).
-    aa_token_mask = token_mask & (S_aa.sum(dim=-1) > 0)
-
-    intra_pair = torch.triu(
-        torch.ones(N, N, dtype=torch.bool, device=device),
-        diagonal=sequence_separation,
-    )
-    same_chain = rearrange(chain_id, "b n -> b n 1") == rearrange(
-        chain_id, "b n -> b 1 n"
-    )
-    both_aa = rearrange(aa_token_mask, "b n -> b n 1") & rearrange(
-        aa_token_mask, "b n -> b 1 n"
-    )
-    pair_mask = (same_chain & both_aa & intra_pair).to(dtype)
-
-    hbond_score = (chem_pair * distance_gate * pair_mask).sum(dim=(-2, -1))
-    return -hbond_score
-
-
 def composition_chi_squared_penalty(
     S: Float[Tensor, "batch n_token num_residue_types"],
     protein_mutable_mask: Bool[Tensor, "batch n_token"],
@@ -628,94 +496,3 @@ def net_charge_penalty(
 
     penalty = (net_per_res - target_per_residue).square()
     return penalty * (n_residues > 0).to(S.dtype)
-
-
-# Matches artios.utils.geometry.NUM_SSE_BURIAL_BUCKETS and the row count of
-# the (μ, σ) tables in artios.common.sse_burial_stats.
-_NUM_SSE_BURIAL_BUCKETS = len(SSE_BURIAL_BUCKETS)
-
-
-@functools.lru_cache(maxsize=None)
-def _sse_burial_mu_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
-    """Natural per-bucket per-AA μ, shape ``[6, 20]`` in PROTEIN_TYPES order.
-
-    Cached per (device, dtype) — mirrors ``_aa_pair_propensity_tensor``.
-    """
-    return torch.tensor(
-        _sse_burial_mu_matrix(order=residue_names.PROTEIN_TYPES),
-        device=device,
-        dtype=dtype,
-    )
-
-
-@functools.lru_cache(maxsize=None)
-def _sse_burial_sigma_tensor(device: torch.device, dtype: torch.dtype) -> Tensor:
-    """Natural per-bucket per-AA σ, shape ``[6, 20]`` in PROTEIN_TYPES order.
-
-    Cached per (device, dtype).
-    """
-    return torch.tensor(
-        _sse_burial_sigma_matrix(order=residue_names.PROTEIN_TYPES),
-        device=device,
-        dtype=dtype,
-    )
-
-
-def sse_burial_composition_penalty(
-    S: Float[Tensor, "batch n_token num_residue_types"],
-    bucket_idx: Int[Tensor, "batch n_token"],
-    token_mask: Bool[Tensor, "batch n_token"],
-    num_natural_aas: int = 20,
-) -> Float[Tensor, "batch"]:
-    """σ²-weighted regression-to-mean composition penalty per (SSE × burial) bucket.
-
-    For each of the 6 buckets (α/β/coil × buried/exposed), computes the
-    per-bucket AA frequency in the sample and penalises deviation from a
-    natural reference (μ, σ) under a no-dead-zone χ² statistic::
-
-        p_{b,q}  =  Σ_{i: bucket_i = b}  S_{i,q}  /  N_b
-        L        =  Σ_{b, q}  (p_{b,q} − μ_{b,q})² / σ_{b,q}²
-
-    Reference (μ, σ) are loaded from :mod:`artios.common.sse_burial_stats` —
-    per-structure mean and standard deviation of AA frequency across natural
-    monomers. Rare AAs (small σ) get amplified gradient force per unit
-    deviation, so an aromatic deficit pushes the sampler as hard as an
-    alanine surplus despite the much smaller absolute frequency gap.
-
-    Positions with ``bucket_idx == -1`` (chain padding, missing backbone,
-    DSSP-too-short, or otherwise masked) and buckets that end up empty in a
-    sample contribute 0. p is linear in S so autograd is exact.
-
-    Args:
-        S: ``[B, N, R]`` one-hot or soft sequence; only the first
-            ``num_natural_aas`` channels are read.
-        bucket_idx: ``[B, N]`` int from
-            :func:`artios.utils.geometry.compute_sse_burial_buckets` — values
-            in ``{0..5}`` or ``-1`` for ignore. Backbone is fixed during
-            Potts sampling, so this should be precomputed once per inference.
-        token_mask: ``[B, N]`` valid-token mask.
-        num_natural_aas: Number of natural AA types (default 20).
-
-    Returns:
-        Per-sample penalty ``[B]``; larger = farther from the natural
-        per-bucket composition.
-    """
-    Q = num_natural_aas
-    K = _NUM_SSE_BURIAL_BUCKETS
-
-    mu = _sse_burial_mu_tensor(S.device, S.dtype)  # [K, Q]
-    sigma = _sse_burial_sigma_tensor(S.device, S.dtype)  # [K, Q]
-
-    S_aa = S[..., :Q]
-    valid = (token_mask & (bucket_idx >= 0)).to(S.dtype)  # [B, N]
-    bucket_one_hot = F.one_hot(bucket_idx.clamp(min=0), num_classes=K).to(S.dtype)
-    bucket_one_hot = bucket_one_hot * valid.unsqueeze(-1)  # [B, N, K]
-
-    counts = bucket_one_hot.transpose(-1, -2) @ S_aa  # [B, K, Q]
-    n_per_bucket = bucket_one_hot.sum(dim=1)  # [B, K]
-
-    p = counts / (n_per_bucket.unsqueeze(-1) + 1e-8)  # [B, K, Q]
-    z_squared = ((p - mu) / (sigma + 1e-8)) ** 2  # [B, K, Q]
-    per_bucket = z_squared.sum(dim=-1)  # [B, K]
-
-    return (per_bucket * (n_per_bucket > 0).to(S.dtype)).sum(dim=-1)

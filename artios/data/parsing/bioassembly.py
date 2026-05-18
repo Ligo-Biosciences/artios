@@ -23,7 +23,7 @@ from artios.data import filter as filter_module
 from artios.data.filter import Filter
 from artios.data.parsing import _biotite_compat, residue_repair
 from artios.data.parsing.mmcif import MmcifHeader, MmcifReader
-from artios.data.structure import AnnotatedStructure, annotation_v2
+from artios.data.structure import AnnotatedStructure, annotation
 
 logger = logging.getLogger(__name__)
 
@@ -485,7 +485,7 @@ def load_bioassembly(
 
     # Annotate once — the filter gate below reads ``mol_id`` /
     # ``centre_atom_mask`` / ``is_resolved`` off the typed groups.
-    atom_array = annotation_v2.populate_ccd_reference(atom_array)
+    atom_array = annotation.populate_ccd_reference(atom_array)
     structure = AnnotatedStructure.annotate(
         atom_array,
         sequences=header.sequences,
@@ -503,7 +503,7 @@ def load_bioassembly(
     if structure is None:
         return None
 
-    structure = annotation_v2.add_pocket_annotation(structure)
+    structure = annotation.add_pocket_annotation(structure)
 
     return Bioassembly(
         structure=structure,
@@ -560,7 +560,7 @@ def load_distillation_bioassembly(
     if len(atom_array) == 0:
         return None
 
-    atom_array = annotation_v2.populate_ccd_reference(atom_array)
+    atom_array = annotation.populate_ccd_reference(atom_array)
     structure = AnnotatedStructure.annotate(
         atom_array,
         sequences=reader.sequences_for(atom_array),
@@ -570,9 +570,9 @@ def load_distillation_bioassembly(
     )
 
     # Distillation-specific training annotations — all on AnnotatedStructure.
-    structure = annotation_v2.add_fragment_annotation(structure)
-    structure = annotation_v2.remove_disordered_fragments(structure)
-    structure = annotation_v2.add_pocket_annotation_per_fragment(
+    structure = annotation.add_fragment_annotation(structure)
+    structure = annotation.remove_disordered_fragments(structure)
+    structure = annotation.add_pocket_annotation_per_fragment(
         structure, plddt_cutoff=70.0
     )
 

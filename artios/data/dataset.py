@@ -35,7 +35,7 @@ from artios.data.features.featurizer import ContextGenerator
 from artios.data.motif_maker import MotifMaker
 from artios.data.msa import MSA, MSAQueryInfo, MSASampler
 from artios.data.structure import AnnotatedStructure
-from artios.data.structure.annotation_v2 import MotifAnnotation
+from artios.data.structure.annotation import MotifAnnotation
 from artios.utils.file_io import read_indices_csv
 from artios.utils.geometry import random_transform
 from artios.utils.logger import get_logger

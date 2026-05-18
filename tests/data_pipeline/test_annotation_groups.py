@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 from biotite.structure import AtomArray
 
-from artios.data.structure.annotation_v2 import (
+from artios.data.structure.annotation import (
     DerivedAnnotations,
     EntityIds,
     MoleculeIds,

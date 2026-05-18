@@ -15,7 +15,7 @@ directly.
 
 TODO: bonds-level private access (``BondList._bonds``,
 ``_remove_redundant_bonds``, ``_get_max_bonds_per_atom``) is still
-scattered across ``filter.py`` / ``annotation_v2.py``. Folding it in
+scattered across ``filter.py`` / ``annotation.py``. Folding it in
 here is a follow-up.
 """
 

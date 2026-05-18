@@ -23,7 +23,7 @@ import numpy as np
 from biotite.structure import AtomArray
 
 from artios.common import atom_types
-from artios.data.structure.annotation_v2 import MotifAnnotation
+from artios.data.structure.annotation import MotifAnnotation
 
 if TYPE_CHECKING:
     from artios.data.structure.structure import AnnotatedStructure

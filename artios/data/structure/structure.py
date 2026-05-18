@@ -14,8 +14,8 @@ import numpy as np
 from biotite.structure import AtomArray
 
 from artios.common.constants import BACKBONE_DEFS, PRO_STD_RESIDUES
-from artios.data.structure import annotation_v2
-from artios.data.structure.annotation_v2 import (
+from artios.data.structure import annotation
+from artios.data.structure.annotation import (
     DerivedAnnotations,
     EntityIds,
     MoleculeIds,
@@ -129,8 +129,8 @@ class AnnotatedStructure:
             include_training_masks: Compute plddt_m_rep_atom_mask.
         """
         aa = atom_array.copy()
-        aa = annotation_v2.canonicalize_chain_ids(aa)
-        aa, mol_id, entity_mol_id = annotation_v2.order_atoms_by_mol(
+        aa = annotation.canonicalize_chain_ids(aa)
+        aa, mol_id, entity_mol_id = annotation.order_atoms_by_mol(
             aa, entity_poly_type, check_final_equiv=entity_poly_type is not None
         )
 

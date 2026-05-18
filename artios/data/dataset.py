@@ -33,10 +33,9 @@ from artios.data.data_weights import get_sample_weights
 from artios.data.features import FullContext
 from artios.data.features.featurizer import ContextGenerator
 from artios.data.motif_maker import MotifMaker
+from artios.data.msa import MSA, MSAQueryInfo, MSASampler
 from artios.data.structure import AnnotatedStructure
 from artios.data.structure.annotation_v2 import MotifAnnotation
-from artios.data.msa import MSA, MSAQueryInfo, MSASampler
-from artios.data.structure import AnnotatedStructure, annotation
 from artios.utils.file_io import read_indices_csv
 from artios.utils.geometry import random_transform
 from artios.utils.logger import get_logger
@@ -537,19 +536,17 @@ class BaseSingleDataset(Dataset):
             )
         timings["motif"] = time.time() - tmotif
 
-        # --- Featurize ---
-        structure = AnnotatedStructure.from_atom_array(cropped_atom_array)
-
         # --- MSA sample ---
         msa: Optional[MSA] = None
         if self.msa_sampler is not None:
             t_msa = time.time()
             if msa_query_info is not None:
-                msa = self.msa_sampler.sample(structure, msa_query_info)
+                msa = self.msa_sampler.sample(cropped_structure, msa_query_info)
             if msa is None:
                 msa = MSA.null_for(self.msa_sampler.n_msa)
             timings["msa_sample"] = time.time() - t_msa
 
+        # --- Featurize ---
         t4 = time.time()
         context = ContextGenerator(
             cropped_structure,

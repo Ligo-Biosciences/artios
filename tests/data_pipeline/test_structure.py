@@ -784,10 +784,10 @@ def test_basic_context_atom_array_roundtrips_through_from_atom_array(
     """``BasicContext.atom_array`` must carry the annotations needed to
     reconstruct an equivalent ``AnnotatedStructure`` via ``from_atom_array``.
 
-    This pins the contract between the featurizer and the sequence-design /
-    packing inference paths. ``_save_backbone_to_npz`` persists whatever
+    This pins the contract between the featurizer and the sequence-design
+    inference path. ``_save_backbone_to_npz`` persists whatever
     annotations are on ``context.basic.atom_array``; downstream,
-    ``MPNNDataset`` / ``PackingDataset`` reload the stack and call
+    ``MPNNDataset`` reloads the stack and calls
     ``AnnotatedStructure.from_atom_array`` on each model. If the featurizer
     ever returns ``self.s.atoms`` (the biotite-native view stripped by
     ``from_atom_array``) instead of ``self.s.to_atom_array()`` (the

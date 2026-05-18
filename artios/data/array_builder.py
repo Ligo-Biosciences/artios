@@ -23,10 +23,8 @@ from artios.data.parsing.json import (
     SMILESLigand,
 )
 from artios.data.parsing.motif import Motif, MotifLigand, MotifResidue
-from artios.data.structure import annotation
 from artios.data.structure.annotation_v2 import MotifMappingEntry
 from artios.data.structure.structure import AnnotatedStructure
-from evaluation.utils.constants import DESIGN_CHAIN_ID
 
 logger = logging.getLogger(__name__)
 
@@ -49,34 +47,6 @@ def mse_to_met(atom_array: AtomArray) -> AtomArray:
     atom_array.element[se] = "S"
     atom_array.res_name[mse] = "MET"
     atom_array.hetero[mse] = False
-    return atom_array
-
-
-def add_atom_array_attributes(atom_array: AtomArray) -> AtomArray:
-    """Add legacy-annotation attributes to the Biotite AtomArray.
-
-    Only used by ``packing_input_to_atom_array_v2`` as a scaffold while
-    the packing adapter still depends on the legacy annotation path for
-    ligand ``ref_pos`` preservation. The motif-unindex branch is gone —
-    ``AnnotatedStructure.with_unindexed_motif`` owns that now.
-
-    Note: The ordering of how we add the annotations is important.
-    """
-    sequences = {entity_id: "" for entity_id in np.unique(atom_array.label_entity_id)}
-
-    atom_array = annotation.add_token_mol_type(atom_array, sequences)
-    atom_array = annotation.add_centre_atom_mask(atom_array)
-    atom_array = annotation.add_cano_seq_resname(atom_array)
-    atom_array = annotation.add_tokatom_idx(atom_array)
-    atom_array = annotation.add_modified_res_mask(atom_array)
-    atom_array = annotation.unique_chain_and_add_ids(atom_array)
-    atom_array = annotation.find_equiv_mol_and_assign_ids(
-        atom_array, check_final_equiv=False
-    )
-    atom_array = annotation.add_ref_space_uid(atom_array)
-    atom_array = annotation.add_atom_mol_type_mask(atom_array)
-    atom_array.set_annotation("is_resolved", [True] * len(atom_array))
-
     return atom_array
 
 
@@ -105,76 +75,6 @@ def set_chain_and_seq_ids(
     return atom_array
 
 
-def packing_input_to_atom_array_v2(
-    input_array: AtomArray,
-    sequence: ProteinSequence,
-) -> AtomArray:
-    """Build packing input from stitched backbone + MPNN sequence.
-
-    Takes the stitched backbone output and the MPNN-designed sequence, builds
-    a full atom array with CCD reference sidechains, and transfers C-alpha
-    coordinates from the input. Ligands are preserved as-is.
-
-    Args:
-        input_array: Stitched backbone output. Chain "0" is the protein backbone
-            (with motif sidechains, which are ignored). Other chains are ligands.
-        sequence: 1-letter amino acid sequence from MPNN (e.g., "MKVLAFFAG...")
-
-    Returns:
-        AtomArray: Complete atom array with full sidechains from CCD,
-            C-alpha coords from input, and ligands preserved.
-    """
-    sequence = [PROTEIN_1to3[aa] for aa in sequence]
-
-    # Get input ligand and protein
-    ligand_mask = input_array.hetero  # Use hetero flag for ligands
-    ligand_input = input_array[ligand_mask].copy() if ligand_mask.any() else None
-
-    protein_input = input_array[input_array.chain_id == DESIGN_CHAIN_ID]
-
-    # Build new protein array from sequence
-    protein_array = _build_polymer_atom_array(sequence)
-    protein_array = add_reference_features(protein_array)
-    protein_array = set_chain_and_seq_ids(protein_array, chain_id=0, entity_id=1)
-
-    # Remap contiguous res_ids to match input's (potentially non-contiguous) res_ids
-    # e.g., input has [24-200, 230-250], new array has [1-198]
-    # After remapping: new array has [24-200, 230-250]
-    unique_input_res_ids = np.unique(protein_input.res_id)
-    protein_array.res_id = unique_input_res_ids[protein_array.res_id - 1]
-
-    # Transfer C-alpha coordinates from input to new array
-    input_ca_coords: dict[int, np.ndarray] = {}
-    for i in range(len(protein_input)):
-        if protein_input.atom_name[i] == "CA":
-            input_ca_coords[protein_input.res_id[i]] = protein_input.coord[i]
-
-    for i in range(len(protein_array)):
-        if protein_array.atom_name[i] == "CA":
-            res_id = protein_array.res_id[i]
-            if res_id in input_ca_coords:
-                protein_array.coord[i] = input_ca_coords[res_id]
-
-    protein_array.set_annotation(
-        "is_motif_related", np.zeros(len(protein_array), dtype=int)
-    )
-    protein_array.set_annotation("is_motif", np.zeros(len(protein_array), dtype=int))
-    protein_array.set_annotation(
-        "original_motif_res_id", np.full(len(protein_array), -1, dtype=int)
-    )
-    protein_array.set_annotation(
-        "original_motif_chain_id", np.array([""] * len(protein_array))
-    )
-    protein_array = add_atom_array_attributes(protein_array)
-
-    if ligand_input is not None:
-        combined = protein_array + ligand_input
-    else:
-        combined = protein_array
-
-    return combined
-
-
 # ---------------------------------------------------------------------------
 # Input → AnnotatedStructure adapters (PR C unified path)
 # ---------------------------------------------------------------------------
@@ -184,9 +84,10 @@ def packing_input_to_atom_array_v2(
 # pipeline used in ``infer_data_pipeline.py`` with
 # ``AnnotatedStructure.annotate()`` + the motif transforms (PR C1-C4).
 #
-# Legacy functions above remain alive until PR C8 deletes them; keeping
-# both during PR C lets the test_infer_parity goldens verify byte-equality
-# across the flip.
+# The packing adapter is intentionally disabled below. Its legacy implementation
+# was the last caller of the old annotation.py AtomArray-mutation path; keeping
+# the importable function but raising on use lets non-packing evaluation modules
+# continue to import while making packing fail only when requested.
 # ---------------------------------------------------------------------------
 
 
@@ -260,19 +161,19 @@ def packing_input_to_structure(
     input_array: AtomArray,
     sequence: ProteinSequence,
 ) -> tuple[AnnotatedStructure, tuple[MotifMappingEntry, ...]]:
-    """Build ``AnnotatedStructure`` for sidechain packing.
+    """Packing inference is temporarily disabled.
 
-    Mirrors the legacy ``packing_input_to_atom_array_v2`` + ``from_atom_array``
-    flow — protein is annotated fresh, ligand carries its NPZ
-    annotations through the concatenation unchanged. Using
-    ``AnnotatedStructure.annotate`` on the combined array would regenerate
-    ligand ``ref_pos`` from CCD (zeros for unknown ligands like ``UNL``),
-    diverging from the golden. ``packing_input_to_atom_array_v2`` +
-    ``add_atom_array_attributes`` stay alive for this one call site until
-    a follow-up refactor eliminates the split-annotation pattern.
+    Keep this symbol importable because ``infer_data_pipeline`` and the
+    Modal/evaluation entry points share module imports across backbone, MPNN,
+    Potts, and packing flows. Calling the packing path should fail here, and
+    only here, until the adapter is rebuilt on the unified annotation pipeline.
     """
-    combined = packing_input_to_atom_array_v2(input_array, sequence)
-    return AnnotatedStructure.from_atom_array(combined), ()
+    raise NotImplementedError(
+        "Packing input construction is temporarily disabled while the legacy "
+        "annotation.py path is removed. Non-packing inference/evaluation paths "
+        "are unaffected; invoking PackingDataset or the Artios packing Modal "
+        "container will fail here until packing is reimplemented."
+    )
 
 
 def _build_polymer_atom_array(ccd_seqs: list[str]) -> AtomArray:

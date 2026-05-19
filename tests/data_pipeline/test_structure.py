@@ -171,6 +171,105 @@ class TestSelection:
 
 
 # ---------------------------------------------------------------------------
+# Chain-id transformations
+# ---------------------------------------------------------------------------
+
+
+class TestChainIdTransforms:
+    """Chain renaming must refresh chain-derived fields without corrupting residues."""
+
+    @staticmethod
+    def _split_first_multi_residue_chain_ids(structure: AnnotatedStructure):
+        starts = get_residue_starts(structure.atoms, add_exclusive_stop=True)
+        residue_starts = starts[:-1]
+        residue_asym = structure.entity_ids.asym_id_int[residue_starts]
+
+        chain_id = np.empty(len(structure.atoms), dtype="<U16")
+        for asym_id in np.unique(structure.entity_ids.asym_id_int):
+            chain_id[structure.entity_ids.asym_id_int == asym_id] = f"C{asym_id}"
+
+        for asym_id in np.unique(residue_asym):
+            residue_indices = np.where(residue_asym == asym_id)[0]
+            if len(residue_indices) < 2:
+                continue
+            first_residue = residue_indices[0]
+            start, stop = starts[first_residue], starts[first_residue + 1]
+            chain_id[start:stop] = "DESIGN"
+            return chain_id
+
+        raise AssertionError("fixture has no multi-residue chain")
+
+    def test_with_chain_ids_refreshes_chain_dependent_fields(self, structure):
+        """Changing chain labels must update AtomArray labels, entity IDs,
+        ref_space_uid, and token grouping while preserving residue IDs.
+
+        The test deliberately splits the first multi-residue chain at a
+        residue boundary; this catches implementations that merely mutate
+        ``atoms.chain_id`` and leave typed chain state stale.
+        """
+        old_chain_id = structure.atoms.chain_id.copy()
+        new_chain_id = self._split_first_multi_residue_chain_ids(structure)
+
+        out = structure.with_chain_ids(new_chain_id)
+
+        np.testing.assert_array_equal(structure.atoms.chain_id, old_chain_id)
+        np.testing.assert_array_equal(out.atoms.chain_id.astype(str), new_chain_id)
+        np.testing.assert_array_equal(out.atoms.res_id, structure.atoms.res_id)
+        assert (
+            np.unique(out.entity_ids.asym_id_int).size == np.unique(new_chain_id).size
+        )
+
+        expected_keys = np.stack([out.entity_ids.asym_id_int, out.atoms.res_id], axis=1)
+        _, expected_ref_uid = np.unique(expected_keys, axis=0, return_inverse=True)
+        np.testing.assert_array_equal(out.reference.ref_space_uid, expected_ref_uid)
+        assert out.grouping.n_tokens == structure.grouping.n_tokens
+
+        cats = set(structure.atoms.get_annotation_categories())
+        if "label_asym_id" in cats:
+            np.testing.assert_array_equal(
+                out.atoms.label_asym_id.astype(str), new_chain_id
+            )
+        if "auth_asym_id" in cats:
+            np.testing.assert_array_equal(
+                out.atoms.auth_asym_id, structure.atoms.auth_asym_id
+            )
+
+    def test_with_chain_ids_rejects_splitting_one_residue(self, structure):
+        """A single residue cannot receive multiple chain labels."""
+        starts = get_residue_starts(structure.atoms, add_exclusive_stop=True)
+        start, stop = next(
+            (start, stop)
+            for start, stop in zip(starts[:-1], starts[1:])
+            if stop - start > 1
+        )
+        chain_id = structure.atoms.chain_id.astype(str).copy()
+        chain_id[start] = "BROKEN"
+
+        with pytest.raises(ValueError, match="constant within"):
+            structure.with_chain_ids(chain_id)
+
+    def test_with_chain_ids_rejects_disjoint_repeated_chain_labels(self, structure):
+        """Each chain label must occupy one contiguous run."""
+        starts = get_residue_starts(structure.atoms, add_exclusive_stop=True)
+        chain_id = np.empty(len(structure.atoms), dtype="<U16")
+        for i, (start, stop) in enumerate(zip(starts[:-1], starts[1:])):
+            chain_id[start:stop] = f"R{i}"
+
+        chain_id[starts[0] : starts[1]] = "REPEAT"
+        chain_id[starts[2] : starts[3]] = "REPEAT"
+
+        with pytest.raises(ValueError, match="contiguous"):
+            structure.with_chain_ids(chain_id)
+
+    def test_with_chain_ids_rejects_merging_multiple_entities(self, structure):
+        """A rewritten chain cannot contain multiple label_entity_id values."""
+        chain_id = np.full(len(structure.atoms), "MERGED")
+
+        with pytest.raises(ValueError, match="label_entity_id"):
+            structure.with_chain_ids(chain_id)
+
+
+# ---------------------------------------------------------------------------
 # Residue-id transformations
 # ---------------------------------------------------------------------------
 
@@ -626,6 +725,28 @@ class TestMotifTransforms:
             assert after.original_motif_chain_id == before.original_motif_chain_id
             assert after.original_motif_res_id == before.original_motif_res_id
             assert after.res_name == before.res_name
+
+    def test_chain_id_transform_updates_unindexed_motif_mapping(
+        self, structure_with_protein_motif
+    ):
+        """Renumbering chains after motif unindexing must not leave mapping stale."""
+        s = structure_with_protein_motif.with_unindexed_motif()
+        entry = s.motif.mapping[0]
+
+        chain_id = s.atoms.chain_id.astype(str).copy()
+        chain_id[s.atoms.chain_id.astype(str) == entry.unindexed_chain_id] = "RENAMED"
+
+        out = s.with_chain_ids(chain_id)
+
+        updated = next(
+            e
+            for e in out.motif.mapping
+            if e.original_motif_chain_id == entry.original_motif_chain_id
+            and e.original_motif_res_id == entry.original_motif_res_id
+            and e.res_name == entry.res_name
+        )
+        assert updated.unindexed_chain_id == "RENAMED"
+        assert updated.unindexed_res_id == entry.unindexed_res_id
 
     def test_unindex_same_restype_shares_entity_different_asym(
         self, structure_with_protein_motif

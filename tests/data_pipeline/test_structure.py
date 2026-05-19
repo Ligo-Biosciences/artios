@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from biotite.structure import get_residue_starts
 
 from artios.data.structure import (
     AnnotatedStructure,
@@ -167,6 +168,158 @@ class TestSelection:
         assert (cropped.type_masks.is_ligand == 1).all()
         # Each atom is its own token
         assert cropped.grouping.n_tokens == len(cropped.atoms)
+
+
+# ---------------------------------------------------------------------------
+# Residue-id transformations
+# ---------------------------------------------------------------------------
+
+
+class TestResidueIdTransforms:
+    """Residue renumbering must refresh dependent fields without collateral drift."""
+
+    @staticmethod
+    def _reversed_ids_by_chain(structure: AnnotatedStructure, offset: int = 1000):
+        """Build per-atom ids that preserve residues but change UID ordering."""
+        starts = get_residue_starts(structure.atoms, add_exclusive_stop=True)
+        residue_starts = starts[:-1]
+        residue_asym = structure.entity_ids.asym_id_int[residue_starts]
+        new_res_id = np.empty(len(structure.atoms), dtype=int)
+
+        for asym_id in np.unique(residue_asym):
+            residue_indices = np.where(residue_asym == asym_id)[0]
+            values = offset + np.arange(len(residue_indices))[::-1]
+            for residue_index, value in zip(residue_indices, values):
+                start, stop = starts[residue_index], starts[residue_index + 1]
+                new_res_id[start:stop] = value
+        return new_res_id
+
+    def test_with_residue_ids_refreshes_only_residue_dependent_fields(self, structure):
+        """Changing ids must update token residue_index and ref_space_uid,
+        while preserving unrelated per-atom groups exactly.
+
+        The reversed numbering is deliberate: if ``ref_space_uid`` were
+        accidentally left stale, this test would fail even though the shape
+        and atom count still look perfectly healthy.
+        """
+        old_res_id = structure.atoms.res_id.copy()
+        new_res_id = self._reversed_ids_by_chain(structure)
+
+        out = structure.with_residue_ids(new_res_id)
+
+        # Source structure stays immutable from the caller's perspective.
+        np.testing.assert_array_equal(structure.atoms.res_id, old_res_id)
+        np.testing.assert_array_equal(out.atoms.res_id, new_res_id)
+
+        expected_keys = np.stack([out.entity_ids.asym_id_int, new_res_id], axis=1)
+        _, expected_ref_uid = np.unique(expected_keys, axis=0, return_inverse=True)
+        np.testing.assert_array_equal(out.reference.ref_space_uid, expected_ref_uid)
+        assert not np.array_equal(
+            out.reference.ref_space_uid, structure.reference.ref_space_uid
+        ), "test numbering did not exercise stale-ref_space_uid detection"
+
+        from artios.data.features.featurizer import ContextGenerator
+
+        token = ContextGenerator(out, ref_pos_augment=False).get_token_context()
+        np.testing.assert_array_equal(
+            token.residue_index.numpy(), new_res_id[out.centre_atom_indices]
+        )
+
+        for group_name in ("entity_ids", "molecule_ids", "type_masks", "derived"):
+            _assert_annotation_group_equal(
+                getattr(out, group_name),
+                getattr(structure, group_name),
+                group_name,
+            )
+        _assert_annotation_group_equal(out.training, structure.training, "training")
+        np.testing.assert_array_equal(
+            out.reference.ref_pos, structure.reference.ref_pos
+        )
+        np.testing.assert_array_equal(
+            out.reference.ref_charge, structure.reference.ref_charge
+        )
+        np.testing.assert_array_equal(
+            out.reference.ref_mask, structure.reference.ref_mask
+        )
+        np.testing.assert_array_equal(out.atoms.coord, structure.atoms.coord)
+        np.testing.assert_array_equal(out.atoms.atom_name, structure.atoms.atom_name)
+        np.testing.assert_array_equal(out.atoms.res_name, structure.atoms.res_name)
+
+        cats = set(structure.atoms.get_annotation_categories())
+        if "label_seq_id" in cats:
+            before = structure.atoms.label_seq_id.astype(str)
+            missing = np.isin(before, [".", "?"])
+            np.testing.assert_array_equal(
+                out.atoms.label_seq_id[~missing].astype(str),
+                new_res_id[~missing].astype(str),
+            )
+            np.testing.assert_array_equal(
+                out.atoms.label_seq_id[missing].astype(str), before[missing]
+            )
+        if "auth_seq_id" in cats:
+            np.testing.assert_array_equal(
+                out.atoms.auth_seq_id, structure.atoms.auth_seq_id
+            )
+
+    def test_with_residue_ids_rejects_splitting_one_residue(self, structure):
+        """A single residue cannot receive multiple ids.
+
+        Without this guard, tokenization would silently split a chemically
+        single residue into multiple residue groups after the transform.
+        """
+        starts = get_residue_starts(structure.atoms, add_exclusive_stop=True)
+        start, stop = next(
+            (start, stop)
+            for start, stop in zip(starts[:-1], starts[1:])
+            if stop - start > 1
+        )
+        new_res_id = structure.atoms.res_id.copy()
+        new_res_id[start] = int(new_res_id[start]) + 10_000
+
+        with pytest.raises(ValueError, match="constant within"):
+            structure.with_residue_ids(new_res_id)
+
+    def test_with_residue_ids_rejects_same_chain_collision(self, structure):
+        """Two residues in the same asym chain cannot collapse to one id.
+
+        This protects ``ref_space_uid`` and residue grouping from a quiet
+        many-to-one mapping that would otherwise keep all arrays the right
+        length while corrupting residue identity.
+        """
+        starts = get_residue_starts(structure.atoms, add_exclusive_stop=True)
+        residue_asym = structure.entity_ids.asym_id_int[starts[:-1]]
+        pair = next(
+            (i, i + 1)
+            for i in range(len(residue_asym) - 1)
+            if residue_asym[i] == residue_asym[i + 1]
+        )
+
+        new_res_id = structure.atoms.res_id.copy()
+        first, second = pair
+        new_res_id[starts[second] : starts[second + 1]] = new_res_id[starts[first]]
+
+        with pytest.raises(ValueError, match="collapse"):
+            structure.with_residue_ids(new_res_id)
+
+    def test_with_contiguous_residue_ids_numbers_by_chain_or_globally(self, structure):
+        """The convenience helper must assign dense ids at the residue level."""
+        starts = get_residue_starts(structure.atoms, add_exclusive_stop=True)
+        residue_starts = starts[:-1]
+        residue_asym = structure.entity_ids.asym_id_int[residue_starts]
+
+        by_chain = structure.with_contiguous_residue_ids(start=0, by_chain=True)
+        by_chain_res_ids = by_chain.atoms.res_id[residue_starts]
+        for asym_id in np.unique(residue_asym):
+            mask = residue_asym == asym_id
+            np.testing.assert_array_equal(by_chain_res_ids[mask], np.arange(mask.sum()))
+
+        global_numbering = structure.with_contiguous_residue_ids(
+            start=10, by_chain=False
+        )
+        np.testing.assert_array_equal(
+            global_numbering.atoms.res_id[residue_starts],
+            10 + np.arange(len(residue_starts)),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +604,28 @@ class TestMotifTransforms:
             assert entry.unindexed_chain_id
             assert entry.original_motif_chain_id
             assert entry.res_name
+
+    def test_residue_id_transform_updates_unindexed_motif_mapping(
+        self, structure_with_protein_motif
+    ):
+        """Renumbering after motif unindexing must not leave mapping stale.
+
+        ``MotifAnnotation.mapping`` is non-array metadata, so generic
+        atom-aligned preservation would miss it. If this goes stale,
+        inference-time stitching points at the old unindexed residue id.
+        """
+        s = structure_with_protein_motif.with_unindexed_motif()
+        assert s.motif.mapping
+        assert {entry.unindexed_res_id for entry in s.motif.mapping} == {1}
+
+        out = s.with_residue_ids(s.atoms.res_id + 1000)
+
+        assert {entry.unindexed_res_id for entry in out.motif.mapping} == {1001}
+        for before, after in zip(s.motif.mapping, out.motif.mapping):
+            assert after.unindexed_chain_id == before.unindexed_chain_id
+            assert after.original_motif_chain_id == before.original_motif_chain_id
+            assert after.original_motif_res_id == before.original_motif_res_id
+            assert after.res_name == before.res_name
 
     def test_unindex_same_restype_shares_entity_different_asym(
         self, structure_with_protein_motif

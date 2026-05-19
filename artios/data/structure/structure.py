@@ -6,13 +6,12 @@ Replaces stringly-typed annotations on AtomArray with frozen dataclasses.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
 import numpy as np
-from biotite.structure import AtomArray, get_residue_starts
+from biotite.structure import AtomArray, get_chain_starts, get_residue_starts
 
 from artios.common.constants import BACKBONE_DEFS, PRO_STD_RESIDUES
 from artios.data.structure import annotation
@@ -465,6 +464,65 @@ class AnnotatedStructure:
             sym_id_int=_make_contiguous(self.entity_ids.sym_id_int),
         )
 
+    def with_chain_ids(
+        self,
+        chain_id: np.ndarray,
+        *,
+        update_label_asym_id: bool = True,
+        update_auth_asym_id: bool = False,
+    ) -> AnnotatedStructure:
+        """Return a copy with ``atoms.chain_id`` replaced consistently.
+
+        ``chain_id`` is atom-indexed, but the transform preserves residue
+        boundaries: every existing residue must receive exactly one chain
+        label, and no two existing residues may collapse onto the same
+        ``(chain_id, res_id)`` pair. Chain labels must also form contiguous
+        runs in atom order so Biotite chain iteration remains well-defined.
+
+        Args:
+            chain_id: String-like array of shape ``(n_atom,)``.
+            update_label_asym_id: If True and ``label_asym_id`` exists,
+                mirror it to the new ``chain_id``.
+            update_auth_asym_id: If True and ``auth_asym_id`` exists,
+                mirror it to the new ``chain_id``. Defaults false because
+                author chain IDs are usually provenance.
+        """
+        new_chain_id = self._coerce_atom_chain_ids(chain_id)
+        residue_starts = get_residue_starts(self.atoms, add_exclusive_stop=True)
+        self._check_chain_ids_preserve_residue_partition(new_chain_id, residue_starts)
+        self._check_chain_ids_are_contiguous(new_chain_id)
+        self._check_chain_ids_have_single_entity(new_chain_id)
+        self._check_chain_residue_keys_unique(new_chain_id, residue_starts)
+
+        new_atoms = self._copy_atoms_with_chain_ids(
+            new_chain_id,
+            update_label_asym_id=update_label_asym_id,
+            update_auth_asym_id=update_auth_asym_id,
+        )
+        entity_ids = EntityIds.compute(new_atoms)
+        type_masks = self._type_masks_for_atoms(new_atoms)
+
+        return dataclasses.replace(
+            self,
+            atoms=new_atoms,
+            entity_ids=entity_ids,
+            type_masks=type_masks,
+            reference=dataclasses.replace(
+                self.reference,
+                ref_space_uid=self._ref_space_uid_for(
+                    new_atoms.res_id, entity_ids=entity_ids
+                ),
+            ),
+            motif=self._motif_with_atom_ids(new_chain_id, self.atoms.res_id),
+            grouping=compute_token_grouping_vectorized(
+                new_atoms,
+                mol_type=type_masks.mol_type,
+                is_motif_related=(
+                    self.motif.is_motif_related if self.motif is not None else None
+                ),
+            ),
+        )
+
     def with_residue_ids(
         self,
         res_id: np.ndarray,
@@ -508,7 +566,7 @@ class AnnotatedStructure:
                 self.reference,
                 ref_space_uid=self._ref_space_uid_for(new_atoms.res_id),
             ),
-            motif=self._motif_with_residue_ids(new_res_id),
+            motif=self._motif_with_atom_ids(self.atoms.chain_id, new_res_id),
             grouping=compute_token_grouping_vectorized(
                 new_atoms,
                 mol_type=self.type_masks.mol_type,
@@ -547,6 +605,20 @@ class AnnotatedStructure:
             update_auth_seq_id=update_auth_seq_id,
         )
 
+    def _coerce_atom_chain_ids(self, chain_id: np.ndarray) -> np.ndarray:
+        """Validate shape and return a private string copy."""
+        new_chain_id = np.asarray(chain_id).astype(str)
+        if new_chain_id.ndim != 1:
+            raise ValueError("chain_id must be a 1D atom-indexed array")
+        if len(new_chain_id) != len(self.atoms):
+            raise ValueError(
+                f"chain_id length {len(new_chain_id)} does not match "
+                f"n_atom {len(self.atoms)}"
+            )
+        if np.isin(new_chain_id, ["", ".", "?"]).any():
+            raise ValueError("chain_id must not contain empty or missing labels")
+        return new_chain_id.copy()
+
     def _coerce_atom_residue_ids(self, res_id: np.ndarray) -> np.ndarray:
         """Validate shape/dtype and return a private integer copy."""
         new_res_id = np.asarray(res_id)
@@ -562,6 +634,17 @@ class AnnotatedStructure:
         return new_res_id.astype(int, copy=True)
 
     @staticmethod
+    def _check_chain_ids_preserve_residue_partition(
+        chain_id: np.ndarray, residue_starts: np.ndarray
+    ) -> None:
+        """Ensure each existing residue receives one and only one chain label."""
+        for start, stop in zip(residue_starts[:-1], residue_starts[1:]):
+            if np.unique(chain_id[start:stop]).size != 1:
+                raise ValueError(
+                    "chain_id must be constant within each existing residue"
+                )
+
+    @staticmethod
     def _check_residue_ids_preserve_partition(
         res_id: np.ndarray, residue_starts: np.ndarray
     ) -> None:
@@ -569,6 +652,48 @@ class AnnotatedStructure:
         for start, stop in zip(residue_starts[:-1], residue_starts[1:]):
             if np.unique(res_id[start:stop]).size != 1:
                 raise ValueError("res_id must be constant within each existing residue")
+
+    @staticmethod
+    def _check_chain_ids_are_contiguous(chain_id: np.ndarray) -> None:
+        """Reject repeated chain labels in disjoint atom-array runs."""
+        if len(chain_id) == 0:
+            return
+
+        run_starts = np.concatenate(
+            [[0], np.where(chain_id[1:] != chain_id[:-1])[0] + 1]
+        )
+        run_labels = chain_id[run_starts]
+        if np.unique(run_labels).size != len(run_labels):
+            raise ValueError("chain_id labels must form contiguous runs")
+
+    def _check_chain_ids_have_single_entity(self, chain_id: np.ndarray) -> None:
+        """Ensure each new chain run has one label_entity_id."""
+        if len(chain_id) == 0:
+            return
+
+        run_starts = np.concatenate(
+            [[0], np.where(chain_id[1:] != chain_id[:-1])[0] + 1, [len(chain_id)]]
+        )
+        for start, stop in zip(run_starts[:-1], run_starts[1:]):
+            if np.unique(self.atoms.label_entity_id[start:stop]).size != 1:
+                raise ValueError(
+                    "chain_id would merge atoms from multiple label_entity_id values"
+                )
+
+    def _check_chain_residue_keys_unique(
+        self, chain_id: np.ndarray, residue_starts: np.ndarray
+    ) -> None:
+        """Ensure the new chain labels do not merge existing residues."""
+        residue_chain_ids = chain_id[residue_starts[:-1]]
+        if len(residue_chain_ids) == 0:
+            return
+
+        residue_res_ids = self.atoms.res_id[residue_starts[:-1]].astype(str)
+        residue_keys = np.stack([residue_chain_ids, residue_res_ids], axis=1)
+        if np.unique(residue_keys, axis=0).shape[0] != len(residue_keys):
+            raise ValueError(
+                "chain_id would collapse two residues with the same res_id"
+            )
 
     def _check_residue_ids_unique_per_asym(
         self, res_id: np.ndarray, residue_starts: np.ndarray
@@ -584,6 +709,27 @@ class AnnotatedStructure:
             raise ValueError(
                 "res_id would collapse two residues within the same asym chain"
             )
+
+    def _copy_atoms_with_chain_ids(
+        self,
+        chain_id: np.ndarray,
+        *,
+        update_label_asym_id: bool,
+        update_auth_asym_id: bool,
+    ) -> AtomArray:
+        """Copy atoms, write ``chain_id``, and optionally mirror asym fields."""
+        atoms = self.atoms.copy()
+        atoms.del_annotation("chain_id")
+        atoms.set_annotation("chain_id", chain_id)
+
+        cats = atoms.get_annotation_categories()
+        if update_label_asym_id and "label_asym_id" in cats:
+            atoms.del_annotation("label_asym_id")
+            atoms.set_annotation("label_asym_id", chain_id.copy())
+        if update_auth_asym_id and "auth_asym_id" in cats:
+            atoms.del_annotation("auth_asym_id")
+            atoms.set_annotation("auth_asym_id", chain_id.copy())
+        return atoms
 
     def _copy_atoms_with_residue_ids(
         self,
@@ -603,22 +749,47 @@ class AnnotatedStructure:
             self._update_seq_id_annotation(atoms, "auth_seq_id", res_id)
         return atoms
 
-    def _ref_space_uid_for(self, res_id: np.ndarray) -> np.ndarray:
+    def _type_masks_for_atoms(self, atoms: AtomArray) -> TypeMasks:
+        """Refresh chain-level type masks after a chain-id rewrite."""
+        chain_mol_type = np.empty_like(self.type_masks.chain_mol_type)
+        chain_starts = get_chain_starts(atoms, add_exclusive_stop=True)
+        for start, stop in zip(chain_starts[:-1], chain_starts[1:]):
+            values, counts = np.unique(
+                self.type_masks.mol_type[start:stop], return_counts=True
+            )
+            chain_mol_type[start:stop] = values[np.argmax(counts)]
+
+        return TypeMasks(
+            mol_type=self.type_masks.mol_type,
+            chain_mol_type=chain_mol_type,
+            is_protein=(chain_mol_type == "protein").astype(int),
+            is_ligand=(chain_mol_type == "ligand").astype(int),
+            is_dna=(chain_mol_type == "dna").astype(int),
+            is_rna=(chain_mol_type == "rna").astype(int),
+        )
+
+    def _ref_space_uid_for(
+        self, res_id: np.ndarray, *, entity_ids: EntityIds | None = None
+    ) -> np.ndarray:
         """Compute the AF3 ref-space uid for the current asym ids + ``res_id``."""
-        chain_res_id = np.stack([self.entity_ids.asym_id_int, res_id], axis=1)
+        entity_ids = self.entity_ids if entity_ids is None else entity_ids
+        chain_res_id = np.stack([entity_ids.asym_id_int, res_id], axis=1)
         _, ref_space_uid = np.unique(chain_res_id, axis=0, return_inverse=True)
         return ref_space_uid
 
-    def _motif_with_residue_ids(self, res_id: np.ndarray) -> MotifAnnotation | None:
-        """Refresh motif mapping residue ids after a residue-id rewrite."""
+    def _motif_with_atom_ids(
+        self, chain_id: np.ndarray, res_id: np.ndarray
+    ) -> MotifAnnotation | None:
+        """Refresh motif mapping chain/residue ids after an id rewrite."""
         if self.motif is None or not self.motif.mapping:
             return self.motif
 
-        chain_id = self.atoms.chain_id.astype(str)
+        old_chain_id = self.atoms.chain_id.astype(str)
+        new_chain_id = chain_id.astype(str)
         mapping: list[MotifMappingEntry] = []
         for entry in self.motif.mapping:
             mask = (
-                (chain_id == entry.unindexed_chain_id)
+                (old_chain_id == entry.unindexed_chain_id)
                 & (self.atoms.res_id == entry.unindexed_res_id)
                 & (self.atoms.res_name == entry.res_name)
             )
@@ -627,13 +798,22 @@ class AnnotatedStructure:
                     "motif mapping entry does not match any residue in the structure"
                 )
 
+            new_entry_chain_ids = np.unique(new_chain_id[mask])
+            if len(new_entry_chain_ids) != 1:
+                raise ValueError(
+                    "motif mapping entry spans multiple rewritten chain ids"
+                )
             new_entry_res_ids = np.unique(res_id[mask])
             if len(new_entry_res_ids) != 1:
                 raise ValueError(
                     "motif mapping entry spans multiple rewritten residue ids"
                 )
             mapping.append(
-                dataclasses.replace(entry, unindexed_res_id=int(new_entry_res_ids[0]))
+                dataclasses.replace(
+                    entry,
+                    unindexed_chain_id=str(new_entry_chain_ids[0]),
+                    unindexed_res_id=int(new_entry_res_ids[0]),
+                )
             )
 
         return self.motif.with_mapping(tuple(mapping))
@@ -669,80 +849,6 @@ class AnnotatedStructure:
         updated = current.astype(f"<U{width}")
         updated[~missing] = replacement[~missing]
         atoms.set_annotation(name, updated)
-
-    def with_canonical_chain_naming(
-        self,
-        design_chain_id: str,
-        non_design_chain_ids: Iterable[str],
-    ) -> AnnotatedStructure:
-        """Rewrite ``chain_id`` (and non-protein ``res_id``) to a canonical design topology.
-
-        The single protein molecule's ``chain_id`` is set to ``design_chain_id``.
-        Every other molecule (one ``mol_id`` = one connected component) is
-        assigned the next chain id from ``non_design_chain_ids`` and has its
-        ``res_id`` reset to 1 for all of its atoms.
-
-        Molecules are walked in atom order so the assignment is deterministic
-        and reproducible across runs. Requires exactly one protein molecule;
-        raises ``ValueError`` otherwise.
-
-        ``label_asym_id`` mirrors ``chain_id``. ``EntityIds`` and other typed
-        annotations are left untouched — the integer encodings remain 1-1
-        with chain identity since renaming a chain doesn't change which atoms
-        share an asym/entity/sym group.
-
-        TODO: also renumber the protein chain's ``res_id`` to start at 1 with
-        gaps preserved. Currently leaves ``res_id`` on protein atoms unchanged.
-        """
-        mol_id = self.molecule_ids.mol_id
-        chain_mol_type = self.type_masks.chain_mol_type
-
-        unique_mol_ids, first_indices = np.unique(mol_id, return_index=True)
-        ordered_mol_ids = unique_mol_ids[np.argsort(first_indices)]
-
-        protein_mol_ids = [
-            int(m)
-            for m in ordered_mol_ids
-            if chain_mol_type[np.argmax(mol_id == m)] == "protein"
-        ]
-        if len(protein_mol_ids) != 1:
-            raise ValueError(
-                f"with_canonical_chain_naming requires exactly one protein "
-                f"molecule; found {len(protein_mol_ids)}."
-            )
-        protein_mol_id = protein_mol_ids[0]
-
-        non_design_iter = iter(non_design_chain_ids)
-        mol_to_chain: dict[int, str] = {}
-        for m in ordered_mol_ids:
-            m_int = int(m)
-            if m_int == protein_mol_id:
-                mol_to_chain[m_int] = design_chain_id
-            else:
-                try:
-                    mol_to_chain[m_int] = next(non_design_iter)
-                except StopIteration as e:
-                    raise ValueError(
-                        f"non_design_chain_ids exhausted: structure has "
-                        f"{len(ordered_mol_ids) - 1} non-protein molecules."
-                    ) from e
-
-        new_chain_id = np.array(
-            [mol_to_chain[int(m)] for m in mol_id],
-        )
-        new_res_id = self.atoms.res_id.copy()
-        non_protein_mask = mol_id != protein_mol_id
-        new_res_id[non_protein_mask] = 1
-
-        new_atoms = self.atoms.copy()
-        new_atoms.del_annotation("chain_id")
-        new_atoms.set_annotation("chain_id", new_chain_id)
-        new_atoms.res_id = new_res_id
-        if "label_asym_id" in new_atoms.get_annotation_categories():
-            new_atoms.del_annotation("label_asym_id")
-        new_atoms.set_annotation("label_asym_id", new_chain_id.copy())
-
-        return dataclasses.replace(self, atoms=new_atoms)
 
     def _replace_entity_ids(self, **overrides) -> AnnotatedStructure:
         """Return a copy with selected EntityIds fields replaced."""

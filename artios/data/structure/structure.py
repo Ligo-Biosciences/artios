@@ -6,6 +6,7 @@ Replaces stringly-typed annotations on AtomArray with frozen dataclasses.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -463,6 +464,80 @@ class AnnotatedStructure:
             entity_id_int=_make_contiguous(self.entity_ids.entity_id_int),
             sym_id_int=_make_contiguous(self.entity_ids.sym_id_int),
         )
+
+    def with_canonical_chain_naming(
+        self,
+        design_chain_id: str,
+        non_design_chain_ids: Iterable[str],
+    ) -> AnnotatedStructure:
+        """Rewrite ``chain_id`` (and non-protein ``res_id``) to a canonical design topology.
+
+        The single protein molecule's ``chain_id`` is set to ``design_chain_id``.
+        Every other molecule (one ``mol_id`` = one connected component) is
+        assigned the next chain id from ``non_design_chain_ids`` and has its
+        ``res_id`` reset to 1 for all of its atoms.
+
+        Molecules are walked in atom order so the assignment is deterministic
+        and reproducible across runs. Requires exactly one protein molecule;
+        raises ``ValueError`` otherwise.
+
+        ``label_asym_id`` mirrors ``chain_id``. ``EntityIds`` and other typed
+        annotations are left untouched — the integer encodings remain 1-1
+        with chain identity since renaming a chain doesn't change which atoms
+        share an asym/entity/sym group.
+
+        TODO: also renumber the protein chain's ``res_id`` to start at 1 with
+        gaps preserved. Currently leaves ``res_id`` on protein atoms unchanged.
+        """
+        mol_id = self.molecule_ids.mol_id
+        chain_mol_type = self.type_masks.chain_mol_type
+
+        unique_mol_ids, first_indices = np.unique(mol_id, return_index=True)
+        ordered_mol_ids = unique_mol_ids[np.argsort(first_indices)]
+
+        protein_mol_ids = [
+            int(m)
+            for m in ordered_mol_ids
+            if chain_mol_type[np.argmax(mol_id == m)] == "protein"
+        ]
+        if len(protein_mol_ids) != 1:
+            raise ValueError(
+                f"with_canonical_chain_naming requires exactly one protein "
+                f"molecule; found {len(protein_mol_ids)}."
+            )
+        protein_mol_id = protein_mol_ids[0]
+
+        non_design_iter = iter(non_design_chain_ids)
+        mol_to_chain: dict[int, str] = {}
+        for m in ordered_mol_ids:
+            m_int = int(m)
+            if m_int == protein_mol_id:
+                mol_to_chain[m_int] = design_chain_id
+            else:
+                try:
+                    mol_to_chain[m_int] = next(non_design_iter)
+                except StopIteration as e:
+                    raise ValueError(
+                        f"non_design_chain_ids exhausted: structure has "
+                        f"{len(ordered_mol_ids) - 1} non-protein molecules."
+                    ) from e
+
+        new_chain_id = np.array(
+            [mol_to_chain[int(m)] for m in mol_id],
+        )
+        new_res_id = self.atoms.res_id.copy()
+        non_protein_mask = mol_id != protein_mol_id
+        new_res_id[non_protein_mask] = 1
+
+        new_atoms = self.atoms.copy()
+        new_atoms.del_annotation("chain_id")
+        new_atoms.set_annotation("chain_id", new_chain_id)
+        new_atoms.res_id = new_res_id
+        if "label_asym_id" in new_atoms.get_annotation_categories():
+            new_atoms.del_annotation("label_asym_id")
+        new_atoms.set_annotation("label_asym_id", new_chain_id.copy())
+
+        return dataclasses.replace(self, atoms=new_atoms)
 
     def _replace_entity_ids(self, **overrides) -> AnnotatedStructure:
         """Return a copy with selected EntityIds fields replaced."""

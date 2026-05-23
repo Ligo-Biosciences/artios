@@ -35,7 +35,7 @@ guidance_model_configs = {
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
-    "sigma_data": 12.0,
+    "sigma_data": 16.0,
     "diffusion_batch_size": 48,
     "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
@@ -69,44 +69,32 @@ guidance_model_configs = {
             1
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
-    "train_timestep_sampler": {
-        "distributions_config": ListValue(
-            [
-                {"distribution_type": "beta", "alpha": 6, "beta": 1.5, "weight": 0.85},
-                {
-                    "distribution_type": "uniform",
-                    "low": 0.0,
-                    "high": 1.0,
-                    "weight": 0.1,
-                },
-                {
-                    "distribution_type": "uniform",
-                    "low": 0.9,
-                    "high": 1.0,
-                    "weight": 0.05,
-                },
-            ]
-        ),
+    "train_noise_sampler": {
+        "p_mean": -1.2,
+        "p_std": 1.5,
+        "sigma_data": GlobalConfigValue("sigma_data"),
     },
-    "inference_timestep_scheduler": {
-        "ligo": {"p": -0.7},
-        "variable_linear_quadratic": {"m": 0.1, "n": 0.3},
-        "la_proteina": {"scale": 10.0},
+    "inference_noise_scheduler": {
+        "s_max": 160.0,
+        "s_min": 4e-4,
+        "rho": 7.0,
+        "sigma_data": GlobalConfigValue("sigma_data"),
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
         "N_sample": 1,  # 1
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
-        "stoch_type": "beta",
-        "alpha": 0.8,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
-        "gamma": 1.0,
-        "sigma_data": GlobalConfigValue("sigma_data"),
-        "second_order_train": False,
-        "second_order_inference": False,
-        "guidance_weight": 1.2,
-        "beta_mean": 0.33,
-        "beta_std": 0.233,
+        "gamma0": 0.8,
+        "gamma_min": 1.0,
+        "noise_scale_lambda": 1.003,
+        "step_scale_eta": 1.5,
+        "cfg_type": "no-guidance",
+        "cfg_weight": 1.0,
+        "lower_guidance_limit": 0.0,
+        "upper_guidance_limit": 1.0,
+        "lower_guidance_limit_weight": 3.0,
+        "upper_guidance_limit_weight": 3.0,
     },
     "model": {
         "N_model_seed": 1,  # for inference

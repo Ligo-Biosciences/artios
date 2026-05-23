@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# EDM motif-scaffolding backbone pre-training.
+# EDM motif-scaffolding backbone training.
 # Usage:
-#   WANDB_API_KEY=... bash scripts/train_backbone_edm_motif_pretrain.sh
+#   WANDB_API_KEY=... bash scripts/train_backbone_edm_motif.sh
 #
 # Common overrides:
-#   RUN_NAME=motif-v2.5-edm-pretrain NPROC_PER_NODE=8 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 bash scripts/train_backbone_edm_motif_pretrain.sh
+#   RUN_NAME=motif-v2.5-edm-train NPROC_PER_NODE=8 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 bash scripts/train_backbone_edm_motif.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -16,7 +16,7 @@ export TORCH_COMPILE_DISABLE="${TORCH_COMPILE_DISABLE:-1}"
 export TYPECHECK="${TYPECHECK:-false}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 
-RUN_NAME="${RUN_NAME:-motif-v2.5-edm-pretrain}"
+RUN_NAME="${RUN_NAME:-motif-v2.5-edm-train}"
 BASE_DIR="${BASE_DIR:-./training}"
 PROJECT="${WANDB_PROJECT:-artios-motif-scaffolding}"
 USE_WANDB="${USE_WANDB:-true}"

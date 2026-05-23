@@ -1,0 +1,37 @@
+{
+  "name": "M0711_2esd",
+  "task": "backbone",
+  "spec": {
+    "design": [
+      {
+        "length": "",
+        "chain_id": "0"
+      }
+    ],
+    "motif": {
+      "cif_file": "evaluation/inputs/motifs/complexa_ame/M0711_2esd.cif",
+      "ligands": [
+        {
+          "cif_res_name": "G3H",
+          "chain_id": "1",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "G3H"
+            ]
+          }
+        },
+        {
+          "cif_res_name": "NAP",
+          "chain_id": "2",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "NAP"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

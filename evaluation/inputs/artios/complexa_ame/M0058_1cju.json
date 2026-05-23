@@ -1,0 +1,37 @@
+{
+  "name": "M0058_1cju",
+  "task": "backbone",
+  "spec": {
+    "design": [
+      {
+        "length": "",
+        "chain_id": "0"
+      }
+    ],
+    "motif": {
+      "cif_file": "evaluation/inputs/motifs/complexa_ame/M0058_1cju.cif",
+      "ligands": [
+        {
+          "cif_res_name": "DAD",
+          "chain_id": "1",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "DAD"
+            ]
+          }
+        },
+        {
+          "cif_res_name": "MG",
+          "chain_id": "2",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "MG"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -121,6 +121,7 @@ model_configs = {
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
+    "sigma_data": 16.0,
     "sigma_coord": 12.0,
     "local_sigma_coord": 2.0,
     "s_noise_entity_trans": 2.0,
@@ -156,38 +157,32 @@ model_configs = {
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
     "self_conditioning_prob": 0.5,
-    "train_timestep_sampler": {
-        "alpha": 1.9,
-        # "beta": 1.0,
-        "uniform_weight": 0.02,
+    "train_noise_sampler": {
+        "p_mean": -1.2,
+        "p_std": 1.5,
+        "sigma_data": GlobalConfigValue("sigma_data"),
     },
-    "inference_timestep_scheduler": {
-        "ligo": {"p": -0.7},
-        "variable_linear_quadratic": {"m": 0.35, "n": 0.7},
-        "la_proteina": {
-            "coord": {
-                "scale": 10.0
-            },  # TODO: coord is redundant as we don't have latents
-        },
+    "inference_noise_scheduler": {
+        "s_max": 160.0,
+        "s_min": 4e-4,
+        "rho": 7.0,
+        "sigma_data": GlobalConfigValue("sigma_data"),
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
         "N_sample": 5,  # changed from 1, BATCH SIZE AT SAMPLING
         "N_step_mini_rollout": 20,
         "N_sample_mini_rollout": 1,
-        "stoch_type": "non_singular",
-        "alpha": 0.7,  # 1/sqrt(12), equates to using alpha=1 in before we normalised our noise schedules
-        "gamma": 1.0,
-        "sigma_coord": GlobalConfigValue("sigma_coord"),
-        "second_order": False,
+        "gamma0": 0.8,
+        "gamma_min": 1.0,
+        "noise_scale_lambda": 1.003,
+        "step_scale_eta": 1.5,
         "cfg_type": "no-guidance",
         "cfg_weight": 1.0,
         "lower_guidance_limit": 0.0,
         "upper_guidance_limit": 1.0,
         "lower_guidance_limit_weight": 3.0,
         "upper_guidance_limit_weight": 3.0,
-        "beta_mean": 0.5,
-        "beta_std": 0.233,
         "track_trajectory": False,
         "trajectory_step_stride": 10,
         "centre_and_augment_coords_during_sampling": True,
@@ -202,7 +197,7 @@ model_configs = {
             "n_blocks": 1,  # default was 3, not much to gain after 1 in design
         },
         "diffusion_module": {
-            "sigma_coord": GlobalConfigValue("sigma_coord"),
+            "sigma_data": GlobalConfigValue("sigma_data"),
             "c_token": GlobalConfigValue("c_token"),
             "c_atom": GlobalConfigValue("c_atom"),
             "c_z": GlobalConfigValue("c_z"),

@@ -15,15 +15,13 @@ from torch.utils.checkpoint import checkpoint
 from artios.data.features import FullContext
 from artios.metrics.rmsd import align_pred_to_true
 from artios.model.generator import (
-    CFGPredictor,
     CFGSchedule,
-    Deterministic,
-    FlowMatchingSampler,
-    InferenceTimestepScheduler,
+    EDMCFGPredictor,
+    EDMDenoisePredictor,
+    EDMInferenceNoiseScheduler,
+    EDMSampler,
     NoCFG,
     SamplingResult,
-    StochasticitySchedule,
-    VelocityScorePredictor,
 )
 from artios.model.modules.components import Transition
 from artios.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
@@ -49,7 +47,7 @@ class DiffusionConditioning(nn.Module):
 
     def __init__(
         self,
-        sigma_coord: float = 12.0,
+        sigma_data: float = 16.0,
         c_z: int = 128,
         c_s: int = 384,
         c_timestep_embedding: int = 256,
@@ -59,16 +57,17 @@ class DiffusionConditioning(nn.Module):
     ) -> None:
         """
         Args:
-            sigma_coord (torch.float, optional): the standard deviation of the coordinates. Defaults to 16.0.
+            sigma_data (torch.float, optional): EDM data standard deviation.
+                Defaults to 16.0.
             c_z (int, optional): hidden dim [for pair embedding].
             c_s (int, optional):  hidden dim [for single embedding].
             c_timestep_embedding (int, optional): timestep embedding dim.
-            motif_dist_min (float, optional): minimum distance for motif pair distance binning. Defaults to 1.0.
-            motif_dist_max (float, optional): maximum distance for motif pair distance binning. Defaults to 15.0.
-            motif_dist_bin_size (float, optional): bin size for motif pair distance binning. Defaults to 0.25.
+            motif_dist_min (float, optional): minimum motif distance bin.
+            motif_dist_max (float, optional): maximum motif distance bin.
+            motif_dist_bin_size (float, optional): motif distance bin size.
         """
         super(DiffusionConditioning, self).__init__()
-        self.sigma_coord = sigma_coord
+        self.sigma_data = sigma_data
         self.c_z = c_z
         self.c_s = c_s
 
@@ -388,7 +387,7 @@ class DiffusionConditioning(nn.Module):
     def forward(
         self,
         r_noisy: Float[Tensor, "... n_sample n_atom 3"],
-        timestep: Float[Tensor, "... n_sample"],
+        noise_level: Float[Tensor, "... n_sample"],
         context: FullContext,
         cache: Optional[CachedConditioning] = None,
         inplace_safe: bool = False,
@@ -399,7 +398,7 @@ class DiffusionConditioning(nn.Module):
         """
         Args:
             r_noisy: Noisy coordinates
-            timestep: Noising timestep
+            noise_level: EDM noising level.
             context: Full context containing all features and labels.
             cache: Precomputed timestep-independent conditioning. If None, computed internally.
             inplace_safe: Whether it is safe to use inplace operations.
@@ -413,13 +412,13 @@ class DiffusionConditioning(nn.Module):
         n_token = context.token.residue_index.shape[-1]
 
         # Timestep-dependent single conditioning
-        timestep_embed = self.fourier_embedding(t_hat_timestep=(2 * timestep - 1)).to(
-            cache.z.dtype
-        )
+        noise_embed = self.fourier_embedding(
+            t_hat_timestep=torch.log(noise_level / self.sigma_data) / 4
+        ).to(cache.z.dtype)
 
         s = rearrange(cache.s_base, "... n c -> ... 1 n c")
         s = s + repeat(
-            self.linear_t(self.layernorm_t(timestep_embed)),
+            self.linear_t(self.layernorm_t(noise_embed)),
             "... s c -> ... s n c",
             n=n_token,
         )
@@ -437,7 +436,7 @@ class DiffusionModule(nn.Module):
 
     def __init__(
         self,
-        sigma_coord: float = 12.0,
+        sigma_data: float = 16.0,
         c_token: int = 768,
         c_atom: int = 128,
         c_s: int = 384,
@@ -447,17 +446,18 @@ class DiffusionModule(nn.Module):
     ) -> None:
         """
         Args:
-            sigma_coord (torch.float, optional): the standard deviation of the coordinates. Defaults to 12.0.
+            sigma_data (torch.float, optional): EDM data standard deviation.
+                Defaults to 16.0.
             c_token (int, optional): feature channel of token (single a). Defaults to 768.
             c_atom (int, optional): feature channel of atom. Defaults to 128.
             c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
             c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128.
-            transformer (dict[str, int], optional): configs in DiffusionTransformer. Defaults to {"n_blocks": 24, "n_heads": 16}.
-            dropout (float, optional): dropout probability for attention weights and transition block. Defaults to 0.0.
+            transformer (dict[str, int], optional): DiffusionTransformer configs.
+            dropout (float, optional): dropout probability.
         """
 
         super(DiffusionModule, self).__init__()
-        self.sigma_coord = sigma_coord
+        self.sigma_data = sigma_data
         self.c_token = c_token
         self.c_atom = c_atom
         self.c_s = c_s
@@ -474,7 +474,7 @@ class DiffusionModule(nn.Module):
         self.self_cond_merge = LinearNoBias(2 * c_token, c_token)
 
         self.diffusion_conditioning = DiffusionConditioning(
-            sigma_coord=sigma_coord,
+            sigma_data=sigma_data,
             c_z=c_z,
             c_s=c_s,
         )
@@ -524,18 +524,16 @@ class DiffusionModule(nn.Module):
         self,
         context: FullContext,
         inplace_safe: bool = False,
-        eps: float = 1e-5,
         cfg_schedule: CFGSchedule = NoCFG(),
         self_conditioning: bool = True,
-    ) -> VelocityScorePredictor:
-        """Create a VelocityScorePredictor bound to this module and context.
+    ) -> EDMDenoisePredictor:
+        """Create an EDM denoising predictor bound to this module and context.
 
         Optionally wraps with classifier-free guidance if cfg_schedule is not NoCFG.
 
         Args:
             context: Full feature context to use for predictions.
             inplace_safe: Whether to use inplace operations safely.
-            eps: Small constant for numerical stability.
             cfg_schedule: CFG schedule. Use NoCFG() to skip classifier-free guidance
                 entirely (no unconditional forward pass). Defaults to NoCFG().
             self_conditioning: Whether to chain predictions across sampling steps.
@@ -543,19 +541,19 @@ class DiffusionModule(nn.Module):
                 When False, prev_pred is always None (no self-conditioning).
 
         Returns:
-            A callable satisfying VelocityScorePredictor protocol.
+            A callable satisfying EDMDenoisePredictor protocol.
             If cfg_schedule is not NoCFG, returns a CFGPredictor.
         """
 
-        def make_predictor(ctx: FullContext) -> VelocityScorePredictor:
+        def make_predictor(ctx: FullContext) -> EDMDenoisePredictor:
             """Create a predictor bound to a specific context."""
             conditioning_cache = self.diffusion_conditioning.compute_cache(ctx)
             prev_pred: Optional[Float[Tensor, "... n_atom 3"]] = None
 
             def predictor(
                 x_noisy: Float[Tensor, "... n_atom 3"],
-                timestep: Float[Tensor, "..."],
-            ) -> tuple[Float[Tensor, "... n_atom 3"], Float[Tensor, "... n_atom 3"]]:
+                noise_level: Float[Tensor, "..."],
+            ) -> Float[Tensor, "... n_atom 3"]:
                 nonlocal prev_pred  # hidden statefulness for self conditioning
 
                 # Align previous prediction to current noisy coords (handles frame changes)
@@ -571,7 +569,7 @@ class DiffusionModule(nn.Module):
 
                 coords_pred = self.forward(
                     r_noisy=x_noisy,
-                    timestep=timestep,
+                    noise_level=noise_level,
                     context=ctx,
                     cache=conditioning_cache,
                     inplace_safe=inplace_safe,
@@ -581,10 +579,7 @@ class DiffusionModule(nn.Module):
                 if self_conditioning:
                     prev_pred = coords_pred.detach()
 
-                t = repeat(timestep, "... -> ... 1 1")
-                velocity = (coords_pred - x_noisy) / torch.clamp(1 - t, min=eps)
-                score = t * velocity - x_noisy
-                return velocity, score
+                return coords_pred
 
             return predictor
 
@@ -595,7 +590,7 @@ class DiffusionModule(nn.Module):
 
         uncond_context = context.to_unconditional()
         uncond_predictor = make_predictor(uncond_context)
-        return CFGPredictor(
+        return EDMCFGPredictor(
             cond_predictor=cond_predictor,
             uncond_predictor=uncond_predictor,
             guidance_schedule=cfg_schedule,
@@ -605,29 +600,31 @@ class DiffusionModule(nn.Module):
     def sample(
         self,
         context: FullContext,
-        timestep_scheduler: InferenceTimestepScheduler,
+        noise_scheduler: EDMInferenceNoiseScheduler,
         n_steps: int,
-        stochasticity: StochasticitySchedule = Deterministic(),
         cfg_schedule: CFGSchedule = NoCFG(),
-        gamma: float = 1.0,
+        gamma0: float = 0.8,
+        gamma_min: float = 1.0,
+        noise_scale_lambda: float = 1.003,
+        step_scale_eta: float = 1.5,
         n_sample: int = 1,
-        second_order: bool = False,
         inplace_safe: bool = False,
         centre_coords: bool = False,
         track_trajectory: bool = False,
         self_conditioning: bool = True,
     ) -> SamplingResult:
-        """Backbone denoising sampling using flow matching.
+        """Backbone denoising sampling using AF3/Protenix-style EDM.
 
         Args:
             context: Full feature context.
-            timestep_scheduler: Scheduler for generating timestep sequence.
+            noise_scheduler: Scheduler for generating EDM noise levels.
             n_steps: Number of integration steps.
-            stochasticity: Schedule defining g(t) in the SDE.
             cfg_schedule: CFG schedule.
-            gamma: Temperature parameter for the stochastic term.
+            gamma0: AF3 churn factor.
+            gamma_min: Noise threshold below which churn is disabled.
+            noise_scale_lambda: Scale factor for added churn noise.
+            step_scale_eta: Euler step scale factor.
             n_sample: Number of samples to generate.
-            second_order: Whether to use second-order integration.
             inplace_safe: Whether to use inplace operations safely.
             track_trajectory: If True, store coordinates at each step.
 
@@ -640,16 +637,18 @@ class DiffusionModule(nn.Module):
         dtype = torch.float32
 
         # Generate initial noise
-        x_init = self.sigma_coord * torch.randn(
+        noise_schedule = noise_scheduler.get_schedule(n_steps, device, dtype)
+        x_init = noise_schedule[0] * torch.randn(
             size=(*batch_shape, n_sample, n_atom, 3), device=device, dtype=dtype
         )
 
         # Create sampler and predictor
-        sampler = FlowMatchingSampler(
-            timestep_scheduler=timestep_scheduler,
-            stochasticity=stochasticity,
-            gamma=gamma,
-            second_order=second_order,
+        sampler = EDMSampler(
+            noise_scheduler=noise_scheduler,
+            gamma0=gamma0,
+            gamma_min=gamma_min,
+            noise_scale_lambda=noise_scale_lambda,
+            step_scale_eta=step_scale_eta,
             centre_coords=centre_coords,
         )
         predictor = self.as_predictor(
@@ -672,18 +671,18 @@ class DiffusionModule(nn.Module):
     def f_forward(
         self,
         r_noisy: Float[Tensor, "... n_sample n_atom 3"],
-        timestep: Float[Tensor, "... n_sample"],
+        noise_level: Float[Tensor, "... n_sample"],
         context: FullContext,
         cache: Optional[CachedConditioning] = None,
         inplace_safe: bool = False,
         prev_pred: Optional[Float[Tensor, "... n_sample n_atom 3"]] = None,
     ) -> Float[Tensor, "... n_sample n_atom 3"]:
-        """The raw network to be trained. This is v_theta(x_t, t).
+        """The raw network to be trained. This is F_theta(c_in * x, c_noise).
         c_noise(sigma) is computed in Conditioning module.
 
         Args:
             r_noisy: Scaled noisy coordinates (i.e., c_in * x)
-            timestep: Noising timestep
+            noise_level: EDM noising level.
             context: Full context containing all features and labels.
             cache: Precomputed timestep-independent conditioning from DiffusionConditioning.
             inplace_safe: Whether it is safe to use inplace operations.
@@ -732,7 +731,7 @@ class DiffusionModule(nn.Module):
 
         s, z = self.diffusion_conditioning(
             r_noisy=r_noisy,
-            timestep=timestep,
+            noise_level=noise_level,
             context=context,
             cache=cache,
             inplace_safe=inplace_safe,
@@ -773,23 +772,27 @@ class DiffusionModule(nn.Module):
 
         return self.readout(q_atom)
 
-    def c_in(self, timestep: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
-        """Input scaling factor for noisy coordinates."""
-        return 1 / (timestep**2 + (1 - timestep) ** 2).sqrt()
+    def c_in(self, noise_level: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
+        """EDM input scaling factor for noisy coordinates."""
+        return 1 / torch.sqrt(self.sigma_data**2 + noise_level**2)
 
-    def c_out(self, timestep: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
-        """Output scaling factor (velocity parametrization)."""
-        return 1 - timestep
+    def c_out(self, noise_level: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
+        """EDM output scaling factor."""
+        return (
+            self.sigma_data
+            * noise_level
+            / torch.sqrt(self.sigma_data**2 + noise_level**2)
+        )
 
-    def c_skip(self, timestep: Float[Tensor, "..."]) -> float:
-        """Skip connection scaling factor."""
-        return 1.0
+    def c_skip(self, noise_level: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
+        """EDM skip connection scaling factor."""
+        return self.sigma_data**2 / (self.sigma_data**2 + noise_level**2)
 
     @typecheck
     def forward(
         self,
         r_noisy: Float[Tensor, "... n_sample n_atom 3"],
-        timestep: Float[Tensor, "... n_sample"],
+        noise_level: Float[Tensor, "... n_sample"],
         context: FullContext,
         cache: Optional[CachedConditioning] = None,
         inplace_safe: bool = False,
@@ -799,7 +802,7 @@ class DiffusionModule(nn.Module):
 
         Args:
             r_noisy: Noisy coordinates
-            timestep: Noising timestep
+            noise_level: EDM noising level.
             context: Full context containing all features and labels.
             cache: Precomputed timestep-independent conditioning from DiffusionConditioning.
             inplace_safe: Whether it is safe to use inplace operations.
@@ -808,21 +811,21 @@ class DiffusionModule(nn.Module):
         Returns:
             Predicted coordinates
         """
-        # Expand timesteps
-        timestep_ = timestep[..., None, None]
+        # Expand noise levels
+        noise_level_ = noise_level[..., None, None]
 
         # Scale input noisy coords to unit variance
-        r_noisy_unit = (r_noisy / self.sigma_coord) * self.c_in(timestep_)
+        r_noisy_unit = r_noisy * self.c_in(noise_level_)
 
         # Scale previous prediction the same way
         prev_pred_unit = None
         if prev_pred is not None:
-            prev_pred_unit = (prev_pred / self.sigma_coord) * self.c_in(timestep_)
+            prev_pred_unit = prev_pred * self.c_in(noise_level_)
 
-        # Predict velocity
+        # Predict EDM residual update
         out = self.f_forward(
             r_noisy=r_noisy_unit,
-            timestep=timestep,
+            noise_level=noise_level,
             context=context,
             cache=cache,
             inplace_safe=inplace_safe,
@@ -830,8 +833,6 @@ class DiffusionModule(nn.Module):
         )
 
         # Apply skip connections and output scaling
-        r_pred = r_noisy * self.c_skip(timestep_) + out * self.sigma_coord * self.c_out(
-            timestep_
-        )
+        r_pred = r_noisy * self.c_skip(noise_level_) + out * self.c_out(noise_level_)
 
         return r_pred

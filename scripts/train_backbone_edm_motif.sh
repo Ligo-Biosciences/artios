@@ -10,7 +10,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "${PROJECT_ROOT}"
+# Keep the caller's working directory so relative data paths such as
+# af3-dev/release_data/... can resolve beside artios-all-atom.
 
 export TORCH_COMPILE_DISABLE="${TORCH_COMPILE_DISABLE:-1}"
 export TYPECHECK="${TYPECHECK:-false}"
@@ -26,7 +27,9 @@ if [[ "${USE_WANDB}" == "true" ]]; then
   : "${WANDB_API_KEY:?Set WANDB_API_KEY, or run with USE_WANDB=false.}"
 fi
 
-uv run torchrun --nproc_per_node="${NPROC_PER_NODE}" runner/train_backbone.py \
+uv run --project "${PROJECT_ROOT}" torchrun \
+  --nproc_per_node="${NPROC_PER_NODE}" \
+  "${PROJECT_ROOT}/runner/train_backbone.py" \
   --run_name "${RUN_NAME}" \
   --seed 43 \
   --base_dir "${BASE_DIR}" \

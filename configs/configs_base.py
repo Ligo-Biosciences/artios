@@ -208,7 +208,7 @@ model_configs = {
             "c_z": GlobalConfigValue("c_z"),
             "c_s": GlobalConfigValue("c_s"),
             "transformer": {
-                "num_blocks": 24,
+                "num_blocks": 16,
                 "num_heads": 16,
                 "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
             },

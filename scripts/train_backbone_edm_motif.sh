@@ -13,7 +13,6 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Keep the caller's working directory so relative data paths such as
 # af3-dev/release_data/... can resolve beside artios-all-atom.
 
-export TORCH_COMPILE_DISABLE="${TORCH_COMPILE_DISABLE:-1}"
 export TYPECHECK="${TYPECHECK:-false}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 

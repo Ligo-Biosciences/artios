@@ -9,6 +9,7 @@ from artios.model.modules.layout import gather_trunk_pair_embedding
 from artios.model.modules.primitives import (
     Linear,
     attention,
+    attention_with_bias,
 )
 
 
@@ -107,6 +108,83 @@ class TestAttentionFunction:
 
         # Compare outputs
         torch.testing.assert_close(manual_output, impl_output, rtol=1e-5, atol=1e-6)
+
+    def test_attention_with_bias_broadcasts_batch_dims(
+        self, device: torch.device
+    ) -> None:
+        """Biased attention must match the literal formula with broadcasted bias."""
+        batch_size, n_sample, num_heads, n_q, n_kv, d = 2, 3, 4, 8, 10, 16
+        q = torch.randn(batch_size, n_sample, num_heads, n_q, d, device=device)
+        k = torch.randn(batch_size, n_sample, num_heads, n_kv, d, device=device)
+        v = torch.randn(batch_size, n_sample, num_heads, n_kv, d, device=device)
+        pair_mask = torch.ones(
+            batch_size, 1, 1, n_q, n_kv, device=device, dtype=torch.bool
+        )
+        pair_mask[..., -2:] = False
+        attn_bias = torch.randn(batch_size, 1, num_heads, n_q, n_kv, device=device)
+        inf = 1e9
+
+        # Manual formula: pair_bias + scale * (q @ k.T).
+        attn_weights_manual = q @ k.transpose(-1, -2) / (d**0.5)
+        attn_weights_manual = attn_weights_manual + attn_bias
+        attn_weights_manual = torch.masked_fill(attn_weights_manual, ~pair_mask, -inf)
+        attn_weights_manual = F.softmax(attn_weights_manual, dim=-1)
+        manual_output = attn_weights_manual @ v
+
+        impl_output = attention_with_bias(
+            q=q, k=k, v=v, pair_mask=pair_mask, attn_bias=attn_bias, inf=inf
+        )
+
+        torch.testing.assert_close(manual_output, impl_output, rtol=1e-5, atol=1e-6)
+
+    def test_attention_with_bias_backward_matches_literal_formula(
+        self, device: torch.device
+    ) -> None:
+        """The baddbmm path should preserve gradients of the literal formula."""
+        batch_size, n_sample, num_heads, n_q, n_kv, d = 2, 2, 3, 4, 5, 8
+        q = torch.randn(
+            batch_size, n_sample, num_heads, n_q, d, device=device, requires_grad=True
+        )
+        k = torch.randn(
+            batch_size, n_sample, num_heads, n_kv, d, device=device, requires_grad=True
+        )
+        v = torch.randn(
+            batch_size, n_sample, num_heads, n_kv, d, device=device, requires_grad=True
+        )
+        attn_bias = torch.randn(
+            batch_size, 1, num_heads, n_q, n_kv, device=device, requires_grad=True
+        )
+        pair_mask = torch.ones(
+            batch_size, 1, 1, n_q, n_kv, device=device, dtype=torch.bool
+        )
+        pair_mask[..., -1:] = False
+        upstream = torch.randn(batch_size, n_sample, num_heads, n_q, d, device=device)
+        inf = 1e9
+
+        q_ref = q.detach().clone().requires_grad_(True)
+        k_ref = k.detach().clone().requires_grad_(True)
+        v_ref = v.detach().clone().requires_grad_(True)
+        attn_bias_ref = attn_bias.detach().clone().requires_grad_(True)
+
+        impl_output = attention_with_bias(
+            q=q, k=k, v=v, pair_mask=pair_mask, attn_bias=attn_bias, inf=inf
+        )
+        impl_loss = (impl_output * upstream).sum()
+        impl_grads = torch.autograd.grad(impl_loss, (q, k, v, attn_bias))
+
+        # Manual formula: pair_bias + scale * (q @ k.T).
+        attn_weights_manual = q_ref @ k_ref.transpose(-1, -2) / (d**0.5)
+        attn_weights_manual = attn_weights_manual + attn_bias_ref
+        attn_weights_manual = torch.masked_fill(attn_weights_manual, ~pair_mask, -inf)
+        attn_weights_manual = F.softmax(attn_weights_manual, dim=-1)
+        manual_output = attn_weights_manual @ v_ref
+        manual_loss = (manual_output * upstream).sum()
+        manual_grads = torch.autograd.grad(
+            manual_loss, (q_ref, k_ref, v_ref, attn_bias_ref)
+        )
+
+        for impl_grad, manual_grad in zip(impl_grads, manual_grads):
+            torch.testing.assert_close(impl_grad, manual_grad, rtol=1e-5, atol=1e-6)
 
     def test_attention_with_partial_mask(self, device: torch.device) -> None:
         """Test attention function with partial masking."""

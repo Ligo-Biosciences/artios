@@ -22,11 +22,7 @@ from artios.model.modules.layout import (
     rearrange_to_key_subset,
     rearrange_to_query_subset,
 )
-from artios.model.modules.primitives import (
-    BiasInitLinear,
-    LayerNorm,
-    LinearNoBias,
-)
+from artios.model.modules.primitives import BiasInitLinear, LayerNorm, LinearNoBias
 from artios.utils.typing import Bool, Float, typecheck
 
 
@@ -77,6 +73,7 @@ class DiTBlock(nn.Module):
             LinearNoBias(2 * c_token, c_token, init="default"),
         )
 
+    @torch.compile(dynamic=False)
     @typecheck
     def forward(
         self,
@@ -110,16 +107,21 @@ class DiTBlock(nn.Module):
         ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {pair_bias.shape[-3]}"
 
         # Adaln + Attention
-        attn_input = scale_attn * self.attn_layernorm(a) + shift_attn
+        # shift_attn + scale_attn * LayerNorm(a).
+        attn_input = torch.addcmul(shift_attn, scale_attn, self.attn_layernorm(a))
         attn_output = self.attention(
             q_x=attn_input, kv_x=attn_input, pair_bias=pair_bias, pair_mask=pair_mask
         )
-        a = a + (gate_attn * attn_output)
+        # Gated residual update: a + gate_attn * attn_output.
+        a = torch.addcmul(a, gate_attn, attn_output)
 
         # Adaln + MLP
-        mlp_input = scale_mlp * self.mlp_layernorm(a) + shift_mlp
+        # shift_mlp + scale_mlp * LayerNorm(a).
+        mlp_input = torch.addcmul(shift_mlp, scale_mlp, self.mlp_layernorm(a))
         mlp_output = self.mlp(mlp_input)
-        a = a + (gate_mlp * mlp_output)
+
+        # a + gate_mlp * mlp_output.
+        a = torch.addcmul(a, gate_mlp, mlp_output)
         return a
 
 
@@ -363,7 +365,8 @@ class LocalAttnTransformerBlock(nn.Module):
         ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {trunked_pair_bias.shape[-3]}"
 
         # AdaLN on q_l first
-        attn_input = scale_attn * self.attn_layernorm(q_l) + shift_attn
+        # AdaLN modulation: shift_attn + scale_attn * LayerNorm(q_l).
+        attn_input = torch.addcmul(shift_attn, scale_attn, self.attn_layernorm(q_l))
 
         # Rearrange q_l and do attention with trunked
         q_x = rearrange_to_query_subset(
@@ -389,12 +392,15 @@ class LocalAttnTransformerBlock(nn.Module):
         )
 
         # Gate the attention output and add as residual
-        q_l = q_l + (gate_attn * attn_out)
+        # Gated residual update: q_l + gate_attn * attn_out.
+        q_l = torch.addcmul(q_l, gate_attn, attn_out)
 
         # MLP with AdaLN
-        mlp_input = scale_mlp * self.mlp_layernorm(q_l) + shift_mlp
+        # AdaLN modulation: shift_mlp + scale_mlp * LayerNorm(q_l).
+        mlp_input = torch.addcmul(shift_mlp, scale_mlp, self.mlp_layernorm(q_l))
         mlp_output = self.mlp(mlp_input)
-        q_l = q_l + (gate_mlp * mlp_output)
+        # Gated residual update: q_l + gate_mlp * mlp_output.
+        q_l = torch.addcmul(q_l, gate_mlp, mlp_output)
 
         return q_l
 

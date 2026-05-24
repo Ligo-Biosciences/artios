@@ -518,7 +518,6 @@ class LocalAttnTransformer(nn.Module):
         return blocks
 
     # @profile_function("atom_transformer")
-    @torch.compile
     @typecheck
     def forward(
         self,

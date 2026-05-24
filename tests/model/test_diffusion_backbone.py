@@ -192,6 +192,46 @@ class TestDiffusionModule:
         )
         torch.testing.assert_close(diffusion_module.c_out(noise_level), expected_c_out)
 
+    def test_prev_pred_is_scaled_by_sigma_data(
+        self, diffusion_module, context, device, monkeypatch
+    ):
+        """Self-conditioning receives denoised coords scaled by SIGMA_DATA."""
+        n_atoms = context.reference.ref_pos.shape[-2]
+        batch_size = context.token.residue_index.shape[0]
+        captured = {}
+
+        def fake_f_forward(
+            self,
+            r_noisy,
+            noise_level,
+            context,
+            cache=None,
+            inplace_safe=False,
+            prev_pred=None,
+        ):
+            captured["prev_pred"] = prev_pred.detach().clone()
+            return torch.zeros_like(r_noisy)
+
+        monkeypatch.setattr(DiffusionModule, "f_forward", fake_f_forward)
+
+        r_noisy = torch.randn(batch_size, 1, n_atoms, 3, device=device)
+        noise_level = torch.full((batch_size, 1), 32.0, device=device)
+        prev_pred = torch.randn(batch_size, 1, n_atoms, 3, device=device)
+
+        diffusion_module(
+            r_noisy=r_noisy,
+            noise_level=noise_level,
+            context=context,
+            prev_pred=prev_pred,
+        )
+
+        expected = prev_pred / SIGMA_DATA
+        old_noise_dependent_scaling = prev_pred * diffusion_module.c_in(
+            noise_level[..., None, None]
+        )
+        torch.testing.assert_close(captured["prev_pred"], expected)
+        assert not torch.allclose(captured["prev_pred"], old_noise_dependent_scaling)
+
     def test_zero_initialized_readout_returns_skip_scaled_noisy_coords(
         self, diffusion_module, context, device
     ):

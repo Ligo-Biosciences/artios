@@ -874,10 +874,11 @@ class DiffusionModule(nn.Module):
         # Scale input noisy coords to unit variance
         r_noisy_unit = r_noisy * self.c_in(noise_level_)
 
-        # Scale previous prediction the same way
+        # Previous predictions are already denoised coordinates, so scale them
+        # by the fixed data scale rather than the current noise-dependent c_in.
         prev_pred_unit = None
         if prev_pred is not None:
-            prev_pred_unit = prev_pred * self.c_in(noise_level_)
+            prev_pred_unit = prev_pred / SIGMA_DATA
 
         # Predict EDM residual update
         out = self.f_forward(

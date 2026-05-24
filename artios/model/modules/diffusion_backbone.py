@@ -2,8 +2,11 @@
 TODO: this filename should eventually just be called diffusion.py I think.
 """
 
-from dataclasses import dataclass
-from typing import Optional
+import hashlib
+import json
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -15,6 +18,7 @@ from torch.utils.checkpoint import checkpoint
 from artios.data.features import FullContext
 from artios.metrics.rmsd import align_pred_to_true
 from artios.model.generator import (
+    SIGMA_DATA,
     CFGSchedule,
     EDMCFGPredictor,
     EDMDenoisePredictor,
@@ -26,7 +30,10 @@ from artios.model.generator import (
 from artios.model.modules.components import Transition
 from artios.model.modules.embedders import FourierEmbedding, RelativePositionEncoding
 from artios.model.modules.primitives import LayerNorm, LinearNoBias
-from artios.model.modules.transformer import DiffusionTransformer
+from artios.model.modules.transformer import (
+    DiffusionTransformer,
+    DiffusionTransformerConfig,
+)
 from artios.model.utils import average_atom_to_token, broadcast_token_to_atom, one_hot
 from artios.utils.geometry import centre_random_augmentation
 from artios.utils.typing import typecheck
@@ -40,6 +47,65 @@ class CachedConditioning:
     z: Float[Tensor, "... n_token n_token c_z"]
 
 
+def _stable_hash(value: Mapping[str, Any]) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DiffusionConditioningConfig:
+    """Architecture settings for diffusion conditioning."""
+
+    c_timestep_embedding: int = 256
+    motif_dist_min: float = 1.0
+    motif_dist_max: float = 15.0
+    motif_dist_bin_size: float = 0.25
+
+    def __post_init__(self) -> None:
+        if self.c_timestep_embedding <= 0:
+            raise ValueError("c_timestep_embedding must be greater than 0")
+        if self.motif_dist_max <= self.motif_dist_min:
+            raise ValueError("motif_dist_max must be greater than motif_dist_min")
+        if self.motif_dist_bin_size <= 0:
+            raise ValueError("motif_dist_bin_size must be greater than 0")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DiffusionModuleConfig:
+    """Architecture settings for the EDM diffusion backbone module."""
+
+    c_token: int = 768
+    c_atom: int = 256
+    c_s: int = 384
+    c_z: int = 128
+    conditioning: DiffusionConditioningConfig = field(
+        default_factory=DiffusionConditioningConfig
+    )
+    transformer: DiffusionTransformerConfig = field(
+        default_factory=DiffusionTransformerConfig
+    )
+
+    def __post_init__(self) -> None:
+        for name in ("c_token", "c_atom", "c_s", "c_z"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be greater than 0")
+        if self.c_token % self.transformer.num_heads != 0:
+            raise ValueError("c_token must be divisible by transformer.num_heads")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def architecture_hash(self) -> str:
+        return _stable_hash(self.to_dict())
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DiffusionRuntimeConfig:
+    """Execution settings that do not define diffusion architecture."""
+
+    checkpoint_grads: bool = True
+
+
 class DiffusionConditioning(nn.Module):
     """
     Implements Algorithm 21 in AF3
@@ -47,27 +113,21 @@ class DiffusionConditioning(nn.Module):
 
     def __init__(
         self,
-        sigma_data: float = 16.0,
+        config: DiffusionConditioningConfig | None = None,
         c_z: int = 128,
         c_s: int = 384,
-        c_timestep_embedding: int = 256,
-        motif_dist_min: float = 1.0,
-        motif_dist_max: float = 15.0,
-        motif_dist_bin_size: float = 0.25,
     ) -> None:
         """
         Args:
-            sigma_data (torch.float, optional): EDM data standard deviation.
-                Defaults to 16.0.
+            config: Architecture settings for diffusion conditioning.
             c_z (int, optional): hidden dim [for pair embedding].
             c_s (int, optional):  hidden dim [for single embedding].
-            c_timestep_embedding (int, optional): timestep embedding dim.
-            motif_dist_min (float, optional): minimum motif distance bin.
-            motif_dist_max (float, optional): maximum motif distance bin.
-            motif_dist_bin_size (float, optional): motif distance bin size.
         """
         super(DiffusionConditioning, self).__init__()
-        self.sigma_data = sigma_data
+        if config is None:
+            config = DiffusionConditioningConfig()
+
+        self.config = config
         self.c_z = c_z
         self.c_s = c_s
 
@@ -93,15 +153,15 @@ class DiffusionConditioning(nn.Module):
 
         ### Motif features
         # Motif distance binning parameters
-        self.motif_dist_min = motif_dist_min
-        self.motif_dist_max = motif_dist_max
-        self.motif_dist_bin_size = motif_dist_bin_size
+        self.motif_dist_min = config.motif_dist_min
+        self.motif_dist_max = config.motif_dist_max
+        self.motif_dist_bin_size = config.motif_dist_bin_size
         self.n_motif_dist_bins = int(
-            (motif_dist_max - motif_dist_min) / motif_dist_bin_size
+            (config.motif_dist_max - config.motif_dist_min) / config.motif_dist_bin_size
         )
 
         motif_lower_bins = torch.arange(
-            motif_dist_min, motif_dist_max, motif_dist_bin_size
+            config.motif_dist_min, config.motif_dist_max, config.motif_dist_bin_size
         )
         motif_upper_bins = torch.cat(
             [motif_lower_bins[1:], motif_lower_bins.new_tensor([1e6])], dim=-1
@@ -127,9 +187,11 @@ class DiffusionConditioning(nn.Module):
         self.linear_no_bias_z = LinearNoBias(2 * self.c_z, self.c_z)
 
         ### Timestep embeddings
-        self.fourier_embedding = FourierEmbedding(c=c_timestep_embedding)
-        self.layernorm_t = LayerNorm(c_timestep_embedding)
-        self.linear_t = LinearNoBias(c_timestep_embedding, self.c_s, init="lecun")
+        self.fourier_embedding = FourierEmbedding(c=config.c_timestep_embedding)
+        self.layernorm_t = LayerNorm(config.c_timestep_embedding)
+        self.linear_t = LinearNoBias(
+            config.c_timestep_embedding, self.c_s, init="lecun"
+        )
 
         # Entity type embedding
         self.entity_features = {
@@ -413,7 +475,7 @@ class DiffusionConditioning(nn.Module):
 
         # Timestep-dependent single conditioning
         noise_embed = self.fourier_embedding(
-            t_hat_timestep=torch.log(noise_level / self.sigma_data) / 4
+            t_hat_timestep=torch.log(noise_level / SIGMA_DATA) / 4
         ).to(cache.z.dtype)
 
         s = rearrange(cache.s_base, "... n c -> ... 1 n c")
@@ -436,32 +498,27 @@ class DiffusionModule(nn.Module):
 
     def __init__(
         self,
-        sigma_data: float = 16.0,
-        c_token: int = 768,
-        c_atom: int = 128,
-        c_s: int = 384,
-        c_z: int = 128,
-        transformer: dict[str, int] = {"num_blocks": 24, "num_heads": 16},
-        dropout: float = 0.0,
+        config: DiffusionModuleConfig | None = None,
+        runtime_config: DiffusionRuntimeConfig | None = None,
     ) -> None:
         """
         Args:
-            sigma_data (torch.float, optional): EDM data standard deviation.
-                Defaults to 16.0.
-            c_token (int, optional): feature channel of token (single a). Defaults to 768.
-            c_atom (int, optional): feature channel of atom. Defaults to 128.
-            c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
-            c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128.
-            transformer (dict[str, int], optional): DiffusionTransformer configs.
-            dropout (float, optional): dropout probability.
+            config: Architecture settings for the diffusion module.
+            runtime_config: Execution settings that do not affect model identity.
         """
 
         super(DiffusionModule, self).__init__()
-        self.sigma_data = sigma_data
-        self.c_token = c_token
-        self.c_atom = c_atom
-        self.c_s = c_s
-        self.c_z = c_z
+        if config is None:
+            config = DiffusionModuleConfig()
+        if runtime_config is None:
+            runtime_config = DiffusionRuntimeConfig()
+
+        self.config = config
+        self.runtime_config = runtime_config
+        self.c_token = config.c_token
+        self.c_atom = config.c_atom
+        self.c_s = config.c_s
+        self.c_z = config.c_z
 
         self.atom_input_feature = {  # TODO: how could we better handle - dataclass?
             "ref_charge": 1,
@@ -469,41 +526,45 @@ class DiffusionModule(nn.Module):
             "ref_atom_name_chars": 4 * 64,
         }
 
-        self.linear_no_bias_r_embed = LinearNoBias(3, c_token)
-        self.linear_no_bias_prev_pred_embed = LinearNoBias(3, c_token, init="zeros")
-        self.self_cond_merge = LinearNoBias(2 * c_token, c_token)
+        self.linear_no_bias_r_embed = LinearNoBias(3, self.c_token)
+        self.linear_no_bias_prev_pred_embed = LinearNoBias(
+            3, self.c_token, init="zeros"
+        )
+        self.self_cond_merge = LinearNoBias(2 * self.c_token, self.c_token)
 
         self.diffusion_conditioning = DiffusionConditioning(
-            sigma_data=sigma_data,
-            c_z=c_z,
-            c_s=c_s,
+            config=config.conditioning,
+            c_z=self.c_z,
+            c_s=self.c_s,
         )
 
-        self.layernorm_s = LayerNorm(c_s)
+        self.layernorm_s = LayerNorm(self.c_s)
         self.linear_no_bias_s = LinearNoBias(
-            in_features=c_s, out_features=c_token, init="zeros"
+            in_features=self.c_s, out_features=self.c_token, init="zeros"
         )
         self.diffusion_transformer = DiffusionTransformer(
-            **transformer,  # type: ignore[invalid-argument-type]
-            c_token=c_token,
-            c_s=c_s,
-            c_z=c_z,
+            num_blocks=config.transformer.num_blocks,
+            num_heads=config.transformer.num_heads,
+            c_token=self.c_token,
+            c_s=self.c_s,
+            c_z=self.c_z,
+            checkpoint_grads=runtime_config.checkpoint_grads,
         )
-        self.layernorm_a = LayerNorm(c_token)
+        self.layernorm_a = LayerNorm(self.c_token)
 
         self.linear_no_bias_a = LinearNoBias(
-            c_token,
-            c_atom,
+            self.c_token,
+            self.c_atom,
         )
 
         self.linear_no_bias_f = LinearNoBias(
             sum(self.atom_input_feature.values()),
-            c_atom,
+            self.c_atom,
         )
 
-        self.readout_transition = Transition(c_in=c_atom, n=2)
-        self.readout_layernorm = LayerNorm(c_atom)
-        self.readout_linear = LinearNoBias(c_atom, 3, init="zeros")
+        self.readout_transition = Transition(c_in=self.c_atom, n=2)
+        self.readout_layernorm = LayerNorm(self.c_atom)
+        self.readout_linear = LinearNoBias(self.c_atom, 3, init="zeros")
 
     @typecheck
     def readout(
@@ -774,19 +835,15 @@ class DiffusionModule(nn.Module):
 
     def c_in(self, noise_level: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
         """EDM input scaling factor for noisy coordinates."""
-        return 1 / torch.sqrt(self.sigma_data**2 + noise_level**2)
+        return 1 / torch.sqrt(SIGMA_DATA**2 + noise_level**2)
 
     def c_out(self, noise_level: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
         """EDM output scaling factor."""
-        return (
-            self.sigma_data
-            * noise_level
-            / torch.sqrt(self.sigma_data**2 + noise_level**2)
-        )
+        return SIGMA_DATA * noise_level / torch.sqrt(SIGMA_DATA**2 + noise_level**2)
 
     def c_skip(self, noise_level: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
         """EDM skip connection scaling factor."""
-        return self.sigma_data**2 / (self.sigma_data**2 + noise_level**2)
+        return SIGMA_DATA**2 / (SIGMA_DATA**2 + noise_level**2)
 
     @typecheck
     def forward(

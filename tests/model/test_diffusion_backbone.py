@@ -9,10 +9,14 @@ import torch
 import torch.nn as nn
 
 from artios.data.features import FullContext
+from artios.model.generator import SIGMA_DATA, EDMInferenceNoiseScheduler
 from artios.model.modules.diffusion_backbone import (
     DiffusionConditioning,
+    DiffusionConditioningConfig,
     DiffusionModule,
+    DiffusionModuleConfig,
 )
+from artios.model.modules.transformer import DiffusionTransformerConfig
 from tests._helpers.context import create_test_context
 
 
@@ -50,16 +54,17 @@ class TestDiffusionConditioning:
     def test_motif_distance_bin_count_formula(self, device):
         """n_motif_dist_bins must be ``int((max - min) / bin_size)``."""
         diff_cond = DiffusionConditioning(
-            sigma_data=16.0,
-            motif_dist_min=1.0,
-            motif_dist_max=15.0,
-            motif_dist_bin_size=0.25,
+            config=DiffusionConditioningConfig(
+                motif_dist_min=1.0,
+                motif_dist_max=15.0,
+                motif_dist_bin_size=0.25,
+            ),
         ).to(device)
         assert diff_cond.n_motif_dist_bins == int((15.0 - 1.0) / 0.25)
 
     def test_cache_equivalence(self, device, context):
         """forward(cache=None) matches forward(cache=compute_cache(...))."""
-        diff_cond = DiffusionConditioning(sigma_data=16.0).to(device)
+        diff_cond = DiffusionConditioning().to(device)
         diff_cond.eval()
 
         n_atoms = context.reference.ref_pos.shape[-2]
@@ -86,7 +91,7 @@ class TestDiffusionConditioning:
 
     def test_cache_noise_level_invariance(self, device, context):
         """Test that compute_cache output is identical regardless of later noise levels."""
-        diff_cond = DiffusionConditioning(sigma_data=16.0).to(device)
+        diff_cond = DiffusionConditioning().to(device)
         diff_cond.eval()
 
         # compute_cache does not depend on noise level at all
@@ -100,7 +105,7 @@ class TestDiffusionConditioning:
         torch.testing.assert_close(cache1.z, cache2.z)
 
     def test_conditioning_uses_log_sigma_scaled_fourier_input(self, device, context):
-        diff_cond = DiffusionConditioning(sigma_data=16.0).to(device)
+        diff_cond = DiffusionConditioning().to(device)
         spy = SpyFourierEmbedding(diff_cond.fourier_embedding.c).to(device)
         diff_cond.fourier_embedding = spy
 
@@ -111,7 +116,7 @@ class TestDiffusionConditioning:
 
         diff_cond(r_noisy=r_noisy, noise_level=noise_level, context=context)
 
-        expected = torch.log(noise_level / 16.0) / 4
+        expected = torch.log(noise_level / SIGMA_DATA) / 4
         torch.testing.assert_close(spy.seen_input, expected)
 
 
@@ -121,16 +126,14 @@ class TestDiffusionModule:
     @pytest.fixture
     def diffusion_module(self, device):
         """Create a DiffusionModule with minimal configuration for testing."""
-        config = {
-            "sigma_data": 16.0,
-            "c_z": 128,
-            "c_token": 64,  # Smaller for faster testing
-            "c_atom": 128,
-            "c_s": 384,
-            "transformer": {"num_blocks": 2, "num_heads": 4},  # Minimal transformer
-            "dropout": 0.0,
-        }
-        return DiffusionModule(**config).to(device)
+        config = DiffusionModuleConfig(
+            c_z=128,
+            c_token=64,  # Smaller for faster testing
+            c_atom=128,
+            c_s=384,
+            transformer=DiffusionTransformerConfig(num_blocks=2, num_heads=4),
+        )
+        return DiffusionModule(config=config).to(device)
 
     def test_forward_pass(self, diffusion_module, context, device):
         """Test the complete forward pass."""
@@ -175,7 +178,7 @@ class TestDiffusionModule:
 
     def test_edm_preconditioning_factors(self, diffusion_module, device):
         noise_level = torch.tensor([0.0, 16.0, 32.0], device=device)
-        sigma_data = diffusion_module.sigma_data
+        sigma_data = SIGMA_DATA
 
         expected_c_in = 1 / torch.sqrt(sigma_data**2 + noise_level**2)
         expected_c_skip = sigma_data**2 / (sigma_data**2 + noise_level**2)
@@ -216,16 +219,14 @@ class TestSelfConditioning:
 
     @pytest.fixture
     def diffusion_module(self, device):
-        config = {
-            "sigma_data": 16.0,
-            "c_z": 128,
-            "c_token": 64,
-            "c_atom": 128,
-            "c_s": 384,
-            "transformer": {"num_blocks": 2, "num_heads": 4},
-            "dropout": 0.0,
-        }
-        return DiffusionModule(**config).to(device)
+        config = DiffusionModuleConfig(
+            c_z=128,
+            c_token=64,
+            c_atom=128,
+            c_s=384,
+            transformer=DiffusionTransformerConfig(num_blocks=2, num_heads=4),
+        )
+        return DiffusionModule(config=config).to(device)
 
     def test_prev_pred_changes_output(self, diffusion_module, context, device):
         """Providing prev_pred should change the model output."""
@@ -286,6 +287,46 @@ class TestSelfConditioning:
 
         # Same input but different output because second call has self-conditioning
         assert not torch.allclose(pred1, pred2, atol=1e-5)
+
+    def test_sampler_runs_with_self_conditioning_enabled(
+        self, diffusion_module, context, device, monkeypatch
+    ):
+        """The EDM sample loop should feed previous denoised coords into later steps."""
+        calls = {"align": 0}
+
+        def recording_align(pred_pose, true_pose, atom_mask):
+            calls["align"] += 1
+            assert pred_pose.shape == true_pose.shape
+            assert atom_mask.shape == true_pose.shape[:-1]
+            return pred_pose, None, None
+
+        monkeypatch.setattr(
+            "artios.model.modules.diffusion_backbone.align_pred_to_true",
+            recording_align,
+        )
+
+        diffusion_module.eval()
+        scheduler = EDMInferenceNoiseScheduler(
+            s_max=1.0,
+            s_min=0.1,
+            rho=1.0,
+        )
+
+        with torch.no_grad():
+            result = diffusion_module.sample(
+                context=context,
+                noise_scheduler=scheduler,
+                n_steps=2,
+                n_sample=1,
+                centre_coords=False,
+                self_conditioning=True,
+            )
+
+        n_atoms = context.reference.ref_pos.shape[-2]
+        batch_size = context.token.residue_index.shape[0]
+        assert result.final.shape == (batch_size, 1, n_atoms, 3)
+        assert torch.isfinite(result.final).all()
+        assert calls["align"] == 1
 
 
 if __name__ == "__main__":

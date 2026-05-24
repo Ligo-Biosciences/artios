@@ -19,6 +19,9 @@ from artios.utils.typing import Bool, Float, Int, typecheck
 
 logger = logging.getLogger(__name__)
 
+# EDM coordinate standard deviation used by AF3/Protenix preconditioning.
+SIGMA_DATA = 16.0
+
 
 class TrainingTimestepSampler(ABC):
     """Abstract base class for training timestep samplers."""
@@ -74,7 +77,6 @@ class EDMTrainingNoiseSampler(TrainingTimestepSampler):
 
     p_mean: float = -1.2
     p_std: float = 1.5
-    sigma_data: float = 16.0
 
     @typecheck
     def sample(
@@ -84,7 +86,7 @@ class EDMTrainingNoiseSampler(TrainingTimestepSampler):
         generator: torch.Generator | None = None,
     ) -> Float[Tensor, "..."]:
         rnd_normal = torch.randn(size=size, device=device, generator=generator)
-        return torch.exp(rnd_normal * self.p_std + self.p_mean) * self.sigma_data
+        return torch.exp(rnd_normal * self.p_std + self.p_mean) * SIGMA_DATA
 
 
 @dataclass(frozen=True)
@@ -92,13 +94,12 @@ class EDMInferenceNoiseScheduler(InferenceTimestepScheduler):
     """Karras/AF3 EDM inference noise scheduler.
 
     The configured ``s_max`` and ``s_min`` are dimensionless AF3 values and are
-    scaled by ``sigma_data`` to produce coordinate-space noise levels.
+    scaled by ``SIGMA_DATA`` to produce coordinate-space noise levels.
     """
 
     s_max: float = 160.0
     s_min: float = 4e-4
     rho: float = 7.0
-    sigma_data: float = 16.0
 
     @typecheck
     def get_schedule(
@@ -110,7 +111,7 @@ class EDMInferenceNoiseScheduler(InferenceTimestepScheduler):
         step_indices = torch.arange(n_steps + 1, dtype=dtype, device=device)
         step_size = 1 / n_steps
         schedule = (
-            self.sigma_data
+            SIGMA_DATA
             * (
                 self.s_max ** (1 / self.rho)
                 + step_indices

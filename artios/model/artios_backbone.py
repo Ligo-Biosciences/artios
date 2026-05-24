@@ -1,4 +1,8 @@
-from typing import Optional
+import hashlib
+import json
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -8,6 +12,7 @@ from typing_extensions import assert_never
 
 from artios.data.features import FullContext
 from artios.model.generator import (
+    SIGMA_DATA,
     EDMInferenceNoiseScheduler,
     EDMTrainingNoiseSampler,
     cfg_schedule_from_config,
@@ -21,17 +26,97 @@ from artios.model.loss import (
     mse_loss,
     mse_per_atom,
 )
-from artios.model.modules.diffusion_backbone import DiffusionModule
+from artios.model.modules.diffusion_backbone import (
+    DiffusionModule,
+    DiffusionModuleConfig,
+    DiffusionRuntimeConfig,
+)
 from artios.model.output import BackboneOutput, DiffusionOutput, ModelOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
 from artios.utils.geometry import centre_random_augmentation
 
 
+def _stable_hash(value: Mapping[str, Any]) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _has_config_key(config: Any, key: str) -> bool:
+    if config is None:
+        return False
+    try:
+        return key in config
+    except TypeError:
+        return hasattr(config, key)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ArtiosBackboneConfig:
+    """Immutable model identity for ArtiosBackbone."""
+
+    n_model_seed: int = 1
+    diffusion_module: DiffusionModuleConfig = field(
+        default_factory=DiffusionModuleConfig
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def architecture_hash(self) -> str:
+        return _stable_hash(self.to_dict())
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ArtiosBackboneRuntimeConfig:
+    """Runtime settings that do not define ArtiosBackbone architecture."""
+
+    diffusion: DiffusionRuntimeConfig = field(default_factory=DiffusionRuntimeConfig)
+
+
 class ArtiosBackbone(nn.Module):
-    def __init__(self, configs):
+    def __init__(
+        self,
+        configs=None,
+        *,
+        model_config: ArtiosBackboneConfig | None = None,
+        runtime_config: ArtiosBackboneRuntimeConfig | None = None,
+    ):
         super(ArtiosBackbone, self).__init__()
+        if configs is None:
+            raise ValueError(
+                "configs are still required for loss, noise, and sampling settings"
+            )
+        if _has_config_key(configs, "sigma_data"):
+            raise ValueError(
+                "SIGMA_DATA is a code constant; remove the sigma_data config override."
+            )
+        if _has_config_key(configs, "model"):
+            legacy_model_config = configs.model
+            legacy_architecture_keys = [
+                key
+                for key in ("N_model_seed", "diffusion_module")
+                if _has_config_key(legacy_model_config, key)
+            ]
+            if legacy_architecture_keys:
+                joined_keys = ", ".join(
+                    f"model.{key}" for key in legacy_architecture_keys
+                )
+                raise ValueError(
+                    f"{joined_keys} are no longer config fields. "
+                    "Edit ArtiosBackboneConfig or DiffusionModuleConfig in code instead."
+                )
         self.configs = configs
+        if model_config is None:
+            model_config = ArtiosBackboneConfig()
+        if runtime_config is None:
+            runtime_config = ArtiosBackboneRuntimeConfig(
+                diffusion=DiffusionRuntimeConfig(
+                    checkpoint_grads=bool(configs.checkpoint_grads)
+                )
+            )
+        self.model_config = model_config
+        self.runtime_config = runtime_config
 
         mse_cfg = configs.loss.backbone.mse
         self.loss_weight_config = LossWeightConfig(
@@ -43,7 +128,7 @@ class ArtiosBackbone(nn.Module):
             motif_related=mse_cfg.weight_motif_related,
         )
 
-        self.N_model_seed = self.configs.model.N_model_seed
+        self.N_model_seed = self.model_config.n_model_seed
 
         self.noise_sampler = EDMTrainingNoiseSampler(**configs.train_noise_sampler)
 
@@ -55,8 +140,10 @@ class ArtiosBackbone(nn.Module):
 
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
-        self.diffusion_module = DiffusionModule(**configs.model.diffusion_module)
-        self.sigma_data = configs.sigma_data
+        self.diffusion_module = DiffusionModule(
+            config=self.model_config.diffusion_module,
+            runtime_config=self.runtime_config.diffusion,
+        )
 
     def main_inference_loop(
         self,
@@ -274,7 +361,7 @@ class ArtiosBackbone(nn.Module):
         assert output.noise_level is not None, "noise_level required for EDM loss"
 
         # Scale by EDM noise level
-        scale = edm_noise_level_scale(output.noise_level, sigma_data=self.sigma_data)
+        scale = edm_noise_level_scale(output.noise_level, sigma_data=SIGMA_DATA)
         scaled_mse = scale * per_sample_mse
 
         # Reduce to scalar

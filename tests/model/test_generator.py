@@ -65,7 +65,7 @@ class TestEDMGenerator:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def test_training_noise_sampler_matches_lognormal_formula(self, device):
-        sampler = EDMTrainingNoiseSampler(p_mean=-1.2, p_std=1.5, sigma_data=16.0)
+        sampler = EDMTrainingNoiseSampler(p_mean=-1.2, p_std=1.5)
         size = (2, 5)
         seed = 123
 
@@ -80,9 +80,7 @@ class TestEDMGenerator:
         assert (noise_level > 0).all()
 
     def test_inference_noise_scheduler_matches_af3_formula(self, device):
-        scheduler = EDMInferenceNoiseScheduler(
-            s_max=160.0, s_min=4e-4, rho=7.0, sigma_data=16.0
-        )
+        scheduler = EDMInferenceNoiseScheduler(s_max=160.0, s_min=4e-4, rho=7.0)
         n_steps = 8
 
         schedule = scheduler.get_schedule(n_steps=n_steps, device=device)
@@ -101,6 +99,13 @@ class TestEDMGenerator:
         torch.testing.assert_close(schedule, expected)
         assert torch.all(torch.diff(schedule) < 0)
         assert schedule[-1] == 0
+
+    def test_edm_sigma_data_is_not_configurable(self):
+        with pytest.raises(TypeError):
+            EDMTrainingNoiseSampler(sigma_data=16.0)
+
+        with pytest.raises(TypeError):
+            EDMInferenceNoiseScheduler(sigma_data=16.0)
 
     def test_edm_sampler_one_step_deterministic_update(self, device):
         x = torch.ones(2, 3, 3, device=device)

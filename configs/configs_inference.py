@@ -35,7 +35,6 @@ guidance_model_configs = {
     "n_blocks": 48,  # 16
     "max_atoms_per_token": 24,  # DNA G max_atoms = 23
     "no_bins": 64,
-    "sigma_data": 16.0,
     "diffusion_batch_size": 48,
     "compile_model": False,
     "diffusion_chunk_size": ValueMaybeNone(48),  # chunksize of diffusion_batch_size
@@ -72,13 +71,11 @@ guidance_model_configs = {
     "train_noise_sampler": {
         "p_mean": -1.2,
         "p_std": 1.5,
-        "sigma_data": GlobalConfigValue("sigma_data"),
     },
     "inference_noise_scheduler": {
         "s_max": 160.0,
         "s_min": 4e-4,
         "rho": 7.0,
-        "sigma_data": GlobalConfigValue("sigma_data"),
     },
     "sample_diffusion": {
         "N_step": 200,  # 25
@@ -97,35 +94,10 @@ guidance_model_configs = {
         "upper_guidance_limit_weight": 3.0,
     },
     "model": {
-        "N_model_seed": 1,  # for inference
         "input_embedder": {
             "c_atom": 256,
             "c_atompair": 16,
             "c_token": 768,
-        },
-        "diffusion_module": {
-            "use_fine_grained_checkpoint": True,
-            "sigma_data": 16.0,
-            "c_token": 768,
-            "c_atom": 256,
-            "c_atompair": 16,
-            "c_z": 128,
-            "c_s": 256,
-            "c_s_inputs": 256,
-            "atom_encoder": {
-                "n_blocks": 3,
-                "n_heads": 4,
-            },
-            "transformer": {
-                "n_blocks": 24,
-                "n_heads": 16,
-            },
-            "atom_decoder": {
-                "n_blocks": 3,
-                "n_heads": 4,
-            },
-            "dropout": 0.0,
-            "blocks_per_ckpt": 1,
         },
     },
     "loss": {

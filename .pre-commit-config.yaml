@@ -7,10 +7,10 @@ repos:
       # Run the linter.
       - id: ruff
         args: [--fix]
-        exclude: run_batch_modal_inference\.py
+        exclude: run_modal_inference\.py
       # Run the formatter.
       - id: ruff-format
-        exclude: run_batch_modal_inference\.py
+        exclude: run_modal_inference\.py
 
 #  - repo: https://github.com/johannsdg/pre-commit-license-headers
 #    rev: v0.1.0

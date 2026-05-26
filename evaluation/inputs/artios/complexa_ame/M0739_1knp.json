@@ -1,0 +1,37 @@
+{
+  "name": "M0739_1knp",
+  "task": "backbone",
+  "spec": {
+    "design": [
+      {
+        "length": "",
+        "chain_id": "0"
+      }
+    ],
+    "motif": {
+      "cif_file": "evaluation/inputs/motifs/complexa_ame/M0739_1knp.cif",
+      "ligands": [
+        {
+          "cif_res_name": "SIN",
+          "chain_id": "1",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "SIN"
+            ]
+          }
+        },
+        {
+          "cif_res_name": "FAD",
+          "chain_id": "2",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "FAD"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

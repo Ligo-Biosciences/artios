@@ -1,0 +1,37 @@
+{
+  "name": "M0092_1dli",
+  "task": "backbone",
+  "spec": {
+    "design": [
+      {
+        "length": "",
+        "chain_id": "0"
+      }
+    ],
+    "motif": {
+      "cif_file": "evaluation/inputs/motifs/complexa_ame/M0092_1dli.cif",
+      "ligands": [
+        {
+          "cif_res_name": "UDX",
+          "chain_id": "1",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "UDX"
+            ]
+          }
+        },
+        {
+          "cif_res_name": "NAD",
+          "chain_id": "2",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "NAD"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "M0157_1qh5",
+  "task": "backbone",
+  "spec": {
+    "design": [
+      {
+        "length": "",
+        "chain_id": "0"
+      }
+    ],
+    "motif": {
+      "cif_file": "evaluation/inputs/motifs/complexa_ame/M0157_1qh5.cif",
+      "ligands": [
+        {
+          "cif_res_name": "GSH",
+          "chain_id": "1",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "GSH"
+            ]
+          }
+        },
+        {
+          "cif_res_name": "ZN",
+          "chain_id": "2",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "ZN"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

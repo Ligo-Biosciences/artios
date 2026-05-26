@@ -19,6 +19,9 @@ from artios.utils.typing import Bool, Float, Int, typecheck
 
 logger = logging.getLogger(__name__)
 
+# EDM coordinate standard deviation used by AF3/Protenix preconditioning.
+SIGMA_DATA = 16.0
+
 
 class TrainingTimestepSampler(ABC):
     """Abstract base class for training timestep samplers."""
@@ -66,6 +69,59 @@ class InferenceTimestepScheduler(ABC):
             Timesteps tensor of shape [n_steps + 1].
         """
         ...
+
+
+@dataclass(frozen=True)
+class EDMTrainingNoiseSampler(TrainingTimestepSampler):
+    """Sample EDM training noise levels from the AF3/Protenix lognormal law."""
+
+    p_mean: float = -1.2
+    p_std: float = 1.5
+
+    @typecheck
+    def sample(
+        self,
+        size: tuple[int, ...],
+        device: torch.device,
+        generator: torch.Generator | None = None,
+    ) -> Float[Tensor, "..."]:
+        rnd_normal = torch.randn(size=size, device=device, generator=generator)
+        return torch.exp(rnd_normal * self.p_std + self.p_mean) * SIGMA_DATA
+
+
+@dataclass(frozen=True)
+class EDMInferenceNoiseScheduler(InferenceTimestepScheduler):
+    """Karras/AF3 EDM inference noise scheduler.
+
+    The configured ``s_max`` and ``s_min`` are dimensionless AF3 values and are
+    scaled by ``SIGMA_DATA`` to produce coordinate-space noise levels.
+    """
+
+    s_max: float = 160.0
+    s_min: float = 4e-4
+    rho: float = 7.0
+
+    @typecheck
+    def get_schedule(
+        self,
+        n_steps: int,
+        device: torch.device,
+        dtype: torch.dtype = torch.float32,
+    ) -> Float[Tensor, "n_steps_plus_one"]:
+        step_indices = torch.arange(n_steps + 1, dtype=dtype, device=device)
+        step_size = 1 / n_steps
+        schedule = (
+            SIGMA_DATA
+            * (
+                self.s_max ** (1 / self.rho)
+                + step_indices
+                * step_size
+                * (self.s_min ** (1 / self.rho) - self.s_max ** (1 / self.rho))
+            )
+            ** self.rho
+        )
+        schedule[-1] = 0
+        return schedule
 
 
 class MaskingTimestepSampler(TrainingTimestepSampler):
@@ -810,6 +866,20 @@ class VelocityScorePredictor(Protocol):
 
 
 @runtime_checkable
+class EDMDenoisePredictor(Protocol):
+    """Protocol for EDM models that predict denoised coordinates."""
+
+    @typecheck
+    def __call__(
+        self,
+        x_noisy: Float[Tensor, "*batch n_atom 3"],
+        noise_level: Float[Tensor, "*batch"],
+    ) -> Float[Tensor, "*batch n_atom 3"]:
+        """Predict denoised coordinates at a given EDM noise level."""
+        ...
+
+
+@runtime_checkable
 class SequencePredictor(Protocol):
     @typecheck
     def __call__(
@@ -889,6 +959,30 @@ class CFGPredictor:
         return v_cfg, s_cfg
 
 
+@dataclass(frozen=True)
+class EDMCFGPredictor:
+    """Classifier-free guidance wrapper for EDM denoised-coordinate predictors."""
+
+    cond_predictor: EDMDenoisePredictor
+    uncond_predictor: EDMDenoisePredictor
+    guidance_schedule: CFGSchedule
+
+    @typecheck
+    def __call__(
+        self,
+        x_noisy: Float[Tensor, "*batch n_atom 3"],
+        noise_level: Float[Tensor, "*batch"],
+    ) -> Float[Tensor, "*batch n_atom 3"]:
+        w = self.guidance_schedule(noise_level)
+        x_cond = self.cond_predictor(x_noisy, noise_level)
+
+        if torch.all(w == 1.0):
+            return x_cond
+
+        x_uncond = self.uncond_predictor(x_noisy, noise_level)
+        return x_uncond + w[..., None, None] * (x_cond - x_uncond)
+
+
 @dataclass
 class SamplingResult:
     """Result of flow matching sampling, optionally including trajectory.
@@ -902,6 +996,69 @@ class SamplingResult:
 
     final: Float[Tensor, "... n_atom 3"]
     trajectory: Float[Tensor, "... n_steps_plus_one n_atom 3"] | None = None
+
+
+@dataclass(frozen=True)
+class EDMSampler:
+    """AF3-style EDM predictor-corrector sampler."""
+
+    noise_scheduler: InferenceTimestepScheduler
+    gamma0: float = 0.8
+    gamma_min: float = 1.0
+    noise_scale_lambda: float = 1.003
+    step_scale_eta: float = 1.5
+    centre_coords: bool = True
+
+    @typecheck
+    def sample(
+        self,
+        predictor: EDMDenoisePredictor,
+        x_init: Float[Tensor, "... n_atom 3"],
+        n_steps: int,
+        mask: Bool[Tensor, "... n_atom"],
+        track_trajectory: bool = False,
+    ) -> SamplingResult:
+        device = x_init.device
+        dtype = x_init.dtype
+        noise_schedule = self.noise_scheduler.get_schedule(n_steps, device, dtype)
+
+        if track_trajectory:
+            traj_shape = (*x_init.shape[:-2], n_steps + 1, *x_init.shape[-2:])
+            trajectory = torch.zeros(traj_shape, dtype=dtype, device=device)
+            trajectory[..., 0, :, :] = x_init.detach()
+        else:
+            trajectory = None
+
+        x = x_init
+        for i, (c_tau_last, c_tau) in enumerate(
+            zip(noise_schedule[:-1], noise_schedule[1:])
+        ):
+            if self.centre_coords:
+                x = (
+                    centre_random_augmentation(x_input_coords=x, n_sample=1, mask=mask)
+                    .squeeze(dim=-3)
+                    .to(dtype)
+                )
+
+            gamma = float(self.gamma0) if c_tau > self.gamma_min else 0.0
+            t_hat_scalar = c_tau_last * (1.0 + gamma)
+            delta_noise_level = torch.sqrt(t_hat_scalar**2 - c_tau_last**2)
+            x_noisy = (
+                x + self.noise_scale_lambda * delta_noise_level * torch.randn_like(x)
+            )
+
+            t_hat = t_hat_scalar.reshape((1,) * len(x.shape[:-2])).expand(x.shape[:-2])
+            t_hat = t_hat.to(dtype=dtype)
+
+            x_denoised = predictor(x_noisy, t_hat)
+            delta = (x_noisy - x_denoised) / t_hat[..., None, None]
+            dt = c_tau - t_hat
+            x = x_noisy + self.step_scale_eta * dt[..., None, None] * delta
+
+            if track_trajectory:
+                trajectory[..., i + 1, :, :] = x.detach()
+
+        return SamplingResult(final=x, trajectory=trajectory)
 
 
 @dataclass(frozen=True)

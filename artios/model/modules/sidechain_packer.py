@@ -198,7 +198,6 @@ class SidechainPacker(nn.Module):
         return s_ligand, z_ligand
 
     # @typecheck
-    @torch.compile
     def f_forward(
         self,
         r_noisy: Float[Tensor, "... n_sample n_atom 3"],

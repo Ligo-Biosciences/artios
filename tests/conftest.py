@@ -18,9 +18,11 @@ guard caching has been a repeat source of flakes. See `tests/CLAUDE.md`.
 
 import os
 
-# Must be set before torch is imported by any test module. conftest is
-# the first thing pytest loads, so setting it here propagates.
-os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+# Must be set before torch or artios modules are imported by any test module.
+# conftest is the first thing pytest loads, so setting it here propagates.
+os.environ["TYPECHECK"] = "true"
+os.environ["TORCH_COMPILE_DISABLE"] = "1"
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
 
 from pathlib import Path  # noqa: E402
 from typing import Callable  # noqa: E402

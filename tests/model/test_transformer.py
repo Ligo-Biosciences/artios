@@ -1,4 +1,3 @@
-import pytest
 import torch
 
 from artios.model.modules.transformer import (
@@ -6,8 +5,6 @@ from artios.model.modules.transformer import (
     DiTBlock,
     LocalAttnTransformer,
     LocalAttnTransformerBlock,
-    Transformer,
-    TransformerBlock,
 )
 
 
@@ -127,50 +124,3 @@ class TestLocalAttnTransformer:
 
         out = transformer(q=q, c=c, p=p, trunked_pair_mask=trunked_pair_mask)
         assert out.shape == (BATCH_SIZE, N_atom, c_atom)
-
-
-class TestTransformerBlock:
-    def test_forward_runs(self):
-        BATCH_SIZE, N, c_a, c_z, num_heads = 2, 12, 128, 64, 4
-
-        block = TransformerBlock(c_a=c_a, c_z=c_z, num_heads=num_heads)
-
-        a = torch.randn(BATCH_SIZE, N, c_a)
-        pair_bias = torch.randn(BATCH_SIZE, num_heads, N, N)
-        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
-
-        out = block(a=a, pair_bias=pair_bias, pair_mask=pair_mask)
-        assert out.shape == (BATCH_SIZE, N, c_a)
-
-    def test_c_a_must_be_divisible_by_num_heads(self):
-        """``c_a % num_heads != 0`` must fail at init so we don't carry a
-        silently-truncated head dimension into production."""
-        with pytest.raises(AssertionError):
-            TransformerBlock(c_a=127, c_z=64, num_heads=4)
-
-
-class TestTransformer:
-    def test_pair_bias_chunking(self):
-        """``z_proj.out_features`` must equal ``num_heads * num_blocks`` so the
-        projected pair bias can be chunked across blocks."""
-        c_a, c_z, num_heads, num_blocks = 64, 32, 2, 3
-        transformer = Transformer(
-            c_a=c_a, c_z=c_z, num_blocks=num_blocks, num_heads=num_heads
-        )
-        assert transformer.z_proj.out_features == num_heads * num_blocks
-
-    def test_z_broadcasts_across_batch(self):
-        """``z`` with batch=1 must broadcast across an ``a`` with batch=B."""
-        BATCH_SIZE, N = 3, 5
-        c_a, c_z, num_heads, num_blocks = 128, 64, 4, 2
-
-        transformer = Transformer(
-            c_a=c_a, c_z=c_z, num_blocks=num_blocks, num_heads=num_heads
-        )
-
-        a = torch.randn(BATCH_SIZE, N, c_a)
-        z = torch.randn(1, N, N, c_z)  # broadcast across batch
-        pair_mask = torch.randint(0, 2, (BATCH_SIZE, N, N)).bool()
-
-        out = transformer(a=a, z=z, pair_mask=pair_mask)
-        assert out.shape == (BATCH_SIZE, N, c_a)

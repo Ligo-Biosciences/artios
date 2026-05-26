@@ -1,7 +1,4 @@
-import hashlib
-import json
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import torch
@@ -37,11 +34,6 @@ from artios.utils.casting import disable_autocast
 from artios.utils.geometry import centre_random_augmentation
 
 
-def _stable_hash(value: Mapping[str, Any]) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
 def _has_config_key(config: Any, key: str) -> bool:
     if config is None:
         return False
@@ -59,12 +51,6 @@ class ArtiosBackboneConfig:
     diffusion_module: DiffusionModuleConfig = field(
         default_factory=DiffusionModuleConfig
     )
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    def architecture_hash(self) -> str:
-        return _stable_hash(self.to_dict())
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

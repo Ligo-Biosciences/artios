@@ -30,6 +30,7 @@ def _get_scalar_dtype(is_fused=None):
     )
 
 
+@torch.compile
 def zeropower_via_newtonschulz5(G, steps: int):
     """
     Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
@@ -60,6 +61,7 @@ def zeropower_via_newtonschulz5(G, steps: int):
     return X
 
 
+@torch.compile
 def batched_zeropower_via_newtonschulz5(G: Tensor, steps: int = 5) -> Tensor:
     """
     Batched gradient orthogonalization routine.

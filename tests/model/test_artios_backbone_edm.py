@@ -149,7 +149,7 @@ def test_backbone_model_config_is_immutable(small_model_config):
         small_model_config.diffusion_module.c_token = 64
 
 
-def test_backbone_architecture_hash_is_independent_of_runtime_config(
+def test_backbone_runtime_config_is_independent_of_model_config(
     backbone_configs, small_model_config
 ):
     no_checkpointing = ArtiosBackboneRuntimeConfig(
@@ -170,16 +170,13 @@ def test_backbone_architecture_hash_is_independent_of_runtime_config(
         runtime_config=with_checkpointing,
     )
 
-    assert (
-        model_a.model_config.architecture_hash()
-        == model_b.model_config.architecture_hash()
-    )
+    assert model_a.model_config == model_b.model_config
     assert model_a.runtime_config != model_b.runtime_config
     assert model_a.diffusion_module.diffusion_transformer.checkpoint_grads is False
     assert model_b.diffusion_module.diffusion_transformer.checkpoint_grads is True
 
 
-def test_backbone_architecture_hash_changes_with_depth(small_model_config):
+def test_backbone_model_config_equality_tracks_architecture(small_model_config):
     deeper_model_config = ArtiosBackboneConfig(
         diffusion_module=DiffusionModuleConfig(
             c_z=16,
@@ -190,10 +187,7 @@ def test_backbone_architecture_hash_changes_with_depth(small_model_config):
         )
     )
 
-    assert (
-        small_model_config.architecture_hash()
-        != deeper_model_config.architecture_hash()
-    )
+    assert small_model_config != deeper_model_config
 
 
 def test_backbone_rejects_legacy_architecture_config(

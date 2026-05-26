@@ -2,11 +2,8 @@
 TODO: this filename should eventually just be called diffusion.py I think.
 """
 
-import hashlib
-import json
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -45,11 +42,6 @@ class CachedConditioning:
 
     s_base: Float[Tensor, "... n_token c_s"]
     z: Float[Tensor, "... n_token n_token c_z"]
-
-
-def _stable_hash(value: Mapping[str, Any]) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -91,12 +83,6 @@ class DiffusionModuleConfig:
                 raise ValueError(f"{name} must be greater than 0")
         if self.c_token % self.transformer.num_heads != 0:
             raise ValueError("c_token must be divisible by transformer.num_heads")
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    def architecture_hash(self) -> str:
-        return _stable_hash(self.to_dict())
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

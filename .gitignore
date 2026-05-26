@@ -27,6 +27,8 @@ pdb-samples/
 
 notebooks/sample-proteins/
 
+blogs/
+
 # Generated PDB/CIF outputs
 notebooks/PDBs/
 notebooks/PDBs_noise_*/

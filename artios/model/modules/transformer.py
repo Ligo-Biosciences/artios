@@ -9,173 +9,35 @@ we follow.
 Cross attention and self attention are separated.
 """
 
+from dataclasses import dataclass
 from functools import partial
-from typing import Callable
 
 import torch
 from einops import rearrange
 from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint
 
-from artios.model.modules.components import Attention, SwiGLU, Transition
+from artios.model.modules.components import Attention, SwiGLU
 from artios.model.modules.layout import (
     rearrange_to_key_subset,
     rearrange_to_query_subset,
 )
-from artios.model.modules.primitives import (
-    BiasInitLinear,
-    LayerNorm,
-    LinearNoBias,
-)
+from artios.model.modules.primitives import BiasInitLinear, LayerNorm, LinearNoBias
 from artios.utils.typing import Bool, Float, typecheck
 
 
-class TransformerBlock(nn.Module):
-    """
-    Standard Transformer block with pair-bias functionality.
-    """
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DiffusionTransformerConfig:
+    """Architecture settings for the global diffusion transformer."""
 
-    def __init__(
-        self,
-        c_a: int,
-        c_z: int,
-        num_heads: int,
-    ) -> None:
-        """
-        Args:
-            c_a (int): dimension of single embedding.
-            c_z (int): dimension of pair embedding.
-            num_heads (int): number of heads in attention.
-        """
-        super(TransformerBlock, self).__init__()
-        self.c_a = c_a
-        self.c_z = c_z
-        self.num_heads = num_heads
-        assert c_a % num_heads == 0
+    num_blocks: int = 16
+    num_heads: int = 16
 
-        # Attention
-        self.attn_layernorm = LayerNorm(c_a)
-        self.attention = Attention(
-            q_dim=c_a,
-            kv_dim=c_a,
-            head_dim=c_a // num_heads,
-            num_heads=num_heads,
-            gating=False,
-        )
-        # MLP (with built-in layernorm)
-        self.transition = Transition(c_in=c_a, n=4)
-
-    @typecheck
-    def forward(
-        self,
-        a: Float[Tensor, "... n c_a"],
-        pair_bias: Float[Tensor, "... h n n"],
-        pair_mask: Bool[Tensor, "... n n"],
-    ) -> Float[Tensor, "... n c_a"]:
-        """
-        Args:
-            a: the single feature aggregate per-atom representation
-            pair_bias: pair embedding
-            pair_mask: pair mask for the attention
-
-        Returns:
-            Single embeddings.
-        """
-        attn_input = self.attn_layernorm(a)
-        a = a + self.attention(
-            q_x=attn_input,
-            kv_x=attn_input,
-            pair_bias=pair_bias,
-            pair_mask=pair_mask,
-        )
-        a = a + self.transition(a)
-        return a
-
-
-class Transformer(nn.Module):
-    """
-    Standard Transformer with pair-bias functionality.
-    """
-
-    def __init__(
-        self,
-        c_a: int,
-        c_z: int,
-        num_blocks: int,
-        num_heads: int,
-        checkpoint_grads: bool = False,
-    ) -> None:
-        """
-        Args:
-            c_a (int): single embedding dimension.
-            c_z (int): pair embedding dimension.
-            num_blocks (int): number of blocks in Transformer.
-            num_heads (int): number of heads in attention.
-            checkpoint_grads (bool): whether to use gradient checkpointing during training
-        """
-        super(Transformer, self).__init__()
-        self.c_a = c_a
-        self.c_z = c_z
-        self.num_blocks = num_blocks
-        self.num_heads = num_heads
-        self.checkpoint_grads = checkpoint_grads
-
-        # Pair bias projection
-        self.z_layernorm = LayerNorm(c_z)
-        self.z_proj = LinearNoBias(c_z, num_heads * num_blocks)
-
-        self.blocks = nn.ModuleList()
-        for _ in range(num_blocks):
-            block = TransformerBlock(
-                c_a=c_a,
-                c_z=c_z,
-                num_heads=num_heads,
-            )
-            self.blocks.append(block)
-
-    def _prep_blocks(
-        self, pair_biases: Tensor, pair_mask: Tensor
-    ) -> list[Callable[..., Tensor]]:
-        """Prepare the transformer blocks."""
-        blocks = [
-            partial(block, pair_bias=pair_biases[i], pair_mask=pair_mask)
-            for i, block in enumerate(self.blocks)
-        ]
-        return blocks
-
-    @typecheck
-    def forward(
-        self,
-        a: Float[Tensor, "... n c_a"],
-        z: Float[Tensor, "... n n c_z"],
-        pair_mask: Bool[Tensor, "... n n"],
-    ) -> Float[Tensor, "... n c_a"]:
-        """
-        Args:
-            a: single embedding
-            z: pair embedding to be used for pair bias
-            pair_mask: pair mask for attention
-
-        Returns:
-            the output of Transformer
-        """
-        # Project and chunk pair bias
-        z = self.z_layernorm(z)
-        pair_bias_fused = self.z_proj(z)
-        pair_bias_fused = rearrange(pair_bias_fused, "... i j nb -> ... nb i j")
-        pair_biases = pair_bias_fused.chunk(self.num_blocks, dim=-3)
-
-        # Prepare blocks
-        blocks = self._prep_blocks(pair_biases=pair_biases, pair_mask=pair_mask)
-
-        # Transformer tower
-        for block in blocks:
-            if self.checkpoint_grads:
-                a = checkpoint(block, a, use_reentrant=False)
-            else:
-                a = block(a)
-
-        return a
+    def __post_init__(self) -> None:
+        if self.num_blocks <= 0:
+            raise ValueError("num_blocks must be greater than 0")
+        if self.num_heads <= 0:
+            raise ValueError("num_heads must be greater than 0")
 
 
 class DiTBlock(nn.Module):
@@ -211,6 +73,7 @@ class DiTBlock(nn.Module):
             LinearNoBias(2 * c_token, c_token, init="default"),
         )
 
+    @torch.compile(dynamic=False)
     @typecheck
     def forward(
         self,
@@ -244,16 +107,21 @@ class DiTBlock(nn.Module):
         ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {pair_bias.shape[-3]}"
 
         # Adaln + Attention
-        attn_input = scale_attn * self.attn_layernorm(a) + shift_attn
+        # shift_attn + scale_attn * LayerNorm(a).
+        attn_input = torch.addcmul(shift_attn, scale_attn, self.attn_layernorm(a))
         attn_output = self.attention(
             q_x=attn_input, kv_x=attn_input, pair_bias=pair_bias, pair_mask=pair_mask
         )
-        a = a + (gate_attn * attn_output)
+        # Gated residual update: a + gate_attn * attn_output.
+        a = torch.addcmul(a, gate_attn, attn_output)
 
         # Adaln + MLP
-        mlp_input = scale_mlp * self.mlp_layernorm(a) + shift_mlp
+        # shift_mlp + scale_mlp * LayerNorm(a).
+        mlp_input = torch.addcmul(shift_mlp, scale_mlp, self.mlp_layernorm(a))
         mlp_output = self.mlp(mlp_input)
-        a = a + (gate_mlp * mlp_output)
+
+        # a + gate_mlp * mlp_output.
+        a = torch.addcmul(a, gate_mlp, mlp_output)
         return a
 
 
@@ -497,7 +365,8 @@ class LocalAttnTransformerBlock(nn.Module):
         ), f"Pair bias dimension mismatch. Expected {self.num_heads}, got {trunked_pair_bias.shape[-3]}"
 
         # AdaLN on q_l first
-        attn_input = scale_attn * self.attn_layernorm(q_l) + shift_attn
+        # AdaLN modulation: shift_attn + scale_attn * LayerNorm(q_l).
+        attn_input = torch.addcmul(shift_attn, scale_attn, self.attn_layernorm(q_l))
 
         # Rearrange q_l and do attention with trunked
         q_x = rearrange_to_query_subset(
@@ -523,12 +392,15 @@ class LocalAttnTransformerBlock(nn.Module):
         )
 
         # Gate the attention output and add as residual
-        q_l = q_l + (gate_attn * attn_out)
+        # Gated residual update: q_l + gate_attn * attn_out.
+        q_l = torch.addcmul(q_l, gate_attn, attn_out)
 
         # MLP with AdaLN
-        mlp_input = scale_mlp * self.mlp_layernorm(q_l) + shift_mlp
+        # AdaLN modulation: shift_mlp + scale_mlp * LayerNorm(q_l).
+        mlp_input = torch.addcmul(shift_mlp, scale_mlp, self.mlp_layernorm(q_l))
         mlp_output = self.mlp(mlp_input)
-        q_l = q_l + (gate_mlp * mlp_output)
+        # Gated residual update: q_l + gate_mlp * mlp_output.
+        q_l = torch.addcmul(q_l, gate_mlp, mlp_output)
 
         return q_l
 
@@ -646,7 +518,6 @@ class LocalAttnTransformer(nn.Module):
         return blocks
 
     # @profile_function("atom_transformer")
-    @torch.compile
     @typecheck
     def forward(
         self,

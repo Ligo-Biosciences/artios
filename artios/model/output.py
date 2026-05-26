@@ -21,6 +21,7 @@ class ModelOutput:
     seq_logits: Optional[Float[Tensor, "batch n_token num_residue_types"]] = None
     is_masked: Optional[Bool[Tensor, "batch n_token"]] = None
     timestep: Optional[Float[Tensor, "batch n_sample"]] = None
+    noise_level: Optional[Float[Tensor, "batch n_sample"]] = None
     trajectory: Optional[Float[Tensor, "batch n_sample n_steps_plus_one n_atom 3"]] = (
         None
     )
@@ -39,12 +40,13 @@ class ModelOutput:
 class BackboneOutput(ModelOutput):
     """Output from backbone diffusion model.
 
-    coordinate is required. timestep is required for training (loss computation)
+    coordinate is required. noise_level is required for training (loss computation)
     but optional for inference. trajectory is optional.
     """
 
     coordinate: Float[Tensor, "batch n_sample n_atom 3"]  # type: ignore[assignment]
     timestep: Optional[Float[Tensor, "batch n_sample"]] = None
+    noise_level: Optional[Float[Tensor, "batch n_sample"]] = None
     trajectory: Optional[Float[Tensor, "batch n_sample n_steps_plus_one n_atom 3"]] = (
         None
     )

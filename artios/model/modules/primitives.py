@@ -291,6 +291,61 @@ class LayerNorm(nn.Module):
         )
 
 
+def _as_batched_matrix(x: Tensor, leading_shape: torch.Size) -> Tensor:
+    """Expand to ``leading_shape`` and flatten leading dims for baddbmm/bmm."""
+    return x.expand(*leading_shape, *x.shape[-2:]).reshape(-1, *x.shape[-2:])
+
+
+@typecheck
+def attention_with_bias(
+    q: Float[Tensor, "*batch n_q d"],
+    k: Float[Tensor, "*batch n_kv d"],
+    v: Float[Tensor, "*batch n_kv d"],
+    pair_mask: Bool[Tensor, "... n_q n_kv"],
+    attn_bias: Float[Tensor, "... n_q n_kv"],
+    inf: float = 1e10,
+) -> Float[Tensor, "... n_q d"]:
+    """Attention with mandatory bias.
+
+    This mirrors ``attention`` but keeps the biased path branch-free for compiled
+    transformer blocks.
+
+    Args:
+        q: query tensor
+        k: key tensor
+        v: value tensor
+        pair_mask: pair mask tensor
+        attn_bias: attention bias tensor
+        inf: large number for attention masking. Defaults to 1e10.
+
+    Returns:
+        attention output
+    """
+    leading_shape = q.shape[:-2]
+    n_q, d = q.shape[-2:]
+    n_kv = k.shape[-2]
+
+    # pair_bias + scale * (q @ k.T).
+    attn_weights = torch.baddbmm(
+        _as_batched_matrix(attn_bias, leading_shape),
+        _as_batched_matrix(q, leading_shape),
+        _as_batched_matrix(k, leading_shape).transpose(-1, -2),
+        beta=1.0,
+        alpha=d**-0.5,
+    ).reshape(*leading_shape, n_q, n_kv)
+
+    # fill out of mask with -inf (based on dtype)
+    attn_weights.masked_fill_(~pair_mask, -inf)
+
+    # [..., n_q, n_kv]
+    attn_weights = F.softmax(attn_weights, dim=-1)
+
+    # [..., n_q, n_kv], [..., n_kv, d] -> [..., n_q, d]
+    attn_output = attn_weights @ v
+
+    return attn_output
+
+
 @typecheck
 @torch.compiler.disable  # ty: ignore[possibly-missing-attribute]
 def attention(
@@ -314,13 +369,20 @@ def attention(
     Returns:
         attention output
     """
+    if attn_bias is not None:
+        return attention_with_bias(
+            q=q,
+            k=k,
+            v=v,
+            pair_mask=pair_mask,
+            attn_bias=attn_bias,
+            inf=inf,
+        )
+
     k = rearrange(k, "... n_kv d -> ... d n_kv")
 
     # [..., n_q, d], [..., d, n_kv] -> [..., n_q, n_kv]
     attn_weights = q @ k / (q.shape[-1] ** 0.5)
-
-    if attn_bias is not None:
-        attn_weights = attn_weights + attn_bias
 
     # fill out of mask with -inf (based on dtype)
     attn_weights.masked_fill_(~pair_mask, -inf)

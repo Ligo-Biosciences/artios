@@ -373,6 +373,15 @@ def timestep_scale(
 
 
 @typecheck
+def edm_noise_level_scale(
+    noise_level: Float[Tensor, "*batch"],
+    sigma_data: float,
+) -> Float[Tensor, "*batch"]:
+    """Compute EDM diffusion loss weighting from the sampled noise level."""
+    return (noise_level**2 + sigma_data**2) / ((sigma_data * noise_level) ** 2)
+
+
+@typecheck
 def align_to_prediction(
     pred: Float[Tensor, "*batch n_atom 3"],
     true: Float[Tensor, "*batch n_atom 3"],

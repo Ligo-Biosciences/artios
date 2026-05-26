@@ -11,10 +11,10 @@ from functools import cached_property
 from pathlib import Path
 
 import numpy as np
-from biotite.structure import AtomArray
+from biotite.structure import AtomArray, get_chain_starts
 
 from artios.common.constants import BACKBONE_DEFS, PRO_STD_RESIDUES
-from artios.data.structure import annotation
+from artios.data.structure import annotation, id_transforms
 from artios.data.structure.annotation import (
     DerivedAnnotations,
     EntityIds,
@@ -463,6 +463,273 @@ class AnnotatedStructure:
             entity_id_int=_make_contiguous(self.entity_ids.entity_id_int),
             sym_id_int=_make_contiguous(self.entity_ids.sym_id_int),
         )
+
+    def with_chain_ids(
+        self,
+        chain_id: np.ndarray,
+        *,
+        update_label_asym_id: bool = True,
+        update_auth_asym_id: bool = False,
+    ) -> AnnotatedStructure:
+        """Return a copy with ``atoms.chain_id`` replaced consistently.
+
+        ``chain_id`` is atom-indexed, but the transform preserves residue
+        boundaries: every existing residue must receive exactly one chain
+        label, and no two existing residues may collapse onto the same
+        ``(chain_id, res_id)`` pair. Chain labels must also form contiguous
+        runs in atom order so Biotite chain iteration remains well-defined.
+
+        Args:
+            chain_id: String-like array of shape ``(n_atom,)``.
+            update_label_asym_id: If True and ``label_asym_id`` exists,
+                mirror it to the new ``chain_id``.
+            update_auth_asym_id: If True and ``auth_asym_id`` exists,
+                mirror it to the new ``chain_id``. Defaults false because
+                author chain IDs are usually provenance.
+        """
+        new_chain_id = id_transforms.coerce_atom_chain_ids(
+            chain_id, n_atoms=len(self.atoms)
+        )
+        id_transforms.validate_chain_id_rewrite(self.atoms, new_chain_id)
+
+        new_atoms = self._copy_atoms_with_chain_ids(
+            new_chain_id,
+            update_label_asym_id=update_label_asym_id,
+            update_auth_asym_id=update_auth_asym_id,
+        )
+        entity_ids = EntityIds.compute(new_atoms)
+        type_masks = self._type_masks_for_atoms(new_atoms)
+
+        return dataclasses.replace(
+            self,
+            atoms=new_atoms,
+            entity_ids=entity_ids,
+            type_masks=type_masks,
+            reference=dataclasses.replace(
+                self.reference,
+                ref_space_uid=self._ref_space_uid_for(
+                    new_atoms.res_id, entity_ids=entity_ids
+                ),
+            ),
+            motif=self._motif_with_atom_ids(new_chain_id, self.atoms.res_id),
+            grouping=compute_token_grouping_vectorized(
+                new_atoms,
+                mol_type=type_masks.mol_type,
+                is_motif_related=(
+                    self.motif.is_motif_related if self.motif is not None else None
+                ),
+            ),
+        )
+
+    def with_residue_ids(
+        self,
+        res_id: np.ndarray,
+        *,
+        update_label_seq_id: bool = True,
+        update_auth_seq_id: bool = False,
+    ) -> AnnotatedStructure:
+        """Return a copy with ``atoms.res_id`` replaced consistently.
+
+        ``res_id`` is atom-indexed, but this transform is residue-native:
+        every existing residue must receive exactly one new id, and no two
+        residues in the same asym chain may collapse onto the same id. The
+        method refreshes fields whose meaning depends on ``res_id`` while
+        preserving all atom-aligned annotations that are independent of
+        residue numbering.
+
+        Args:
+            res_id: Integer array of shape ``(n_atom,)``.
+            update_label_seq_id: If True and ``label_seq_id`` exists, mirror
+                numeric/non-missing entries to the new ``res_id`` while
+                preserving missing values (``"."``/``"?"``), e.g. ligands.
+            update_auth_seq_id: If True and ``auth_seq_id`` exists, mirror
+                numeric/non-missing entries to the new ``res_id``. Defaults
+                false because author numbering is usually provenance.
+        """
+        new_res_id = id_transforms.coerce_atom_residue_ids(
+            res_id, n_atoms=len(self.atoms)
+        )
+        id_transforms.validate_residue_id_rewrite(
+            self.atoms, self.entity_ids.asym_id_int, new_res_id
+        )
+
+        new_atoms = self._copy_atoms_with_residue_ids(
+            new_res_id,
+            update_label_seq_id=update_label_seq_id,
+            update_auth_seq_id=update_auth_seq_id,
+        )
+
+        return dataclasses.replace(
+            self,
+            atoms=new_atoms,
+            reference=dataclasses.replace(
+                self.reference,
+                ref_space_uid=self._ref_space_uid_for(new_atoms.res_id),
+            ),
+            motif=self._motif_with_atom_ids(self.atoms.chain_id, new_res_id),
+            grouping=compute_token_grouping_vectorized(
+                new_atoms,
+                mol_type=self.type_masks.mol_type,
+                is_motif_related=(
+                    self.motif.is_motif_related if self.motif is not None else None
+                ),
+            ),
+        )
+
+    def with_contiguous_residue_ids(
+        self,
+        *,
+        start: int = 1,
+        by_chain: bool = True,
+        update_label_seq_id: bool = True,
+        update_auth_seq_id: bool = False,
+    ) -> AnnotatedStructure:
+        """Return a copy with dense residue ids in residue order.
+
+        Args:
+            start: First residue id to assign.
+            by_chain: If True, numbering restarts for each asym chain.
+                If False, numbering is global over residue order.
+            update_label_seq_id: Forwarded to ``with_residue_ids``.
+            update_auth_seq_id: Forwarded to ``with_residue_ids``.
+        """
+        atom_res_ids = id_transforms.make_contiguous_residue_ids(
+            self.atoms,
+            self.entity_ids.asym_id_int,
+            start=start,
+            by_chain=by_chain,
+        )
+
+        return self.with_residue_ids(
+            atom_res_ids,
+            update_label_seq_id=update_label_seq_id,
+            update_auth_seq_id=update_auth_seq_id,
+        )
+
+    def _copy_atoms_with_chain_ids(
+        self,
+        chain_id: np.ndarray,
+        *,
+        update_label_asym_id: bool,
+        update_auth_asym_id: bool,
+    ) -> AtomArray:
+        """Copy atoms, write ``chain_id``, and optionally mirror asym fields."""
+        atoms = self.atoms.copy()
+        atoms.del_annotation("chain_id")
+        atoms.set_annotation("chain_id", chain_id)
+
+        cats = atoms.get_annotation_categories()
+        if update_label_asym_id and "label_asym_id" in cats:
+            atoms.del_annotation("label_asym_id")
+            atoms.set_annotation("label_asym_id", chain_id.copy())
+        if update_auth_asym_id and "auth_asym_id" in cats:
+            atoms.del_annotation("auth_asym_id")
+            atoms.set_annotation("auth_asym_id", chain_id.copy())
+        return atoms
+
+    def _copy_atoms_with_residue_ids(
+        self,
+        res_id: np.ndarray,
+        *,
+        update_label_seq_id: bool,
+        update_auth_seq_id: bool,
+    ) -> AtomArray:
+        """Copy atoms, write ``res_id``, and optionally mirror seq-id fields."""
+        atoms = self.atoms.copy()
+        atoms.res_id = res_id
+
+        cats = atoms.get_annotation_categories()
+        if update_label_seq_id and "label_seq_id" in cats:
+            self._update_seq_id_annotation(atoms, "label_seq_id", res_id)
+        if update_auth_seq_id and "auth_seq_id" in cats:
+            self._update_seq_id_annotation(atoms, "auth_seq_id", res_id)
+        return atoms
+
+    def _type_masks_for_atoms(self, atoms: AtomArray) -> TypeMasks:
+        """Refresh chain-level type masks after a chain-id rewrite."""
+        chain_mol_type = np.empty_like(self.type_masks.chain_mol_type)
+        chain_starts = get_chain_starts(atoms, add_exclusive_stop=True)
+        for start, stop in zip(chain_starts[:-1], chain_starts[1:]):
+            values, counts = np.unique(
+                self.type_masks.mol_type[start:stop], return_counts=True
+            )
+            chain_mol_type[start:stop] = values[np.argmax(counts)]
+
+        return TypeMasks(
+            mol_type=self.type_masks.mol_type,
+            chain_mol_type=chain_mol_type,
+            is_protein=(chain_mol_type == "protein").astype(int),
+            is_ligand=(chain_mol_type == "ligand").astype(int),
+            is_dna=(chain_mol_type == "dna").astype(int),
+            is_rna=(chain_mol_type == "rna").astype(int),
+        )
+
+    def _ref_space_uid_for(
+        self, res_id: np.ndarray, *, entity_ids: EntityIds | None = None
+    ) -> np.ndarray:
+        """Compute the AF3 ref-space uid for the current asym ids + ``res_id``."""
+        entity_ids = self.entity_ids if entity_ids is None else entity_ids
+        chain_res_id = np.stack([entity_ids.asym_id_int, res_id], axis=1)
+        _, ref_space_uid = np.unique(chain_res_id, axis=0, return_inverse=True)
+        return ref_space_uid
+
+    def _motif_with_atom_ids(
+        self, chain_id: np.ndarray, res_id: np.ndarray
+    ) -> MotifAnnotation | None:
+        """Refresh motif mapping chain/residue ids after an id rewrite."""
+        if self.motif is None or not self.motif.mapping:
+            return self.motif
+
+        old_chain_id = self.atoms.chain_id.astype(str)
+        new_chain_id = chain_id.astype(str)
+        mapping: list[MotifMappingEntry] = []
+        for entry in self.motif.mapping:
+            mask = (
+                (old_chain_id == entry.unindexed_chain_id)
+                & (self.atoms.res_id == entry.unindexed_res_id)
+                & (self.atoms.res_name == entry.res_name)
+            )
+            if not mask.any():
+                raise ValueError(
+                    "motif mapping entry does not match any residue in the structure"
+                )
+
+            new_entry_chain_ids = np.unique(new_chain_id[mask])
+            if len(new_entry_chain_ids) != 1:
+                raise ValueError(
+                    "motif mapping entry spans multiple rewritten chain ids"
+                )
+            new_entry_res_ids = np.unique(res_id[mask])
+            if len(new_entry_res_ids) != 1:
+                raise ValueError(
+                    "motif mapping entry spans multiple rewritten residue ids"
+                )
+            mapping.append(
+                dataclasses.replace(
+                    entry,
+                    unindexed_chain_id=str(new_entry_chain_ids[0]),
+                    unindexed_res_id=int(new_entry_res_ids[0]),
+                )
+            )
+
+        return self.motif.with_mapping(tuple(mapping))
+
+    @staticmethod
+    def _update_seq_id_annotation(
+        atoms: AtomArray, name: str, res_id: np.ndarray
+    ) -> None:
+        """Mirror non-missing sequence-id annotation rows to ``res_id``."""
+        current = getattr(atoms, name).astype(str)
+        missing = np.isin(current, [".", "?"])
+        replacement = res_id.astype(str)
+        width = max(
+            current.dtype.itemsize // np.dtype("U1").itemsize,
+            replacement.dtype.itemsize // np.dtype("U1").itemsize,
+            1,
+        )
+        updated = current.astype(f"<U{width}")
+        updated[~missing] = replacement[~missing]
+        atoms.set_annotation(name, updated)
 
     def _replace_entity_ids(self, **overrides) -> AnnotatedStructure:
         """Return a copy with selected EntityIds fields replaced."""

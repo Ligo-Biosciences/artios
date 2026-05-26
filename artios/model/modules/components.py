@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import rearrange
 from torch import Tensor
 
 from artios.model.modules.primitives import (
@@ -9,7 +9,7 @@ from artios.model.modules.primitives import (
     LayerNorm,
     Linear,
     LinearNoBias,
-    attention,
+    attention_with_bias,
 )
 from artios.utils.typing import Bool, Float, typecheck
 
@@ -215,12 +215,11 @@ class Attention(nn.Module):
             c=self.head_dim,
         )
 
-        # Add head dim
-        pair_mask = repeat(
-            pair_mask, "... n_q n_kv -> ... h n_q n_kv", h=self.num_heads
-        )
+        # Broadcast over heads without materializing repeated mask copies:
+        # pair_mask[..., None, n_q, n_kv].
+        pair_mask = pair_mask.unsqueeze(-3)
 
-        attn_out = attention(
+        attn_out = attention_with_bias(
             q=q, k=k, v=v, pair_mask=pair_mask, attn_bias=pair_bias, inf=1e9
         )  # [..., n_heads, n_q, c]
 

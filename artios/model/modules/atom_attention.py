@@ -158,7 +158,6 @@ class AtomAttentionEncoder(nn.Module):
             out_features=self.c_token,
         )
 
-    @torch.compile
     @typecheck
     def _per_atom_conditioning(
         self,
@@ -242,7 +241,6 @@ class AtomAttentionEncoder(nn.Module):
 
         return c_l, p_lm
 
-    @torch.compile
     @typecheck
     def forward(
         self,

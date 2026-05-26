@@ -1,4 +1,5 @@
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -8,31 +9,100 @@ from typing_extensions import assert_never
 
 from artios.data.features import FullContext
 from artios.model.generator import (
-    LaProteinaCoordScheduler,
-    ProteinaCoordSampler,
+    SIGMA_DATA,
+    EDMInferenceNoiseScheduler,
+    EDMTrainingNoiseSampler,
     cfg_schedule_from_config,
-    stochasticity_from_config,
 )
 from artios.model.loss import (
     LossWeightConfig,
     align_to_prediction,
     build_atom_weights,
     compute_entity_metrics,
+    edm_noise_level_scale,
     mse_loss,
     mse_per_atom,
-    timestep_scale,
 )
-from artios.model.modules.diffusion_backbone import DiffusionModule
+from artios.model.modules.diffusion_backbone import (
+    DiffusionModule,
+    DiffusionModuleConfig,
+    DiffusionRuntimeConfig,
+)
 from artios.model.output import BackboneOutput, DiffusionOutput, ModelOutput
 from artios.model.utils import Mode
 from artios.utils.casting import disable_autocast
 from artios.utils.geometry import centre_random_augmentation
 
 
+def _has_config_key(config: Any, key: str) -> bool:
+    if config is None:
+        return False
+    try:
+        return key in config
+    except TypeError:
+        return hasattr(config, key)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ArtiosBackboneConfig:
+    """Immutable model identity for ArtiosBackbone."""
+
+    n_model_seed: int = 1
+    diffusion_module: DiffusionModuleConfig = field(
+        default_factory=DiffusionModuleConfig
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ArtiosBackboneRuntimeConfig:
+    """Runtime settings that do not define ArtiosBackbone architecture."""
+
+    diffusion: DiffusionRuntimeConfig = field(default_factory=DiffusionRuntimeConfig)
+
+
 class ArtiosBackbone(nn.Module):
-    def __init__(self, configs):
+    def __init__(
+        self,
+        configs=None,
+        *,
+        model_config: ArtiosBackboneConfig | None = None,
+        runtime_config: ArtiosBackboneRuntimeConfig | None = None,
+    ):
         super(ArtiosBackbone, self).__init__()
+        if configs is None:
+            raise ValueError(
+                "configs are still required for loss, noise, and sampling settings"
+            )
+        if _has_config_key(configs, "sigma_data"):
+            raise ValueError(
+                "SIGMA_DATA is a code constant; remove the sigma_data config override."
+            )
+        if _has_config_key(configs, "model"):
+            legacy_model_config = configs.model
+            legacy_architecture_keys = [
+                key
+                for key in ("N_model_seed", "diffusion_module")
+                if _has_config_key(legacy_model_config, key)
+            ]
+            if legacy_architecture_keys:
+                joined_keys = ", ".join(
+                    f"model.{key}" for key in legacy_architecture_keys
+                )
+                raise ValueError(
+                    f"{joined_keys} are no longer config fields. "
+                    "Edit ArtiosBackboneConfig or DiffusionModuleConfig in code instead."
+                )
         self.configs = configs
+        if model_config is None:
+            model_config = ArtiosBackboneConfig()
+        if runtime_config is None:
+            runtime_config = ArtiosBackboneRuntimeConfig(
+                diffusion=DiffusionRuntimeConfig(
+                    checkpoint_grads=bool(configs.checkpoint_grads)
+                )
+            )
+        self.model_config = model_config
+        self.runtime_config = runtime_config
 
         mse_cfg = configs.loss.backbone.mse
         self.loss_weight_config = LossWeightConfig(
@@ -44,21 +114,22 @@ class ArtiosBackbone(nn.Module):
             motif_related=mse_cfg.weight_motif_related,
         )
 
-        self.N_model_seed = self.configs.model.N_model_seed
+        self.N_model_seed = self.model_config.n_model_seed
 
-        self.timestep_sampler = ProteinaCoordSampler(**configs.train_timestep_sampler)
+        self.noise_sampler = EDMTrainingNoiseSampler(**configs.train_noise_sampler)
 
-        self.inference_timestep_scheduler = LaProteinaCoordScheduler(
-            **configs.inference_timestep_scheduler.la_proteina.coord
+        self.inference_noise_scheduler = EDMInferenceNoiseScheduler(
+            **configs.inference_noise_scheduler
         )
 
         self.sampling_configs = configs.sample_diffusion
 
         self.diffusion_batch_size = self.configs.diffusion_batch_size
 
-        self.diffusion_module = DiffusionModule(**configs.model.diffusion_module)
-        self.sigma_coord = configs.sigma_coord
-        self.s_noise_entity_trans = configs.s_noise_entity_trans
+        self.diffusion_module = DiffusionModule(
+            config=self.model_config.diffusion_module,
+            runtime_config=self.runtime_config.diffusion,
+        )
 
     def main_inference_loop(
         self,
@@ -77,11 +148,6 @@ class ArtiosBackbone(nn.Module):
         N_sample = self.sampling_configs.N_sample
         N_step = self.sampling_configs.N_step
 
-        stochasticity = stochasticity_from_config(
-            stoch_type=self.sampling_configs.stoch_type,
-            alpha=self.sampling_configs.alpha,
-        )
-
         cfg_schedule = cfg_schedule_from_config(
             cfg_type=self.sampling_configs.cfg_type,
             weight=self.sampling_configs.cfg_weight,
@@ -93,12 +159,13 @@ class ArtiosBackbone(nn.Module):
 
         result = self.diffusion_module.sample(
             context=context,
-            timestep_scheduler=self.inference_timestep_scheduler,
+            noise_scheduler=self.inference_noise_scheduler,
             n_steps=N_step,
-            stochasticity=stochasticity,
-            gamma=self.sampling_configs.gamma,
+            gamma0=self.sampling_configs.gamma0,
+            gamma_min=self.sampling_configs.gamma_min,
+            noise_scale_lambda=self.sampling_configs.noise_scale_lambda,
+            step_scale_eta=self.sampling_configs.step_scale_eta,
             n_sample=N_sample,
-            second_order=self.sampling_configs.second_order,
             inplace_safe=inplace_safe,
             cfg_schedule=cfg_schedule,
             centre_coords=self.sampling_configs.centre_and_augment_coords_during_sampling,
@@ -146,8 +213,8 @@ class ArtiosBackbone(nn.Module):
             mask=context.mask.is_resolved,
         ).to(dtype)
 
-        # Generate timesteps
-        timestep = self.timestep_sampler.sample(
+        # Generate EDM noise levels
+        noise_level = self.noise_sampler.sample(
             size=(*batch_shape, n_sample), device=device, generator=generator
         ).to(dtype)
 
@@ -159,31 +226,11 @@ class ArtiosBackbone(nn.Module):
                 device=device,
                 generator=generator,
             )
-            * self.sigma_coord
+            * noise_level[..., None, None]
         )
 
-        # Per-entity noise translation: offset each chain's noise independently
-        if self.s_noise_entity_trans > 0:
-            entity_ids = context.index.atom_asym_id  # [*batch, n_atom]
-            n_entities = int(entity_ids.max()) + 1
-            entity_offsets = self.s_noise_entity_trans * torch.randn(
-                *batch_shape,
-                n_sample,
-                n_entities,
-                3,
-                device=device,
-                dtype=dtype,
-                generator=generator,
-            )
-            # One-hot lookup: broadcast entity translations to atom positions
-            entity_map = nn.functional.one_hot(entity_ids.long(), n_entities).to(dtype)
-            noise = noise + torch.einsum(
-                "...ae,...sec->...sac", entity_map, entity_offsets
-            )
-
-        # Flow matching interpolation
-        t = timestep[..., :, None, None]
-        r_noisy = t * x_target_augment + (1 - t) * noise
+        # EDM additive noising
+        r_noisy = x_target_augment + noise
 
         # Self-conditioning: with probability p, warm-start with a no-grad forward pass
         prev_pred = None
@@ -191,7 +238,7 @@ class ArtiosBackbone(nn.Module):
             with torch.no_grad():
                 prev_pred = self.diffusion_module(
                     r_noisy=r_noisy,
-                    timestep=timestep,
+                    noise_level=noise_level,
                     context=context,
                     inplace_safe=inplace_safe,
                 ).detach()
@@ -199,7 +246,7 @@ class ArtiosBackbone(nn.Module):
         # Denoising
         pred = self.diffusion_module(
             r_noisy=r_noisy,
-            timestep=timestep,
+            noise_level=noise_level,
             context=context,
             inplace_safe=inplace_safe,
             prev_pred=prev_pred,
@@ -218,7 +265,7 @@ class ArtiosBackbone(nn.Module):
 
         # symmetry_corrected = result.coordinate if result else pred
 
-        return DiffusionOutput(coordinate=pred, timestep=timestep)
+        return DiffusionOutput(coordinate=pred, noise_level=noise_level)
 
     def forward(
         self,
@@ -236,7 +283,7 @@ class ArtiosBackbone(nn.Module):
             seed (Optional[int]): Seed for random number generation. Defaults to None.
 
         Returns:
-            ModelOutput: Model output containing the prediction and timestep.
+            ModelOutput: Model output containing the prediction and noise level.
         """
         inplace_safe = not (self.training or torch.is_grad_enabled())
 
@@ -266,7 +313,7 @@ class ArtiosBackbone(nn.Module):
         """Compute loss from model output and context.
 
         Args:
-            output: Model output containing predicted coordinates and timestep.
+            output: Model output containing predicted coordinates and noise level.
             context: Full context containing ground truth and masks.
 
         Returns:
@@ -297,8 +344,10 @@ class ArtiosBackbone(nn.Module):
         # Compute per-sample MSE loss
         per_sample_mse = mse_loss(pred, true_aligned, mask, weight=atom_weights)
 
-        # Scale by timestep
-        scale = timestep_scale(output.timestep, sigma=self.sigma_coord)
+        assert output.noise_level is not None, "noise_level required for EDM loss"
+
+        # Scale by EDM noise level
+        scale = edm_noise_level_scale(output.noise_level, sigma_data=SIGMA_DATA)
         scaled_mse = scale * per_sample_mse
 
         # Reduce to scalar
@@ -306,7 +355,7 @@ class ArtiosBackbone(nn.Module):
 
         # Compute entity metrics for logging
         per_atom_se = mse_per_atom(pred, true_aligned)  # [batch, n_sample, n_atom]
-        per_atom_se = per_atom_se * scale[..., None]  # scale by timestep
+        per_atom_se = per_atom_se * scale[..., None]  # scale by noise level
         per_atom_se_avg = per_atom_se.mean(dim=-2)  # [batch, n_atom]
 
         entity_masks = {

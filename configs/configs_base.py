@@ -119,15 +119,6 @@ model_configs = {
         ),  # chunk size for LDDTMetrics; None disables chunking
     },
     "self_conditioning_prob": 0.5,
-    "train_noise_sampler": {
-        "p_mean": -1.2,
-        "p_std": 1.5,
-    },
-    "inference_noise_scheduler": {
-        "s_max": 160.0,
-        "s_min": 4e-4,
-        "rho": 7.0,
-    },
     "sample_diffusion": {
         "N_step": 200,  # 25
         "N_sample": 5,  # changed from 1, BATCH SIZE AT SAMPLING

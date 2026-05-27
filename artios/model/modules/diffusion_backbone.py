@@ -19,8 +19,8 @@ from artios.model.generator import (
     CFGSchedule,
     EDMCFGPredictor,
     EDMDenoisePredictor,
-    EDMInferenceNoiseScheduler,
     EDMSampler,
+    InferenceTimestepScheduler,
     NoCFG,
     SamplingResult,
 )
@@ -647,7 +647,7 @@ class DiffusionModule(nn.Module):
     def sample(
         self,
         context: FullContext,
-        noise_scheduler: EDMInferenceNoiseScheduler,
+        noise_scheduler: InferenceTimestepScheduler,
         n_steps: int,
         cfg_schedule: CFGSchedule = NoCFG(),
         gamma0: float = 0.8,

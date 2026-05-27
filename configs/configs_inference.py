@@ -68,15 +68,6 @@ guidance_model_configs = {
             1
         ),  # only works if loss_metrics_sparse_enable, can set as default 1
     },
-    "train_noise_sampler": {
-        "p_mean": -1.2,
-        "p_std": 1.5,
-    },
-    "inference_noise_scheduler": {
-        "s_max": 160.0,
-        "s_min": 4e-4,
-        "rho": 7.0,
-    },
     "sample_diffusion": {
         "N_step": 200,  # 25
         "N_sample": 1,  # 1

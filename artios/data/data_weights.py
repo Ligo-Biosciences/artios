@@ -244,6 +244,7 @@ def get_weighted_pdb_weight(
     Returns:
         Unnormalized sampling weight for this entry.
     """
+    # TODO: move these up
     if not beta_dict:
         beta_dict = {RowType.CHAIN: 0.5, RowType.INTERFACE: 1}
     if not alpha_dict:
@@ -487,6 +488,7 @@ def calc_weights_for_df(
     return indices_df
 
 
+# TODO: delete, I don't want this kind of code hanging around.
 _LEGACY_SAMPLER_KEYS = frozenset(
     {
         "beta_dict",

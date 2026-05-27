@@ -10,6 +10,7 @@ from torch.utils.data import Dataset as TorchDataset
 from artios.data.collate.collate import CollateContexts
 from artios.data.dataset import Dataset, get_datasets
 from artios.data.features import FullContext
+from artios.data.motif_maker import DEFAULT_MOTIF_MAKER_CONFIG
 from artios.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -405,8 +406,8 @@ def get_dataloaders(
         atom_bin_ends=configs.data.padding.atom_bin_ends,
         token_bin_ends=configs.data.padding.token_bin_ends,
         crop_size=configs.train_crop_size,
-        motif_training=configs.data.motif_training.motif_train_rate > 0.0,
-        max_motif_residues=configs.data.motif_training.max_motif_residues,
+        motif_training=configs.data.motif_train_rate > 0.0,
+        max_motif_residues=DEFAULT_MOTIF_MAKER_CONFIG.max_motif_residues,
     )
 
     use_worker_side_batching = configs.data.get("worker_batching", False)
@@ -501,8 +502,8 @@ def get_dataloaders(
                 atom_bin_ends=configs.data.padding.atom_bin_ends,
                 token_bin_ends=configs.data.padding.token_bin_ends,
                 crop_size=configs.train_crop_size,
-                motif_training=configs.data.motif_training.motif_train_rate > 0.0,
-                max_motif_residues=configs.data.motif_training.max_motif_residues,
+                motif_training=configs.data.motif_train_rate > 0.0,
+                max_motif_residues=DEFAULT_MOTIF_MAKER_CONFIG.max_motif_residues,
             ),
         )
     logger.info(

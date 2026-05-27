@@ -110,7 +110,6 @@ model_configs = {
     # ArtiosBackboneConfig/DiffusionModuleConfig, not in CLI config.
     "sigma_coord": 12.0,
     "local_sigma_coord": 2.0,
-    "diffusion_batch_size": 16,
     "find_unused_parameters": False,
     "dtype": "bf16",  # default training dtype: bf16
     "infer_setting": {
@@ -118,26 +117,13 @@ model_configs = {
             1
         ),  # chunk size for LDDTMetrics; None disables chunking
     },
-    "self_conditioning_prob": 0.5,
+    # Runtime inference overrides (frozen sampling params live on
+    # BackboneSamplingConfig; frozen training params on BackboneTrainingConfig).
     "sample_diffusion": {
-        "N_step": 200,  # 25
-        "N_sample": 5,  # changed from 1, BATCH SIZE AT SAMPLING
-        "N_step_mini_rollout": 20,
-        "N_sample_mini_rollout": 1,
-        "gamma0": 0.8,
-        "gamma_min": 1.0,
-        "noise_scale_lambda": 1.003,
-        "step_scale_eta": 1.5,
-        "cfg_type": "no-guidance",
-        "cfg_weight": 1.0,
-        "lower_guidance_limit": 0.0,
-        "upper_guidance_limit": 1.0,
-        "lower_guidance_limit_weight": 3.0,
-        "upper_guidance_limit_weight": 3.0,
+        "N_step": 200,
+        "N_sample": 5,
         "track_trajectory": False,
         "trajectory_step_stride": 10,
-        "centre_and_augment_coords_during_sampling": True,
-        "self_conditioning": True,
     },
     "artios_mpnn": {
         "train_zero_shot": False,
@@ -313,9 +299,9 @@ loss_configs = {
                 "weight_protein": 1.0,
                 "weight_dna": 0.0,
                 "weight_rna": 0.0,
-                "weight_ligand": 5.0,
+                "weight_ligand": 10.0,
                 "weight_motif": 0.0,
-                "weight_motif_related": 10.0,
+                "weight_motif_related": 5.0,
             },
         },
         "mpnn": {

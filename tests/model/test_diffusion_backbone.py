@@ -364,7 +364,6 @@ class TestSelfConditioning:
                 noise_scheduler=_FixedScheduler([1.0, 0.5, 0.0]),
                 n_steps=2,
                 n_sample=1,
-                centre_coords=False,
                 self_conditioning=True,
             )
 

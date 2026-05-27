@@ -107,77 +107,15 @@ class TestEDMGenerator:
         with pytest.raises(TypeError):
             EDMInferenceNoiseScheduler(s_max=160.0)
 
-    def test_edm_sampler_one_step_deterministic_update(self, device):
-        x = torch.ones(2, 3, 3, device=device)
-        scheduler = FixedNoiseScheduler([2.0, 0.5])
-        sampler = EDMSampler(
-            noise_scheduler=scheduler,
-            gamma0=0.0,
-            gamma_min=1.0,
-            noise_scale_lambda=1.003,
-            step_scale_eta=1.5,
-            centre_coords=False,
-        )
+    def test_edm_sampler_params_are_not_configurable(self):
+        with pytest.raises(TypeError):
+            EDMSampler(noise_scheduler=FixedNoiseScheduler([1.0, 0.0]), gamma0=0.5)
 
-        def predictor(x_noisy, noise_level):
-            return x_noisy * 0.25
-
-        result = sampler.sample(
-            predictor=predictor,
-            x_init=x,
-            n_steps=1,
-            mask=torch.ones(2, 3, dtype=torch.bool, device=device),
-        )
-
-        t_hat = torch.full((2,), 2.0, device=device)
-        x_denoised = x * 0.25
-        delta = (x - x_denoised) / t_hat[..., None, None]
-        expected = x + 1.5 * (0.5 - t_hat)[..., None, None] * delta
-
-        torch.testing.assert_close(result.final, expected)
-
-    def test_edm_sampler_churn_uses_gamma_threshold_and_noise_scale(self, device):
-        x = torch.zeros(1, 4, 3, device=device)
-        mask = torch.ones(1, 4, dtype=torch.bool, device=device)
-
-        def identity_predictor(x_noisy, noise_level):
-            return x_noisy
-
-        torch.manual_seed(7)
-        churn_sampler = EDMSampler(
-            noise_scheduler=FixedNoiseScheduler([2.0, 1.5]),
-            gamma0=0.5,
-            gamma_min=1.0,
-            noise_scale_lambda=1.25,
-            step_scale_eta=1.0,
-            centre_coords=False,
-        )
-        churn_result = churn_sampler.sample(
-            predictor=identity_predictor, x_init=x, n_steps=1, mask=mask
-        )
-
-        torch.manual_seed(7)
-        expected_noise = torch.randn_like(x)
-        expected = (
-            1.25
-            * torch.sqrt(torch.tensor(3.0**2 - 2.0**2, device=device))
-            * expected_noise
-        )
-        torch.testing.assert_close(churn_result.final, expected)
-
-        torch.manual_seed(7)
-        no_churn_sampler = EDMSampler(
-            noise_scheduler=FixedNoiseScheduler([2.0, 0.5]),
-            gamma0=0.5,
-            gamma_min=1.0,
-            noise_scale_lambda=1.25,
-            step_scale_eta=1.0,
-            centre_coords=False,
-        )
-        no_churn_result = no_churn_sampler.sample(
-            predictor=identity_predictor, x_init=x, n_steps=1, mask=mask
-        )
-        torch.testing.assert_close(no_churn_result.final, x)
+        with pytest.raises(TypeError):
+            EDMSampler(
+                noise_scheduler=FixedNoiseScheduler([1.0, 0.0]),
+                step_scale_eta=2.0,
+            )
 
 
 class TestStochasticitySchedules:

@@ -11,7 +11,7 @@ structures. This module provides:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -488,28 +488,10 @@ def calc_weights_for_df(
     return indices_df
 
 
-# TODO: delete, I don't want this kind of code hanging around.
-_LEGACY_SAMPLER_KEYS = frozenset(
-    {
-        "beta_dict",
-        "alpha_dict",
-        "force_recompute_weight",
-        "balance_protein_clusters",
-        "balance_percentile",
-        "balance_mol_type_groups",
-        "monomer_pdb_target_fraction",
-        "should_filter_artifact_ligands",
-        "cluster_size_exponent",
-        "length_reweight_gamma",
-    }
-)
-
-
 def get_sample_weights(
     sampler_type: str,
     indices_df: pd.DataFrame,
     config: DataWeightsConfig = DEFAULT_DATA_WEIGHTS_CONFIG,
-    **kwargs: Any,
 ) -> Union[pd.Series, list[float]]:
     """Compute sample weights based on the specified sampler type.
 
@@ -522,17 +504,8 @@ def get_sample_weights(
         Sample weights as a Series (weighted/cluster_balanced) or list (uniform).
 
     Raises:
-        ValueError: If sampler_type is unknown or legacy keys are passed.
+        ValueError: If sampler_type is unknown.
     """
-    legacy = set(kwargs) & _LEGACY_SAMPLER_KEYS
-    if legacy:
-        raise ValueError(
-            f"sampler_configs keys {legacy} are no longer supported. "
-            "Edit DataWeightsConfig in artios/data/data_weights.py instead."
-        )
-    if kwargs:
-        raise TypeError(f"Unexpected keyword arguments: {set(kwargs)}")
-
     if sampler_type == "weighted":
         indices_df = calc_weights_for_df(indices_df=indices_df, config=config)
         return indices_df["weights"].astype("float32")

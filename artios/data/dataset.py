@@ -29,11 +29,7 @@ from torch.utils.data import Dataset
 from artios.common import ccd_sets
 from artios.common.constants import EvaluationChainInterface
 from artios.data.data_pipeline import DataPipeline
-from artios.data.data_weights import (
-    DEFAULT_DATA_WEIGHTS_CONFIG,
-    DataWeightsConfig,
-    get_sample_weights,
-)
+from artios.data.data_weights import DataWeightsConfig, get_sample_weights
 from artios.data.features import FullContext
 from artios.data.features.featurizer import ContextGenerator
 from artios.data.motif_maker import MotifMaker
@@ -803,7 +799,7 @@ class WeightedMultiDataset(Dataset):
 def get_datasets(
     configs: ConfigDict,
     error_dir: Optional[str],
-    data_weights_config: DataWeightsConfig = DEFAULT_DATA_WEIGHTS_CONFIG,
+    data_weights_config: DataWeightsConfig = DataWeightsConfig(),
 ) -> tuple[WeightedMultiDataset, dict[str, BaseSingleDataset]]:
     """
     Get training and testing datasets given configs

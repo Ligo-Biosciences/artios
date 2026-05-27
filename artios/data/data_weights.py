@@ -125,9 +125,6 @@ class DataWeightsConfig:
             raise ValueError("length_reweight_gamma must be non-negative")
 
 
-DEFAULT_DATA_WEIGHTS_CONFIG = DataWeightsConfig()
-
-
 # ── Pandera Schema ─────────────────────────────────────────────────────────
 
 
@@ -404,7 +401,7 @@ def apply_monomer_pdb_boost(
 
 def calc_weights_for_df(
     indices_df: pd.DataFrame,
-    config: DataWeightsConfig = DEFAULT_DATA_WEIGHTS_CONFIG,
+    config: DataWeightsConfig = DataWeightsConfig(),
 ) -> pd.DataFrame:
     """Calculate sampling weights for each row in the indices DataFrame.
 
@@ -491,7 +488,7 @@ def calc_weights_for_df(
 def get_sample_weights(
     sampler_type: str,
     indices_df: pd.DataFrame,
-    config: DataWeightsConfig = DEFAULT_DATA_WEIGHTS_CONFIG,
+    config: DataWeightsConfig = DataWeightsConfig(),
 ) -> Union[pd.Series, list[float]]:
     """Compute sample weights based on the specified sampler type.
 

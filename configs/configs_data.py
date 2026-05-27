@@ -39,21 +39,6 @@ default_test_configs = {
 default_weighted_pdb_configs = {
     "sampler_configs": {
         "sampler_type": "weighted",
-        "beta_dict": {
-            "chain": 0.5,
-            "interface": 1,
-        },
-        "alpha_dict": {
-            "prot": 3,
-            "nuc": 3,
-            "ligand": 1,
-        },
-        "force_recompute_weight": True,
-        "balance_protein_clusters": False,
-        "balance_percentile": 0.9,
-        "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
-        "monomer_pdb_target_fraction": 0.00,
-        "should_filter_artifact_ligands": False,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -72,8 +57,6 @@ default_weighted_pdb_configs = {
 default_distillation_configs = {
     "sampler_configs": {
         "sampler_type": "cluster_balanced",
-        "cluster_size_exponent": 0.75,
-        "force_recompute_weight": True,
     },
     "cropping_configs": {
         "method_weights": ListValue(

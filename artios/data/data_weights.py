@@ -6,8 +6,10 @@ structures. This module provides:
 - Enums for molecule types, row types, and interaction groups
 - Pandera schema for validation with clear error messages
 - Weight calculation functions including protein-cluster-balanced sampling
+- ``DataWeightsConfig`` — fixed weighting recipe (frozen dataclass)
 """
 
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, Union
 
@@ -60,6 +62,70 @@ DEFAULT_BALANCED_GROUPS = [
     MolTypeGroup.LIGAND_PROT.value,
     MolTypeGroup.NUC_PROT.value,
 ]
+
+
+# ── Fixed weighting recipe ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DataWeightsConfig:
+    """Fixed weighting recipe for training sample weights."""
+
+    # Per-row-type multipliers
+    beta_chain: float = 0.5
+    beta_interface: float = 1.0
+
+    # Per-molecule-type multipliers
+    alpha_prot: float = 3.0
+    alpha_nuc: float = 3.0
+    alpha_ligand: float = 1.0
+
+    # Protein cluster balancing
+    balance_protein_clusters: bool = False
+    balance_percentile: float = 0.9
+    balance_mol_type_groups: tuple[str, ...] = field(
+        default_factory=lambda: (
+            MolTypeGroup.LIGAND_PROT.value,
+            MolTypeGroup.NUC_PROT.value,
+        )
+    )
+
+    # Monomer PDB boost
+    monomer_pdb_target_fraction: float = 0.0
+
+    # Artifact ligand filtering
+    filter_artifact_ligands: bool = False
+
+    # Cluster-balanced sampler: per-cluster aggregate weight ∝ N^exponent
+    cluster_size_exponent: float = 0.75
+
+    # Length-based reweighting (uniform sampler only): weight ∝ num_tokens^gamma
+    length_reweight_gamma: float = 0.0
+
+    @property
+    def beta_dict(self) -> dict[RowType, float]:
+        return {RowType.CHAIN: self.beta_chain, RowType.INTERFACE: self.beta_interface}
+
+    @property
+    def alpha_dict(self) -> dict[MolType, float]:
+        return {
+            MolType.PROT: self.alpha_prot,
+            MolType.NUC: self.alpha_nuc,
+            MolType.LIGAND: self.alpha_ligand,
+        }
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.balance_percentile <= 1.0:
+            raise ValueError("balance_percentile must be between 0 and 1")
+        if not 0.0 <= self.monomer_pdb_target_fraction < 1.0:
+            raise ValueError("monomer_pdb_target_fraction must be in [0, 1)")
+        if not 0.0 <= self.cluster_size_exponent <= 1.0:
+            raise ValueError("cluster_size_exponent must be between 0 and 1")
+        if self.length_reweight_gamma < 0:
+            raise ValueError("length_reweight_gamma must be non-negative")
+
+
+DEFAULT_DATA_WEIGHTS_CONFIG = DataWeightsConfig()
 
 
 # ── Pandera Schema ─────────────────────────────────────────────────────────
@@ -337,13 +403,7 @@ def apply_monomer_pdb_boost(
 
 def calc_weights_for_df(
     indices_df: pd.DataFrame,
-    beta_dict: dict[str, Any],
-    alpha_dict: dict[str, Any],
-    balance_protein_clusters: bool = False,
-    balance_percentile: float = 0.9,
-    balance_mol_type_groups: Optional[list[str]] = None,
-    monomer_pdb_target_fraction: float = 0.0,
-    should_filter_artifact_ligands: bool = False,
+    config: DataWeightsConfig = DEFAULT_DATA_WEIGHTS_CONFIG,
 ) -> pd.DataFrame:
     """Calculate sampling weights for each row in the indices DataFrame.
 
@@ -355,19 +415,12 @@ def calc_weights_for_df(
 
     Args:
         indices_df: Training indices DataFrame (validated against IndicesSchema).
-        beta_dict: Weight multipliers per row type (chain/interface).
-        alpha_dict: Weight multipliers per molecule type (prot/nuc/ligand).
-        balance_protein_clusters: Whether to apply protein-cluster-balanced sampling.
-        balance_percentile: Percentile for the protein cluster weight cap.
-        balance_mol_type_groups: Interface mol_type_groups to include in balancing.
-        monomer_pdb_target_fraction: Target sampling fraction for monomer-only PDBs.
-            Set to 0 to disable (default).
-        should_filter_artifact_ligands: Whether to filter out artifact ligands. Default False.
+        config: Fixed weighting recipe.
 
     Returns:
         DataFrame with 'weights' column added.
     """
-    if should_filter_artifact_ligands:
+    if config.filter_artifact_ligands:
         indices_df = _filter_artifact_ligands(indices_df)
 
     # Build entity key: pdb_assembly_sortedEntities
@@ -398,8 +451,8 @@ def calc_weights_for_df(
 
     # Vectorized weight: beta * alpha_sum / cluster_size / member_num
     # All arithmetic on numpy arrays to avoid Arrow dtype issues on Python 3.12
-    _beta = {(k.value if hasattr(k, "value") else k): v for k, v in beta_dict.items()}
-    _alpha = {(k.value if hasattr(k, "value") else k): v for k, v in alpha_dict.items()}
+    _beta = {k.value: v for k, v in config.beta_dict.items()}
+    _alpha = {k.value: v for k, v in config.alpha_dict.items()}
     beta = (
         pd.Series(indices_df["type"].to_numpy(), index=indices_df.index)
         .map(_beta)
@@ -418,106 +471,87 @@ def calc_weights_for_df(
         / indices_df["pdb_sorted_entity_id_member_num"].to_numpy(dtype="float64")
     )
 
-    if balance_protein_clusters:
+    if config.balance_protein_clusters:
         indices_df = apply_protein_cluster_balancing(
             indices_df,
-            percentile=balance_percentile,
-            balanced_mol_type_groups=balance_mol_type_groups,
+            percentile=config.balance_percentile,
+            balanced_mol_type_groups=list(config.balance_mol_type_groups),
         )
 
-    if monomer_pdb_target_fraction > 0:
+    if config.monomer_pdb_target_fraction > 0:
         indices_df = apply_monomer_pdb_boost(
             indices_df,
-            target_fraction=monomer_pdb_target_fraction,
+            target_fraction=config.monomer_pdb_target_fraction,
         )
 
     return indices_df
 
 
+_LEGACY_SAMPLER_KEYS = frozenset(
+    {
+        "beta_dict",
+        "alpha_dict",
+        "force_recompute_weight",
+        "balance_protein_clusters",
+        "balance_percentile",
+        "balance_mol_type_groups",
+        "monomer_pdb_target_fraction",
+        "should_filter_artifact_ligands",
+        "cluster_size_exponent",
+        "length_reweight_gamma",
+    }
+)
+
+
 def get_sample_weights(
     sampler_type: str,
-    indices_df: Optional[pd.DataFrame] = None,
-    beta_dict: dict = {
-        RowType.CHAIN: 0.5,
-        RowType.INTERFACE: 1,
-    },
-    alpha_dict: dict = {
-        MolType.PROT: 3,
-        MolType.NUC: 3,
-        MolType.LIGAND: 1,
-    },
-    force_recompute_weight: bool = False,
-    balance_protein_clusters: bool = False,
-    balance_percentile: float = 0.9,
-    balance_mol_type_groups: Optional[list[str]] = None,
-    monomer_pdb_target_fraction: float = 0.0,
-    should_filter_artifact_ligands: bool = False,
-    length_reweight_gamma: float = 0.0,
-    cluster_size_exponent: float = 0.75,
+    indices_df: pd.DataFrame,
+    config: DataWeightsConfig = DEFAULT_DATA_WEIGHTS_CONFIG,
+    **kwargs: Any,
 ) -> Union[pd.Series, list[float]]:
     """Compute sample weights based on the specified sampler type.
 
     Args:
-        sampler_type: 'weighted' or 'uniform'.
+        sampler_type: 'weighted', 'cluster_balanced', or 'uniform'.
         indices_df: Training indices DataFrame.
-        beta_dict: Weight multipliers per row type.
-        alpha_dict: Weight multipliers per molecule type.
-        force_recompute_weight: Recompute even if 'weights' column exists.
-        balance_protein_clusters: Apply protein-cluster-balanced sampling.
-        balance_percentile: Percentile for the protein cluster weight cap.
-        balance_mol_type_groups: Interface groups to include in balancing.
-        monomer_pdb_target_fraction: Target sampling fraction for monomer-only
-            PDBs. Set to 0 to disable.
-        should_filter_artifact_ligands: Whether to filter out artifact ligands. Default False.
-        length_reweight_gamma: Power exponent for length-based reweighting.
-            Weight per sample is num_tokens^gamma. 0 = uniform, 0.5 = sqrt,
-            1.0 = linear (token-proportional). Only applies to uniform sampler.
-        cluster_size_exponent: Power exponent for the 'cluster_balanced' sampler.
-            Per-cluster aggregate sampling weight scales as cluster_size^exponent.
-            0.0 = fully cluster-balanced (every cluster equally likely),
-            0.5 = sqrt, 0.75 = default (mild down-weighting),
-            1.0 = uniform per row (no balancing). Only applies to the
-            'cluster_balanced' sampler.
+        config: Fixed weighting recipe.
 
     Returns:
-        Sample weights as a Series (weighted) or list (uniform).
+        Sample weights as a Series (weighted/cluster_balanced) or list (uniform).
 
     Raises:
-        ValueError: If sampler_type is not 'weighted' or 'uniform'.
+        ValueError: If sampler_type is unknown or legacy keys are passed.
     """
+    legacy = set(kwargs) & _LEGACY_SAMPLER_KEYS
+    if legacy:
+        raise ValueError(
+            f"sampler_configs keys {legacy} are no longer supported. "
+            "Edit DataWeightsConfig in artios/data/data_weights.py instead."
+        )
+    if kwargs:
+        raise TypeError(f"Unexpected keyword arguments: {set(kwargs)}")
+
     if sampler_type == "weighted":
-        assert indices_df is not None
-        if "weights" not in indices_df.columns or force_recompute_weight:
-            indices_df = calc_weights_for_df(
-                indices_df=indices_df,
-                beta_dict=beta_dict,
-                alpha_dict=alpha_dict,
-                balance_protein_clusters=balance_protein_clusters,
-                balance_percentile=balance_percentile,
-                balance_mol_type_groups=balance_mol_type_groups,
-                monomer_pdb_target_fraction=monomer_pdb_target_fraction,
-                should_filter_artifact_ligands=should_filter_artifact_ligands,
-            )
+        indices_df = calc_weights_for_df(indices_df=indices_df, config=config)
         return indices_df["weights"].astype("float32")
     elif sampler_type == "cluster_balanced":
-        assert indices_df is not None
         cluster_sizes = indices_df.groupby("cluster_id")["pdb_id"].transform("nunique")
-        # Per-row weight = N^(exp-1)  →  per-cluster aggregate = N * N^(exp-1) = N^exp
-        weights = cluster_sizes.astype("float32").pow(cluster_size_exponent - 1.0)
+        exp = config.cluster_size_exponent
+        weights = cluster_sizes.astype("float32").pow(exp - 1.0)
         n_clusters = indices_df["cluster_id"].nunique()
         logger.info(
             f"[cluster_balanced] {len(indices_df)} rows, {n_clusters} clusters, "
-            f"exponent={cluster_size_exponent} "
-            f"(per-cluster aggregate weight ∝ N^{cluster_size_exponent}), "
+            f"exponent={exp} "
+            f"(per-cluster aggregate weight ∝ N^{exp}), "
             f"largest cluster aggregate weight (vs singleton): "
-            f"{cluster_sizes.max() ** cluster_size_exponent:.1f}x"
+            f"{cluster_sizes.max() ** exp:.1f}x"
         )
         return weights / weights.sum()
     elif sampler_type == "uniform":
-        assert indices_df is not None
-        if length_reweight_gamma > 0:
+        if config.length_reweight_gamma > 0:
             weights = (
-                indices_df["num_tokens"].astype("float32") ** length_reweight_gamma
+                indices_df["num_tokens"].astype("float32")
+                ** config.length_reweight_gamma
             )
             return weights / weights.sum()
         return [1 / len(indices_df) for _ in range(len(indices_df))]

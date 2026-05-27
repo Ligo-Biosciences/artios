@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, DistributedSampler, Sampler
 from torch.utils.data import Dataset as TorchDataset
 
 from artios.data.collate.collate import CollateContexts
+from artios.data.data_weights import DEFAULT_DATA_WEIGHTS_CONFIG, DataWeightsConfig
 from artios.data.dataset import Dataset, get_datasets
 from artios.data.features import FullContext
 from artios.data.motif_maker import DEFAULT_MOTIF_MAKER_CONFIG
@@ -384,7 +385,11 @@ class DistributedDataLoader(DataLoader):
 
 
 def get_dataloaders(
-    configs: ConfigDict, world_size: int, seed: int, error_dir: Optional[str] = None
+    configs: ConfigDict,
+    world_size: int,
+    seed: int,
+    error_dir: Optional[str] = None,
+    data_weights_config: DataWeightsConfig = DEFAULT_DATA_WEIGHTS_CONFIG,
 ):
     """
     Generate data loaders for training and testing based on the given configurations and seed.
@@ -399,7 +404,9 @@ def get_dataloaders(
         tuple: A tuple containing the training data loader and a dictionary of testing data loaders.
 
     """
-    train_dataset, test_datasets = get_datasets(configs, error_dir)
+    train_dataset, test_datasets = get_datasets(
+        configs, error_dir, data_weights_config=data_weights_config
+    )
 
     # Collation config
     collate_fn = CollateContexts(

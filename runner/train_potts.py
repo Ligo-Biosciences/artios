@@ -17,6 +17,7 @@ from tqdm import tqdm
 
 from artios.config import parse_configs, parse_sys_args
 from artios.config.config import save_config
+from artios.data.data_weights import DataWeightsConfig
 from artios.data.dataloader import get_dataloaders
 from artios.data.features import FullContext
 from artios.model.artios_potts import ArtiosPotts
@@ -209,6 +210,9 @@ class ArtiosPottsTrainer(object):
             DIST_WRAPPER.world_size,
             seed=self.configs.seed,
             error_dir=self.error_dir,
+            data_weights_config=DataWeightsConfig(
+                monomer_pdb_target_fraction=0.4,
+            ),
         )
         print("finished init_data")
 

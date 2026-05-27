@@ -368,11 +368,11 @@ class TestDataWeightsConfig:
         with pytest.raises(ValueError, match="balance_percentile"):
             DataWeightsConfig(balance_percentile=-0.1)
 
-    def test_legacy_sampler_keys_are_rejected(self):
+    def test_unexpected_kwargs_rejected(self):
         from artios.data.data_weights import get_sample_weights
 
         df = _make_test_df()
-        with pytest.raises(ValueError, match="no longer supported"):
+        with pytest.raises(TypeError):
             get_sample_weights(
                 sampler_type="weighted",
                 indices_df=df,

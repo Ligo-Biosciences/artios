@@ -70,15 +70,6 @@ def backbone_configs():
             "checkpoint_grads": False,
             "diffusion_batch_size": 2,
             "self_conditioning_prob": 0.0,
-            "train_noise_sampler": {
-                "p_mean": -1.2,
-                "p_std": 1.5,
-            },
-            "inference_noise_scheduler": {
-                "s_max": 160.0,
-                "s_min": 4e-4,
-                "rho": 7.0,
-            },
             "sample_diffusion": {
                 "N_step": 2,
                 "N_sample": 1,

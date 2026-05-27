@@ -116,11 +116,9 @@ class ArtiosBackbone(nn.Module):
 
         self.N_model_seed = self.model_config.n_model_seed
 
-        self.noise_sampler = EDMTrainingNoiseSampler(**configs.train_noise_sampler)
+        self.noise_sampler = EDMTrainingNoiseSampler()
 
-        self.inference_noise_scheduler = EDMInferenceNoiseScheduler(
-            **configs.inference_noise_scheduler
-        )
+        self.inference_noise_scheduler = EDMInferenceNoiseScheduler()
 
         self.sampling_configs = configs.sample_diffusion
 

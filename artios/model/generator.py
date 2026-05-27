@@ -71,12 +71,8 @@ class InferenceTimestepScheduler(ABC):
         ...
 
 
-@dataclass(frozen=True)
 class EDMTrainingNoiseSampler(TrainingTimestepSampler):
     """Sample EDM training noise levels from the AF3/Protenix lognormal law."""
-
-    p_mean: float = -1.2
-    p_std: float = 1.5
 
     @typecheck
     def sample(
@@ -85,21 +81,16 @@ class EDMTrainingNoiseSampler(TrainingTimestepSampler):
         device: torch.device,
         generator: torch.Generator | None = None,
     ) -> Float[Tensor, "..."]:
+        p_mean, p_std = -1.2, 1.5
         rnd_normal = torch.randn(size=size, device=device, generator=generator)
-        return torch.exp(rnd_normal * self.p_std + self.p_mean) * SIGMA_DATA
+        return torch.exp(rnd_normal * p_std + p_mean) * SIGMA_DATA
 
 
-@dataclass(frozen=True)
 class EDMInferenceNoiseScheduler(InferenceTimestepScheduler):
     """Karras/AF3 EDM inference noise scheduler.
 
-    The configured ``s_max`` and ``s_min`` are dimensionless AF3 values and are
-    scaled by ``SIGMA_DATA`` to produce coordinate-space noise levels.
+    Produces coordinate-space noise levels scaled by ``SIGMA_DATA``.
     """
-
-    s_max: float = 160.0
-    s_min: float = 4e-4
-    rho: float = 7.0
 
     @typecheck
     def get_schedule(
@@ -108,17 +99,16 @@ class EDMInferenceNoiseScheduler(InferenceTimestepScheduler):
         device: torch.device,
         dtype: torch.dtype = torch.float32,
     ) -> Float[Tensor, "n_steps_plus_one"]:
+        s_max, s_min, rho = 160.0, 4e-4, 7.0
         step_indices = torch.arange(n_steps + 1, dtype=dtype, device=device)
         step_size = 1 / n_steps
         schedule = (
             SIGMA_DATA
             * (
-                self.s_max ** (1 / self.rho)
-                + step_indices
-                * step_size
-                * (self.s_min ** (1 / self.rho) - self.s_max ** (1 / self.rho))
+                s_max ** (1 / rho)
+                + step_indices * step_size * (s_min ** (1 / rho) - s_max ** (1 / rho))
             )
-            ** self.rho
+            ** rho
         )
         schedule[-1] = 0
         return schedule

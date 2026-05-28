@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# EDM motif-scaffolding backbone training.
+# Canonical backbone (diffusion) training script.
+# SOTA defaults live here — experiment branches override individual flags.
+#
 # Usage:
-#   WANDB_API_KEY=... bash scripts/train_backbone_edm_motif.sh
+#   WANDB_API_KEY=... bash scripts/training/train_backbone.sh
 #
 # Common overrides:
-#   RUN_NAME=motif-v2.5-edm-train NPROC_PER_NODE=8 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 bash scripts/train_backbone_edm_motif.sh
+#   RUN_NAME=my-experiment NPROC_PER_NODE=8 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+#     bash scripts/training/train_backbone.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-# Keep the caller's working directory so relative data paths such as
-# af3-dev/release_data/... can resolve beside artios-all-atom.
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 export TYPECHECK="${TYPECHECK:-false}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 
-RUN_NAME="${RUN_NAME:-motif-v2.5-edm-train}"
+RUN_NAME="${RUN_NAME:-backbone-train}"
 BASE_DIR="${BASE_DIR:-./training}"
 PROJECT="${WANDB_PROJECT:-artios-motif-scaffolding}"
 USE_WANDB="${USE_WANDB:-true}"
@@ -35,7 +36,7 @@ uv run --project "${PROJECT_ROOT}" torchrun \
   --checkpoint_grads true \
   --dtype bf16 \
   --project "${PROJECT}" \
-  --ema_decay 0.999 \
+  --ema_decay 0.9999 \
   --use_wandb "${USE_WANDB}" \
   --batch_size 16 \
   --iters_to_accumulate 1 \

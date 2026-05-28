@@ -6,7 +6,7 @@ progressively to parquet (indices) and npz (structures) so that
 a crash doesn't lose completed work.
 
 Usage:
-    python scripts/prepare_training_data_ray.py \
+    python scripts/data/prepare_training_data_ray.py \
       --input-path <input_path> \
       --output-csv <output_csv> \
       --bio-output-dir <bio_output_dir> \
@@ -15,7 +15,7 @@ Usage:
       [--n-cpu <n_cpu>]
 
 Example:
-    python scripts/prepare_training_data_ray.py \
+    python scripts/data/prepare_training_data_ray.py \
         -i af3-dev/release_data/mmcif \
         -o af3-dev/release_data/indices/mmcif_indices \
         -b af3-dev/release_data/mmcif_bioassembly \

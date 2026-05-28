@@ -96,7 +96,7 @@ def biotite_load_ccd_cif(ccd_cif: Union[Path, str]) -> pdbx.CIFFile:
 
 
 def _get_component_rdkit_mol_processing(
-    ccd_code_and_cif_file: tuple[str, Path]
+    ccd_code_and_cif_file: tuple[str, Path],
 ) -> Optional[rdkit.Chem.Mol]:
     """
     Get rdkit mol by PDBeCCDUtils
@@ -144,7 +144,7 @@ def _get_component_rdkit_mol_processing(
         ref_mask[atom_idx] = x_ideal != "?"
     mol.ref_mask = ref_mask
 
-    if mol.sanitized == False:
+    if not mol.sanitized:
         return mol
     options = rdkit.Chem.AllChem.ETKDGv3()
     options.clearConfs = False
@@ -194,7 +194,9 @@ def precompute_ccd_mol(ccd_cif: Path, output_pkl: Path, num_cpu: int = 1):
 
     # success rate
     n_ccd = len(ccd_codes)
-    logging.info("success rate: %.2f%% (%d/%d)", len(mols) / n_ccd * 100, len(mols), n_ccd)
+    logging.info(
+        "success rate: %.2f%% (%d/%d)", len(mols) / n_ccd * 100, len(mols), n_ccd
+    )
 
     # sanitized rate
     sanitized_num = sum([mol.sanitized for mol in mols.values()])
@@ -223,7 +225,9 @@ def precompute_ccd_mol(ccd_cif: Path, output_pkl: Path, num_cpu: int = 1):
         f.write("\n".join(mols.keys()))
 
 
-def run_update_ccd_cache(ccd_cache_dir: Path, num_cpu: int = 1, disable_download: bool = False):
+def run_update_ccd_cache(
+    ccd_cache_dir: Path, num_cpu: int = 1, disable_download: bool = False
+):
     """
     Updates the CCD (Chemical Component Dictionary) cache by downloading the latest
     CCD CIF file and precomputing RDKit molecule objects.
@@ -246,8 +250,7 @@ def run_update_ccd_cache(ccd_cache_dir: Path, num_cpu: int = 1, disable_download
 
 if __name__ == "__main__":
     current_file_path = Path(__file__)
-    current_directory = current_file_path.parent
-    code_directory = current_directory.parent
+    code_directory = current_file_path.parent.parent.parent
     releases_data_ccd_directory = code_directory / "release_data" / "ccd_cache"
 
     parser = argparse.ArgumentParser()

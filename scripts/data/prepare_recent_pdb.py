@@ -2,7 +2,6 @@
 
 import argparse
 import shutil
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -45,7 +44,9 @@ def filter_and_copy_files(input_dir: Path, output_dir: Path, metadata_csv: Path)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Filter and copy recent high-quality PDB files")
+    parser = argparse.ArgumentParser(
+        description="Filter and copy recent high-quality PDB files"
+    )
     parser.add_argument(
         "--input_dir",
         type=Path,

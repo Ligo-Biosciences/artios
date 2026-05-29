@@ -127,8 +127,6 @@ class ArtiosBackbone(nn.Module):
         if training_config is None:
             mse_cfg = configs.loss.backbone.mse
             training_config = BackboneTrainingConfig(
-                diffusion_batch_size=int(configs.diffusion_batch_size),
-                self_conditioning_prob=float(configs.self_conditioning_prob),
                 loss_weights=LossWeightConfig(
                     protein=mse_cfg.weight_protein,
                     dna=mse_cfg.weight_dna,

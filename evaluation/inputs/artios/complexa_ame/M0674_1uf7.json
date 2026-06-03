@@ -1,0 +1,27 @@
+{
+  "name": "M0674_1uf7",
+  "task": "backbone",
+  "spec": {
+    "design": [
+      {
+        "length": "",
+        "chain_id": "0"
+      }
+    ],
+    "motif": {
+      "cif_file": "evaluation/inputs/motifs/complexa_ame/M0674_1uf7.cif",
+      "ligands": [
+        {
+          "cif_res_name": "CDV",
+          "chain_id": "1",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "CDV"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

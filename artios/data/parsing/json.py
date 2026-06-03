@@ -143,7 +143,7 @@ def parse_backbone_input(
 def validate_artios_input_json(input_dict: dict[str, Any]) -> None:
     """Validate an artios input JSON dict against the BackboneInput schema.
 
-    Same checks `run_batch_modal_inference.py` runs at launch — pulled
+    Same checks `run_modal_inference.py` runs at launch — pulled
     earlier into the authoring loop so the eval-bot agent can catch
     schema errors before writing the file.
 

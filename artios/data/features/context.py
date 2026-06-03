@@ -426,6 +426,15 @@ class MotifContext(Context):
         encoding=EncodingType.IDENTITY,
         description="Motif coordinates",
     )
+    motif_depth_norm: Feature(
+        Float[Tensor, "*batch n_token"],
+        type=FeatureType.TOKEN,
+        encoding=EncodingType.IDENTITY,
+        description=(
+            "Normalised motif depth ||CoM(motif) - CoM(non-motif)|| / Rg_complex, "
+            "broadcast across all tokens. -1.0 = null / unconditioned."
+        ),
+    )
 
 
 @typecheck
@@ -726,6 +735,7 @@ class FullContext:
             is_motif_related_token=self.motif.is_motif_related_token & not_lig_tok,
             motif_restype=self.motif.motif_restype * not_lig_tok.unsqueeze(-1),
             motif_coordinate=self.motif.motif_coordinate * not_lig_tok.unsqueeze(-1),
+            motif_depth_norm=self.motif.motif_depth_norm,
         )
 
         new_coordinate = CoordinateContext(

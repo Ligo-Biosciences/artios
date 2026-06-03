@@ -7,14 +7,14 @@ for the inference pipeline.
 
 Usage:
     # Sample from dataset and create pseudo-batches
-    python scripts/create_pseudo_batches.py \
+    python scripts/data/create_pseudo_batches.py \
         --output-dir ./pseudo_batches \
         --n-dataset-samples 1000 \
         --n-samples 8 \
         --data.train_sets trousers_val
 
     # Process existing NPZ files from local directory
-    python scripts/create_pseudo_batches.py \
+    python scripts/data/create_pseudo_batches.py \
         --input-dir /path/to/npz/files \
         --output-dir /path/to/output \
         --n-samples 8
@@ -34,7 +34,7 @@ from scipy.spatial.transform import Rotation
 from tqdm import tqdm
 
 # Add paths for config imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "configs"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "configs"))
 
 from artios.data.chem.ccd import res_names_to_sequence
 from artios.utils.file_io import (

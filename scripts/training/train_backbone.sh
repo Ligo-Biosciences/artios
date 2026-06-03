@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Canonical backbone (diffusion) training script.
+# SOTA defaults live here — experiment branches override individual flags.
+#
+# Usage:
+#   WANDB_API_KEY=... bash scripts/training/train_backbone.sh
+#
+# Common overrides:
+#   RUN_NAME=my-experiment NPROC_PER_NODE=8 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+#     bash scripts/training/train_backbone.sh
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+export TYPECHECK="${TYPECHECK:-false}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
+
+RUN_NAME="${RUN_NAME:-backbone-train}"
+BASE_DIR="${BASE_DIR:-./training}"
+PROJECT="${WANDB_PROJECT:-artios-motif-scaffolding}"
+USE_WANDB="${USE_WANDB:-true}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
+
+if [[ "${USE_WANDB}" == "true" ]]; then
+  : "${WANDB_API_KEY:?Set WANDB_API_KEY, or run with USE_WANDB=false.}"
+fi
+
+uv run --project "${PROJECT_ROOT}" torchrun \
+  --nproc_per_node="${NPROC_PER_NODE}" \
+  "${PROJECT_ROOT}/runner/train_backbone.py" \
+  --run_name "${RUN_NAME}" \
+  --seed 43 \
+  --base_dir "${BASE_DIR}" \
+  --checkpoint_grads true \
+  --dtype bf16 \
+  --project "${PROJECT}" \
+  --ema_decay 0.9999 \
+  --use_wandb "${USE_WANDB}" \
+  --batch_size 16 \
+  --iters_to_accumulate 1 \
+  --train_shuffle_mols false \
+  --train_lig_atom_rename true \
+  --eval_interval 6400 \
+  --eval_first true \
+  --eval_ema_only true \
+  --log_interval 100 \
+  --checkpoint_interval 6400 \
+  --train_crop_size 256 \
+  --max_steps 1000000 \
+  --warmup_steps 2000 \
+  --lr 5e-4 \
+  --weight_decay 1e-2 \
+  --use_adamw false \
+  --use_muon true \
+  --lr_scheduler cosine_annealing \
+  --cosine_annealing.hold_steps 50000 \
+  --cosine_annealing.decay_steps 250000 \
+  --cosine_annealing.min_lr_ratio 0.1 \
+  --monitor.grad_norm true \
+  --monitor.weight_norm true \
+  --run_training_time_inference false \
+  --data.remove_glycans true \
+  --data.num_dl_workers 24 \
+  --data.prefetch_factor 2 \
+  --data.train_sets weightedPDB_before2021_wopb_nometalc_0925,afdb_trousers_train,mgnify_trousers_train \
+  --data.train_sampler.train_sample_weights 0.5,0.25,0.25 \
+  --data.padding.token_bin_ends 256,270,290,384,440,500,540 \
+  --data.padding.atom_bin_ends 1280,1536,1728,2112,3008 \
+  --data.weightedPDB_before2021_wopb_nometalc_0925.base_info.max_n_token 4000 \
+  --data.filter_unique_fragment_prob 1.0 \
+  --data.motif_train_rate 1.0

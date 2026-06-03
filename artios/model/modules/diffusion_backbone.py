@@ -16,12 +16,9 @@ from artios.data.features import FullContext
 from artios.metrics.rmsd import align_pred_to_true
 from artios.model.generator import (
     SIGMA_DATA,
-    CFGSchedule,
-    EDMCFGPredictor,
     EDMDenoisePredictor,
-    EDMInferenceNoiseScheduler,
     EDMSampler,
-    NoCFG,
+    InferenceTimestepScheduler,
     SamplingResult,
 )
 from artios.model.modules.components import Transition
@@ -571,92 +568,63 @@ class DiffusionModule(nn.Module):
         self,
         context: FullContext,
         inplace_safe: bool = False,
-        cfg_schedule: CFGSchedule = NoCFG(),
         self_conditioning: bool = True,
     ) -> EDMDenoisePredictor:
         """Create an EDM denoising predictor bound to this module and context.
 
-        Optionally wraps with classifier-free guidance if cfg_schedule is not NoCFG.
-
         Args:
             context: Full feature context to use for predictions.
             inplace_safe: Whether to use inplace operations safely.
-            cfg_schedule: CFG schedule. Use NoCFG() to skip classifier-free guidance
-                entirely (no unconditional forward pass). Defaults to NoCFG().
             self_conditioning: Whether to chain predictions across sampling steps.
                 When True, each step receives the aligned previous prediction.
                 When False, prev_pred is always None (no self-conditioning).
 
         Returns:
             A callable satisfying EDMDenoisePredictor protocol.
-            If cfg_schedule is not NoCFG, returns a CFGPredictor.
         """
+        conditioning_cache = self.diffusion_conditioning.compute_cache(context)
+        prev_pred: Optional[Float[Tensor, "... n_atom 3"]] = None
 
-        def make_predictor(ctx: FullContext) -> EDMDenoisePredictor:
-            """Create a predictor bound to a specific context."""
-            conditioning_cache = self.diffusion_conditioning.compute_cache(ctx)
-            prev_pred: Optional[Float[Tensor, "... n_atom 3"]] = None
+        def predictor(
+            x_noisy: Float[Tensor, "... n_atom 3"],
+            noise_level: Float[Tensor, "..."],
+        ) -> Float[Tensor, "... n_atom 3"]:
+            nonlocal prev_pred
 
-            def predictor(
-                x_noisy: Float[Tensor, "... n_atom 3"],
-                noise_level: Float[Tensor, "..."],
-            ) -> Float[Tensor, "... n_atom 3"]:
-                nonlocal prev_pred  # hidden statefulness for self conditioning
-
-                # Align previous prediction to current noisy coords (handles frame changes)
-                aligned_prev = None
-                if self_conditioning and prev_pred is not None:
-                    n_sample = x_noisy.shape[-3]
-                    mask = repeat(ctx.mask.is_resolved, "... n -> ... s n", s=n_sample)
-                    aligned_prev, _, _ = align_pred_to_true(
-                        pred_pose=prev_pred,
-                        true_pose=x_noisy,
-                        atom_mask=mask,
-                    )
-
-                coords_pred = self.forward(
-                    r_noisy=x_noisy,
-                    noise_level=noise_level,
-                    context=ctx,
-                    cache=conditioning_cache,
-                    inplace_safe=inplace_safe,
-                    prev_pred=aligned_prev,
+            aligned_prev = None
+            if self_conditioning and prev_pred is not None:
+                n_sample = x_noisy.shape[-3]
+                mask = repeat(context.mask.is_resolved, "... n -> ... s n", s=n_sample)
+                aligned_prev, _, _ = align_pred_to_true(
+                    pred_pose=prev_pred,
+                    true_pose=x_noisy,
+                    atom_mask=mask,
                 )
 
-                if self_conditioning:
-                    prev_pred = coords_pred.detach()
+            coords_pred = self.forward(
+                r_noisy=x_noisy,
+                noise_level=noise_level,
+                context=context,
+                cache=conditioning_cache,
+                inplace_safe=inplace_safe,
+                prev_pred=aligned_prev,
+            )
 
-                return coords_pred
+            if self_conditioning:
+                prev_pred = coords_pred.detach()
 
-            return predictor
+            return coords_pred
 
-        cond_predictor = make_predictor(context)
-
-        if isinstance(cfg_schedule, NoCFG):
-            return cond_predictor
-
-        uncond_context = context.to_unconditional()
-        uncond_predictor = make_predictor(uncond_context)
-        return EDMCFGPredictor(
-            cond_predictor=cond_predictor,
-            uncond_predictor=uncond_predictor,
-            guidance_schedule=cfg_schedule,
-        )
+        return predictor
 
     @typecheck
     def sample(
         self,
         context: FullContext,
-        noise_scheduler: EDMInferenceNoiseScheduler,
+        noise_scheduler: InferenceTimestepScheduler,
         n_steps: int,
-        cfg_schedule: CFGSchedule = NoCFG(),
-        gamma0: float = 0.8,
-        gamma_min: float = 1.0,
-        noise_scale_lambda: float = 1.003,
-        step_scale_eta: float = 1.5,
         n_sample: int = 1,
         inplace_safe: bool = False,
-        centre_coords: bool = False,
         track_trajectory: bool = False,
         self_conditioning: bool = True,
     ) -> SamplingResult:
@@ -666,14 +634,10 @@ class DiffusionModule(nn.Module):
             context: Full feature context.
             noise_scheduler: Scheduler for generating EDM noise levels.
             n_steps: Number of integration steps.
-            cfg_schedule: CFG schedule.
-            gamma0: AF3 churn factor.
-            gamma_min: Noise threshold below which churn is disabled.
-            noise_scale_lambda: Scale factor for added churn noise.
-            step_scale_eta: Euler step scale factor.
             n_sample: Number of samples to generate.
             inplace_safe: Whether to use inplace operations safely.
             track_trajectory: If True, store coordinates at each step.
+            self_conditioning: Whether to use self-conditioning across steps.
 
         Returns:
             SamplingResult containing final coordinates and optional trajectory.
@@ -683,33 +647,25 @@ class DiffusionModule(nn.Module):
         device = context.token.residue_index.device
         dtype = torch.float32
 
-        # Generate initial noise
         noise_schedule = noise_scheduler.get_schedule(n_steps, device, dtype)
         x_init = noise_schedule[0] * torch.randn(
             size=(*batch_shape, n_sample, n_atom, 3), device=device, dtype=dtype
         )
 
-        # Create sampler and predictor
-        sampler = EDMSampler(
-            noise_scheduler=noise_scheduler,
-            gamma0=gamma0,
-            gamma_min=gamma_min,
-            noise_scale_lambda=noise_scale_lambda,
-            step_scale_eta=step_scale_eta,
-            centre_coords=centre_coords,
-        )
+        sampler = EDMSampler(noise_scheduler=noise_scheduler)
         predictor = self.as_predictor(
             context,
             inplace_safe=inplace_safe,
-            cfg_schedule=cfg_schedule,
             self_conditioning=self_conditioning,
         )
+
+        mask = repeat(context.mask.is_resolved, "b n -> b s n", s=n_sample)
 
         return sampler.sample(
             predictor=predictor,
             x_init=x_init,
             n_steps=n_steps,
-            mask=context.mask.is_resolved,
+            mask=mask,
             track_trajectory=track_trajectory,
         )
 

@@ -10,9 +10,10 @@ from artios.model.artios_backbone import (
     ArtiosBackbone,
     ArtiosBackboneConfig,
     ArtiosBackboneRuntimeConfig,
+    BackboneTrainingConfig,
 )
 from artios.model.generator import SIGMA_DATA
-from artios.model.loss import edm_noise_level_scale
+from artios.model.loss import LossWeightConfig, edm_noise_level_scale
 from artios.model.modules.diffusion_backbone import (
     DiffusionConditioning,
     DiffusionConditioningConfig,
@@ -68,47 +69,21 @@ def backbone_configs():
     return ConfigDict(
         {
             "checkpoint_grads": False,
-            "diffusion_batch_size": 2,
-            "self_conditioning_prob": 0.0,
-            "train_noise_sampler": {
-                "p_mean": -1.2,
-                "p_std": 1.5,
-            },
-            "inference_noise_scheduler": {
-                "s_max": 160.0,
-                "s_min": 4e-4,
-                "rho": 7.0,
-            },
             "sample_diffusion": {
                 "N_step": 2,
                 "N_sample": 1,
-                "gamma0": 0.8,
-                "gamma_min": 1.0,
-                "noise_scale_lambda": 1.003,
-                "step_scale_eta": 1.5,
-                "cfg_type": "no-guidance",
-                "cfg_weight": 1.0,
-                "lower_guidance_limit_weight": 1.0,
-                "upper_guidance_limit_weight": 1.0,
-                "lower_guidance_limit": 0.0,
-                "upper_guidance_limit": 1.0,
-                "centre_and_augment_coords_during_sampling": False,
                 "track_trajectory": False,
-                "self_conditioning": True,
-            },
-            "loss": {
-                "backbone": {
-                    "mse": {
-                        "weight_protein": 0.0,
-                        "weight_dna": 0.0,
-                        "weight_rna": 0.0,
-                        "weight_ligand": 0.0,
-                        "weight_motif": 0.0,
-                        "weight_motif_related": 0.0,
-                    }
-                }
             },
         }
+    )
+
+
+@pytest.fixture
+def test_training_config():
+    return BackboneTrainingConfig(
+        diffusion_batch_size=2,
+        self_conditioning_prob=0.0,
+        loss_weights=LossWeightConfig(),
     )
 
 
@@ -125,10 +100,20 @@ def small_model_config():
     )
 
 
+def _make_backbone(backbone_configs, small_model_config, test_training_config):
+    return ArtiosBackbone(
+        backbone_configs,
+        model_config=small_model_config,
+        training_config=test_training_config,
+    )
+
+
 def test_main_train_loop_returns_positive_noise_level(
-    backbone_configs, small_model_config, context, device
+    backbone_configs, small_model_config, test_training_config, context, device
 ):
-    model = ArtiosBackbone(backbone_configs, model_config=small_model_config).to(device)
+    model = _make_backbone(
+        backbone_configs, small_model_config, test_training_config
+    ).to(device)
     model.eval()
 
     with torch.no_grad():
@@ -149,8 +134,37 @@ def test_backbone_model_config_is_immutable(small_model_config):
         small_model_config.diffusion_module.c_token = 64
 
 
+def test_training_config_is_immutable():
+    tc = BackboneTrainingConfig()
+    with pytest.raises(FrozenInstanceError):
+        tc.diffusion_batch_size = 4
+
+    with pytest.raises(FrozenInstanceError):
+        tc.self_conditioning_prob = 0.0
+
+
+def test_training_config_validation():
+    with pytest.raises(ValueError, match="diffusion_batch_size"):
+        BackboneTrainingConfig(diffusion_batch_size=0)
+
+    with pytest.raises(ValueError, match="self_conditioning_prob"):
+        BackboneTrainingConfig(self_conditioning_prob=2.0)
+
+    with pytest.raises(ValueError, match="self_conditioning_prob"):
+        BackboneTrainingConfig(self_conditioning_prob=-0.1)
+
+
+def test_default_training_config_matches_production():
+    tc = BackboneTrainingConfig()
+    assert tc.diffusion_batch_size == 1
+    assert tc.self_conditioning_prob == 0.5
+    assert tc.loss_weights.ligand == 10.0
+    assert tc.loss_weights.motif_related == 5.0
+    assert tc.loss_weights.protein == 1.0
+
+
 def test_backbone_runtime_config_is_independent_of_model_config(
-    backbone_configs, small_model_config
+    backbone_configs, small_model_config, test_training_config
 ):
     no_checkpointing = ArtiosBackboneRuntimeConfig(
         diffusion=DiffusionRuntimeConfig(checkpoint_grads=False)
@@ -163,11 +177,13 @@ def test_backbone_runtime_config_is_independent_of_model_config(
         backbone_configs,
         model_config=small_model_config,
         runtime_config=no_checkpointing,
+        training_config=test_training_config,
     )
     model_b = ArtiosBackbone(
         backbone_configs,
         model_config=small_model_config,
         runtime_config=with_checkpointing,
+        training_config=test_training_config,
     )
 
     assert model_a.model_config == model_b.model_config
@@ -191,22 +207,34 @@ def test_backbone_model_config_equality_tracks_architecture(small_model_config):
 
 
 def test_backbone_rejects_legacy_architecture_config(
-    backbone_configs, small_model_config
+    backbone_configs, small_model_config, test_training_config
 ):
     legacy_configs = ConfigDict(backbone_configs.to_dict())
     legacy_configs.sigma_data = SIGMA_DATA
     with pytest.raises(ValueError, match="SIGMA_DATA"):
-        ArtiosBackbone(legacy_configs, model_config=small_model_config)
+        ArtiosBackbone(
+            legacy_configs,
+            model_config=small_model_config,
+            training_config=test_training_config,
+        )
 
     legacy_configs = ConfigDict(backbone_configs.to_dict())
     legacy_configs.model = ConfigDict({"diffusion_module": {"c_token": 64}})
     with pytest.raises(ValueError, match="DiffusionModuleConfig"):
-        ArtiosBackbone(legacy_configs, model_config=small_model_config)
+        ArtiosBackbone(
+            legacy_configs,
+            model_config=small_model_config,
+            training_config=test_training_config,
+        )
 
     legacy_configs = ConfigDict(backbone_configs.to_dict())
     legacy_configs.model = ConfigDict({"N_model_seed": 4})
     with pytest.raises(ValueError, match="ArtiosBackboneConfig"):
-        ArtiosBackbone(legacy_configs, model_config=small_model_config)
+        ArtiosBackbone(
+            legacy_configs,
+            model_config=small_model_config,
+            training_config=test_training_config,
+        )
 
 
 def test_sigma_data_is_not_a_diffusion_config_field():
@@ -224,9 +252,16 @@ def test_sigma_data_is_not_a_diffusion_config_field():
 
 
 def test_main_train_loop_uses_additive_edm_noise(
-    backbone_configs, small_model_config, context, device, monkeypatch
+    backbone_configs,
+    small_model_config,
+    test_training_config,
+    context,
+    device,
+    monkeypatch,
 ):
-    model = ArtiosBackbone(backbone_configs, model_config=small_model_config).to(device)
+    model = _make_backbone(
+        backbone_configs, small_model_config, test_training_config
+    ).to(device)
     recorder = RecordingDenoiser().to(device)
     model.diffusion_module = recorder
     model.noise_sampler = ConstantNoiseSampler(2.0)
@@ -258,9 +293,16 @@ def test_main_train_loop_uses_additive_edm_noise(
 
 
 def test_compute_loss_uses_edm_noise_level_weight(
-    backbone_configs, small_model_config, context, device, monkeypatch
+    backbone_configs,
+    small_model_config,
+    test_training_config,
+    context,
+    device,
+    monkeypatch,
 ):
-    model = ArtiosBackbone(backbone_configs, model_config=small_model_config).to(device)
+    model = _make_backbone(
+        backbone_configs, small_model_config, test_training_config
+    ).to(device)
     true = context.coordinate.coordinate
     pred = true.unsqueeze(1).expand(-1, 2, -1, -1) + 1.0
     noise_level = torch.tensor([[2.0, 4.0]], device=device)

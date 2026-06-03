@@ -12,7 +12,6 @@ from artios.model.generator import (
     SIGMA_DATA,
     EDMInferenceNoiseScheduler,
     EDMTrainingNoiseSampler,
-    cfg_schedule_from_config,
 )
 from artios.model.loss import (
     LossWeightConfig,
@@ -60,6 +59,33 @@ class ArtiosBackboneRuntimeConfig:
     diffusion: DiffusionRuntimeConfig = field(default_factory=DiffusionRuntimeConfig)
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackboneTrainingConfig:
+    """Training recipe for ArtiosBackbone.
+
+    Defaults are production SOTA from train_backbone_edm_motif_ema_0.9999.sh.
+    """
+
+    diffusion_batch_size: int = 1
+    self_conditioning_prob: float = 0.5
+    loss_weights: LossWeightConfig = field(
+        default_factory=lambda: LossWeightConfig(
+            protein=1.0,
+            dna=0.0,
+            rna=0.0,
+            ligand=10.0,
+            motif=0.0,
+            motif_related=5.0,
+        )
+    )
+
+    def __post_init__(self) -> None:
+        if self.diffusion_batch_size < 1:
+            raise ValueError("diffusion_batch_size must be >= 1")
+        if not 0.0 <= self.self_conditioning_prob <= 1.0:
+            raise ValueError("self_conditioning_prob must be in [0, 1]")
+
+
 class ArtiosBackbone(nn.Module):
     def __init__(
         self,
@@ -67,12 +93,9 @@ class ArtiosBackbone(nn.Module):
         *,
         model_config: ArtiosBackboneConfig | None = None,
         runtime_config: ArtiosBackboneRuntimeConfig | None = None,
+        training_config: BackboneTrainingConfig | None = None,
     ):
         super(ArtiosBackbone, self).__init__()
-        if configs is None:
-            raise ValueError(
-                "configs are still required for loss, noise, and sampling settings"
-            )
         if _has_config_key(configs, "sigma_data"):
             raise ValueError(
                 "SIGMA_DATA is a code constant; remove the sigma_data config override."
@@ -101,30 +124,27 @@ class ArtiosBackbone(nn.Module):
                     checkpoint_grads=bool(configs.checkpoint_grads)
                 )
             )
+        if training_config is None:
+            mse_cfg = configs.loss.backbone.mse
+            training_config = BackboneTrainingConfig(
+                loss_weights=LossWeightConfig(
+                    protein=mse_cfg.weight_protein,
+                    dna=mse_cfg.weight_dna,
+                    rna=mse_cfg.weight_rna,
+                    ligand=mse_cfg.weight_ligand,
+                    motif=mse_cfg.weight_motif,
+                    motif_related=mse_cfg.weight_motif_related,
+                ),
+            )
         self.model_config = model_config
         self.runtime_config = runtime_config
+        self.training_config = training_config
 
-        mse_cfg = configs.loss.backbone.mse
-        self.loss_weight_config = LossWeightConfig(
-            protein=mse_cfg.weight_protein,
-            dna=mse_cfg.weight_dna,
-            rna=mse_cfg.weight_rna,
-            ligand=mse_cfg.weight_ligand,
-            motif=mse_cfg.weight_motif,
-            motif_related=mse_cfg.weight_motif_related,
-        )
-
+        self.loss_weight_config = self.training_config.loss_weights
         self.N_model_seed = self.model_config.n_model_seed
-
-        self.noise_sampler = EDMTrainingNoiseSampler(**configs.train_noise_sampler)
-
-        self.inference_noise_scheduler = EDMInferenceNoiseScheduler(
-            **configs.inference_noise_scheduler
-        )
-
-        self.sampling_configs = configs.sample_diffusion
-
-        self.diffusion_batch_size = self.configs.diffusion_batch_size
+        self.noise_sampler = EDMTrainingNoiseSampler()
+        self.inference_noise_scheduler = EDMInferenceNoiseScheduler()
+        self.diffusion_batch_size = self.training_config.diffusion_batch_size
 
         self.diffusion_module = DiffusionModule(
             config=self.model_config.diffusion_module,
@@ -135,42 +155,25 @@ class ArtiosBackbone(nn.Module):
         self,
         context: FullContext,
         inplace_safe: bool = False,
+        *,
+        n_sample: int | None = None,
+        n_step: int | None = None,
+        track_trajectory: bool | None = None,
     ) -> BackboneOutput:
-        """Main inference loop for ArtiosBackbone.
-
-        Args:
-            context: Full feature context.
-            inplace_safe: Whether to use inplace operations safely.
-
-        Returns:
-            BackboneOutput: Model output containing the prediction.
-        """
-        N_sample = self.sampling_configs.N_sample
-        N_step = self.sampling_configs.N_step
-
-        cfg_schedule = cfg_schedule_from_config(
-            cfg_type=self.sampling_configs.cfg_type,
-            weight=self.sampling_configs.cfg_weight,
-            lower_guidance_limit_weight=self.sampling_configs.lower_guidance_limit_weight,
-            upper_guidance_limit_weight=self.sampling_configs.upper_guidance_limit_weight,
-            lower_guidance_limit=self.sampling_configs.lower_guidance_limit,
-            upper_guidance_limit=self.sampling_configs.upper_guidance_limit,
-        )
+        if n_sample is None:
+            n_sample = self.configs.sample_diffusion.N_sample
+        if n_step is None:
+            n_step = self.configs.sample_diffusion.N_step
+        if track_trajectory is None:
+            track_trajectory = self.configs.sample_diffusion.track_trajectory
 
         result = self.diffusion_module.sample(
             context=context,
             noise_scheduler=self.inference_noise_scheduler,
-            n_steps=N_step,
-            gamma0=self.sampling_configs.gamma0,
-            gamma_min=self.sampling_configs.gamma_min,
-            noise_scale_lambda=self.sampling_configs.noise_scale_lambda,
-            step_scale_eta=self.sampling_configs.step_scale_eta,
-            n_sample=N_sample,
+            n_steps=n_step,
+            n_sample=n_sample,
             inplace_safe=inplace_safe,
-            cfg_schedule=cfg_schedule,
-            centre_coords=self.sampling_configs.centre_and_augment_coords_during_sampling,
-            track_trajectory=self.sampling_configs.track_trajectory,
-            self_conditioning=self.sampling_configs.self_conditioning,
+            track_trajectory=track_trajectory,
         )
 
         return BackboneOutput(
@@ -234,7 +237,7 @@ class ArtiosBackbone(nn.Module):
 
         # Self-conditioning: with probability p, warm-start with a no-grad forward pass
         prev_pred = None
-        if torch.rand(1).item() < self.configs.self_conditioning_prob:
+        if torch.rand(1).item() < self.training_config.self_conditioning_prob:
             with torch.no_grad():
                 prev_pred = self.diffusion_module(
                     r_noisy=r_noisy,
@@ -273,18 +276,10 @@ class ArtiosBackbone(nn.Module):
         mode: Mode,
         *,
         seed: Optional[int] = None,
+        n_sample: int | None = None,
+        n_step: int | None = None,
+        track_trajectory: bool | None = None,
     ) -> ModelOutput:
-        """
-        Forward pass of the Artios backbone model.
-
-        Args:
-            context (FullContext): Full context containing all features and labels.
-            mode (Mode): Mode of operation.
-            seed (Optional[int]): Seed for random number generation. Defaults to None.
-
-        Returns:
-            ModelOutput: Model output containing the prediction and noise level.
-        """
         inplace_safe = not (self.training or torch.is_grad_enabled())
 
         match mode:
@@ -298,6 +293,9 @@ class ArtiosBackbone(nn.Module):
                 output = self.main_inference_loop(
                     context=context,
                     inplace_safe=False,
+                    n_sample=n_sample,
+                    n_step=n_step,
+                    track_trajectory=track_trajectory,
                 )
             case _:
                 assert_never(mode)

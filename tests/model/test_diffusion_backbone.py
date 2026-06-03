@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 
 from artios.data.features import FullContext
-from artios.model.generator import SIGMA_DATA, EDMInferenceNoiseScheduler
+from artios.model.generator import SIGMA_DATA, InferenceTimestepScheduler
 from artios.model.modules.diffusion_backbone import (
     DiffusionConditioning,
     DiffusionConditioningConfig,
@@ -18,6 +18,17 @@ from artios.model.modules.diffusion_backbone import (
 )
 from artios.model.modules.transformer import DiffusionTransformerConfig
 from tests._helpers.context import create_test_context
+
+
+class _FixedScheduler(InferenceTimestepScheduler):
+    """Test helper: returns a pre-defined noise schedule."""
+
+    def __init__(self, schedule: list[float]):
+        self._schedule = schedule
+
+    def get_schedule(self, n_steps, device, dtype=torch.float32):
+        assert n_steps == len(self._schedule) - 1
+        return torch.tensor(self._schedule, device=device, dtype=dtype)
 
 
 class SpyFourierEmbedding(nn.Module):
@@ -346,19 +357,13 @@ class TestSelfConditioning:
         )
 
         diffusion_module.eval()
-        scheduler = EDMInferenceNoiseScheduler(
-            s_max=1.0,
-            s_min=0.1,
-            rho=1.0,
-        )
 
         with torch.no_grad():
             result = diffusion_module.sample(
                 context=context,
-                noise_scheduler=scheduler,
+                noise_scheduler=_FixedScheduler([1.0, 0.5, 0.0]),
                 n_steps=2,
                 n_sample=1,
-                centre_coords=False,
                 self_conditioning=True,
             )
 

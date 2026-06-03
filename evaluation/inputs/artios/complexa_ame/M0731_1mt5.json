@@ -1,0 +1,27 @@
+{
+  "name": "M0731_1mt5",
+  "task": "backbone",
+  "spec": {
+    "design": [
+      {
+        "length": "",
+        "chain_id": "0"
+      }
+    ],
+    "motif": {
+      "cif_file": "evaluation/inputs/motifs/complexa_ame/M0731_1mt5.cif",
+      "ligands": [
+        {
+          "cif_res_name": "MAY",
+          "chain_id": "1",
+          "full_ligand": {
+            "type": "ccd",
+            "codes": [
+              "MAY"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

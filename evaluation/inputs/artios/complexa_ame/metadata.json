@@ -1,0 +1,1637 @@
+{
+  "schema_version": 1,
+  "description": "Metadata for AME motif-scaffolding benchmark inputs. protein_motif_residue_count is the number of unique non-hetero protein residue IDs in the motif CIF.",
+  "targets": [
+    {
+      "target_name": "M0024_1nzy_og",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0024_1nzy_og.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0024_1nzy_og.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "BCA",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 6,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0040_13pk",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0040_13pk.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0040_13pk.cif",
+      "motif_ligand_count": 3,
+      "motif_ligands": [
+        {
+          "cif_res_name": "ADP",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "MG",
+          "chain_id": "2"
+        },
+        {
+          "cif_res_name": "3PG",
+          "chain_id": "3"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0050_1dbt",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0050_1dbt.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0050_1dbt.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "U5P",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 6,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0054_1qfe",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0054_1qfe.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0054_1qfe.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "DHS",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 3,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0058_1cju",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0058_1cju.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0058_1cju.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "DAD",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "MG",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 5,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0078_1al6",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0078_1al6.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0078_1al6.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "OAA",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "HAX",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 5,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0092_1dli",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0092_1dli.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0092_1dli.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "UDX",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "NAD",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 6,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0093_1dqa",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0093_1dqa.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0093_1dqa.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "NAP",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "COA",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0096_1chm_og",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0096_1chm_og.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0096_1chm_og.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "CMS",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 3,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0097_1ctt",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0097_1ctt.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0097_1ctt.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "DHZ",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "ZN",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0110_1c0p",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0110_1c0p.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0110_1c0p.cif",
+      "motif_ligand_count": 3,
+      "motif_ligands": [
+        {
+          "cif_res_name": "DAL",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "PER",
+          "chain_id": "2"
+        },
+        {
+          "cif_res_name": "FAD",
+          "chain_id": "3"
+        }
+      ],
+      "protein_motif_residue_count": 3,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0129_1os7",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0129_1os7.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0129_1os7.cif",
+      "motif_ligand_count": 3,
+      "motif_ligands": [
+        {
+          "cif_res_name": "AKG",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "FE2",
+          "chain_id": "2"
+        },
+        {
+          "cif_res_name": "TAU",
+          "chain_id": "3"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0151_1q0n",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0151_1q0n.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0151_1q0n.cif",
+      "motif_ligand_count": 3,
+      "motif_ligands": [
+        {
+          "cif_res_name": "APC",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "PH2",
+          "chain_id": "2"
+        },
+        {
+          "cif_res_name": "MG",
+          "chain_id": "3"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0157_1qh5",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0157_1qh5.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0157_1qh5.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "GSH",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "ZN",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 7,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 7,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0179_1q3s",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0179_1q3s.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0179_1q3s.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "ADP",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "MG",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0188_1xel",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0188_1xel.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0188_1xel.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "UPG",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "NAD",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 3,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0209_1lij",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0209_1lij.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0209_1lij.cif",
+      "motif_ligand_count": 3,
+      "motif_ligands": [
+        {
+          "cif_res_name": "RPP",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "ACP",
+          "chain_id": "2"
+        },
+        {
+          "cif_res_name": "MG",
+          "chain_id": "3"
+        }
+      ],
+      "protein_motif_residue_count": 2,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0255_1mg5",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0255_1mg5.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0255_1mg5.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "NAI",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "ACT",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0315_1ey3",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0315_1ey3.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0315_1ey3.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "DAK",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0349_1e3v",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0349_1e3v.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0349_1e3v.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "DXC",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0365_1pfk",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0365_1pfk.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0365_1pfk.cif",
+      "motif_ligand_count": 3,
+      "motif_ligands": [
+        {
+          "cif_res_name": "ADP",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "FBP",
+          "chain_id": "2"
+        },
+        {
+          "cif_res_name": "MG",
+          "chain_id": "3"
+        }
+      ],
+      "protein_motif_residue_count": 6,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0375_4ts9",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0375_4ts9.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0375_4ts9.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "PO4",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "FMC",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 7,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 7,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0500_1e3i",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0500_1e3i.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0500_1e3i.cif",
+      "motif_ligand_count": 3,
+      "motif_ligands": [
+        {
+          "cif_res_name": "CXF",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "NAI",
+          "chain_id": "2"
+        },
+        {
+          "cif_res_name": "ZN",
+          "chain_id": "3"
+        }
+      ],
+      "protein_motif_residue_count": 6,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0552_1fgh",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0552_1fgh.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0552_1fgh.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "ATH",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 6,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0555_1f8r",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0555_1f8r.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0555_1f8r.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "CIT",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "FAD",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 2,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0584_1ldm",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0584_1ldm.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0584_1ldm.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "NAD",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "OXM",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0630_1j79",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0630_1j79.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0630_1j79.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "ORO",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "ZN",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 1,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0636_1uaq",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0636_1uaq.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0636_1uaq.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "DUC",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "ZN",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 3,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0663_1rk2",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0663_1rk2.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0663_1rk2.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "ADP",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "RIB",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 4,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0664_2dhn",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0664_2dhn.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0664_2dhn.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "PH2",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 2,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0674_1uf7",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0674_1uf7.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0674_1uf7.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "CDV",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 3,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0710_1ra0",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0710_1ra0.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0710_1ra0.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "FE",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "FPY",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 2,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0711_2esd",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0711_2esd.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0711_2esd.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "G3H",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "NAP",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 3,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0717_1x7d",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0717_1x7d.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0717_1x7d.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "ORN",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "NAD",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 2,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0731_1mt5",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0731_1mt5.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0731_1mt5.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "MAY",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 7,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 7,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0732_1xs1",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0732_1xs1.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0732_1xs1.cif",
+      "motif_ligand_count": 1,
+      "motif_ligands": [
+        {
+          "cif_res_name": "DUT",
+          "chain_id": "1"
+        }
+      ],
+      "protein_motif_residue_count": 5,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0738_1o98",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0738_1o98.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0738_1o98.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "2PG",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "MN",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 3,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0739_1knp",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0739_1knp.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0739_1knp.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "SIN",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "FAD",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 3,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0870_1oh9",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0870_1oh9.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0870_1oh9.cif",
+      "motif_ligand_count": 3,
+      "motif_ligands": [
+        {
+          "cif_res_name": "ADP",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "MG",
+          "chain_id": "2"
+        },
+        {
+          "cif_res_name": "NLG",
+          "chain_id": "3"
+        }
+      ],
+      "protein_motif_residue_count": 5,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0904_1qgx",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0904_1qgx.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0904_1qgx.cif",
+      "motif_ligand_count": 2,
+      "motif_ligands": [
+        {
+          "cif_res_name": "MG",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "AMP",
+          "chain_id": "2"
+        }
+      ],
+      "protein_motif_residue_count": 7,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 7,
+          "ins_code": ""
+        }
+      ]
+    },
+    {
+      "target_name": "M0907_1rbl",
+      "input_json_path": "evaluation/inputs/artios/complexa_ame/M0907_1rbl.json",
+      "motif_cif_path": "evaluation/inputs/motifs/complexa_ame/M0907_1rbl.cif",
+      "motif_ligand_count": 3,
+      "motif_ligands": [
+        {
+          "cif_res_name": "MG",
+          "chain_id": "1"
+        },
+        {
+          "cif_res_name": "FMT",
+          "chain_id": "2"
+        },
+        {
+          "cif_res_name": "CAP",
+          "chain_id": "3"
+        }
+      ],
+      "protein_motif_residue_count": 6,
+      "protein_motif_residue_ids": [
+        {
+          "chain_id": "0",
+          "res_id": 1,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 2,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 3,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 4,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 5,
+          "ins_code": ""
+        },
+        {
+          "chain_id": "0",
+          "res_id": 6,
+          "ins_code": ""
+        }
+      ]
+    }
+  ]
+}

@@ -71,12 +71,8 @@ class InferenceTimestepScheduler(ABC):
         ...
 
 
-@dataclass(frozen=True)
 class EDMTrainingNoiseSampler(TrainingTimestepSampler):
     """Sample EDM training noise levels from the AF3/Protenix lognormal law."""
-
-    p_mean: float = -1.2
-    p_std: float = 1.5
 
     @typecheck
     def sample(
@@ -85,21 +81,16 @@ class EDMTrainingNoiseSampler(TrainingTimestepSampler):
         device: torch.device,
         generator: torch.Generator | None = None,
     ) -> Float[Tensor, "..."]:
+        p_mean, p_std = -1.2, 1.5
         rnd_normal = torch.randn(size=size, device=device, generator=generator)
-        return torch.exp(rnd_normal * self.p_std + self.p_mean) * SIGMA_DATA
+        return torch.exp(rnd_normal * p_std + p_mean) * SIGMA_DATA
 
 
-@dataclass(frozen=True)
 class EDMInferenceNoiseScheduler(InferenceTimestepScheduler):
     """Karras/AF3 EDM inference noise scheduler.
 
-    The configured ``s_max`` and ``s_min`` are dimensionless AF3 values and are
-    scaled by ``SIGMA_DATA`` to produce coordinate-space noise levels.
+    Produces coordinate-space noise levels scaled by ``SIGMA_DATA``.
     """
-
-    s_max: float = 160.0
-    s_min: float = 4e-4
-    rho: float = 7.0
 
     @typecheck
     def get_schedule(
@@ -108,17 +99,16 @@ class EDMInferenceNoiseScheduler(InferenceTimestepScheduler):
         device: torch.device,
         dtype: torch.dtype = torch.float32,
     ) -> Float[Tensor, "n_steps_plus_one"]:
+        s_max, s_min, rho = 160.0, 4e-4, 7.0
         step_indices = torch.arange(n_steps + 1, dtype=dtype, device=device)
         step_size = 1 / n_steps
         schedule = (
             SIGMA_DATA
             * (
-                self.s_max ** (1 / self.rho)
-                + step_indices
-                * step_size
-                * (self.s_min ** (1 / self.rho) - self.s_max ** (1 / self.rho))
+                s_max ** (1 / rho)
+                + step_indices * step_size * (s_min ** (1 / rho) - s_max ** (1 / rho))
             )
-            ** self.rho
+            ** rho
         )
         schedule[-1] = 0
         return schedule
@@ -619,125 +609,6 @@ def stochasticity_from_config(
 # When w(t) = 1, no guidance is applied. When w(t) > 1, conditioning is amplified.
 
 
-class CFGSchedule(ABC):
-    """Abstract base class for classifier-free guidance schedules.
-
-    Defines w(t) in: v_cfg = v_uncond + w(t) * (v_cond - v_uncond)
-    """
-
-    @abstractmethod
-    @typecheck
-    def __call__(self, t: Float[Tensor, "*shape"]) -> Float[Tensor, "*shape"]:
-        """Compute guidance scale w(t) at timestep t.
-
-        Args:
-            t: Timesteps tensor of any shape (values in [0, 1]).
-
-        Returns:
-            w(t) values with same shape as input.
-        """
-        ...
-
-
-@dataclass(frozen=True)
-class NoCFG(CFGSchedule):
-    """No classifier-free guidance: w(t) = 1.0 for all t.
-
-    This explicitly signals that CFG should be skipped entirely for efficiency.
-    When used, the unconditional predictor is never created or called.
-    """
-
-    @typecheck
-    def __call__(self, t: Float[Tensor, "*shape"]) -> Float[Tensor, "*shape"]:
-        return torch.ones_like(t)
-
-
-@dataclass(frozen=True)
-class ConstantCFG(CFGSchedule):
-    """Constant guidance weight: w(t) = weight for all t."""
-
-    weight: float = 1.5
-
-    @typecheck
-    def __call__(self, t: Float[Tensor, "*shape"]) -> Float[Tensor, "*shape"]:
-        return torch.full_like(t, self.weight)
-
-
-@dataclass(frozen=True)
-class LinearCFG(CFGSchedule):
-    """
-    Linear guidance weight schedule, optionally within a [lower_guidance_limit, upper_guidance_limit] window.
-
-    Guidance is set to 1.0 outside [lower_guidance_limit, upper_guidance_limit], otherwise is
-    linearly interpolated from `lower_guidance_limit_weight` at `lower_guidance_limit`
-    to `upper_guidance_limit_weight` at `upper_guidance_limit`.
-    """
-
-    lower_guidance_limit_weight: float = 2.0
-    upper_guidance_limit_weight: float = 1.0
-    lower_guidance_limit: float = 0.3
-    upper_guidance_limit: float = 0.7
-
-    @typecheck
-    def __call__(self, t: Float[Tensor, "*shape"]) -> Float[Tensor, "*shape"]:
-        one = torch.ones_like(t)
-        mask = (t >= self.lower_guidance_limit) & (t <= self.upper_guidance_limit)
-
-        # Linear interpolation for t in [lower_guidance_limit, upper_guidance_limit]
-        denom = self.upper_guidance_limit - self.lower_guidance_limit
-        delta = (t - self.lower_guidance_limit) / denom
-        interp = (
-            self.lower_guidance_limit_weight
-            + (self.upper_guidance_limit_weight - self.lower_guidance_limit_weight)
-            * delta
-        )
-
-        # Apply piecewise: guidance weight = interp if mask else 1.0
-        return torch.where(mask, interp, one)
-
-
-def cfg_schedule_from_config(
-    cfg_type: str,
-    weight: float = 1.5,
-    lower_guidance_limit_weight: float = 2.0,
-    upper_guidance_limit_weight: float = 1.0,
-    lower_guidance_limit: float = 0.3,
-    upper_guidance_limit: float = 0.7,
-) -> CFGSchedule:
-    """Create a CFGSchedule from config parameters.
-
-    Args:
-        cfg_type: One of "no-guidance", "constant", "linear".
-        weight: Weight for ConstantCFG.
-        lower_guidance_limit_weight: Weight for lower guidance limit.
-        upper_guidance_limit_weight: Weight for upper guidance limit.
-        lower_guidance_limit: Lower guidance limit.
-        upper_guidance_limit: Upper guidance limit.
-
-    Returns:
-        Configured CFGSchedule instance.
-
-    Raises:
-        ValueError: If cfg_type is not recognized.
-    """
-    schedules: dict[str, CFGSchedule] = {
-        "no-guidance": NoCFG(),
-        "constant": ConstantCFG(weight=weight),
-        "linear": LinearCFG(
-            lower_guidance_limit_weight=lower_guidance_limit_weight,
-            upper_guidance_limit_weight=upper_guidance_limit_weight,
-            lower_guidance_limit=lower_guidance_limit,
-            upper_guidance_limit=upper_guidance_limit,
-        ),
-    }
-    if cfg_type not in schedules:
-        valid_types = ", ".join(schedules.keys())
-        raise ValueError(
-            f"Invalid CFG schedule type: {cfg_type}. Must be one of: {valid_types}"
-        )
-    return schedules[cfg_type]
-
-
 # =============================================================================
 # Atomic Integration Primitives
 # =============================================================================
@@ -897,92 +768,6 @@ class SequencePredictor(Protocol):
         ...
 
 
-@dataclass(frozen=True)
-class CFGPredictor:
-    """Classifier-Free Guidance predictor combining conditional and unconditional.
-
-    Wraps two predictors and returns CFG-weighted combination of their outputs.
-    The guidance scale can vary over timesteps via a CFGSchedule.
-
-    The CFG formula is:
-        v_cfg = v_uncond + w(t) * (v_cond - v_uncond)
-              = (1 - w(t)) * v_uncond + w(t) * v_cond
-
-    When w(t) = 1, this reduces to the conditional predictor (no guidance).
-    When w(t) > 1, conditioning is amplified beyond the conditional prediction.
-
-    Example:
-        >>> cond_predictor = model.as_predictor(context)
-        >>> uncond_predictor = model.as_predictor(context.to_unconditional())
-        >>> cfg_predictor = CFGPredictor(cond_predictor, uncond_predictor, ConstantCFG(1.5))
-        >>> sampler.sample(cfg_predictor, x_init, n_steps=50)
-    """
-
-    cond_predictor: VelocityScorePredictor
-    """Predictor conditioned on motif/ligand features."""
-
-    uncond_predictor: VelocityScorePredictor
-    """Predictor with conditioning features zeroed."""
-
-    guidance_schedule: CFGSchedule
-    """Schedule defining w(t) over diffusion time."""
-
-    @typecheck
-    def __call__(
-        self,
-        x_noisy: Float[Tensor, "*batch n_atom 3"],
-        timestep: Float[Tensor, "*batch"],
-    ) -> tuple[Float[Tensor, "*batch n_atom 3"], Float[Tensor, "*batch n_atom 3"]]:
-        """Compute CFG-weighted velocity and score.
-
-        Args:
-            x_noisy: Noisy coordinates.
-            timestep: Current diffusion timestep.
-
-        Returns:
-            Tuple of (velocity_cfg, score_cfg) tensors.
-        """
-        w = self.guidance_schedule(timestep)
-        v_cond, s_cond = self.cond_predictor(x_noisy, timestep)
-
-        # Skip unconditional pass if no guidance required
-        if torch.all(w == 1.0):
-            return v_cond, s_cond
-
-        v_uncond, s_uncond = self.uncond_predictor(x_noisy, timestep)
-
-        w = w[..., None, None]
-
-        v_cfg = v_uncond + w * (v_cond - v_uncond)
-        s_cfg = s_uncond + w * (s_cond - s_uncond)
-
-        return v_cfg, s_cfg
-
-
-@dataclass(frozen=True)
-class EDMCFGPredictor:
-    """Classifier-free guidance wrapper for EDM denoised-coordinate predictors."""
-
-    cond_predictor: EDMDenoisePredictor
-    uncond_predictor: EDMDenoisePredictor
-    guidance_schedule: CFGSchedule
-
-    @typecheck
-    def __call__(
-        self,
-        x_noisy: Float[Tensor, "*batch n_atom 3"],
-        noise_level: Float[Tensor, "*batch"],
-    ) -> Float[Tensor, "*batch n_atom 3"]:
-        w = self.guidance_schedule(noise_level)
-        x_cond = self.cond_predictor(x_noisy, noise_level)
-
-        if torch.all(w == 1.0):
-            return x_cond
-
-        x_uncond = self.uncond_predictor(x_noisy, noise_level)
-        return x_uncond + w[..., None, None] * (x_cond - x_uncond)
-
-
 @dataclass
 class SamplingResult:
     """Result of flow matching sampling, optionally including trajectory.
@@ -1003,21 +788,18 @@ class EDMSampler:
     """AF3-style EDM predictor-corrector sampler."""
 
     noise_scheduler: InferenceTimestepScheduler
-    gamma0: float = 0.8
-    gamma_min: float = 1.0
-    noise_scale_lambda: float = 1.003
-    step_scale_eta: float = 1.5
-    centre_coords: bool = True
 
     @typecheck
     def sample(
         self,
         predictor: EDMDenoisePredictor,
-        x_init: Float[Tensor, "... n_atom 3"],
+        x_init: Float[Tensor, "*batch n_atom 3"],
         n_steps: int,
-        mask: Bool[Tensor, "... n_atom"],
+        mask: Bool[Tensor, "*batch n_atom"],
         track_trajectory: bool = False,
     ) -> SamplingResult:
+        gamma0, gamma_min, noise_scale_lambda, step_scale_eta = 0.8, 1.0, 1.003, 1.5
+
         device = x_init.device
         dtype = x_init.dtype
         noise_schedule = self.noise_scheduler.get_schedule(n_steps, device, dtype)
@@ -1033,19 +815,16 @@ class EDMSampler:
         for i, (c_tau_last, c_tau) in enumerate(
             zip(noise_schedule[:-1], noise_schedule[1:])
         ):
-            if self.centre_coords:
-                x = (
-                    centre_random_augmentation(x_input_coords=x, n_sample=1, mask=mask)
-                    .squeeze(dim=-3)
-                    .to(dtype)
-                )
+            x = (
+                centre_random_augmentation(x_input_coords=x, n_sample=1, mask=mask)
+                .squeeze(dim=-3)
+                .to(dtype)
+            )
 
-            gamma = float(self.gamma0) if c_tau > self.gamma_min else 0.0
+            gamma = gamma0 if c_tau > gamma_min else 0.0
             t_hat_scalar = c_tau_last * (1.0 + gamma)
             delta_noise_level = torch.sqrt(t_hat_scalar**2 - c_tau_last**2)
-            x_noisy = (
-                x + self.noise_scale_lambda * delta_noise_level * torch.randn_like(x)
-            )
+            x_noisy = x + noise_scale_lambda * delta_noise_level * torch.randn_like(x)
 
             t_hat = t_hat_scalar.reshape((1,) * len(x.shape[:-2])).expand(x.shape[:-2])
             t_hat = t_hat.to(dtype=dtype)
@@ -1053,7 +832,7 @@ class EDMSampler:
             x_denoised = predictor(x_noisy, t_hat)
             delta = (x_noisy - x_denoised) / t_hat[..., None, None]
             dt = c_tau - t_hat
-            x = x_noisy + self.step_scale_eta * dt[..., None, None] * delta
+            x = x_noisy + step_scale_eta * dt[..., None, None] * delta
 
             if track_trajectory:
                 trajectory[..., i + 1, :, :] = x.detach()

@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from artios.data.data_weights import (
+    DataWeightsConfig,
     MolType,
     RowType,
     calc_weights_for_df,
@@ -236,14 +237,19 @@ def alpha_dict():
     return {MolType.PROT: 3, MolType.NUC: 3, MolType.LIGAND: 1}
 
 
+@pytest.fixture
+def weights_config():
+    return DataWeightsConfig()
+
+
 class TestCalcWeightsForDf:
-    def test_matches_reference(self, beta_dict, alpha_dict):
+    def test_matches_reference(self, beta_dict, alpha_dict, weights_config):
         """Vectorized implementation must produce identical weights to the
         original iterrows-based reference."""
         df = _make_test_df()
 
         ref = _calc_weights_reference(df.copy(), beta_dict, alpha_dict)
-        new = calc_weights_for_df(df.copy(), beta_dict, alpha_dict)
+        new = calc_weights_for_df(df.copy(), weights_config)
 
         np.testing.assert_allclose(
             new["weights"].values,
@@ -255,11 +261,11 @@ class TestCalcWeightsForDf:
             ref["pdb_sorted_entity_id_member_num"]
         )
 
-    def test_member_num_divides_weight(self, beta_dict, alpha_dict):
+    def test_member_num_divides_weight(self, weights_config):
         """Rows sharing a pdb_sorted_entity_id should have lower weight than
         singletons, all else equal."""
         df = _make_test_df()
-        result = calc_weights_for_df(df.copy(), beta_dict, alpha_dict)
+        result = calc_weights_for_df(df.copy(), weights_config)
 
         # Rows 1 and 2 share entity key 1abc_1_1.0_2.0 (member_num=2)
         # Row 4 (3ghi interface) has member_num=1
@@ -267,11 +273,11 @@ class TestCalcWeightsForDf:
         assert result.loc[2, "pdb_sorted_entity_id_member_num"] == 2
         assert result.loc[4, "pdb_sorted_entity_id_member_num"] == 1
 
-    def test_larger_cluster_lower_weight(self, beta_dict, alpha_dict):
+    def test_larger_cluster_lower_weight(self, weights_config):
         """A chain in a 2-member cluster should weigh less than an identical
         chain in a singleton cluster (weight ~ 1/cluster_size)."""
         df = _make_test_df()
-        result = calc_weights_for_df(df.copy(), beta_dict, alpha_dict)
+        result = calc_weights_for_df(df.copy(), weights_config)
 
         # Row 0: prot chain in cluster clA (size 2 entities: 1abc and 2def)
         # Row 5: nuc chain in cluster clC (size 1 entity: 4jkl)
@@ -280,9 +286,9 @@ class TestCalcWeightsForDf:
         w_clC_chain = result.loc[5, "weights"]
         assert w_clA_chain < w_clC_chain
 
-    def test_no_zero_weights(self, beta_dict, alpha_dict):
+    def test_no_zero_weights(self, weights_config):
         df = _make_test_df()
-        result = calc_weights_for_df(df.copy(), beta_dict, alpha_dict)
+        result = calc_weights_for_df(df.copy(), weights_config)
         assert (result["weights"] > 0).all()
 
 
@@ -337,3 +343,38 @@ class TestExclusionDict:
         new = self._apply_exclusion_new(df.copy(), exclusion_dict)
         assert len(ref) == len(new)
         assert list(ref["pdb_id"]) == list(new["pdb_id"])
+
+
+class TestDataWeightsConfig:
+    def test_custom_config_changes_weights(self):
+        """Non-default alpha/beta values produce different weights."""
+        df = _make_test_df()
+        default_result = calc_weights_for_df(df.copy())
+        custom = DataWeightsConfig(alpha_ligand=10.0)
+        custom_result = calc_weights_for_df(df.copy(), custom)
+
+        # Rows with ligand mol_type should have higher weights
+        ligand_rows = df["mol_1_type"].eq("ligand") | df["mol_2_type"].eq("ligand")
+        assert (
+            custom_result.loc[ligand_rows, "weights"]
+            > default_result.loc[ligand_rows, "weights"]
+        ).all()
+
+    def test_rejects_invalid_cluster_size_exponent(self):
+        with pytest.raises(ValueError, match="cluster_size_exponent"):
+            DataWeightsConfig(cluster_size_exponent=1.5)
+
+    def test_rejects_invalid_balance_percentile(self):
+        with pytest.raises(ValueError, match="balance_percentile"):
+            DataWeightsConfig(balance_percentile=-0.1)
+
+    def test_unexpected_kwargs_rejected(self):
+        from artios.data.data_weights import get_sample_weights
+
+        df = _make_test_df()
+        with pytest.raises(TypeError):
+            get_sample_weights(
+                sampler_type="weighted",
+                indices_df=df,
+                beta_dict={RowType.CHAIN: 0.5, RowType.INTERFACE: 1},
+            )

@@ -80,7 +80,7 @@ def test_process_one_with_msa_produces_populated_msacontext():
             "crop_size": 256,
         },
         msa_sampler=sampler,
-        motif_training={"motif_train_rate": 0.0},
+        motif_train_rate=0.0,
         # Keep the run reproducible and fast.
         random_sample_if_failed=False,
         filter_unique_fragment_prob=0.0,

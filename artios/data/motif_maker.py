@@ -14,6 +14,7 @@ The branches of ``sample()``:
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import TYPE_CHECKING, Any
@@ -31,61 +32,82 @@ if TYPE_CHECKING:
 logger = getLogger(__name__)
 
 
-@dataclass
-class MotifMaker:
-    """Stochastic motif sampler. See module docstring for branch descriptions.
+ProbabilityTable = tuple[tuple[int, float], ...]
 
-    Stored as a plain dataclass so ``MotifMaker(**config_dict)`` works from
-    ml_collections ConfigDict — any unknown key raises ``TypeError``. Dict-valued
-    fields accept str or int keys (config files typically stringify ints); they
-    get normalized to int and precomputed into parallel numpy arrays in
-    ``__post_init__`` so ``np.random.choice`` doesn't re-parse each call.
-    """
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MotifMakerConfig:
+    """Fixed motif-sampling recipe for motif-scaffolding training."""
 
     # --- Branch selection ----------------------------------------------------
-    ligand_motif_prob: float = 0.8
-    pocket_motif_prob: float = 0.8
+    ligand_motif_prob: float = 0.9
+    pocket_motif_prob: float = 1.0
 
     # --- Ligand motif --------------------------------------------------------
-    whole_ligand_prob: float = 0.7
+    whole_ligand_prob: float = 0.0
     drop_ligand_motif_prob: float = 0.1
     complex_ligand_threshold: int = 5
-    complex_ligand_preference_prob: float = 0.9
-    ligand_region_count_probs: dict[int, float] = field(
-        default_factory=lambda: {1: 0.5, 2: 0.4, 3: 0.07, 4: 0.03}
+    complex_ligand_preference_prob: float = 1.0
+    ligand_region_count_probs: ProbabilityTable = field(
+        default_factory=lambda: ((1, 0.5), (2, 0.4), (3, 0.07), (4, 0.03))
     )
-    ligand_bfs_atom_count_probs: dict[int, float] = field(
-        default_factory=lambda: {1: 0.15, 2: 0.25, 3: 0.3, 4: 0.2, 5: 0.1}
+    ligand_bfs_atom_count_probs: ProbabilityTable = field(
+        default_factory=lambda: (
+            (1, 0.15),
+            (2, 0.2),
+            (3, 0.25),
+            (4, 0.2),
+            (5, 0.125),
+            (6, 0.075),
+        )
     )
     ligand_fixed_size_bfs_prob: float = 0.9
     supplementary_ligand_distance: float = 5.0
     supplementary_ligand_prob: float = 0.5
 
     # --- Around-a-point mask (shared by all branches) ------------------------
-    r_min: float = 3.0
-    r_max: float = 6.0
-    residue_inclusion_prob: float = 0.9
-    use_tip_atoms_only_prob: float = 0.9
-    whole_sidechain_prob: float = 0.2
-    max_motif_residues: int = 20
+    r_min: float = 5.0
+    r_max: float = 8.0
+    residue_inclusion_prob: float = 0.8
+    use_tip_atoms_only_prob: float = 0.95
+    whole_sidechain_prob: float = 0.0
+    max_motif_residues: int = 15
 
     # --- Partial residue (sidechain BFS) -------------------------------------
-    sidechain_seed_is_tip_prob: float = 0.1
-    sidechain_seed_is_in_sphere_prob: float = 0.8
+    sidechain_seed_is_tip_prob: float = 0.0
+    sidechain_seed_is_in_sphere_prob: float = 1.0
     sidechain_bfs_depth_prob: float = 0.5
 
     def __post_init__(self) -> None:
-        self.ligand_region_count_probs = {
-            int(k): v for k, v in self.ligand_region_count_probs.items()
-        }
-        self.ligand_bfs_atom_count_probs = {
-            int(k): v for k, v in self.ligand_bfs_atom_count_probs.items()
-        }
+        object.__setattr__(
+            self,
+            "ligand_region_count_probs",
+            _normalize_probability_table(self.ligand_region_count_probs),
+        )
+        object.__setattr__(
+            self,
+            "ligand_bfs_atom_count_probs",
+            _normalize_probability_table(self.ligand_bfs_atom_count_probs),
+        )
+        _validate_probability_config(self)
+
+
+@dataclass(slots=True, kw_only=True)
+class MotifMaker:
+    """Stochastic motif sampler. See module docstring for branch descriptions."""
+
+    config: MotifMakerConfig = field(default_factory=MotifMakerConfig)
+    _region_counts: np.ndarray = field(init=False, repr=False)
+    _region_probs: np.ndarray = field(init=False, repr=False)
+    _bfs_counts: np.ndarray = field(init=False, repr=False)
+    _bfs_probs: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
         self._region_counts, self._region_probs = _dist_to_arrays(
-            self.ligand_region_count_probs
+            self.config.ligand_region_count_probs
         )
         self._bfs_counts, self._bfs_probs = _dist_to_arrays(
-            self.ligand_bfs_atom_count_probs
+            self.config.ligand_bfs_atom_count_probs
         )
 
     def sample(self, structure: AnnotatedStructure) -> MotifAnnotation:
@@ -95,11 +117,11 @@ class MotifMaker:
         # TODO: delete this check once we have pocket annotations for the PDB
         has_pocket_id = "pocket_id" in aa.get_annotation_categories()
 
-        if np.random.rand() < self.ligand_motif_prob and aa.is_ligand.any():
+        if np.random.rand() < self.config.ligand_motif_prob and aa.is_ligand.any():
             is_motif = self._generate_ligand_motif_mask(aa)
         elif (
             has_pocket_id
-            and np.random.rand() < self.pocket_motif_prob
+            and np.random.rand() < self.config.pocket_motif_prob
             and aa.pocket_id.any()
         ):
             is_motif = self._generate_pocket_motif_mask(aa)
@@ -110,7 +132,7 @@ class MotifMaker:
             is_motif = np.zeros(len(aa), dtype=int)
         elif is_motif.any():
             num_residues = len(np.unique(aa[is_motif > 0].res_id))
-            if num_residues > self.max_motif_residues:
+            if num_residues > self.config.max_motif_residues:
                 is_motif = np.zeros(len(aa), dtype=int)
 
         is_motif_related = self._get_is_motif_related_mask(aa, is_motif)
@@ -138,7 +160,7 @@ class MotifMaker:
         With probability ``ligand_fixed_size_bfs_prob``, samples from
         ``ligand_bfs_atom_count_probs``; otherwise proportion-based.
         """
-        if np.random.rand() < self.ligand_fixed_size_bfs_prob:
+        if np.random.rand() < self.config.ligand_fixed_size_bfs_prob:
             return int(np.random.choice(self._bfs_counts, p=self._bfs_probs))
         ligand_proportion = np.random.rand()
         return max(1, int(ligand_proportion * ligand_graph_size))
@@ -179,7 +201,7 @@ class MotifMaker:
         distances = np.linalg.norm(other_ligand_coords - seed_coord, axis=-1)
 
         # Find atoms within distance threshold
-        within_distance_mask = distances <= self.supplementary_ligand_distance
+        within_distance_mask = distances <= self.config.supplementary_ligand_distance
         if not within_distance_mask.any():
             return supplementary_ligand_mask
 
@@ -191,7 +213,7 @@ class MotifMaker:
 
         # Process each nearby ligand chain independently
         for asym_id in unique_nearby_asym_ids:
-            if np.random.rand() >= self.supplementary_ligand_prob:
+            if np.random.rand() >= self.config.supplementary_ligand_prob:
                 continue
 
             # Find the closest atom from this chain
@@ -258,13 +280,13 @@ class MotifMaker:
         complex_ligand_ids = []
         for asym_id in ligand_asym_ids:
             atom_count = (atom_array.asym_id_int == asym_id).sum()
-            if atom_count >= self.complex_ligand_threshold:
+            if atom_count >= self.config.complex_ligand_threshold:
                 complex_ligand_ids.append(asym_id)
 
         # Prefer complex ligands if available
         if (
             len(complex_ligand_ids) > 0
-            and np.random.rand() < self.complex_ligand_preference_prob
+            and np.random.rand() < self.config.complex_ligand_preference_prob
         ):
             ligand_motif_asym_id = np.random.choice(complex_ligand_ids)
         else:
@@ -275,7 +297,7 @@ class MotifMaker:
         ) & ligand_mask
 
         if (
-            np.random.rand() < self.whole_ligand_prob
+            np.random.rand() < self.config.whole_ligand_prob
             or ligand_motif_chain_mask.sum() == 1
         ):
             ligand_atoms = atom_array[ligand_motif_chain_mask]
@@ -333,7 +355,7 @@ class MotifMaker:
 
         is_motif[surrounding_mask > 0] = 1
 
-        if np.random.rand() < self.drop_ligand_motif_prob:
+        if np.random.rand() < self.config.drop_ligand_motif_prob:
             is_motif[ligand_motif_chain_mask] = 0
         else:
             is_motif[ligand_motif_chain_mask] = 1
@@ -438,7 +460,7 @@ class MotifMaker:
         Returns:
             np.ndarray: Integer mask (0/1) indicating motif atoms
         """
-        if np.random.rand() < self.use_tip_atoms_only_prob:
+        if np.random.rand() < self.config.use_tip_atoms_only_prob:
             use_tip_atoms_only = True
         else:
             use_tip_atoms_only = False
@@ -446,7 +468,7 @@ class MotifMaker:
         is_motif = np.zeros(len(atom_array), dtype=int)
 
         # Find polymer atoms within sphere
-        r = np.random.uniform(self.r_min, self.r_max)
+        r = np.random.uniform(self.config.r_min, self.config.r_max)
 
         distances = np.linalg.norm(atom_array.coord - point_coord, axis=-1)
         within_radius_mask = distances <= r
@@ -480,13 +502,13 @@ class MotifMaker:
         # Process each residue
         for uid in unique_ref_space_uids:
             # Skip residue with probability
-            if np.random.rand() > self.residue_inclusion_prob:
+            if np.random.rand() > self.config.residue_inclusion_prob:
                 continue
 
             # Get all atoms of this residue
             residue_mask = atom_array.ref_space_uid == uid
 
-            if np.random.rand() > self.whole_sidechain_prob:
+            if np.random.rand() > self.config.whole_sidechain_prob:
                 # Partial residue
                 partial_mask = self._get_partial_residue_motif_mask(
                     atom_array, residue_mask, in_sphere_mask=atoms_in_sphere_mask
@@ -542,10 +564,12 @@ class MotifMaker:
             idx for idx in local_indices_in_sphere if idx in graph_node_set
         ]
 
-        if p < self.sidechain_seed_is_in_sphere_prob and valid_seed_atoms:
+        if p < self.config.sidechain_seed_is_in_sphere_prob and valid_seed_atoms:
             seed_atom = np.random.choice(valid_seed_atoms)
         elif (
-            p < self.sidechain_seed_is_in_sphere_prob + self.sidechain_seed_is_tip_prob
+            p
+            < self.config.sidechain_seed_is_in_sphere_prob
+            + self.config.sidechain_seed_is_tip_prob
         ):
             seed_atom = graph_nodes[
                 -1
@@ -554,7 +578,7 @@ class MotifMaker:
             seed_atom = np.random.choice(graph_nodes)
 
         # Pick depth
-        num_bonds = np.random.geometric(self.sidechain_bfs_depth_prob) - 1
+        num_bonds = np.random.geometric(self.config.sidechain_bfs_depth_prob) - 1
 
         # Get atoms within num_bonds of seed
         motif_atom_ids = nx.single_source_shortest_path_length(
@@ -570,9 +594,69 @@ class MotifMaker:
         return partial_motif_mask
 
 
-def _dist_to_arrays(dist: dict[int, float]) -> tuple[np.ndarray, np.ndarray]:
-    """Convert a ``{value: prob}`` dict to parallel arrays for ``np.random.choice``."""
-    return np.array(list(dist.keys())), np.array(list(dist.values()))
+def _normalize_probability_table(
+    table: Mapping[int | str, float] | Iterable[tuple[int | str, float]],
+) -> ProbabilityTable:
+    items = table.items() if isinstance(table, Mapping) else table
+    return tuple((int(value), float(prob)) for value, prob in items)
+
+
+def _validate_probability_config(config: MotifMakerConfig) -> None:
+    scalar_prob_names = (
+        "ligand_motif_prob",
+        "pocket_motif_prob",
+        "whole_ligand_prob",
+        "drop_ligand_motif_prob",
+        "complex_ligand_preference_prob",
+        "ligand_fixed_size_bfs_prob",
+        "supplementary_ligand_prob",
+        "residue_inclusion_prob",
+        "use_tip_atoms_only_prob",
+        "whole_sidechain_prob",
+        "sidechain_seed_is_tip_prob",
+        "sidechain_seed_is_in_sphere_prob",
+        "sidechain_bfs_depth_prob",
+    )
+    for name in scalar_prob_names:
+        value = getattr(config, name)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be between 0 and 1")
+
+    if config.r_min > config.r_max:
+        raise ValueError("r_min must be less than or equal to r_max")
+    if config.complex_ligand_threshold <= 0:
+        raise ValueError("complex_ligand_threshold must be greater than 0")
+    if config.max_motif_residues <= 0:
+        raise ValueError("max_motif_residues must be greater than 0")
+
+    _validate_probability_table(
+        "ligand_region_count_probs", config.ligand_region_count_probs
+    )
+    _validate_probability_table(
+        "ligand_bfs_atom_count_probs", config.ligand_bfs_atom_count_probs
+    )
+
+
+def _validate_probability_table(name: str, table: ProbabilityTable) -> None:
+    if not table:
+        raise ValueError(f"{name} must not be empty")
+    total = sum(prob for _, prob in table)
+    if not np.isclose(total, 1.0):
+        raise ValueError(f"{name} probabilities must sum to 1")
+    for value, prob in table:
+        if value <= 0:
+            raise ValueError(f"{name} values must be positive")
+        if prob < 0:
+            raise ValueError(f"{name} probabilities must be non-negative")
+
+
+def _dist_to_arrays(dist: ProbabilityTable) -> tuple[np.ndarray, np.ndarray]:
+    """Convert a probability table to parallel arrays for ``np.random.choice``."""
+    values, probs = zip(*dist)
+    return np.array(values), np.array(probs)
+
+
+DEFAULT_MOTIF_MAKER_CONFIG = MotifMakerConfig()
 
 
 def get_random_seed_atom_from_array(atom_array: AtomArray) -> np.ndarray:

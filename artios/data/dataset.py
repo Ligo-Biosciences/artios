@@ -29,7 +29,7 @@ from torch.utils.data import Dataset
 from artios.common import ccd_sets
 from artios.common.constants import EvaluationChainInterface
 from artios.data.data_pipeline import DataPipeline
-from artios.data.data_weights import get_sample_weights
+from artios.data.data_weights import DataWeightsConfig, get_sample_weights
 from artios.data.features import FullContext
 from artios.data.features.featurizer import ContextGenerator
 from artios.data.motif_maker import MotifMaker
@@ -61,7 +61,6 @@ class BaseSingleDataset(Dataset):
         indices_fpath: Union[str, Path],
         cropping_configs: dict[str, Any],
         template_featurizer: Optional[Any] = None,
-        motif_maker: Optional[MotifMaker] = None,
         msa_sampler: Optional[MSASampler] = None,
         name: Optional[str] = None,
         **kwargs,
@@ -132,11 +131,13 @@ class BaseSingleDataset(Dataset):
             os.makedirs(self.error_dir, exist_ok=True)
 
         self.template_featurizer = template_featurizer
-        self.motif_maker = motif_maker
         self.msa_sampler = msa_sampler
 
-        # Motif training configs
-        self.motif_configs = kwargs.get("motif_training", {})
+        # Dataset-level schedule for applying the fixed motif sampler.
+        self.motif_train_rate = kwargs.get("motif_train_rate", 0.0)
+        if not 0 <= self.motif_train_rate <= 1.0:
+            raise ValueError("motif_train_rate must be between 0 and 1")
+        self.motif_maker = MotifMaker() if self.motif_train_rate > 0.0 else None
 
         # Performance optimization: exclude atom_array/token_array from context
         # These are expensive to serialize and only needed for debugging/visualization
@@ -524,7 +525,7 @@ class BaseSingleDataset(Dataset):
 
         # --- Motif ---
         tmotif = time.time()
-        if self.motif_configs["motif_train_rate"] > 0.0:
+        if self.motif_train_rate > 0.0:
             cropped_structure = self._apply_motif_processing(
                 cropped_structure, pdb_id=pdb_id
             )
@@ -690,8 +691,7 @@ class BaseSingleDataset(Dataset):
         (zero-mask overlay) — matches legacy behaviour when
         ``motif_train_rate > 0``.
         """
-        motif_train_rate = self.motif_configs["motif_train_rate"]
-        if self.motif_maker is not None and np.random.rand() < motif_train_rate:
+        if self.motif_maker is not None and np.random.rand() < self.motif_train_rate:
             structure = structure.with_sampled_motif(self.motif_maker)
         else:
             n = len(structure.atoms)
@@ -704,36 +704,6 @@ class BaseSingleDataset(Dataset):
         structure = structure.without_non_motif_sidechains()
         structure = structure.with_unindexed_motif()
         return structure
-
-
-def get_motif_maker(configs: ConfigDict, dataset_name: str) -> Optional[MotifMaker]:
-    """
-    Creates and returns a MotifMaker object based on the provided configurations.
-    Allows for dataset-specfic config overrides.
-
-    Args:
-        configs: A dictionary containing the configurations for the MotifMaker.
-        dataset_name: The name of the dataset.
-
-    Returns:
-        A MotifMaker object if motif training is enabled, otherwise None.
-    """
-    data_config = configs.data
-
-    motif_config = dict(data_config["motif_training"])
-    # motif_train_rate is a dataset-level training schedule knob (how often to
-    # invoke the maker), not a MotifMaker sampling field. Strip before passing.
-    motif_train_rate = motif_config.pop("motif_train_rate")
-    if not 0 <= motif_train_rate <= 1.0:
-        raise ValueError("motif_train_rate must be between 0 and 1")
-
-    # Check for dataset-specific overrides
-    if dataset_name in data_config and "motif_training" in data_config[dataset_name]:
-        override = dict(data_config[dataset_name]["motif_training"])
-        override.pop("motif_train_rate", None)
-        return MotifMaker(**{**motif_config, **override})
-
-    return MotifMaker(**motif_config)
 
 
 def get_msa_sampler(configs: ConfigDict, dataset_name: str) -> Optional[MSASampler]:
@@ -827,7 +797,9 @@ class WeightedMultiDataset(Dataset):
 
 
 def get_datasets(
-    configs: ConfigDict, error_dir: Optional[str]
+    configs: ConfigDict,
+    error_dir: Optional[str],
+    data_weights_config: DataWeightsConfig = DataWeightsConfig(),
 ) -> tuple[WeightedMultiDataset, dict[str, BaseSingleDataset]]:
     """
     Get training and testing datasets given configs
@@ -845,12 +817,17 @@ def get_datasets(
     def _get_dataset_param(config_dict, dataset_name: str, stage: str):
         # Template_featurizer is under development
         # Lig_atom_rename/shuffle_mols/shuffle_sym_ids do not affect the performance very much
+        if "motif_training" in config_dict:
+            raise ValueError(
+                f"data.{dataset_name}.motif_training is no longer supported. "
+                "Edit MotifMakerConfig in artios/data/motif_maker.py instead."
+            )
+
         return {
             "name": dataset_name,
             **config_dict["base_info"],
             "cropping_configs": config_dict["cropping_configs"],
             "error_dir": error_dir,
-            "motif_maker": get_motif_maker(configs, dataset_name),
             "msa_sampler": get_msa_sampler(configs, dataset_name),
             "template_featurizer": None,
             "lig_atom_rename": config_dict.get("lig_atom_rename", False),
@@ -866,6 +843,10 @@ def get_datasets(
         }
 
     data_config = configs.data
+    if "motif_training" in data_config:
+        raise ValueError(
+            "data.motif_training is no longer supported. Use data.motif_train_rate."
+        )
     logger.info(f"Using train sets {data_config.train_sets}")
     assert len(data_config.train_sets) == len(
         data_config.train_sampler.train_sample_weights
@@ -892,7 +873,7 @@ def get_datasets(
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
-        dataset_param["motif_training"] = data_config.get("motif_training", {})
+        dataset_param["motif_train_rate"] = data_config.get("motif_train_rate", 0.0)
         dataset_param["include_arrays_in_context"] = data_config.get(
             "include_arrays_in_context", False
         )
@@ -905,6 +886,7 @@ def get_datasets(
             get_sample_weights(
                 **data_config[train_name]["sampler_configs"],
                 indices_df=train_dataset.indices_list,
+                config=data_weights_config,
             )
         )
     train_dataset = WeightedMultiDataset(
@@ -925,7 +907,7 @@ def get_datasets(
         dataset_param["train_with_binding_target"] = data_config.get(
             "train_with_binding_target", False
         )
-        dataset_param["motif_training"] = data_config.get("motif_training", {})
+        dataset_param["motif_train_rate"] = data_config.get("motif_train_rate", 0.0)
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["include_arrays_in_context"] = data_config.get(

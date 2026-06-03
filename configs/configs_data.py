@@ -39,21 +39,6 @@ default_test_configs = {
 default_weighted_pdb_configs = {
     "sampler_configs": {
         "sampler_type": "weighted",
-        "beta_dict": {
-            "chain": 0.5,
-            "interface": 1,
-        },
-        "alpha_dict": {
-            "prot": 3,
-            "nuc": 3,
-            "ligand": 1,
-        },
-        "force_recompute_weight": True,
-        "balance_protein_clusters": False,
-        "balance_percentile": 0.9,
-        "balance_mol_type_groups": ["ligand_prot", "nuc_prot"],
-        "monomer_pdb_target_fraction": 0.00,
-        "should_filter_artifact_ligands": False,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -72,8 +57,6 @@ default_weighted_pdb_configs = {
 default_distillation_configs = {
     "sampler_configs": {
         "sampler_type": "cluster_balanced",
-        "cluster_size_exponent": 0.75,
-        "force_recompute_weight": True,
     },
     "cropping_configs": {
         "method_weights": ListValue(
@@ -185,36 +168,7 @@ data_configs = {
     "binding_target_train_rate": 0.0,
     "remove_glycans": True,
     "filter_unique_fragment_prob": 1.0,
-    "motif_training": {
-        "motif_train_rate": 0.0,
-        "ligand_motif_prob": 0.8,
-        "pocket_motif_prob": 1.0,
-        "whole_ligand_prob": 0.7,
-        "whole_sidechain_prob": 0.05,
-        "sidechain_seed_is_tip_prob": 0.0,
-        "sidechain_seed_is_in_sphere_prob": 1.0,
-        "sidechain_bfs_depth_prob": 0.5,
-        "residue_inclusion_prob": 0.4,
-        "use_tip_atoms_only_prob": 0.95,
-        "max_motif_residues": 15,
-        "complex_ligand_threshold": 4,
-        "complex_ligand_preference_prob": 0.9,
-        "ligand_region_count_probs": {"1": 0.5, "2": 0.4, "3": 0.07, "4": 0.03},
-        "ligand_bfs_atom_count_probs": {
-            "1": 0.15,
-            "2": 0.2,
-            "3": 0.25,
-            "4": 0.2,
-            "5": 0.125,
-            "6": 0.075,
-        },
-        "ligand_fixed_size_bfs_prob": 0.9,
-        "drop_ligand_motif_prob": 0.1,
-        "supplementary_ligand_distance": 5.0,
-        "supplementary_ligand_prob": 0.5,
-        "r_min": 5.0,
-        "r_max": 8.0,
-    },
+    "motif_train_rate": 1.0,
     "padding": {
         "max_n_template": 4,
         "max_n_pocket": 16,

@@ -169,6 +169,9 @@ data_configs = {
     "remove_glycans": True,
     "filter_unique_fragment_prob": 1.0,
     "motif_train_rate": 1.0,
+    # Probability of nulling the normalised motif-depth conditioning per training
+    # sample (so the model also learns the unconditioned behaviour).
+    "motif_depth_dropout_prob": 0.5,
     "padding": {
         "max_n_template": 4,
         "max_n_pocket": 16,

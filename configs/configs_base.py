@@ -125,6 +125,12 @@ model_configs = {
         "track_trajectory": False,
         "trajectory_step_stride": 10,
     },
+    # Conditioning on normalised motif depth: ||CoM(motif) - CoM(non-motif)|| / Rg_complex.
+    # The training dropout probability lives in configs_data.motif_depth_dropout_prob.
+    "motif_depth": {
+        # Inference: target normalised depth to condition on; < 0 => unconditioned (null).
+        "inference_value": -1.0,
+    },
     "artios_mpnn": {
         "train_zero_shot": False,
         "model": {

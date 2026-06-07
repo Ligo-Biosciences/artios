@@ -76,8 +76,8 @@ class DataWeightsConfig:
     beta_interface: float = 1.0
 
     # Per-molecule-type multipliers
-    alpha_prot: float = 3.0
-    alpha_nuc: float = 3.0
+    alpha_prot: float = 1.0
+    alpha_nuc: float = 0.0
     alpha_ligand: float = 1.0
 
     # Protein cluster balancing

@@ -154,7 +154,6 @@ model_configs = {
             "zero_sum_gauge": True,
             "parameterisation": "factor",
             "num_factors": 32,
-            "masking_sampler": "linear",
             "sampling": {
                 "proposal": "gibbs",
                 "n_sweeps": 150,
@@ -320,8 +319,6 @@ loss_configs = {
         "potts": {
             "loss_type": "pseudo",
             "label_smoothing": 0.0,
-            "active_site_upweight": 1.0,
-            "active_site_distance": 8.0,
             "n_msa_chunk": 8,
             "supervise_query": True,
         },

@@ -65,7 +65,7 @@ uv run --project "${PROJECT_ROOT}" torchrun \
   --monitor.grad_norm true \
   --monitor.weight_norm true \
   --run_training_time_inference false \
-  --data.remove_glycans false \
+  --data.remove_glycans true \
   --data.num_dl_workers 10 \
   --data.prefetch_factor 2 \
   --data.train_sets weightedPDB_before2021_wopb_nometalc_0925 \
@@ -88,8 +88,6 @@ uv run --project "${PROJECT_ROOT}" torchrun \
   --artios_mpnn.potts.parameterisation factor \
   --artios_mpnn.potts.num_factors 32 \
   --loss.potts.loss_type composite \
-  --loss.potts.active_site_upweight 1.0 \
-  --loss.potts.active_site_distance 8.0 \
   --data.motif_training.motif_train_rate 1.0 \
   --data.motif_training.ligand_motif_prob 0.85 \
   --data.motif_training.pocket_motif_prob 1.0 \

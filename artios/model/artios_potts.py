@@ -258,20 +258,18 @@ class ArtiosPotts(nn.Module):
             else None
         )
 
-        mutable_mask = build_mutable_mask(context.mask.token_mask, fixed_mask)
+        design_mask = (
+            context.mask.token_mask
+            & context.entity.is_protein_token
+            & ~context.motif.is_motif_related_token
+        )
+        mutable_mask = build_mutable_mask(design_mask, fixed_mask)
         alphabet_mask = build_alphabet_mask(
             mutable_mask, R, self.exclude_cys, self.exclude_met
         )
         energy_bias = build_energy_bias_vector(self.energy_bias, R, device)
         group_energy_bias = build_group_energy_bias_vector(
             self.group_energy_bias, R, device
-        )
-        S_init = build_s_init(
-            h,
-            self.potts_sampler.temperature_init,
-            fixed_mask,
-            fixed_restype,
-            generator,
         )
 
         ### Apply masks and biases
@@ -288,6 +286,20 @@ class ArtiosPotts(nn.Module):
             h = h + group_energy_bias
             if h_uncond is not None:
                 h_uncond = h_uncond + group_energy_bias
+
+        preserved_mask = context.mask.token_mask & ~mutable_mask
+        preserved_restype = context.token.restype.float()
+        if fixed_mask is not None and fixed_restype is not None:
+            preserved_restype = torch.where(
+                fixed_mask.unsqueeze(-1), fixed_restype, preserved_restype
+            )
+        S_init = build_s_init(
+            h,
+            self.potts_sampler.temperature_init,
+            preserved_mask,
+            preserved_restype,
+            generator,
+        )
 
         ### Penalty logic
         penalty_dict: dict[str, callable] = {}

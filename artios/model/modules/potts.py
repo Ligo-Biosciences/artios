@@ -89,11 +89,10 @@ def build_alphabet_mask(
 ) -> Bool[Tensor, "batch n_token num_residue_types"]:
     """Build mask of allowed residue types per position.
 
-    Allows the 20 standard amino acids (indices 0-19) at every position so
-    that h values for non-mutable residues remain interpretable during
-    sampling (their per-node energies and U_i logits are not inflated by
-    the alphabet bias). Non-mutable positions are protected from updates by
-    token_mask in the sampler, so they do not need an alphabet-wide bias.
+    Allows only the 20 standard amino acids (indices 0-19) at mutable
+    positions. Non-mutable positions allow all residue states so fixed or
+    non-protein tokens can keep their existing identity without an artificial
+    alphabet-wide energy bias.
 
     CYS (index 4) and MET (index 12) exclusions are scoped to mutable
     positions only — non-mutable positions whose residue happens to be CYS
@@ -112,9 +111,11 @@ def build_alphabet_mask(
     device = mutable_mask.device
     R = num_residue_types
 
-    mask = torch.zeros(B, N, R, dtype=torch.bool, device=device)
-    # Allow only the 20 standard amino acids at every position
-    mask[:, :, :20] = True
+    mask = torch.ones(B, N, R, dtype=torch.bool, device=device)
+    mutable_alphabet = torch.zeros_like(mask)
+    mutable_alphabet[:, :, :20] = True
+    # Mutable positions are sampled as standard amino acids only.
+    mask = torch.where(mutable_mask.unsqueeze(-1), mutable_alphabet, mask)
 
     # CYS/MET exclusion only applies where we are actually free to mutate.
     if exclude_cys:
@@ -180,14 +181,14 @@ def build_s_init(
     """Build initial sequence for Potts sampling.
 
     If fixed_mask is None, returns None (sampler initializes from h internally).
-    Otherwise, samples mutable positions from softmax(-h / temperature) and
-    sets fixed positions to fixed_restype.
+    Otherwise, samples non-fixed positions from softmax(-h / temperature) and
+    sets fixed/preserved positions to fixed_restype.
 
     Args:
         h: Potts fields (already alphabet-biased) [B, N, R].
         temperature: Initial sampling temperature.
-        fixed_mask: Identity-fixed position mask [B, N], or None.
-        fixed_restype: One-hot fixed residue types [B, N, R], or None.
+        fixed_mask: Preserved-position mask [B, N], or None.
+        fixed_restype: One-hot preserved residue types [B, N, R], or None.
         generator: Optional torch Generator for reproducibility.
 
     Returns:

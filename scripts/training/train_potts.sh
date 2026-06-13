@@ -10,6 +10,8 @@ set -euo pipefail
 # Common overrides:
 #   RUN_NAME=my-experiment NPROC_PER_NODE=2 CUDA_VISIBLE_DEVICES=0,1 \
 #     bash scripts/training/train_potts.sh
+#   RUN_NAME=my-experiment NPROC_PER_NODE=2 CUDA_VISIBLE_DEVICES=2,3 MASTER_PORT=29501 \
+#     bash scripts/training/train_potts.sh
 #
 # TODO(freeze): the artios_mpnn.model.* and artios_mpnn.potts.* flags below
 #   will move into a frozen PottsModelConfig dataclass in the codebase.
@@ -27,6 +29,7 @@ BASE_DIR="${BASE_DIR:-./training}"
 PROJECT="${WANDB_PROJECT:-artios-mpnn}"
 USE_WANDB="${USE_WANDB:-true}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
+MASTER_PORT="${MASTER_PORT:-29500}"
 
 if [[ "${USE_WANDB}" == "true" ]]; then
   : "${WANDB_API_KEY:?Set WANDB_API_KEY, or run with USE_WANDB=false.}"
@@ -34,6 +37,7 @@ fi
 
 uv run --project "${PROJECT_ROOT}" torchrun \
   --nproc_per_node="${NPROC_PER_NODE}" \
+  --master_port="${MASTER_PORT}" \
   "${PROJECT_ROOT}/runner/train_potts.py" \
   --run_name "${RUN_NAME}" \
   --seed 43 \

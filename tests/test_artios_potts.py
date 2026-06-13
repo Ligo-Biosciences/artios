@@ -4,6 +4,8 @@ Tests cover the forward pass, main_train_loop, compute_potts_single_logits,
 compute_potts_joint_logits, and compute_loss for both pseudo and composite likelihood modes.
 """
 
+from dataclasses import replace
+
 import pytest
 import torch
 from ml_collections import ConfigDict
@@ -40,8 +42,6 @@ def _make_configs(
                 "potts": {
                     "loss_type": loss_type,
                     "label_smoothing": label_smoothing,
-                    "active_site_upweight": 1.0,
-                    "active_site_distance": 8.0,
                     "n_msa_chunk": 8,
                     "supervise_query": True,
                 },
@@ -68,7 +68,6 @@ def _make_configs(
                     "zero_sum_gauge": True,
                     "parameterisation": parameterisation,
                     "num_factors": 32,
-                    "masking_sampler": "linear",
                     "sampling": {
                         "proposal": proposal,
                         "n_sweeps": 5,
@@ -170,7 +169,6 @@ class TestArtiosPottsInit:
 
         assert hasattr(model, "mpnn")
         assert hasattr(model, "potts")
-        assert hasattr(model, "masking_sampler")
         assert hasattr(model, "loss_config")
 
     def test_loss_config_pseudo(self, pseudo_configs, device):
@@ -226,7 +224,8 @@ class TestArtiosPottsForward:
         assert output.edge_index.shape == (B, N, K)
         assert output.edge_mask.shape == (B, N, K)
         assert output.is_masked.shape == (B, N)
-        assert output.timestep.shape == (B,)
+        assert output.timestep is None
+        assert torch.equal(output.is_masked, context.mask.token_mask)
 
     def test_main_train_loop_finite_values(self, model, context):
         model.train()
@@ -283,6 +282,25 @@ class TestArtiosPottsForward:
 
         assert torch.allclose(o1.h, o2.h)
         assert torch.allclose(o1.J, o2.J)
+
+    def test_protein_restypes_do_not_change_potts_parameters(
+        self, model, context, device
+    ):
+        model.eval()
+        shifted_idx = (context.token.restype.argmax(dim=-1) + 7) % 32
+        shifted_restype = torch.zeros_like(context.token.restype)
+        shifted_restype.scatter_(-1, shifted_idx.unsqueeze(-1), 1)
+        shifted_context = replace(
+            context,
+            token=replace(context.token, restype=shifted_restype.to(device)),
+        )
+
+        with torch.no_grad():
+            original = model.main_train_loop(context=context, seed=42)
+            shifted = model.main_train_loop(context=shifted_context, seed=42)
+
+        assert torch.allclose(original.h, shifted.h)
+        assert torch.allclose(original.J, shifted.J)
 
 
 # ---------------------------------------------------------------------------

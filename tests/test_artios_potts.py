@@ -254,6 +254,45 @@ class TestArtiosPottsForward:
         assert output.sampled_sequence is not None
         assert output.energy is not None
 
+    def test_inference_preserves_ligand_tokens(self, model, context):
+        model.eval()
+        ligand_token_mask = torch.zeros_like(context.entity.is_ligand_token)
+        ligand_token_mask[:, [3, 11]] = True
+
+        atom_ligand_mask = torch.gather(
+            ligand_token_mask,
+            1,
+            context.index.atom_to_token_idx,
+        )
+
+        restype = context.token.restype.clone()
+        ligand_indices = torch.full(
+            ligand_token_mask.shape, 25, dtype=torch.long, device=restype.device
+        )
+        restype[ligand_token_mask] = torch.nn.functional.one_hot(
+            ligand_indices[ligand_token_mask], restype.shape[-1]
+        ).to(restype.dtype)
+
+        ligand_context = replace(
+            context,
+            token=replace(context.token, restype=restype),
+            entity=replace(
+                context.entity,
+                is_protein=context.entity.is_protein & ~atom_ligand_mask,
+                is_ligand=context.entity.is_ligand | atom_ligand_mask,
+                is_protein_token=context.entity.is_protein_token & ~ligand_token_mask,
+                is_ligand_token=context.entity.is_ligand_token | ligand_token_mask,
+            ),
+        )
+
+        with torch.no_grad():
+            output = model.forward(context=ligand_context, mode=Mode.INFERENCE, seed=42)
+
+        assert torch.equal(
+            output.sampled_sequence[ligand_token_mask],
+            restype.float()[ligand_token_mask],
+        )
+
     def test_train_eval_modes_equivalent(self, model, context):
         """Both Mode.TRAIN and Mode.EVAL route to main_train_loop."""
         model.eval()

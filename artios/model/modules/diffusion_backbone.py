@@ -7,6 +7,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange, repeat
 from jaxtyping import Float
 from torch import Tensor
@@ -49,6 +50,8 @@ class DiffusionConditioningConfig:
     motif_dist_min: float = 1.0
     motif_dist_max: float = 15.0
     motif_dist_bin_size: float = 0.25
+    motif_depth_max: float = 2.0
+    motif_depth_bin_size: float = 0.05
 
     def __post_init__(self) -> None:
         if self.c_timestep_embedding <= 0:
@@ -57,6 +60,10 @@ class DiffusionConditioningConfig:
             raise ValueError("motif_dist_max must be greater than motif_dist_min")
         if self.motif_dist_bin_size <= 0:
             raise ValueError("motif_dist_bin_size must be greater than 0")
+        if self.motif_depth_max <= 0:
+            raise ValueError("motif_depth_max must be greater than 0")
+        if self.motif_depth_bin_size <= 0:
+            raise ValueError("motif_depth_bin_size must be greater than 0")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -157,6 +164,19 @@ class DiffusionConditioning(nn.Module):
         self.embed_motif_coord = LinearNoBias(3, self.c_s, init="lecun")
         self.embed_motif_pair_dist = LinearNoBias(
             self.n_motif_dist_bins, self.c_z, init="normal"
+        )
+
+        # Motif depth (normalised) conditioning: fine bins over [0, motif_depth_max),
+        # then one overflow bin (>= max) and one null bin (depth < 0, unconditioned).
+        self.motif_depth_bin_size = config.motif_depth_bin_size
+        self.n_motif_depth_fine_bins = int(
+            config.motif_depth_max / config.motif_depth_bin_size
+        )
+        self.motif_depth_overflow_bin = self.n_motif_depth_fine_bins
+        self.motif_depth_null_bin = self.n_motif_depth_fine_bins + 1
+        self.n_motif_depth_bins = self.n_motif_depth_fine_bins + 2
+        self.embed_motif_depth = LinearNoBias(
+            self.n_motif_depth_bins, self.c_s, init="normal"
         )
 
         ### Token bonds
@@ -371,6 +391,33 @@ class DiffusionConditioning(nn.Module):
         return s_motif, z_motif
 
     @typecheck
+    def get_motif_depth_condition(
+        self,
+        context: FullContext,
+    ) -> Float[Tensor, "... n_token c_s"]:
+        """Embed the normalised motif-depth conditioning into the single stream.
+
+        ``motif_depth_norm`` is a per-token broadcast scalar equal to
+        ``||CoM(motif) - CoM(non-motif)|| / Rg_complex`` (>= 0), or -1.0 for the null
+        (unconditioned) case. Values are discretised into fine bins over
+        ``[0, motif_depth_max)``, an overflow bin (>= max), and a dedicated null bin,
+        then embedded and masked to real tokens.
+        """
+        motif_depth = context.motif.motif_depth_norm  # [..., n_token]
+        bin_idx = torch.floor(motif_depth / self.motif_depth_bin_size).long()
+        bin_idx = bin_idx.clamp(min=0, max=self.motif_depth_overflow_bin)
+        bin_idx = torch.where(
+            motif_depth < 0,
+            torch.full_like(bin_idx, self.motif_depth_null_bin),
+            bin_idx,
+        )
+        motif_depth_onehot = F.one_hot(bin_idx, num_classes=self.n_motif_depth_bins).to(
+            context.reference.ref_pos.dtype
+        )
+        s_motif_depth = self.embed_motif_depth(motif_depth_onehot)
+        return s_motif_depth * context.mask.token_mask[..., None]
+
+    @typecheck
     def compute_cache(self, context: FullContext) -> CachedConditioning:
         """Compute timestep-independent conditioning that can be reused across sampling steps.
 
@@ -388,6 +435,9 @@ class DiffusionConditioning(nn.Module):
         # Motif features
         s_motif, z_motif = self.get_motif_condition(context)
 
+        # Motif depth (normalised) conditioning, single stream only
+        s_motif_depth = self.get_motif_depth_condition(context)
+
         # Pair: combine atom + motif, add relpos, layernorm + linear, transition
         z = z_atom + z_motif
 
@@ -402,8 +452,8 @@ class DiffusionConditioning(nn.Module):
         z = self.linear_no_bias_z(self.layernorm_z(z))
         z = z + checkpoint(self.transition_z, z, use_reentrant=False)
 
-        # Single base: atom + motif + entity types
-        s_base = s_atom + s_motif
+        # Single base: atom + motif + motif depth + entity types
+        s_base = s_atom + s_motif + s_motif_depth
 
         s_entity_type = self.entity_type_embed(
             torch.stack(

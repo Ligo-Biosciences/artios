@@ -54,9 +54,14 @@ def get_inference_dataloader(
 
     sample_input = parse_input_dict(input_dict)
 
+    try:
+        motif_depth_norm = float(configs.motif_depth.inference_value)
+    except (AttributeError, KeyError, TypeError):
+        motif_depth_norm = -1.0
+
     match sample_input:
         case BackboneInput():
-            dataset = MotifDataset(sample_input)
+            dataset = MotifDataset(sample_input, motif_depth_norm=motif_depth_norm)
             motif_training = True
         case SequenceDesignInput():
             dataset = MPNNDataset(sample_input)
@@ -100,8 +105,11 @@ class MotifDataset(Dataset):
     Produces a single FullContext from a BackboneInput specification.
     """
 
-    def __init__(self, backbone_input: BackboneInput) -> None:
+    def __init__(
+        self, backbone_input: BackboneInput, motif_depth_norm: float = -1.0
+    ) -> None:
         self.backbone_input = backbone_input
+        self.motif_depth_norm = motif_depth_norm
 
     def __len__(self) -> int:
         return 1
@@ -117,6 +125,7 @@ class MotifDataset(Dataset):
             structure,
             pdb_id=sample_name,
             original_motif_mapping=original_motif_mapping,
+            motif_depth_norm=self.motif_depth_norm,
         ).get_full_context()
 
 

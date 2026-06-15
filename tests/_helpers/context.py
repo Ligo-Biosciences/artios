@@ -115,6 +115,7 @@ def create_test_context(
         ),
         motif_restype=torch.zeros(batch_size, n_tokens, 32, device=device),
         motif_coordinate=torch.zeros(batch_size, n_tokens, 3, device=device),
+        motif_depth_norm=torch.full((batch_size, n_tokens), 0.5, device=device),
     )
 
     # IndexContext

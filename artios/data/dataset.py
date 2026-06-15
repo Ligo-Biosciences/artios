@@ -31,7 +31,10 @@ from artios.common.constants import EvaluationChainInterface
 from artios.data.data_pipeline import DataPipeline
 from artios.data.data_weights import DataWeightsConfig, get_sample_weights
 from artios.data.features import FullContext
-from artios.data.features.featurizer import ContextGenerator
+from artios.data.features.featurizer import (
+    ContextGenerator,
+    compute_motif_depth_norm,
+)
 from artios.data.motif_maker import MotifMaker
 from artios.data.msa import MSA, MSAQueryInfo, MSASampler
 from artios.data.structure import AnnotatedStructure
@@ -142,6 +145,10 @@ class BaseSingleDataset(Dataset):
         # Performance optimization: exclude atom_array/token_array from context
         # These are expensive to serialize and only needed for debugging/visualization
         self.include_arrays_in_context = kwargs.get("include_arrays_in_context", False)
+
+        # Probability of nulling the motif-depth conditioning per sample (train aug;
+        # 0.0 for eval/test). The scalar itself is computed from the structure below.
+        self.motif_depth_dropout_prob = kwargs.get("motif_depth_dropout_prob", 0.0)
 
         # Read data
         self.indices_list = self.read_indices_list(indices_fpath)
@@ -549,6 +556,9 @@ class BaseSingleDataset(Dataset):
 
         # --- Featurize ---
         t4 = time.time()
+        motif_depth_norm = compute_motif_depth_norm(cropped_structure)
+        if random.random() < self.motif_depth_dropout_prob:
+            motif_depth_norm = -1.0
         context = ContextGenerator(
             cropped_structure,
             ref_pos_augment=self.ref_pos_augment,
@@ -556,6 +566,7 @@ class BaseSingleDataset(Dataset):
             bioassembly_dict_fpath=npz_path,
             pdb_id=pdb_id,
             msa=msa,
+            motif_depth_norm=motif_depth_norm,
         ).get_full_context(include_arrays=self.include_arrays_in_context)
         timings["get_feature_and_label"] = time.time() - t4
 
@@ -874,6 +885,9 @@ def get_datasets(
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["limits"] = data_config.get("limits", -1)
         dataset_param["motif_train_rate"] = data_config.get("motif_train_rate", 0.0)
+        dataset_param["motif_depth_dropout_prob"] = data_config.get(
+            "motif_depth_dropout_prob", 0.0
+        )
         dataset_param["include_arrays_in_context"] = data_config.get(
             "include_arrays_in_context", False
         )
@@ -908,6 +922,8 @@ def get_datasets(
             "train_with_binding_target", False
         )
         dataset_param["motif_train_rate"] = data_config.get("motif_train_rate", 0.0)
+        # Deterministic at eval: never drop the motif-depth conditioning.
+        dataset_param["motif_depth_dropout_prob"] = 0.0
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["include_arrays_in_context"] = data_config.get(

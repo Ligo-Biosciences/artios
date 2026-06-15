@@ -49,6 +49,7 @@ class ContextGenerator:
         ref_pos_augment: bool = True,
         lig_atom_rename: bool = False,
         msa: MSA | None = None,
+        motif_depth_norm: float = -1.0,
     ) -> None:
         self.s = structure
         self.pdb_id = pdb_id
@@ -57,6 +58,10 @@ class ContextGenerator:
         self.lig_atom_rename = lig_atom_rename
         self.original_motif_mapping = original_motif_mapping
         self.msa = msa
+        # Normalised motif depth is decided by the caller (computed from the
+        # structure for training, taken from config for inference) and broadcast
+        # to every token in get_motif_context. -1.0 = null / unconditioned.
+        self.motif_depth_norm = motif_depth_norm
 
         self.atom_to_token_idx = torch.from_numpy(
             self.s.grouping.atom_token_index
@@ -402,6 +407,12 @@ class ContextGenerator:
             -1, 1
         )  # [N_token, 3]
 
+        motif_depth_norm = torch.full(
+            (self.s.grouping.n_tokens,),
+            float(self.motif_depth_norm),
+            dtype=torch.float32,
+        )
+
         return MotifContext(
             is_motif=torch.from_numpy(is_motif.astype(bool)),
             is_motif_related=torch.from_numpy(is_motif_related.astype(bool)),
@@ -411,6 +422,7 @@ class ContextGenerator:
             ),
             motif_restype=motif_restype.float(),
             motif_coordinate=torch.from_numpy(motif_coordinate.astype(np.float32)),
+            motif_depth_norm=motif_depth_norm,
         )
 
     def get_coordinate_context(self) -> CoordinateContext:
@@ -713,6 +725,33 @@ class ContextGenerator:
             np.array(pocket_mask_list).astype(int)
         ).long()
         return ligand_mask_by_pockets, pocket_mask_by_pockets
+
+
+def compute_motif_depth_norm(structure: AnnotatedStructure, eps: float = 1e-6) -> float:
+    """Normalised motif depth of a complete structure.
+
+    ``||CoM(motif atoms) - CoM(non-motif atoms)|| / Rg_complex``,
+    where Rg_complex is the radius of gyration of all resolved atoms. Returns -1.0
+    when the structure has no resolved motif or no resolved
+    non-motif atoms.
+    """
+    coord = structure.atoms.coord
+    if structure.motif is not None:
+        is_motif = structure.motif.is_motif.astype(bool)
+    else:
+        is_motif = np.zeros(len(coord), dtype=bool)
+    is_resolved = structure.training.is_resolved.astype(bool)
+
+    motif = is_motif & is_resolved
+    non_motif = (~is_motif) & is_resolved
+    if not motif.any() or not non_motif.any():
+        return -1.0
+
+    c_motif = coord[motif].mean(axis=0)
+    c_non_motif = coord[non_motif].mean(axis=0)
+    c_complex = coord[is_resolved].mean(axis=0)
+    rg = float(np.sqrt(np.mean(((coord[is_resolved] - c_complex) ** 2).sum(axis=1))))
+    return float(np.linalg.norm(c_motif - c_non_motif) / (rg + eps))
 
 
 def _extract_backbone_atoms(

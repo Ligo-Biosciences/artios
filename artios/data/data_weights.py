@@ -96,11 +96,12 @@ class DataWeightsConfig:
     # Artifact ligand filtering
     filter_artifact_ligands: bool = False
 
-    # Cluster-balanced sampler: per-cluster aggregate weight ∝ N^exponent
-    cluster_size_exponent: float = 0.75
+    # Cluster-balanced sampler: base per-row weight ∝ N^(exponent - 1)
+    cluster_size_exponent: float = 0.5
 
-    # Length-based reweighting (uniform sampler only): weight ∝ num_tokens^gamma
-    length_reweight_gamma: float = 0.0
+    # Length-based reweighting: weight ∝ num_tokens^gamma. Negative gamma
+    # biases toward shorter sequences; positive gamma biases toward longer.
+    length_reweight_gamma: float = -1.0
 
     @property
     def beta_dict(self) -> dict[RowType, float]:
@@ -121,8 +122,6 @@ class DataWeightsConfig:
             raise ValueError("monomer_pdb_target_fraction must be in [0, 1)")
         if not 0.0 <= self.cluster_size_exponent <= 1.0:
             raise ValueError("cluster_size_exponent must be between 0 and 1")
-        if self.length_reweight_gamma < 0:
-            raise ValueError("length_reweight_gamma must be non-negative")
 
 
 # ── Pandera Schema ─────────────────────────────────────────────────────────
@@ -510,17 +509,21 @@ def get_sample_weights(
         cluster_sizes = indices_df.groupby("cluster_id")["pdb_id"].transform("nunique")
         exp = config.cluster_size_exponent
         weights = cluster_sizes.astype("float32").pow(exp - 1.0)
+        length_gamma = config.length_reweight_gamma
+        if length_gamma != 0:
+            weights *= indices_df["num_tokens"].astype("float32").pow(length_gamma)
         n_clusters = indices_df["cluster_id"].nunique()
         logger.info(
             f"[cluster_balanced] {len(indices_df)} rows, {n_clusters} clusters, "
             f"exponent={exp} "
-            f"(per-cluster aggregate weight ∝ N^{exp}), "
+            f"length_gamma={length_gamma} "
+            f"(per-row weight ∝ N^({exp} - 1) * num_tokens^{length_gamma}), "
             f"largest cluster aggregate weight (vs singleton): "
             f"{cluster_sizes.max() ** exp:.1f}x"
         )
         return weights / weights.sum()
     elif sampler_type == "uniform":
-        if config.length_reweight_gamma > 0:
+        if config.length_reweight_gamma != 0:
             weights = (
                 indices_df["num_tokens"].astype("float32")
                 ** config.length_reweight_gamma

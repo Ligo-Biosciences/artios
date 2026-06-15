@@ -26,10 +26,10 @@ basic_configs = {
     "base_dir": RequiredValue(str),
     # training
     "checkpoint_grads": True,  # Enable gradient checkpointing in transformers
-    "eval_interval": RequiredValue(int),
-    "log_interval": RequiredValue(int),
-    "checkpoint_interval": -1,
-    "eval_first": False,  # run evaluate() before training steps
+    "eval_interval": 10000,
+    "log_interval": 100,
+    "checkpoint_interval": 10000,
+    "eval_first": True,  # run evaluate() before training steps
     "iters_to_accumulate": 1,
     "eval_only": False,
     "load_backbone_checkpoint_path": "",
@@ -48,10 +48,10 @@ basic_configs = {
     "neptune_run_id": "",
     "neptune_fork_run_id": "",
     "neptune_fork_step": "",
-    "seed": 42,
+    "seed": 43,
     "deterministic": False,
     "deterministic_seed": False,
-    "ema_decay": 0.999,
+    "ema_decay": 0.9999,
     "load_ema_checkpoint_path": "",
     "eval_ema_only": True,  # whether wandb only tracking ema checkpoint metrics
     "ema_mutable_param_keywords": [""],
@@ -59,11 +59,11 @@ basic_configs = {
 }
 data_configs = {
     # Data
-    "batch_size": 8,
-    "train_crop_size": 384,
+    "batch_size": 16,
+    "train_crop_size": 256,
     "test_crop_size": 256,
     "test_max_n_token": -1,
-    "train_lig_atom_rename": False,  # TODO:
+    "train_lig_atom_rename": True,  # TODO:
     "train_shuffle_mols": False,
     "train_shuffle_sym_ids": False,
     "test_lig_atom_rename": False,
@@ -72,10 +72,10 @@ data_configs = {
 }
 optim_configs = {
     # Optim
-    "lr": 2e-4,
-    "lr_scheduler": "af3",
+    "lr": 5e-4,
+    "lr_scheduler": "cosine_annealing",
     "warmup_steps": 2000,
-    "max_steps": RequiredValue(int),
+    "max_steps": 1000000,
     "decay_every_n_steps": 25000,  # 50000
     "grad_clip_norm": 3,
     "use_adamw": False,
@@ -101,7 +101,7 @@ optim_configs = {
     "cosine_annealing": {
         "warmup_steps": GlobalConfigValue("warmup_steps"),
         "hold_steps": 50_000,
-        "decay_steps": 150_000,
+        "decay_steps": 250_000,
         "min_lr_ratio": 0.1,
     },
 }
@@ -361,7 +361,7 @@ monitor_configs = {
 
 
 training_time_inference_configs = {
-    "run_training_time_inference": True,
+    "run_training_time_inference": False,
     "run_training_time_mpnn_inference_on_backbones": False,
     "seeds": ListValue([101]),
     "dump_dir": "./output",

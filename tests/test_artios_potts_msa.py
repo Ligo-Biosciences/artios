@@ -32,8 +32,6 @@ def _make_msa_configs(loss_type: str = "composite"):
                 "potts": {
                     "loss_type": loss_type,
                     "label_smoothing": 0.0,
-                    "active_site_upweight": 1.0,
-                    "active_site_distance": 8.0,
                     "n_msa_chunk": 8,
                     "supervise_query": True,
                 },
@@ -60,7 +58,6 @@ def _make_msa_configs(loss_type: str = "composite"):
                     "zero_sum_gauge": True,
                     "parameterisation": "linear",
                     "num_factors": 32,
-                    "masking_sampler": "linear",
                     "sampling": {
                         "proposal": "gibbs",
                         "n_sweeps": 5,

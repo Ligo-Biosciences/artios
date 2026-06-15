@@ -504,7 +504,6 @@ class TestPottsOutput:
             edge_index=torch.randint(0, N, (B, N, K), device=device),
             edge_mask=torch.ones(B, N, K, dtype=torch.bool, device=device),
             is_masked=torch.ones(B, N, dtype=torch.bool, device=device),
-            timestep=torch.rand(B, device=device),
         )
 
         assert output.h.shape == (B, N, R)
@@ -512,7 +511,7 @@ class TestPottsOutput:
         assert output.edge_index.shape == (B, N, K)
         assert output.edge_mask.shape == (B, N, K)
         assert output.is_masked.shape == (B, N)
-        assert output.timestep.shape == (B,)
+        assert output.timestep is None
 
 
 # ---------------------------------------------------------------------------

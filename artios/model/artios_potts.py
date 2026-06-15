@@ -5,7 +5,6 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from einops import repeat
 from torch import Tensor
 from torch.nn import functional as F
 from typing_extensions import assert_never
@@ -13,8 +12,6 @@ from typing_extensions import assert_never
 from artios.common.residue_stats import AA_FREQUENCIES, Organism
 from artios.data.features import FullContext
 from artios.model.generator import (
-    ExponentialMaskingTimestepSampler,
-    LinearMaskingTimestepSampler,
     PottsProposal,
     PottsSampler,
 )
@@ -48,11 +45,6 @@ ALPHABET_BIAS = 1e4
 logger = logging.getLogger(__name__)
 
 
-class MaskingSamplerType(str, Enum):
-    LINEAR = "linear"
-    EXPONENTIAL = "exponential"
-
-
 class PottsLossType(str, Enum):
     PSEUDO = "pseudo"
     COMPOSITE = "composite"
@@ -62,8 +54,6 @@ class PottsLossType(str, Enum):
 class PottsLossConfig:
     loss_type: PottsLossType = PottsLossType.COMPOSITE
     label_smoothing: float = 0.0
-    active_site_upweight: float = 1.0
-    active_site_distance: float = 8.0
     n_msa_chunk: int = 8
     supervise_query: bool = True
 
@@ -97,22 +87,9 @@ class ArtiosPotts(nn.Module):
         self.loss_config = PottsLossConfig(
             loss_type=potts_loss_cfg.loss_type,
             label_smoothing=potts_loss_cfg.label_smoothing,
-            active_site_upweight=potts_loss_cfg.active_site_upweight,
-            active_site_distance=potts_loss_cfg.active_site_distance,
             n_msa_chunk=potts_loss_cfg.n_msa_chunk,
             supervise_query=potts_loss_cfg.supervise_query,
         )
-
-        masking_sampler_type = MaskingSamplerType(
-            configs.artios_mpnn.potts.masking_sampler
-        )
-        match masking_sampler_type:
-            case MaskingSamplerType.LINEAR:
-                self.masking_sampler = LinearMaskingTimestepSampler()
-            case MaskingSamplerType.EXPONENTIAL:
-                self.masking_sampler = ExponentialMaskingTimestepSampler(b=0.01)
-            case _:
-                assert_never(masking_sampler_type)
 
         sampling_cfg = configs.artios_mpnn.potts.sampling
         self.cfg_scale = sampling_cfg.cfg_scale
@@ -162,18 +139,13 @@ class ArtiosPotts(nn.Module):
         self.net_charge_penalty_weight = sampling_cfg.net_charge_penalty_weight
         self.net_charge_target_per_residue = sampling_cfg.net_charge_target_per_residue
 
-    def _build_masked_inputs(self, context: FullContext) -> tuple[Tensor, Tensor]:
-        """Build masked restypes and is_masked from the context's fixed residues."""
-        if context.fixed_residues is not None:
-            is_masked = ~context.fixed_residues.fixed_mask & context.mask.token_mask
-            masked_restypes = self.mpnn.pad_and_mask_restypes(
-                context.fixed_residues.fixed_restype, is_masked
-            )
-        else:
-            is_masked = context.mask.token_mask
-            masked_restypes = self.mpnn.pad_and_mask_restypes(
-                context.token.restype, is_masked
-            )
+    def _build_sequence_blind_inputs(
+        self, context: FullContext
+    ) -> tuple[Tensor, Tensor]:
+        """Build all-mask decoder inputs so h/J do not depend on sequence."""
+        is_masked = context.mask.token_mask
+        blank_restypes = torch.zeros_like(context.token.restype)
+        masked_restypes = self.mpnn.pad_and_mask_restypes(blank_restypes, is_masked)
         return masked_restypes, is_masked
 
     def _run_ensemble(
@@ -245,7 +217,7 @@ class ArtiosPotts(nn.Module):
         )
 
         ### Conditional ensemble
-        masked_restypes, is_masked = self._build_masked_inputs(context)
+        masked_restypes, is_masked = self._build_sequence_blind_inputs(context)
         h, J, edge_index, edge_mask = self._run_ensemble(
             context, masked_restypes, is_masked, generator
         )
@@ -257,7 +229,9 @@ class ArtiosPotts(nn.Module):
                 f"Running unconditional ensemble for CFG (scale={self.cfg_scale})"
             )
             uncond_context = context.without_ligand()
-            uncond_masked, uncond_is_masked = self._build_masked_inputs(uncond_context)
+            uncond_masked, uncond_is_masked = self._build_sequence_blind_inputs(
+                uncond_context
+            )
             h_uncond, J_uncond, edge_index_uncond, edge_mask_uncond = (
                 self._run_ensemble(
                     uncond_context, uncond_masked, uncond_is_masked, generator
@@ -284,20 +258,18 @@ class ArtiosPotts(nn.Module):
             else None
         )
 
-        mutable_mask = build_mutable_mask(context.mask.token_mask, fixed_mask)
+        design_mask = (
+            context.mask.token_mask
+            & context.entity.is_protein_token
+            & ~context.motif.is_motif_related_token
+        )
+        mutable_mask = build_mutable_mask(design_mask, fixed_mask)
         alphabet_mask = build_alphabet_mask(
             mutable_mask, R, self.exclude_cys, self.exclude_met
         )
         energy_bias = build_energy_bias_vector(self.energy_bias, R, device)
         group_energy_bias = build_group_energy_bias_vector(
             self.group_energy_bias, R, device
-        )
-        S_init = build_s_init(
-            h,
-            self.potts_sampler.temperature_init,
-            fixed_mask,
-            fixed_restype,
-            generator,
         )
 
         ### Apply masks and biases
@@ -314,6 +286,20 @@ class ArtiosPotts(nn.Module):
             h = h + group_energy_bias
             if h_uncond is not None:
                 h_uncond = h_uncond + group_energy_bias
+
+        preserved_mask = context.mask.token_mask & ~mutable_mask
+        preserved_restype = context.token.restype.float()
+        if fixed_mask is not None and fixed_restype is not None:
+            preserved_restype = torch.where(
+                fixed_mask.unsqueeze(-1), fixed_restype, preserved_restype
+            )
+        S_init = build_s_init(
+            h,
+            self.potts_sampler.temperature_init,
+            preserved_mask,
+            preserved_restype,
+            generator,
+        )
 
         ### Penalty logic
         penalty_dict: dict[str, callable] = {}
@@ -441,25 +427,7 @@ class ArtiosPotts(nn.Module):
         context: FullContext,
         seed: Optional[int] = None,
     ) -> PottsOutput:
-        device = context.token.restype.device
-        B, N, _ = context.token.restype.shape
-
-        generator = (
-            torch.Generator(device).manual_seed(seed)
-            if not self.training and seed is not None
-            else None
-        )
-
-        timestep = self.masking_sampler.sample(
-            size=(B,), device=device, generator=generator
-        )
-        mask_rate = self.masking_sampler.get_mask_rates(timestep)
-
-        rand = torch.rand(B, N, device=device)
-        is_masked = (rand < mask_rate[:, None]) & context.mask.token_mask
-        masked_restypes = self.mpnn.pad_and_mask_restypes(
-            context.token.restype, is_masked
-        )
+        masked_restypes, is_masked = self._build_sequence_blind_inputs(context)
 
         mpnn_output = self.mpnn(
             context=context,
@@ -481,7 +449,6 @@ class ArtiosPotts(nn.Module):
             edge_index=mpnn_output.edge_index,
             edge_mask=mpnn_output.edge_mask,
             is_masked=mpnn_output.is_masked,
-            timestep=timestep,
         )
 
     def forward(
@@ -520,7 +487,7 @@ class ArtiosPotts(nn.Module):
         all reuse the same code. Pseudo-likelihood + MSA is rejected.
 
         Args:
-            output: PottsOutput containing h, J, masking info, and timestep.
+            output: PottsOutput containing h, J, and graph topology.
             context: Full context containing ground truth sequence and masks.
 
         Returns:
@@ -528,28 +495,13 @@ class ArtiosPotts(nn.Module):
         """
         gt_seq = context.token.restype.argmax(dim=-1)
         labels = context.token.restype.float()
-        is_resolved = context.mask.centre_atom_is_resolved
-        mask = output.is_masked & is_resolved
-
-        _, N = gt_seq.shape
-
-        sampler_weight = self.masking_sampler.get_loss_weights(output.timestep)  # [B]
+        mask = (
+            context.mask.token_mask
+            & context.mask.centre_atom_is_resolved
+            & context.entity.is_protein_token
+            & ~context.motif.is_motif_related_token
+        )
         eps = 1e-6
-
-        if self.loss_config.active_site_upweight > 1.0:
-            active_site = build_backbone_ligand_proximity_mask(
-                backbone_coordinate=context.coordinate.backbone_coordinate,
-                centre_coordinate=context.coordinate.centre_coordinate,
-                is_ligand_token=context.entity.is_ligand_token,
-                token_mask=context.mask.token_mask,
-                backbone_mask=context.mask.backbone_mask,
-                distance_cutoff=self.loss_config.active_site_distance,
-            )  # [B, N]
-            position_weight = torch.where(
-                active_site, self.loss_config.active_site_upweight, 1.0
-            )  # [B, N]
-        else:
-            position_weight = None
 
         match self.loss_config.loss_type:
             case PottsLossType.PSEUDO:
@@ -600,12 +552,7 @@ class ArtiosPotts(nn.Module):
             case _:
                 assert_never(self.loss_config.loss_type)
 
-        # Get loss weight
-        loss_weight = repeat(sampler_weight, "B -> B N", N=N)
-        if position_weight is not None:
-            loss_weight = loss_weight * position_weight
-
-        loss = masked_mean(loss_weight * per_position_nll, mask, axes=-1).mean()
+        loss = masked_mean(per_position_nll, mask, axes=-1).mean()
 
         # Metrics
         metrics: dict[str, Tensor] = {}

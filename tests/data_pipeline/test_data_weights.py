@@ -228,18 +228,26 @@ def _make_test_df() -> pd.DataFrame:
 
 
 @pytest.fixture
-def beta_dict():
-    return {RowType.CHAIN: 0.5, RowType.INTERFACE: 1}
-
-
-@pytest.fixture
-def alpha_dict():
-    return {MolType.PROT: 3, MolType.NUC: 3, MolType.LIGAND: 1}
-
-
-@pytest.fixture
 def weights_config():
     return DataWeightsConfig()
+
+
+@pytest.fixture
+def beta_dict(weights_config):
+    return weights_config.beta_dict
+
+
+@pytest.fixture
+def alpha_dict(weights_config):
+    return weights_config.alpha_dict
+
+
+@pytest.fixture
+def all_types_weighted_config():
+    """Default ``alpha_nuc`` is 0.0, which zeroes the nuc rows in the test
+    DataFrame. The cluster-size and positivity invariants below are about the
+    weighting mechanics, so give every mol type a positive alpha."""
+    return DataWeightsConfig(alpha_prot=3.0, alpha_nuc=3.0, alpha_ligand=1.0)
 
 
 class TestCalcWeightsForDf:
@@ -273,11 +281,11 @@ class TestCalcWeightsForDf:
         assert result.loc[2, "pdb_sorted_entity_id_member_num"] == 2
         assert result.loc[4, "pdb_sorted_entity_id_member_num"] == 1
 
-    def test_larger_cluster_lower_weight(self, weights_config):
+    def test_larger_cluster_lower_weight(self, all_types_weighted_config):
         """A chain in a 2-member cluster should weigh less than an identical
         chain in a singleton cluster (weight ~ 1/cluster_size)."""
         df = _make_test_df()
-        result = calc_weights_for_df(df.copy(), weights_config)
+        result = calc_weights_for_df(df.copy(), all_types_weighted_config)
 
         # Row 0: prot chain in cluster clA (size 2 entities: 1abc and 2def)
         # Row 5: nuc chain in cluster clC (size 1 entity: 4jkl)
@@ -286,9 +294,9 @@ class TestCalcWeightsForDf:
         w_clC_chain = result.loc[5, "weights"]
         assert w_clA_chain < w_clC_chain
 
-    def test_no_zero_weights(self, weights_config):
+    def test_no_zero_weights(self, all_types_weighted_config):
         df = _make_test_df()
-        result = calc_weights_for_df(df.copy(), weights_config)
+        result = calc_weights_for_df(df.copy(), all_types_weighted_config)
         assert (result["weights"] > 0).all()
 
 

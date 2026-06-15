@@ -730,12 +730,10 @@ class ContextGenerator:
 def compute_motif_depth_norm(structure: AnnotatedStructure, eps: float = 1e-6) -> float:
     """Normalised motif depth of a complete structure.
 
-    ``||CoM(resolved motif atoms) - CoM(resolved non-motif atoms)|| / Rg_complex``,
-    where Rg_complex is the radius of gyration of all resolved atoms. Returns the
-    null sentinel (-1.0) when the structure has no resolved motif or no resolved
-    non-motif atoms. This is decided upstream (by the dataset for training) and
-    handed to ``ContextGenerator``; it is never called on an inference input,
-    where the non-motif coordinates do not yet exist.
+    ``||CoM(motif atoms) - CoM(non-motif atoms)|| / Rg_complex``,
+    where Rg_complex is the radius of gyration of all resolved atoms. Returns -1.0
+    when the structure has no resolved motif or no resolved
+    non-motif atoms.
     """
     coord = structure.atoms.coord
     if structure.motif is not None:

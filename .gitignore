@@ -36,6 +36,8 @@ notebooks/PDBs_noise_*/
 # Reference distributions
 reference-dists/
 
+p-data-eng/
+
 # Pocket detection training cache
 artios/data/pocket/cache/
 

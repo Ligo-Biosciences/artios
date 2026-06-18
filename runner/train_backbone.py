@@ -230,12 +230,14 @@ class ArtiosBackboneTrainer(object):
                         else None
                     ),
                     "step": self.step,
+                    "step_is_completed_count": True,
                 }
             else:
                 # Save model and step (used for EMA wrappers)
                 checkpoint = {
                     "model": self.backbone_model.state_dict(),
                     "step": self.step,
+                    "step_is_completed_count": True,
                 }
 
             torch.save(checkpoint, path)
@@ -275,7 +277,12 @@ class ArtiosBackboneTrainer(object):
                     self.optimizer.load_state_dict(checkpoint["optimizer"])
                 if not skip_load_step:
                     self.print("Loading checkpoint step")
-                    self.step = checkpoint["step"] + 1
+                    checkpoint_step = checkpoint["step"]
+                    self.step = (
+                        checkpoint_step
+                        if checkpoint.get("step_is_completed_count", False)
+                        else checkpoint_step + 1
+                    )
                     self.start_step = self.step
                     self.global_step = self.step * self.iters_to_accumulate
                 if not skip_load_scheduler:
@@ -467,9 +474,6 @@ class ArtiosBackboneTrainer(object):
 
         # For simplicity, the global training step is used
         if (self.global_step + 1) % self.iters_to_accumulate == 0:
-            self.print(
-                f"self.step {self.step}, self.iters_to_accumulate: {self.iters_to_accumulate}"
-            )
             # Unscales the gradients of optimizer's assigned parameters in-place
             self.scaler.unscale_(self.optimizer)
             self.on_before_optimizer_step()
@@ -483,7 +487,7 @@ class ArtiosBackboneTrainer(object):
                 continue
             self.train_metric_wrapper.add(key, value, namespace="train")
 
-    def progress_bar(self, desc: str = ""):
+    def progress_bar(self, desc: str = "", display_step: int | None = None):
         if DIST_WRAPPER.rank != 0:
             return
         if self.global_step % (
@@ -500,8 +504,9 @@ class ArtiosBackboneTrainer(object):
             self._ipbar = iter(self._pbar)
 
         step = next(self._ipbar)
+        display_step = self.step if display_step is None else display_step
         self._pbar.set_description(
-            f"[step {self.step}: {step}/{self.iters_to_accumulate * self.configs.eval_interval}] {desc}"
+            f"[step {display_step}: {step}/{self.iters_to_accumulate * self.configs.eval_interval}] {desc}"
         )
         return
 
@@ -655,16 +660,17 @@ class ArtiosBackboneTrainer(object):
                     is_update_step = (
                         self.global_step + 1
                     ) % self.iters_to_accumulate == 0
-                    is_last_step = (self.step + 1) == self.configs.max_steps
-                    step_need_log = (self.step + 1) % self.configs.log_interval == 0
+                    next_step = self.step + 1 if is_update_step else self.step
+                    is_last_step = next_step == self.configs.max_steps
+                    step_need_log = next_step % self.configs.log_interval == 0
 
                     step_need_eval = (
                         self.configs.eval_interval > 0
-                        and (self.step + 1) % self.configs.eval_interval == 0
+                        and next_step % self.configs.eval_interval == 0
                     )
                     step_need_save = (
                         self.configs.checkpoint_interval > 0
-                        and (self.step + 1) % self.configs.checkpoint_interval == 0
+                        and next_step % self.configs.checkpoint_interval == 0
                     )
 
                     is_save_training_sample_step = self.global_step < 20
@@ -679,11 +685,15 @@ class ArtiosBackboneTrainer(object):
                     if is_save_training_sample_step:
                         self.save_training_sample(context, motif_as_b_factor=True)
 
-                    self.progress_bar()
+                    self.progress_bar(display_step=next_step)
                     self.train_step(context)
 
                     if use_ema and is_update_step:
                         self.ema_wrapper.update()
+
+                    self.global_step += 1
+                    if is_update_step:
+                        self.step = next_step
 
                     if step_need_log or is_last_step:
                         metrics = self.train_metric_wrapper.calc()
@@ -712,10 +722,6 @@ class ArtiosBackboneTrainer(object):
                     if step_need_eval or is_last_step:
                         self.evaluate()
                         self.on_validation_epoch_end()
-
-                    self.global_step += 1
-                    if self.global_step % self.iters_to_accumulate == 0:
-                        self.step += 1
 
                     if self.step >= self.configs.max_steps:
                         self.print(f"Finish training after {self.step} steps")

@@ -198,6 +198,7 @@ model_configs = {
                     "aromatic": 0.0,
                     "anionic": 0.0,
                     "cationic": 0.0,
+                    "polar": 0.0,
                 },
                 "aromatic_penalty_weight": 0.0,
                 "aromatic_target_fraction": 0.25,

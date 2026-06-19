@@ -158,7 +158,7 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
 #        )
 
 data_configs = {
-    "num_dl_workers": 16,
+    "num_dl_workers": 24,
     "prefetch_factor": 2,
     "worker_batching": True,  # Collate batches in workers instead of main process
     "epoch_size": 10000,
@@ -171,7 +171,7 @@ data_configs = {
     "motif_train_rate": 1.0,
     # Probability of nulling the normalised motif-depth conditioning per training
     # sample (so the model also learns the unconditioned behaviour).
-    "motif_depth_dropout_prob": 0.5,
+    "motif_depth_dropout_prob": 0.1,
     "padding": {
         "max_n_template": 4,
         "max_n_pocket": 16,
@@ -179,8 +179,8 @@ data_configs = {
         # "atom_bin_ends": ListValue([2112, 3008, 4000]),
         # "token_bin_ends": ListValue([384]),
         # motif scaffolding training:
-        "atom_bin_ends": ListValue([1536, 1728]),
-        "token_bin_ends": ListValue([440, 600]),
+        "atom_bin_ends": ListValue([1280, 1536, 1728, 2112, 3008]),
+        "token_bin_ends": ListValue([256, 270, 290, 384, 440, 500, 540]),
     },
     # v1 MSA pipeline. Default disabled — existing runs unchanged. See
     # artios/data/msa/CLAUDE.md for the design contract.
@@ -204,17 +204,14 @@ data_configs = {
     "train_sets": ListValue(
         [
             "weightedPDB_before2021_wopb_nometalc_0925",
-            "afdb_trousers_train",
             "mgnify_trousers_train",
         ]
     ),
     "train_sampler": {
-        "train_sample_weights": ListValue([0.00, 0.4, 0.6]),
+        "train_sample_weights": ListValue([0.5, 0.5]),
         "sampler_type": "weighted",
     },
-    "test_sets": ListValue(
-        ["afdb_trousers_val", "mgnify_trousers_val", "recentPDB_1536_sample384_0925"]
-    ),
+    "test_sets": ListValue(["mgnify_trousers_val", "recentPDB_1536_sample384_0925"]),
     "weightedPDB_before2021_wopb_nometalc_0925": {
         "base_info": {
             "mmcif_dir": os.path.join(DATA_ROOT_DIR, "mmcif"),
@@ -230,7 +227,7 @@ data_configs = {
             ],
             # "pdb_inclusion_list": ["1abc", "2xyz"],  # uncomment to debug specific PDBs
             "random_sample_if_failed": True,
-            "max_n_token": -1,
+            "max_n_token": 4000,
             "max_resolution": -1.0,
             "use_reference_chains_only": False,
             "exclusion": {

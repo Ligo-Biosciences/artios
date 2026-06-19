@@ -10,6 +10,7 @@ from artios.data.data_weights import (
     MolType,
     RowType,
     calc_weights_for_df,
+    get_sample_weights,
     get_weighted_pdb_weight,
 )
 
@@ -353,7 +354,51 @@ class TestExclusionDict:
         assert list(ref["pdb_id"]) == list(new["pdb_id"])
 
 
+class TestGetSampleWeights:
+    def test_uniform_honors_negative_length_gamma(self):
+        df = pd.DataFrame({"num_tokens": [100, 400]})
+        weights = get_sample_weights(
+            sampler_type="uniform",
+            indices_df=df,
+            config=DataWeightsConfig(length_reweight_gamma=-1.0),
+        )
+
+        np.testing.assert_allclose(weights.to_numpy(), [0.8, 0.2], rtol=1e-6)
+
+    def test_cluster_balanced_honors_negative_length_gamma(self):
+        df = pd.DataFrame(
+            {
+                "cluster_id": ["cluster_a", "cluster_a", "cluster_b", "cluster_c"],
+                "pdb_id": ["pdb_1", "pdb_2", "pdb_3", "pdb_4"],
+                "num_tokens": [100, 400, 100, 200],
+            }
+        )
+        config = DataWeightsConfig(
+            cluster_size_exponent=0.5,
+            length_reweight_gamma=-1.0,
+        )
+
+        weights = get_sample_weights(
+            sampler_type="cluster_balanced",
+            indices_df=df,
+            config=config,
+        )
+
+        cluster_sizes = np.array([2, 2, 1, 1], dtype=np.float32)
+        lengths = np.array([100, 400, 100, 200], dtype=np.float32)
+        expected = (cluster_sizes ** (0.5 - 1.0)) * (lengths**-1.0)
+        expected = expected / expected.sum()
+        np.testing.assert_allclose(weights.to_numpy(), expected, rtol=1e-6)
+        assert weights.iloc[0] > weights.iloc[1]
+
+
 class TestDataWeightsConfig:
+    def test_default_short_sequence_sampling_dial(self):
+        config = DataWeightsConfig()
+
+        assert config.cluster_size_exponent == 0.5
+        assert config.length_reweight_gamma == -1.0
+
     def test_custom_config_changes_weights(self):
         """Non-default alpha/beta values produce different weights."""
         df = _make_test_df()
@@ -376,9 +421,10 @@ class TestDataWeightsConfig:
         with pytest.raises(ValueError, match="balance_percentile"):
             DataWeightsConfig(balance_percentile=-0.1)
 
-    def test_unexpected_kwargs_rejected(self):
-        from artios.data.data_weights import get_sample_weights
+    def test_accepts_negative_length_reweight_gamma(self):
+        assert DataWeightsConfig(length_reweight_gamma=-1.0).length_reweight_gamma == -1
 
+    def test_unexpected_kwargs_rejected(self):
         df = _make_test_df()
         with pytest.raises(TypeError):
             get_sample_weights(

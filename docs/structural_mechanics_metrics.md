@@ -296,7 +296,7 @@ We start with Option A. If we need bonded-term decomposition later, upgrade to O
 
 ### Integration with Evaluation Pipeline
 
-Each metric becomes a `BatchComponent` following the pattern in `evaluation/batch_components/`. Constants in `evaluation/utils/constants.py`, Modal functions in `batch_functions/`, deploy via `deploy_all_batched.py`.
+Each metric becomes an `EvalComponent` following the pattern in `evaluation/batch_components/`. Constants in `evaluation/utils/constants.py`, Modal functions in `batch_functions/`, deploy via `deploy_all_batched.py`.
 
 ---
 

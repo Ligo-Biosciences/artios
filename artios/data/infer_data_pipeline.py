@@ -59,9 +59,18 @@ def get_inference_dataloader(
     except (AttributeError, KeyError, TypeError):
         motif_depth_norm = -1.0
 
+    try:
+        rasa_value = float(configs.rasa.inference_value)
+    except (AttributeError, KeyError, TypeError):
+        rasa_value = -1.0
+
     match sample_input:
         case BackboneInput():
-            dataset = MotifDataset(sample_input, motif_depth_norm=motif_depth_norm)
+            dataset = MotifDataset(
+                sample_input,
+                motif_depth_norm=motif_depth_norm,
+                rasa_value=rasa_value,
+            )
             motif_training = True
         case SequenceDesignInput():
             dataset = MPNNDataset(sample_input)
@@ -106,10 +115,14 @@ class MotifDataset(Dataset):
     """
 
     def __init__(
-        self, backbone_input: BackboneInput, motif_depth_norm: float = -1.0
+        self,
+        backbone_input: BackboneInput,
+        motif_depth_norm: float = -1.0,
+        rasa_value: float = -1.0,
     ) -> None:
         self.backbone_input = backbone_input
         self.motif_depth_norm = motif_depth_norm
+        self.rasa_value = rasa_value
 
     def __len__(self) -> int:
         return 1
@@ -126,6 +139,7 @@ class MotifDataset(Dataset):
             pdb_id=sample_name,
             original_motif_mapping=original_motif_mapping,
             motif_depth_norm=self.motif_depth_norm,
+            rasa_value=self.rasa_value,
         ).get_full_context()
 
 
@@ -164,8 +178,7 @@ class MPNNDataset(Dataset):
         backbone_sample_idx = self.backbone_index_map[index]
         sample_name = f"{self.sequence_input.name}_model_{index}"
         logger.info(
-            f"Featurizing {sample_name} "
-            f"(backbone_sample_idx {backbone_sample_idx})..."
+            f"Featurizing {sample_name} (backbone_sample_idx {backbone_sample_idx})..."
         )
 
         structure, _ = sequence_design_input_to_structure(

@@ -131,6 +131,12 @@ model_configs = {
         # Inference: target normalised depth to condition on; < 0 => unconditioned (null).
         "inference_value": -1.0,
     },
+    # Conditioning on ligand RASA (fractional exposure in [0, 1]). The training
+    # dropout probability lives in configs_data.rasa_dropout_prob.
+    "rasa": {
+        # Inference: target ligand exposure to condition on; < 0 => unconditioned (null).
+        "inference_value": -1.0,
+    },
     "artios_mpnn": {
         "train_zero_shot": False,
         "model": {

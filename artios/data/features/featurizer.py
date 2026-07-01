@@ -823,9 +823,13 @@ def compute_ligand_rasa(structure: AnnotatedStructure) -> np.ndarray:
 
     # sasa() returns NaN off-filter; the filtered atoms are scored in the
     # context of the whole `heavy` array (i.e. buried by the protein).
-    sasa_complex = sasa(heavy, atom_filter=ligand_in_heavy, vdw_radii="Single")
+    sasa_complex = sasa(
+        heavy, atom_filter=ligand_in_heavy, ignore_ions=False, vdw_radii="Single"
+    )
     sasa_complex_lig = sasa_complex[ligand_in_heavy]
-    sasa_alone = sasa(structure.atoms[ligand_ctx], vdw_radii="Single")
+    sasa_alone = sasa(
+        structure.atoms[ligand_ctx], ignore_ions=False, vdw_radii="Single"
+    )
 
     exposure = np.zeros(len(sasa_alone), dtype=np.float32)
     nonzero = sasa_alone > 0

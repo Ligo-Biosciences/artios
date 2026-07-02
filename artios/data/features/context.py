@@ -439,6 +439,22 @@ class MotifContext(Context):
 
 @typecheck
 @dataclass
+class RasaContext(Context):
+    """Relative solvent accessibility (RASA) conditioning features."""
+
+    rasa: Feature(
+        Float[Tensor, "*batch n_token"],
+        type=FeatureType.TOKEN,
+        encoding=EncodingType.IDENTITY,
+        description=(
+            "Per-token ligand fractional exposure SASA(complex) / SASA(isolated) "
+            "in [0, 1]; -1.0 = null / unconditioned. Non-ligand tokens are -1.0."
+        ),
+    )
+
+
+@typecheck
+@dataclass
 class FixedResidueContext(Context):
     """Identity-fixed residue information for sequence design.
 
@@ -574,6 +590,7 @@ class FullContext:
     entity: EntityContext
     coordinate: CoordinateContext
     basic: BasicContext
+    rasa: RasaContext
     # NOTE: Temporarily optional - expensive to compute, currently unused
     atom_perm: AtomPermContext = field(default_factory=AtomPermContext)
     fixed_residues: FixedResidueContext | None = None
@@ -687,6 +704,7 @@ class FullContext:
             entity=uncond_entity,
             coordinate=self.coordinate,
             basic=self.basic,
+            rasa=self.rasa,
             fixed_residues=self.fixed_residues,
             msa=self.msa,
         )
@@ -745,6 +763,14 @@ class FullContext:
             backbone_coordinate=self.coordinate.backbone_coordinate,
         )
 
+        new_rasa = RasaContext(
+            rasa=torch.where(
+                not_lig_tok,
+                self.rasa.rasa,
+                torch.full_like(self.rasa.rasa, -1.0),
+            ),
+        )
+
         return FullContext(
             token=self.token,
             reference=self.reference,
@@ -755,6 +781,7 @@ class FullContext:
             entity=new_entity,
             coordinate=new_coordinate,
             basic=self.basic,
+            rasa=new_rasa,
             fixed_residues=self.fixed_residues,
             msa=self.msa,
         )
@@ -791,6 +818,7 @@ class FullContext:
         index = IndexContext.from_dict(d.get("index", {}))
         entity = EntityContext.from_dict(d.get("entity", {}))
         coordinate = CoordinateContext.from_dict(d.get("coordinate", {}))
+        rasa = RasaContext.from_dict(d.get("rasa", {}))
 
         # BasicContext requires non-tensor fields - use placeholder if not provided
         if basic_context is None:
@@ -834,6 +862,7 @@ class FullContext:
             entity=entity,
             coordinate=coordinate,
             basic=basic_context,
+            rasa=rasa,
             fixed_residues=fixed_residues,
             msa=msa,
         )

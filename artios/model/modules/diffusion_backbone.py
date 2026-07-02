@@ -52,6 +52,8 @@ class DiffusionConditioningConfig:
     motif_dist_bin_size: float = 0.25
     motif_depth_max: float = 2.0
     motif_depth_bin_size: float = 0.05
+    rasa_max: float = 1.0
+    rasa_bin_size: float = 0.05
 
     def __post_init__(self) -> None:
         if self.c_timestep_embedding <= 0:
@@ -64,6 +66,10 @@ class DiffusionConditioningConfig:
             raise ValueError("motif_depth_max must be greater than 0")
         if self.motif_depth_bin_size <= 0:
             raise ValueError("motif_depth_bin_size must be greater than 0")
+        if self.rasa_max <= 0:
+            raise ValueError("rasa_max must be greater than 0")
+        if self.rasa_bin_size <= 0:
+            raise ValueError("rasa_bin_size must be greater than 0")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -178,6 +184,15 @@ class DiffusionConditioning(nn.Module):
         self.embed_motif_depth = LinearNoBias(
             self.n_motif_depth_bins, self.c_s, init="normal"
         )
+
+        # RASA (ligand fractional exposure) conditioning: fine bins over
+        # [0, rasa_max), one overflow bin (>= max) and one null bin (rasa < 0).
+        self.rasa_bin_size = config.rasa_bin_size
+        self.n_rasa_fine_bins = int(config.rasa_max / config.rasa_bin_size)
+        self.rasa_overflow_bin = self.n_rasa_fine_bins
+        self.rasa_null_bin = self.n_rasa_fine_bins + 1
+        self.n_rasa_bins = self.n_rasa_fine_bins + 2
+        self.embed_rasa = LinearNoBias(self.n_rasa_bins, self.c_s, init="normal")
 
         ### Token bonds
         # self.token_bonds_embed = LinearNoBias(
@@ -418,6 +433,33 @@ class DiffusionConditioning(nn.Module):
         return s_motif_depth * context.mask.token_mask[..., None]
 
     @typecheck
+    def get_rasa_condition(
+        self,
+        context: FullContext,
+    ) -> Float[Tensor, "... n_token c_s"]:
+        """Embed the per-token ligand RASA conditioning into the single stream.
+
+        ``rasa`` is per-token ligand fractional exposure in [0, rasa_max) (or
+        -1.0 for the null / unconditioned case, which every non-ligand token
+        also carries). Values are discretised into fine bins over
+        ``[0, rasa_max)``, an overflow bin (>= max), and a dedicated null bin,
+        then embedded and masked to real tokens.
+        """
+        rasa = context.rasa.rasa  # [..., n_token]
+        bin_idx = torch.floor(rasa / self.rasa_bin_size).long()
+        bin_idx = bin_idx.clamp(min=0, max=self.rasa_overflow_bin)
+        bin_idx = torch.where(
+            rasa < 0,
+            torch.full_like(bin_idx, self.rasa_null_bin),
+            bin_idx,
+        )
+        rasa_onehot = F.one_hot(bin_idx, num_classes=self.n_rasa_bins).to(
+            context.reference.ref_pos.dtype
+        )
+        s_rasa = self.embed_rasa(rasa_onehot)
+        return s_rasa * context.mask.token_mask[..., None]
+
+    @typecheck
     def compute_cache(self, context: FullContext) -> CachedConditioning:
         """Compute timestep-independent conditioning that can be reused across sampling steps.
 
@@ -438,6 +480,9 @@ class DiffusionConditioning(nn.Module):
         # Motif depth (normalised) conditioning, single stream only
         s_motif_depth = self.get_motif_depth_condition(context)
 
+        # RASA (ligand fractional exposure) conditioning, single stream only
+        s_rasa = self.get_rasa_condition(context)
+
         # Pair: combine atom + motif, add relpos, layernorm + linear, transition
         z = z_atom + z_motif
 
@@ -452,8 +497,8 @@ class DiffusionConditioning(nn.Module):
         z = self.linear_no_bias_z(self.layernorm_z(z))
         z = z + checkpoint(self.transition_z, z, use_reentrant=False)
 
-        # Single base: atom + motif + motif depth + entity types
-        s_base = s_atom + s_motif + s_motif_depth
+        # Single base: atom + motif + motif depth + RASA + entity types
+        s_base = s_atom + s_motif + s_motif_depth + s_rasa
 
         s_entity_type = self.entity_type_embed(
             torch.stack(

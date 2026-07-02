@@ -33,4 +33,8 @@ uv run --project "${PROJECT_ROOT}" torchrun \
   --run_name "${RUN_NAME}" \
   --base_dir "${BASE_DIR}" \
   --project "${PROJECT}" \
-  --use_wandb "${USE_WANDB}"
+  --use_wandb "${USE_WANDB}" \
+  --data.train_sets weightedPDB_before2021_wopb_nometalc_0925 \
+  --data.train_sampler.train_sample_weights 1.0 \
+  --train_crop_size 256 \
+  --data.rasa_dropout_prob 0.1

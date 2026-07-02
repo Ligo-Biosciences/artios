@@ -18,6 +18,7 @@ from artios.data.features import (
     IndexContext,
     MaskContext,
     MotifContext,
+    RasaContext,
     ReferenceConformerContext,
     TokenContext,
 )
@@ -118,6 +119,11 @@ def create_test_context(
         motif_depth_norm=torch.full((batch_size, n_tokens), 0.5, device=device),
     )
 
+    # RasaContext
+    rasa = RasaContext(
+        rasa=torch.full((batch_size, n_tokens), -1.0, device=device),
+    )
+
     # IndexContext
     index = IndexContext(
         atom_to_token_idx=(
@@ -183,4 +189,5 @@ def create_test_context(
         entity=entity,
         coordinate=coordinate,
         basic=basic,
+        rasa=rasa,
     )

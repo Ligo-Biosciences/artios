@@ -436,7 +436,9 @@ class ContextGenerator:
 
         Training reads the per-atom ``rasa`` annotation (computed pre-strip and
         carried through motif processing); inference broadcasts the scalar
-        ``rasa_value`` onto ligand tokens. Non-ligand tokens are -1.0 (null).
+        ``rasa_value`` onto ligand tokens, unless the input JSON supplied a
+        per-atom RASA map (mapped atoms carry their score; unmapped ligand atoms
+        are NaN and fall back to ``rasa_value`` here). Non-ligand tokens are -1.0.
         """
         centre = self.centre_atom_indices
         n_tokens = self.s.grouping.n_tokens
@@ -447,6 +449,11 @@ class ContextGenerator:
         if self.s.training.rasa is not None:
             rasa_token = torch.from_numpy(
                 self.s.training.rasa[centre].astype(np.float32)
+            )
+            rasa_token = torch.where(
+                torch.isnan(rasa_token),
+                torch.full_like(rasa_token, float(self.rasa_value)),
+                rasa_token,
             )
         else:
             rasa_token = torch.full(

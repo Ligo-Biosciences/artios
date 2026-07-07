@@ -22,6 +22,7 @@ class Organism(str, Enum):
     MOUSE = "mouse"
     ARABIDOPSIS = "arabidopsis"
     FLY = "fly"
+    PDB = "pdb"
 
 
 @dataclass(frozen=True)
@@ -399,6 +400,52 @@ AA_FREQUENCIES: Mapping[Organism, OrganismAAFrequencies] = {
             residue_names.TRP: 0.0067,
             residue_names.TYR: 0.0119,
             residue_names.VAL: 0.0162,
+        },
+    ),
+    Organism.PDB: OrganismAAFrequencies(
+        mean={
+            residue_names.ALA: 0.0756,
+            residue_names.ARG: 0.0519,
+            residue_names.ASN: 0.0449,
+            residue_names.ASP: 0.0598,
+            residue_names.CYS: 0.0147,
+            residue_names.GLN: 0.0387,
+            residue_names.GLU: 0.0699,
+            residue_names.GLY: 0.0703,
+            residue_names.HIS: 0.0238,
+            residue_names.ILE: 0.0566,
+            residue_names.LEU: 0.0907,
+            residue_names.LYS: 0.0639,
+            residue_names.MET: 0.0157,
+            residue_names.PHE: 0.0402,
+            residue_names.PRO: 0.0448,
+            residue_names.SER: 0.0620,
+            residue_names.THR: 0.0548,
+            residue_names.TRP: 0.0140,
+            residue_names.TYR: 0.0360,
+            residue_names.VAL: 0.0719,
+        },
+        std={
+            residue_names.ALA: 0.0362,
+            residue_names.ARG: 0.0274,
+            residue_names.ASN: 0.0241,
+            residue_names.ASP: 0.0207,
+            residue_names.CYS: 0.0196,
+            residue_names.GLN: 0.0209,
+            residue_names.GLU: 0.0283,
+            residue_names.GLY: 0.0360,
+            residue_names.HIS: 0.0153,
+            residue_names.ILE: 0.0253,
+            residue_names.LEU: 0.0316,
+            residue_names.LYS: 0.0316,
+            residue_names.MET: 0.0142,
+            residue_names.PHE: 0.0181,
+            residue_names.PRO: 0.0211,
+            residue_names.SER: 0.0252,
+            residue_names.THR: 0.0248,
+            residue_names.TRP: 0.0116,
+            residue_names.TYR: 0.0186,
+            residue_names.VAL: 0.0251,
         },
     ),
 }

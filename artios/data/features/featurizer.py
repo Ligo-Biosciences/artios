@@ -5,7 +5,7 @@ from typing import Union
 import numpy as np
 import torch
 import torch.nn.functional as F
-from biotite.structure import AtomArray, get_residue_starts
+from biotite.structure import AtomArray, get_residue_starts, sasa
 from sklearn.neighbors import KDTree  # TODO: switch to scipy
 
 from artios.common.constants import (
@@ -25,6 +25,7 @@ from artios.data.features import (
     IndexContext,
     MaskContext,
     MotifContext,
+    RasaContext,
     ReferenceConformerContext,
     TokenContext,
 )
@@ -50,6 +51,7 @@ class ContextGenerator:
         lig_atom_rename: bool = False,
         msa: MSA | None = None,
         motif_depth_norm: float = -1.0,
+        rasa_value: float = -1.0,
     ) -> None:
         self.s = structure
         self.pdb_id = pdb_id
@@ -62,6 +64,10 @@ class ContextGenerator:
         # structure for training, taken from config for inference) and broadcast
         # to every token in get_motif_context. -1.0 = null / unconditioned.
         self.motif_depth_norm = motif_depth_norm
+        # Inference-time RASA target, broadcast to ligand tokens in
+        # get_rasa_context. Training instead reads the per-atom rasa annotation
+        # carried on the structure. -1.0 = null / unconditioned.
+        self.rasa_value = rasa_value
 
         self.atom_to_token_idx = torch.from_numpy(
             self.s.grouping.atom_token_index
@@ -425,6 +431,40 @@ class ContextGenerator:
             motif_depth_norm=motif_depth_norm,
         )
 
+    def get_rasa_context(self) -> RasaContext:
+        """Get per-token ligand RASA conditioning.
+
+        Training reads the per-atom ``rasa`` annotation (computed pre-strip and
+        carried through motif processing); inference broadcasts the scalar
+        ``rasa_value`` onto ligand tokens, unless the input JSON supplied a
+        per-atom RASA map (mapped atoms carry their score; unmapped ligand atoms
+        are NaN and fall back to ``rasa_value`` here). Non-ligand tokens are -1.0.
+        """
+        centre = self.centre_atom_indices
+        n_tokens = self.s.grouping.n_tokens
+        is_ligand_token = torch.from_numpy(
+            self.s.type_masks.is_ligand.astype(bool)[centre]
+        )
+
+        if self.s.training.rasa is not None:
+            rasa_token = torch.from_numpy(
+                self.s.training.rasa[centre].astype(np.float32)
+            )
+            rasa_token = torch.where(
+                torch.isnan(rasa_token),
+                torch.full_like(rasa_token, float(self.rasa_value)),
+                rasa_token,
+            )
+        else:
+            rasa_token = torch.full(
+                (n_tokens,), float(self.rasa_value), dtype=torch.float32
+            )
+
+        rasa_token = torch.where(
+            is_ligand_token, rasa_token, torch.full_like(rasa_token, -1.0)
+        )
+        return RasaContext(rasa=rasa_token)
+
     def get_coordinate_context(self) -> CoordinateContext:
         """Get coordinates features.
 
@@ -568,6 +608,7 @@ class ContextGenerator:
             entity=self.get_entity_context(),
             coordinate=self.get_coordinate_context(),
             basic=self.get_basic_context(include_arrays=include_arrays),
+            rasa=self.get_rasa_context(),
             fixed_residues=self.get_fixed_residue_context(fixed_residues)
             if fixed_residues
             else None,
@@ -752,6 +793,59 @@ def compute_motif_depth_norm(structure: AnnotatedStructure, eps: float = 1e-6) -
     c_complex = coord[is_resolved].mean(axis=0)
     rg = float(np.sqrt(np.mean(((coord[is_resolved] - c_complex) ** 2).sum(axis=1))))
     return float(np.linalg.norm(c_motif - c_non_motif) / (rg + eps))
+
+
+def compute_ligand_rasa(structure: AnnotatedStructure) -> np.ndarray:
+    """Per-atom ligand fractional exposure for RASA conditioning.
+
+    ``SASA(atom within the resolved heavy-atom complex) / SASA(atom in the
+    isolated ligand)`` clipped to [0, 1] for ligand atoms; -1.0 for every
+    non-ligand atom. Returns all -1.0 when there is no ligand.
+
+    Fractional exposure (1 = fully exposed, 0 = fully buried) mirrors the
+    burial weight in ``metrics/shape_complementarity.py``. Ligand atoms that
+    are unresolved / hydrogen are left at -1.0 (null); those fully internal
+    even in isolation are treated as buried (0.0).
+
+    Must run on the structure *before* ``without_non_motif_sidechains`` — the
+    ligand's burial depends on the surrounding protein sidechains.
+    """
+    n_atom = len(structure.atoms)
+    rasa = np.full(n_atom, -1.0, dtype=np.float32)
+
+    is_ligand = structure.type_masks.is_ligand.astype(bool)
+    is_resolved = structure.training.is_resolved
+    is_resolved = (
+        np.ones(n_atom, dtype=bool) if is_resolved is None else is_resolved.astype(bool)
+    )
+    is_heavy = structure.atoms.element != "H"
+
+    context_mask = is_resolved & is_heavy
+    ligand_ctx = is_ligand & context_mask
+    if not ligand_ctx.any():
+        return rasa
+
+    heavy = structure.atoms[context_mask]
+    ligand_in_heavy = is_ligand[context_mask]
+
+    # sasa() returns NaN off-filter; the filtered atoms are scored in the
+    # context of the whole `heavy` array (i.e. buried by the protein).
+    sasa_complex = sasa(
+        heavy, atom_filter=ligand_in_heavy, ignore_ions=False, vdw_radii="Single"
+    )
+    sasa_complex_lig = sasa_complex[ligand_in_heavy]
+    sasa_alone = sasa(
+        structure.atoms[ligand_ctx], ignore_ions=False, vdw_radii="Single"
+    )
+
+    exposure = np.zeros(len(sasa_alone), dtype=np.float32)
+    nonzero = sasa_alone > 0
+    exposure[nonzero] = np.clip(
+        sasa_complex_lig[nonzero] / sasa_alone[nonzero], 0.0, 1.0
+    )
+
+    rasa[ligand_ctx] = exposure
+    return rasa
 
 
 def _extract_backbone_atoms(

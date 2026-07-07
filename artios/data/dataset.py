@@ -33,6 +33,7 @@ from artios.data.data_weights import DataWeightsConfig, get_sample_weights
 from artios.data.features import FullContext
 from artios.data.features.featurizer import (
     ContextGenerator,
+    compute_ligand_rasa,
     compute_motif_depth_norm,
 )
 from artios.data.motif_maker import MotifMaker
@@ -149,6 +150,10 @@ class BaseSingleDataset(Dataset):
         # Probability of nulling the motif-depth conditioning per sample (train aug;
         # 0.0 for eval/test). The scalar itself is computed from the structure below.
         self.motif_depth_dropout_prob = kwargs.get("motif_depth_dropout_prob", 0.0)
+
+        # Probability of nulling the per-atom ligand-RASA conditioning per sample
+        # (train aug; 0.0 for eval/test). Values are computed from the structure below.
+        self.rasa_dropout_prob = kwargs.get("rasa_dropout_prob", 0.0)
 
         # Read data
         self.indices_list = self.read_indices_list(indices_fpath)
@@ -320,14 +325,16 @@ class BaseSingleDataset(Dataset):
 
         group_size_dict = dict(df["mol_group_type"].value_counts())
         for i, n_i in group_size_dict.items():
-            logger.info(f"{i}: {n_i}/{len(df)}({round(n_i*100/len(df), 2)}%)")
+            logger.info(f"{i}: {n_i}/{len(df)}({round(n_i * 100 / len(df), 2)}%)")
 
         logger.info("-" * 30)
         if "cluster_id" in df.columns:
             n_cluster = df["cluster_id"].nunique()
             for i in group_size_dict:
                 n_i = df[df["mol_group_type"] == i]["cluster_id"].nunique()
-                logger.info(f"{i}: {n_i}/{n_cluster}({round(n_i*100/n_cluster, 2)}%)")
+                logger.info(
+                    f"{i}: {n_i}/{n_cluster}({round(n_i * 100 / n_cluster, 2)}%)"
+                )
             logger.info("-" * 30)
 
         logger.info(f"Final pdb ids: {len(set(df.pdb_id.tolist()))}")
@@ -530,6 +537,17 @@ class BaseSingleDataset(Dataset):
         cropped_structure = dataclasses.replace(cropped_structure, atoms=new_atoms)
         timings["augmentation"] = time.time() - t_aug
 
+        # --- RASA (per-atom ligand exposure; must precede sidechain stripping) ---
+        t_rasa = time.time()
+        rasa = compute_ligand_rasa(cropped_structure)
+        if random.random() < self.rasa_dropout_prob:
+            rasa = np.full(len(cropped_structure.atoms), -1.0, dtype=np.float32)
+        cropped_structure = dataclasses.replace(
+            cropped_structure,
+            training=dataclasses.replace(cropped_structure.training, rasa=rasa),
+        )
+        timings["rasa"] = time.time() - t_rasa
+
         # --- Motif ---
         tmotif = time.time()
         if self.motif_train_rate > 0.0:
@@ -580,6 +598,7 @@ class BaseSingleDataset(Dataset):
                 f"frag_filter={timings.get('fragment_filter', 0):.3f}s, "
                 f"crop={timings.get('crop', 0):.3f}s, "
                 f"augment={timings.get('augmentation', 0):.3f}s, "
+                f"rasa={timings.get('rasa', 0):.3f}s, "
                 f"motif={timings.get('motif', 0):.3f}s, "
                 f"msa={timings.get('msa_sample', 0):.3f}s, "
                 f"features={timings.get('get_feature_and_label', 0):.3f}s, "
@@ -888,6 +907,7 @@ def get_datasets(
         dataset_param["motif_depth_dropout_prob"] = data_config.get(
             "motif_depth_dropout_prob", 0.0
         )
+        dataset_param["rasa_dropout_prob"] = data_config.get("rasa_dropout_prob", 0.0)
         dataset_param["include_arrays_in_context"] = data_config.get(
             "include_arrays_in_context", False
         )
@@ -922,8 +942,9 @@ def get_datasets(
             "train_with_binding_target", False
         )
         dataset_param["motif_train_rate"] = data_config.get("motif_train_rate", 0.0)
-        # Deterministic at eval: never drop the motif-depth conditioning.
+        # Deterministic at eval: never drop the motif-depth / RASA conditioning.
         dataset_param["motif_depth_dropout_prob"] = 0.0
+        dataset_param["rasa_dropout_prob"] = 0.0
         dataset_param["bin_ends"] = data_config.get("bin_ends", [])
         dataset_param["padding"] = data_config.get("padding", {})
         dataset_param["include_arrays_in_context"] = data_config.get(

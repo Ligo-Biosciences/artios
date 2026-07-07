@@ -1097,6 +1097,9 @@ class TrainingAnnotations(_AnnotationGroup):
     - ``pocket_id`` and ``fragment_id`` come from separate training-prep
       pipelines (pocketeer, FragmentMaker) and arrive on the input
       ``atom_array``. ``compute()`` passes them through when present.
+    - ``rasa`` is attached live by the dataset (``process_one`` computes it
+      pre-strip via ``compute_ligand_rasa`` and sets it with
+      ``dataclasses.replace``); ``compute()`` leaves it ``None``.
     """
 
     FIELD_NAME: ClassVar[str] = "training"
@@ -1106,6 +1109,7 @@ class TrainingAnnotations(_AnnotationGroup):
     plddt_m_rep_atom_mask: Int[np.ndarray, "n_atom"] | None = None
     pocket_id: Int[np.ndarray, "n_atom"] | None = None
     fragment_id: Int[np.ndarray, "n_atom"] | None = None
+    rasa: Float[np.ndarray, "n_atom"] | None = None
 
     @classmethod
     def compute(

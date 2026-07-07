@@ -342,6 +342,26 @@ class LigandMapping(BaseModel):
     cif_res_name: str = Field(..., description="Residue name as it appears in the CIF")
     chain_id: str = Field(..., description="Chain ID as it appears in the CIF")
     full_ligand: FullLigand
+    rasa: dict[str, float] | None = Field(
+        default=None,
+        description=(
+            "Optional per-atom RASA conditioning: maps CIF atom names to a target "
+            "relative solvent accessibility in [0, 1] (1 = fully exposed, 0 = fully "
+            "buried). Ligand atoms omitted here fall back to configs.rasa.inference_value."
+        ),
+    )
+
+    @field_validator("rasa")
+    @classmethod
+    def validate_rasa_range(cls, v: dict[str, float] | None) -> dict[str, float] | None:
+        if v is None:
+            return v
+        for atom_name, score in v.items():
+            if not 0.0 <= score <= 1.0:
+                raise ValueError(
+                    f"RASA score for atom '{atom_name}' must be in [0, 1], got {score}"
+                )
+        return v
 
 
 class MotifSpec(BaseModel):

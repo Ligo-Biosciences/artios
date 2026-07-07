@@ -16,6 +16,7 @@ from artios.common.constants import (
     AROMATIC_RESIDUES,
     CATIONIC_RESIDUES,
     HYDROPHOBIC_RESIDUES,
+    POLAR_RESIDUES,
     mmcif_restype_3to1,
 )
 from artios.common.residue_names import PROTEIN_TYPES_ONE_LETTER_TO_INT
@@ -28,6 +29,7 @@ RESIDUE_GROUPS: dict[str, frozenset[str]] = {
     "aromatic": frozenset(mmcif_restype_3to1[r] for r in AROMATIC_RESIDUES),
     "anionic": frozenset(mmcif_restype_3to1[r] for r in ANIONIC_RESIDUES),
     "cationic": frozenset(mmcif_restype_3to1[r] for r in CATIONIC_RESIDUES),
+    "polar": frozenset(mmcif_restype_3to1[r] for r in POLAR_RESIDUES),
 }
 
 

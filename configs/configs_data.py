@@ -172,6 +172,8 @@ data_configs = {
     # Probability of nulling the normalised motif-depth conditioning per training
     # sample (so the model also learns the unconditioned behaviour).
     "motif_depth_dropout_prob": 0.1,
+    # Probability of nulling the ligand-RASA conditioning per training sample.
+    "rasa_dropout_prob": 0.1,
     "padding": {
         "max_n_template": 4,
         "max_n_pocket": 16,

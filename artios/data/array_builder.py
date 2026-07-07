@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 import random
 import warnings
@@ -20,6 +21,7 @@ from artios.data.chem.rdkit import (
 from artios.data.parsing.json import (
     BackboneInput,
     CCDLigand,
+    MotifSpec,
     SMILESLigand,
 )
 from artios.data.parsing.motif import Motif, MotifLigand, MotifResidue
@@ -137,11 +139,57 @@ def backbone_input_to_structure(
         entity_id: "" for entity_id in np.unique(design_atom_array.label_entity_id)
     }
     structure = AnnotatedStructure.annotate(design_atom_array, sequences)
-
     if has_motif:
         structure = structure.with_unindexed_motif()
+
+    structure = _attach_ligand_rasa_override(structure, backbone_input.motif)
+
+    if has_motif:
         return structure, structure.motif.mapping
     return structure, ()
+
+
+def _attach_ligand_rasa_override(
+    structure: AnnotatedStructure,
+    motif: MotifSpec | None,
+) -> AnnotatedStructure:
+    """Attach a per-atom RASA override built from the ligand mappings' ``rasa`` dicts.
+
+    The RASA keys are CIF atom names; the ligand-building step preserves those
+    names (via ``atom_map``) on the expanded full ligand, so atoms are matched by
+    ``atom_name`` among the ligand atoms (the expanded ligand's ``chain_id`` /
+    ``res_name`` no longer match the CIF values). Mapped ligand atoms get their
+    score; unmapped ligand atoms are NaN, which ``get_rasa_context`` fills with the
+    uniform ``configs.rasa.inference_value``; non-ligand atoms are -1.0 (null).
+    Returns the structure unchanged when no ligand mapping carries a ``rasa`` dict.
+    """
+    if motif is None or not any(lm.rasa for lm in motif.ligands):
+        return structure
+
+    atoms = structure.atoms
+    is_ligand = structure.type_masks.is_ligand.astype(bool)
+    rasa = np.where(is_ligand, np.nan, -1.0).astype(np.float32)
+
+    for lm in motif.ligands:
+        if not lm.rasa:
+            continue
+        for atom_name, score in lm.rasa.items():
+            sel = is_ligand & (atoms.atom_name == atom_name)
+            n_matched = int(sel.sum())
+            if n_matched == 0:
+                raise ValueError(
+                    f"RASA atom '{atom_name}' not found among ligand atoms"
+                )
+            if n_matched > 1:
+                raise ValueError(
+                    f"RASA atom '{atom_name}' matches {n_matched} ligand atoms; "
+                    "per-atom RASA requires unique ligand atom names"
+                )
+            rasa[sel] = score
+
+    return dataclasses.replace(
+        structure, training=dataclasses.replace(structure.training, rasa=rasa)
+    )
 
 
 def sequence_design_input_to_structure(

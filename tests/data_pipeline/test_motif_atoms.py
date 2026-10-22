@@ -51,7 +51,7 @@ FIXTURES = [
         id="cutinase",
     ),
     pytest.param(
-        "agents/eval-bot/.claude/skills/artios-input-json/examples/cysteine_hydrolase_no_ser_trp_no_asn_n.json",
+        "evaluation/inputs/artios/cysteine_hydrolase/cysteine_hydrolase_no_ser_trp_no_asn_n.json",
         id="cysteine_hydrolase",
     ),
 ]

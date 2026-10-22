@@ -87,7 +87,7 @@ GROUND_TRUTH_CASES = [
         id="cutinase_5_atom",
     ),
     pytest.param(
-        "agents/eval-bot/.claude/skills/artios-input-json/examples/cysteine_hydrolase_no_ser_trp_no_asn_n.json",
+        "evaluation/inputs/artios/cysteine_hydrolase/cysteine_hydrolase_no_ser_trp_no_asn_n.json",
         "evaluation/inputs/motifs/cysteine-hydrolase/no_ser_trp_motif_clean_no_asn_n.cif",
         "1",
         "UNK",

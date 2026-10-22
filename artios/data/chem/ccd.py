@@ -17,7 +17,6 @@ import logging
 import pickle
 from collections import defaultdict
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, Optional, Union
 
 import biotite
@@ -27,15 +26,12 @@ import numpy as np
 from biotite.structure import AtomArray
 from rdkit import Chem
 
+from artios.assets import resolve_ccd_files
 from artios.common.chain_type import ChainType
 from artios.common.residue_names import STANDARD_POLYMER_TYPES_SET
-from artios.configs.configs_data import data_configs
 from artios.data.chem.perms import get_substructure_perms
 
 logger = logging.getLogger(__name__)
-
-COMPONENTS_FILE = Path(data_configs["ccd_components_file"])
-RKDIT_MOL_PKL = Path(data_configs["ccd_components_rdkit_mol_file"])
 
 
 @functools.lru_cache
@@ -45,7 +41,7 @@ def biotite_load_ccd_cif() -> pdbx.CIFFile:
     Returns:
         pdbx.CIFFile: ccd components file
     """
-    return pdbx.CIFFile.read(COMPONENTS_FILE)
+    return pdbx.CIFFile.read(resolve_ccd_files().components)
 
 
 def _map_central_to_leaving_groups(
@@ -292,16 +288,9 @@ def get_component_rdkit_mol(ccd_code: str) -> Union[Chem.Mol, None]:
     if _ccd_rdkit_mols:
         return _ccd_rdkit_mols.get(ccd_code, None)
 
-    rdkit_mol_pkl = RKDIT_MOL_PKL
-    if rdkit_mol_pkl.exists():
-        with open(rdkit_mol_pkl, "rb") as f:
-            _ccd_rdkit_mols = pickle.load(f)
-        return _ccd_rdkit_mols.get(ccd_code, None)
-    else:
-        raise FileNotFoundError(
-            f"CCD components file {rdkit_mol_pkl} not found, please download it to your DATA_ROOT_DIR before running."
-            "or generate it with scripts/gen_ccd_cache.py"
-        )
+    with open(resolve_ccd_files().rdkit_mols, "rb") as f:
+        _ccd_rdkit_mols = pickle.load(f)
+    return _ccd_rdkit_mols.get(ccd_code, None)
     # return ccd_code_to_rdkit(ccd_code)
 
 

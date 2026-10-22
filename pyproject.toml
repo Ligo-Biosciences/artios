@@ -46,6 +46,7 @@ dependencies = [
     "ml_collections",
     "PyYaml",
     "tqdm",
+    "huggingface_hub>=0.24",
     # Pinned below 1.8 so the bundled pocket classifiers (joblib) unpickle.
     "scikit-learn>=1.7.2,<1.8",
 ]

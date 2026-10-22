@@ -26,6 +26,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 
+from artios.assets import POTTS_CHECKPOINT, HubFile, download
 from artios.config import parse_configs, parse_sys_args
 from artios.configs.configs_base import configs as configs_base
 from artios.configs.configs_data import data_configs
@@ -54,6 +55,8 @@ class ModelConfig:
     model_class: type[nn.Module]
     checkpoint_path_key: str
     n_sample_key: str = ""
+    # Released weights used when no checkpoint path is given.
+    default_checkpoint: HubFile | None = None
 
 
 MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
@@ -74,6 +77,7 @@ MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
     ModelType.POTTS: ModelConfig(
         model_class=ArtiosPotts,
         checkpoint_path_key="load_potts_checkpoint_path",
+        default_checkpoint=POTTS_CHECKPOINT,
     ),
 }
 
@@ -174,7 +178,7 @@ class InferenceRunner(object):
             )
             # TODO: this exact code is repeated and looks quite unsafe
             # We should make this into a method that's safer and call it both during training.
-            checkpoint = torch.load(checkpoint_path, self.device)
+            checkpoint = torch.load(checkpoint_path, self.device, weights_only=True)
 
             sample_key = [k for k in checkpoint["model"].keys()][0]
             self.print(f"Sampled key: {sample_key}")
@@ -193,6 +197,18 @@ class InferenceRunner(object):
 
         checkpoint_path_key = self.model_config.checkpoint_path_key
         checkpoint_path = getattr(self.configs, checkpoint_path_key)
+        if not checkpoint_path:
+            default_checkpoint = self.model_config.default_checkpoint
+            if default_checkpoint is None:
+                raise ValueError(
+                    f"--{checkpoint_path_key} is required for model_type "
+                    f"{self.model_type.value}"
+                )
+            self.print(
+                f"Using released weights {default_checkpoint.repo_id}/"
+                f"{default_checkpoint.filename}"
+            )
+            checkpoint_path = str(download(default_checkpoint))
         self.model = _load_checkpoint(checkpoint_path, self.model)
         self.print(f"Loaded {self.model_type.value} model")
         self.print("Finished loading checkpoint.")

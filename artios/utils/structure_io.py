@@ -61,6 +61,7 @@ class SaveContext:
     output_format: str = "cif"
     trajectory_step_stride: int = 1
     context: FullContext | None = None
+    # FASTA headers use these ids; defaults to the sample index when None.
     uids: list[int] | None = None
 
 
@@ -415,7 +416,7 @@ def _save_sequence_to_fasta(output: SequenceOutput, ctx: SaveContext) -> list[Pa
 
     sequences: list[tuple[str, ProteinSequence]] = []
     for batch_idx in range(batch_size):
-        uid = ctx.uids[batch_idx]
+        uid = ctx.uids[batch_idx] if ctx.uids is not None else batch_idx
         n_tok = n_tokens[batch_idx] if isinstance(n_tokens, list) else n_tokens
         seq_logits = output.seq_logits[
             batch_idx, :n_tok
@@ -617,7 +618,7 @@ def _save_potts_to_fasta(output: PottsOutput, ctx: SaveContext) -> list[Path]:
 
     sequences: list[tuple[str, ProteinSequence]] = []
     for batch_idx in range(batch_size):
-        uid = ctx.uids[batch_idx]
+        uid = ctx.uids[batch_idx] if ctx.uids is not None else batch_idx
         n_tok = n_tokens[batch_idx] if isinstance(n_tokens, list) else n_tokens
         seq_onehot = sequence[batch_idx, :n_tok]
         mask = design_mask[batch_idx, :n_tok]

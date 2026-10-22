@@ -1,13 +1,14 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "artios"
 version = "0.0.1"
-description = "Ligo's SOTA ligand-binding protein generator."
+description = "Generative models for ligand-binding protein design: all-atom motif scaffolding and sequence design."
 readme = "README.md"
-license = {text = "All rights reserved."}
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     {name = "Arda Goreci", email = "arda@ligo.bio"},
     {name = "Oliver J. Cort", email = "oli@ligo.bio"}
@@ -28,82 +29,62 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 requires-python = ">=3.11,<3.13"
+# Core dependencies: everything needed to import `artios` and run inference.
 dependencies = [
-    "PyYaml",
-    "scipy",
-    "pytest",
-    "ml_collections",
-    "tqdm",
-    "pandas",
-    "rdkit",
-    "biopython>=1.83",
-    "rootutils",
-    "posebusters",
-    "biotite>=1.2.0",
-    "protobuf==3.20.2",
-    "seaborn",
-    "icecream",
-    "neptune-scale",
-    "ninja",
-    "setuptools",
-    "numpy>=1.26.3,<3.0.0",
-    "dm-tree",
-    "numba>=0.60",
-    "matplotlib>=3.9.2",
-    "scikit-learn>=1.7.2,<1.8",
     "torch>=2.3.1",
-    "pre-commit",
-    "modal==1.2.3",
-    "boto3",
-    "lz4",
-    "peppr",
-    "jaxtyping",
-    "pocketeer[dev]==0.0.4",
-    "ray>=2.48.0",
-    "polars>=1.35.2",
-    "rapidgzip>=0.15.2",
-    "beartype>=0.22.6",
-    "pydantic==2.12.3",
+    "numpy>=1.26.3,<3.0.0",
+    "scipy",
+    "pandas",
+    "biotite>=1.2.0",
+    "rdkit",
+    "networkx",
     "einops>=0.8.1",
-    "streamlit",
-    "trambio>=1.0.3",
-    "pymol-remote>=1.1.0",
-    "pdb2pqr",
-    "GridDataFormats",
-    "wandb>=0.25.0",
-    "pandera>=0.29.0",
-    "ipywidgets>=8.1.8",
+    "jaxtyping",
+    "beartype>=0.22.6",
+    "typing_extensions",
+    "pydantic>=2.12.3,<3",
+    "ml_collections",
+    "PyYaml",
+    "tqdm",
+    # Pinned below 1.8 so the bundled pocket classifiers (joblib) unpickle.
+    "scikit-learn>=1.7.2,<1.8",
 ]
 
 [project.optional-dependencies]
-engineering = [
-    "foldcomp>=1.0.0",
-    "xgboost>=3.2.0",
+# Training (runner/train_*.py).
+train = [
+    "wandb>=0.25.0",
+    "neptune-scale",
+    "pandera>=0.29.0",
+    "rootutils",
 ]
-dev = [
-    "pytest>=6.0",
-    "pytest-cov",
-    "pre-commit",
-    "ipykernel",
-    "notebook",
+# Training-data preparation (scripts/data/, pocket annotation).
+data = [
+    "pocketeer==0.0.4",
+    "ray>=2.48.0",
+    "polars>=1.35.2",
+    "psutil",
+    "gemmi",
+    "pdbeccdutils",
 ]
-train-bot = [
-    "slack-bolt>=1.21",
-    "claude-agent-sdk>=0.1.66",
-    "python-dotenv>=1.0",
+# Structure-quality and electrostatics metrics (artios/metrics, artios/electrostatics).
+metrics = [
+    "peppr",
+    "numba>=0.60",
+    "pdb2pqr",
+    "GridDataFormats",
 ]
 
 [project.urls]
-Homepage = "https://github.com/Ligo-Biosciences/artios-ligand"
-Repository = "https://github.com/Ligo-Biosciences/artios-ligand"
-"Bug Tracker" = "https://github.com/Ligo-Biosciences/artios-ligand/issues"
-
+Homepage = "https://github.com/Ligo-Biosciences/artios"
+Repository = "https://github.com/Ligo-Biosciences/artios"
+"Bug Tracker" = "https://github.com/Ligo-Biosciences/artios/issues"
 
 [tool.setuptools.packages.find]
-exclude = ["assets*", "benchmark*", "*.egg-info*", "tests*"]
+include = ["artios*", "configs*", "runner*"]
 
 [tool.setuptools.package-data]
-"artios" = ["model/layer_norm/kernel/*"]
+"artios" = ["data/pocket/*.joblib"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -123,9 +104,6 @@ markers = [
 [tool.ty.src]
 exclude = ["tests/"]
 
-[tool.uv]
-no-binary-package = ["atomworks"]
-
 [tool.ty.environment]
 python = ".venv"
 
@@ -143,6 +121,10 @@ invalid-type-form = "ignore"
 
 [dependency-groups]
 dev = [
-    "ipykernel>=6.30.1",
+    "pytest>=6.0",
+    "pytest-cov",
+    "pre-commit",
+    "ruff",
+    "matplotlib>=3.9.2",
     "ty>=0.0.1a27",
 ]

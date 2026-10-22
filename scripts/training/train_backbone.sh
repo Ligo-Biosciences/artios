@@ -29,7 +29,7 @@ fi
 
 uv run --project "${PROJECT_ROOT}" torchrun \
   --nproc_per_node="${NPROC_PER_NODE}" \
-  "${PROJECT_ROOT}/runner/train_backbone.py" \
+  "${PROJECT_ROOT}/artios/runner/train_backbone.py" \
   --run_name "${RUN_NAME}" \
   --base_dir "${BASE_DIR}" \
   --project "${PROJECT}" \

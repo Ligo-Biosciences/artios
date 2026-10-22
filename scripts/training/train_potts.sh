@@ -37,7 +37,7 @@ fi
 uv run --project "${PROJECT_ROOT}" torchrun \
   --nproc_per_node="${NPROC_PER_NODE}" \
   --master_port="${MASTER_PORT}" \
-  "${PROJECT_ROOT}/runner/train_potts.py" \
+  "${PROJECT_ROOT}/artios/runner/train_potts.py" \
   --run_name "${RUN_NAME}" \
   --seed 43 \
   --base_dir "${BASE_DIR}" \

@@ -24,6 +24,8 @@ from tqdm import tqdm
 from artios.common.constants import BACKBONE_DEFS
 from artios.config import parse_configs, parse_sys_args
 from artios.config.config import save_config
+from artios.configs.configs_base import configs as configs_base
+from artios.configs.configs_data import data_configs
 from artios.data.dataloader import get_dataloaders
 from artios.data.features import FullContext
 from artios.metrics.lddt_metrics import LDDTMetrics
@@ -34,6 +36,7 @@ from artios.model.modules.sidechain_packer import SidechainPacker
 from artios.model.modules.transformer import DiffusionTransformer, DiTBlock
 from artios.model.output import ModelOutput
 from artios.model.utils import Mode
+from artios.runner.ema import EMAWrapper
 from artios.utils.distributed import DIST_WRAPPER, wait_for_all_processes
 from artios.utils.lr_scheduler import get_lr_scheduler
 from artios.utils.metrics import SimpleMetricAggregator
@@ -42,9 +45,6 @@ from artios.utils.profiler import profile_function
 from artios.utils.seed import seed_everything
 from artios.utils.torchwatcher import TorchWatcher
 from artios.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
-from configs.configs_base import configs as configs_base
-from configs.configs_data import data_configs
-from runner.ema import EMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 

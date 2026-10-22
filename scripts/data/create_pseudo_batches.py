@@ -190,9 +190,9 @@ def run_from_dataset(
     """
     # Import here to avoid loading torch/configs if not needed
     from artios.config.config import parse_configs, parse_sys_args
+    from artios.configs.configs_base import configs as base_configs
+    from artios.configs.configs_data import data_configs
     from artios.data.dataset import get_datasets
-    from configs.configs_base import configs as base_configs
-    from configs.configs_data import data_configs
 
     # Setup configurations - parse remaining args as config overrides
     logger.info("Loading configurations...")

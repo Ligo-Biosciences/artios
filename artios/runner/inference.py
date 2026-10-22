@@ -27,6 +27,9 @@ import torch.distributed as dist
 import torch.nn as nn
 
 from artios.config import parse_configs, parse_sys_args
+from artios.configs.configs_base import configs as configs_base
+from artios.configs.configs_data import data_configs
+from artios.configs.configs_inference import inference_configs
 from artios.data.features import FullContext
 from artios.data.infer_data_pipeline import get_inference_dataloader
 from artios.model.artios_backbone import ArtiosBackbone
@@ -40,9 +43,6 @@ from artios.utils.distributed import DIST_WRAPPER
 from artios.utils.inference import ModelType
 from artios.utils.seed import seed_everything
 from artios.utils.structure_io import SaveContext, save_output
-from configs.configs_base import configs as configs_base
-from configs.configs_data import data_configs
-from configs.configs_inference import inference_configs
 
 logger = logging.getLogger(__name__)
 

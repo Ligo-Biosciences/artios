@@ -11,15 +11,19 @@ concurrency:
 
 permissions:
   contents: read
-  packages: read
-
-env:
-  BASE_IMAGE_TAG: ghcr.io/ligo-biosciences/artios-all-atom/base:latest
 
 jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check formatting
+        run: uvx ruff@0.6.3 format --check .
+
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -32,6 +36,13 @@ jobs:
           haskell: true
           large-packages: true
           swap-storage: true
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras
 
       - name: Cache CCD data
         id: ccd-cache
@@ -54,31 +65,5 @@ jobs:
           gunzip ccd_files/components.cif.gz
           gunzip ccd_files/components.cif.rdkit_mol.pkl.gz
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build CI image
-        run: |
-          if docker pull "${BASE_IMAGE_TAG}"; then
-            echo "Using pre-built base image from GHCR"
-            BUILD_ARG="BASE_IMAGE=${BASE_IMAGE_TAG}"
-          else
-            echo "::notice::Base image not found on GHCR — building from scratch as a fallback."
-            echo "::notice::Trigger the 'Build base image' workflow to populate the cache."
-            BUILD_ARG="BASE_IMAGE=base"
-          fi
-          docker build \
-            --target ci \
-            --build-arg "${BUILD_ARG}" \
-            -f Dockerfile.artios \
-            -t artios:ci .
-
       - name: Run fast tests
-        run: |
-          docker run --rm \
-            -v "${{ github.workspace }}/ccd_files:/app/ccd_files:ro" \
-            artios:ci pytest -m "not slow"
+        run: uv run pytest -m "not slow"

@@ -39,7 +39,9 @@ pip install -e ".[train,data]"   # optional extras
 
 ### Chemical Component Dictionary (CCD)
 
-Artios needs the wwPDB Chemical Component Dictionary and a pre-computed RDKit cache. Place both files in `ccd_files/` at the repository root:
+Artios needs the wwPDB Chemical Component Dictionary and a matching pre-computed RDKit cache. On first use, it downloads a pinned snapshot from [Ligo-Biosciences/Artios-CCD](https://huggingface.co/datasets/Ligo-Biosciences/Artios-CCD) (about 550 MB), verifies the checksums and caches it for later (offline) runs.
+
+To use local files instead, put both files in one directory and point `ARTIOS_CCD_DIR` at it, or place them in `ccd_files/` at the repository root:
 
 ```
 ccd_files/
@@ -47,13 +49,28 @@ ccd_files/
 └── components.cif.rdkit_mol.pkl
 ```
 
-`scripts/data/gen_ccd_cache.py` builds the RDKit cache from `components.cif`.
-
-> **TODO:** public download location for the CCD files.
+Both files must come from the same snapshot. `scripts/data/gen_ccd_cache.py` builds the RDKit cache from `components.cif`.
 
 ## Usage
 
-> **TODO:** quickstart command and Hugging Face weight download.
+Model weights and CCD files are downloaded from the Hugging Face Hub on first use. While the repositories are private, log in first with `hf auth login` (or set `HF_TOKEN`).
+
+### Sequence design
+
+Design sequences for the 10 example backbones in `examples/sequence_design/`:
+
+```bash
+uv run python -m artios.runner.inference \
+    --model_type potts \
+    --input_json_path examples/sequence_design/input.json \
+    --dump_dir output/sequence_design
+```
+
+This writes `output/sequence_design/0/example_model_0_artios_potts_sequence.fasta`, containing one designed sequence per backbone (`uid_0` … `uid_9`); motif residues keep their original identities and are not included. The example takes about 7 minutes on a laptop CPU; GPUs are used automatically when available.
+
+Pass `--load_potts_checkpoint_path` to use your own weights instead of the released ones.
+
+> **TODO:** backbone generation quickstart.
 
 ### Input format
 

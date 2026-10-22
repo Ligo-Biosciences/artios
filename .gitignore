@@ -5,50 +5,21 @@ __pycache__/
 *.pyd
 *.egg-info/
 *.egg
+build/
+dist/
 
 .venv/
 
 .DS_Store
 .pytest_cache/
+.ruff_cache/
 
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints
-ccd_files/
 
-# Keys
-artios.pem
-
-# Generated evaluation outputs
-evaluation/reference_distributions/
-
-# Ignore everything in pdb-samples directory
-pdb-samples/
-
-notebooks/sample-proteins/
-
-blogs/
-
-# Generated PDB/CIF outputs
-notebooks/PDBs/
-notebooks/PDBs_noise_*/
-
-# Reference distributions
-reference-dists/
-
-p-data-eng/
+# CCD data (downloaded separately; may be a directory or a symlink)
+ccd_files
 
 # Pocket detection training cache
 artios/data/pocket/cache/
-
-# Downloaded model-selection run data (parquets, search JSONs, plots, structures)
-model_selection_data/
-
-# Downloaded run data (AF2 PDBs, dataframes, search JSONs)
-downloads/
-
-# Local planning / scratch docs
-plans/
-
-# Agent secrets
-agents/*/.env

@@ -7,32 +7,5 @@ repos:
       # Run the linter.
       - id: ruff
         args: [--fix]
-        exclude: run_modal_inference\.py
       # Run the formatter.
       - id: ruff-format
-        exclude: run_modal_inference\.py
-
-#  - repo: https://github.com/johannsdg/pre-commit-license-headers
-#    rev: v0.1.0
-#    hooks:
-#      - id: check-license-headers
-#        args:
-#          - "--template"
-#          - |
-#            Copyright (c) [YEARS] Ligo Biosciences, Inc.
-#            All rights reserved.
-#          # - "--owner=The Pre-Commit License Headers Authors"
-#        include: .*py
-#        exclude: |
-#          (?x)^(
-#            .pre-commit-config.yaml|
-#            .pre-commit-hooks.yaml|
-#            Dockerfile.artios|
-#            LICENSE|
-#            README.md|
-#            requirements.in|
-#            ruff.toml|
-#            artios/data/constants.py|
-#            pyproject.toml|
-#            .*\.txt
-#          )$

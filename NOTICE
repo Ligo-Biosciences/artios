@@ -13,8 +13,8 @@ This product is a derivative work of Protenix
     Copyright 2024 ByteDance and/or its affiliates.
     Licensed under the Apache License, Version 2.0.
 
-Many files under artios/, configs/ and runner/ originate from Protenix and
-have been modified by Ligo Biosciences. The package was renamed from
+Many files under artios/ (including artios/configs/ and artios/runner/)
+originate from Protenix and have been modified by Ligo Biosciences. The package was renamed from
 `protenix` to `artios`; the full modification history is available in this
 repository's git history.
 
@@ -66,6 +66,10 @@ Muon (https://github.com/KellerJordan/Muon)
     Copyright (c) 2024 Keller Jordan
     Used in: artios/utils/muon.py
 
+Pocketeer (https://github.com/cch1999/pocketeer)
+    Copyright (c) 2025 Charlie Harris
+    Used in: artios/data/pocket/legacy.py
+
 The above MIT-licensed components are provided under the following terms:
 
     Permission is hereby granted, free of charge, to any person obtaining a
@@ -94,7 +98,15 @@ BSD-3-Clause licensed code
 Biotite (https://github.com/biotite-dev/biotite)
     Copyright 2017, The Biotite contributors
     All rights reserved.
-    Used in: artios/common/constants.py (standard bond length table)
+    Used in: artios/common/constants.py (standard bond length table),
+             artios/data/chem/ccd.py
+
+AtomWorks (https://github.com/RosettaCommons/atomworks)
+    Copyright (c) 2025, Institute for Protein Design, University of Washington
+    Used in: artios/data/chem/rdkit.py (RDKit-to-AtomArray conversion)
+
+The above BSD-3-Clause licensed components are provided under the
+following terms:
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions are

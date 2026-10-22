@@ -44,26 +44,16 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-extras
 
-      - name: Cache CCD data
-        id: ccd-cache
+      # Tests download the pinned CCD snapshot from the Hugging Face Hub
+      # (artios/assets.py); cache it across runs, keyed on its revision.
+      - name: Cache Hugging Face downloads
         uses: actions/cache@v4
         with:
-          path: ccd_files/
-          key: ccd-20241126
-
-      - name: Download CCD data
-        if: steps.ccd-cache.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p ccd_files
-          gh release download ccd-20241126 \
-            --repo ${{ github.repository }} \
-            --pattern 'components.cif.gz' \
-            --pattern 'components.cif.rdkit_mol.pkl.gz' \
-            --dir ccd_files/
-          gunzip ccd_files/components.cif.gz
-          gunzip ccd_files/components.cif.rdkit_mol.pkl.gz
+          path: ~/.cache/huggingface/hub
+          key: hf-ccd-${{ hashFiles('artios/assets.py') }}
 
       - name: Run fast tests
+        env:
+          # Needed while the Hugging Face repositories are private.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: uv run pytest -m "not slow"

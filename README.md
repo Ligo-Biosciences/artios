@@ -33,7 +33,7 @@ pip install -e ".[train,data]"   # optional extras
 
 | Extra | Needed for |
 |---|---|
-| `train` | Training (`runner/train_*.py`): wandb, neptune-scale, pandera |
+| `train` | Training (`artios/runner/train_*.py`): wandb, neptune-scale, pandera |
 | `data` | Training-data preparation (`scripts/data/`) and pocket annotation |
 | `metrics` | Structure-quality and electrostatics metrics (`artios/metrics`, `artios/electrostatics`) |
 
@@ -93,16 +93,19 @@ Example motifs and inputs live in `evaluation/inputs/motifs/` and `evaluation/in
 
 ## Training
 
-Training code is included as a reference: `runner/train_backbone.py` and `runner/train_potts.py`, launched through `scripts/training/`. See [preparing training data](docs/prepare_training_data.md) and [data sampling weights](docs/data_sampling_weights.md).
+Training code is included as a reference: `artios/runner/train_backbone.py` and `artios/runner/train_potts.py`, launched through `scripts/training/`. See [preparing training data](docs/prepare_training_data.md) and [data sampling weights](docs/data_sampling_weights.md).
 
 > **TODO:** training datasets on Hugging Face.
 
 ## Repository layout
 
 ```
-artios/      model, data pipeline, metrics and utilities
-configs/     default configuration for training and inference
-runner/      inference and training entry points
+artios/
+├── model/   model architectures (ArtiosBackbone, ArtiosPotts, ...)
+├── data/    input parsing, featurization and data pipeline
+├── configs/ default configuration for training and inference
+├── runner/  inference and training entry points
+└── ...      metrics, contacts, electrostatics, utilities
 scripts/     data preparation and training launch scripts
 docs/        input formats and method notes
 tests/       test suite (run with `uv run pytest -m "not slow"`)

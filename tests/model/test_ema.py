@@ -20,7 +20,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from runner.ema import EMAWrapper
+from artios.runner.ema import EMAWrapper
 
 
 def _reference_update(wrapper: EMAWrapper) -> None:

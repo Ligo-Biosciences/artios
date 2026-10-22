@@ -116,7 +116,7 @@ if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
 if (not os.path.exists(CCD_COMPONENTS_FILE_PATH)) or (
     not os.path.exists(CCD_COMPONENTS_RDKIT_MOL_FILE_PATH)
 ):
-    ccd_files_dir = os.path.join(os.path.dirname(__file__), "..", "ccd_files")
+    ccd_files_dir = os.path.join(os.path.dirname(__file__), "..", "..", "ccd_files")
     CCD_COMPONENTS_FILE_PATH = os.path.join(ccd_files_dir, "components.cif")
     CCD_COMPONENTS_RDKIT_MOL_FILE_PATH = os.path.join(
         ccd_files_dir, "components.cif.rdkit_mol.pkl"

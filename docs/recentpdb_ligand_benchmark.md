@@ -15,7 +15,7 @@ the ArtiosPotts natural-backbone NPZ format.
 - **Manifest:** `<release>/indices/recentPDB_low_homology_maxtoken1536.csv` — one row
   per chain / interface, with `eval_type`, `sub_mol_type`, `num_prot_chains`, etc.
 - **CCD dictionary** (needed only by the curation step): `<release>/components.v20240608.cif`
-  (+ `.rdkit_mol.pkl`), resolved via `configs.configs_data.DATA_ROOT_DIR`.
+  (+ `.rdkit_mol.pkl`), resolved via `artios.configs.configs_data.DATA_ROOT_DIR`.
 
 ### Why this is out-of-distribution
 

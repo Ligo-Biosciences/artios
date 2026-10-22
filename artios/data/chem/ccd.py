@@ -29,8 +29,8 @@ from rdkit import Chem
 
 from artios.common.chain_type import ChainType
 from artios.common.residue_names import STANDARD_POLYMER_TYPES_SET
+from artios.configs.configs_data import data_configs
 from artios.data.chem.perms import get_substructure_perms
-from configs.configs_data import data_configs
 
 logger = logging.getLogger(__name__)
 

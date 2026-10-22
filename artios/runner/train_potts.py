@@ -17,21 +17,22 @@ from tqdm import tqdm
 
 from artios.config import parse_configs, parse_sys_args
 from artios.config.config import save_config
+from artios.configs.configs_base import configs as configs_base
+from artios.configs.configs_data import data_configs
+from artios.data.data_weights import DataWeightsConfig
 from artios.data.dataloader import get_dataloaders
 from artios.data.features import FullContext
-from artios.model.artios_mpnn import ArtiosMPNN
+from artios.model.artios_potts import ArtiosPotts
 from artios.model.output import ModelOutput
 from artios.model.utils import Mode
+from artios.runner.dumper import DataDumper
+from artios.runner.ema import EMAWrapper
 from artios.utils.distributed import DIST_WRAPPER
 from artios.utils.lr_scheduler import get_lr_scheduler
 from artios.utils.metrics import SimpleMetricAggregator
 from artios.utils.monitoring import grad_norm
 from artios.utils.seed import seed_everything
 from artios.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
-from configs.configs_base import configs as configs_base
-from configs.configs_data import data_configs
-from runner.dumper import DataDumper
-from runner.ema import EMAWrapper
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -39,7 +40,7 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 os.environ["WANDB_CONSOLE"] = "off"
 
 
-class ArtiosMPNNTrainer(object):
+class ArtiosPottsTrainer(object):
     def __init__(self, configs):
         self.configs = configs
         self.init_env()
@@ -166,12 +167,11 @@ class ArtiosMPNNTrainer(object):
         pass
 
     def init_model(self):
-        self.raw_model = ArtiosMPNN(self.configs).to(self.device)  # TODO: AllatomMPNN
+        self.raw_model = ArtiosPotts(self.configs).to(self.device)
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
             self.print("Using DDP")
             self.use_ddp = True
-            # Fix DDP/checkpoint https://discuss.pytorch.org/t/ddp-and-gradient-checkpointing/132244
             self.model = DDP(
                 self.raw_model,
                 find_unused_parameters=self.configs.find_unused_parameters,
@@ -210,6 +210,9 @@ class ArtiosMPNNTrainer(object):
             DIST_WRAPPER.world_size,
             seed=self.configs.seed,
             error_dir=self.error_dir,
+            data_weights_config=DataWeightsConfig(
+                monomer_pdb_target_fraction=0.4,
+            ),
         )
         print("finished init_data")
 
@@ -221,7 +224,6 @@ class ArtiosMPNNTrainer(object):
                 path = f"{self.checkpoint_dir}/{self.step}.pt"
 
             if not save_model_only:
-                # Save model, optimizer, scheduler, and step
                 checkpoint = {
                     "model": self.model.state_dict(),
                     "optimizer": self.optimizer.state_dict(),
@@ -233,7 +235,6 @@ class ArtiosMPNNTrainer(object):
                     "step": self.step,
                 }
             else:
-                # Save model and step (used for EMA wrappers)
                 checkpoint = {"model": self.model.state_dict(), "step": self.step}
 
             torch.save(checkpoint, path)
@@ -256,7 +257,6 @@ class ArtiosMPNNTrainer(object):
             sample_key = [k for k in checkpoint["model"].keys()][0]
             self.print(f"Sampled key: {sample_key}")
             if sample_key.startswith("module.") and not self.use_ddp:
-                # DDP checkpoint has module. prefix
                 checkpoint["model"] = {
                     k[len("module.") :]: v for k, v in checkpoint["model"].items()
                 }
@@ -283,17 +283,17 @@ class ArtiosMPNNTrainer(object):
             self.print(f"Finish loading checkpoint, current step: {self.step}")
 
         # Load EMA model parameters
-        if self.configs.load_ema_mpnn_checkpoint_path:
+        if self.configs.load_ema_potts_checkpoint_path:
             _load_checkpoint(
-                self.configs.load_ema_mpnn_checkpoint_path,
+                self.configs.load_ema_potts_checkpoint_path,
                 load_params_only=True,
             )
             self.ema_wrapper.register()
 
-        # Load model parameters (With no EMA) from checkpoint
-        if self.configs.load_mpnn_checkpoint_path:
+        # Load model parameters from checkpoint
+        if self.configs.load_potts_checkpoint_path:
             _load_checkpoint(
-                self.configs.load_mpnn_checkpoint_path,
+                self.configs.load_potts_checkpoint_path,
                 self.configs.load_params_only,
                 skip_load_optimizer=self.configs.skip_load_optimizer,
                 skip_load_scheduler=self.configs.skip_load_scheduler,
@@ -310,16 +310,6 @@ class ArtiosMPNNTrainer(object):
         mode: Mode = Mode.TRAIN,
         seed: Optional[int] = None,
     ) -> ModelOutput:
-        """Forward pass of the model.
-
-        Args:
-            context: Full context containing all features and labels.
-            mode: Mode of the forward pass (TRAIN or EVAL).
-            seed: Seed for random number generation. Defaults to None.
-
-        Returns:
-            ModelOutput containing the prediction.
-        """
         try:
             output = self.model(context=context, mode=mode, seed=seed)
         except Exception as e:
@@ -333,15 +323,6 @@ class ArtiosMPNNTrainer(object):
         output: ModelOutput,
         context: FullContext,
     ) -> tuple[torch.Tensor, dict]:
-        """Compute loss from model output and context.
-
-        Args:
-            output: Model output containing predictions.
-            context: Full context containing labels and masks.
-
-        Returns:
-            Tuple of (loss tensor, loss metrics dict).
-        """
         return self.raw_model.compute_loss(output, context)
 
     @torch.no_grad()
@@ -358,14 +339,6 @@ class ArtiosMPNNTrainer(object):
         self,
         ema_suffix: str = "",
     ) -> dict:
-        """Run evaluation loop on all test datasets.
-
-        Args:
-            ema_suffix: Suffix for logging (e.g., "ema_0.999" or "").
-
-        Returns:
-            Dictionary of evaluation metrics.
-        """
         simple_metric_wrapper = SimpleMetricAggregator(["nonzero_avg"])
 
         eval_precision = {
@@ -401,9 +374,7 @@ class ArtiosMPNNTrainer(object):
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
-            # Log validation metrics to Neptune/WandB
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
-                # Add test_name prefix to metrics for clarity
                 prefix = f"{ema_suffix}/" if ema_suffix else ""
                 prefixed_metrics = {
                     f"{prefix}{test_name}/{k}": v for k, v in metrics.items()
@@ -411,18 +382,12 @@ class ArtiosMPNNTrainer(object):
                 wandb.log(prefixed_metrics, step=self.step)
 
     def update(self):
-        # Clip the gradient
         if self.configs.grad_clip_norm != 0.0:
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), self.configs.grad_clip_norm
             )
 
     def train_step(self, context: FullContext):
-        """Execute a single training step.
-
-        Args:
-            context: Full context containing features and labels.
-        """
         self.model.train()
 
         train_precision = {
@@ -454,12 +419,10 @@ class ArtiosMPNNTrainer(object):
 
         scaler.scale(loss / self.iters_to_accumulate).backward()
 
-        # For simplicity, the global training step is used
         if (self.global_step + 1) % self.iters_to_accumulate == 0:
             self.print(
                 f"self.step {self.step}, self.iters_to_accumulate: {self.iters_to_accumulate}"
             )
-            # Unscales the gradients of optimizer's assigned parameters in-place
             scaler.unscale_(self.optimizer)
 
             self.on_before_optimizer_step()
@@ -480,7 +443,6 @@ class ArtiosMPNNTrainer(object):
         if self.global_step % (
             self.configs.eval_interval * self.iters_to_accumulate
         ) == 0 or (not hasattr(self, "_ipbar")):
-            # Start a new progress bar
             self._pbar = tqdm(
                 range(
                     self.global_step
@@ -497,7 +459,6 @@ class ArtiosMPNNTrainer(object):
         return
 
     def on_validation_epoch_end(self):
-        """Hook that is called at the end of each validation epoch."""
         if (
             not self.configs.use_wandb
             or DIST_WRAPPER.rank != 0
@@ -505,48 +466,31 @@ class ArtiosMPNNTrainer(object):
         ):
             return
 
-        # Calculate and log weight norms for each parameter
         weight_norms = {}
         for name, param in self.model.named_parameters():
-            if not param.requires_grad:  # Skip non-trainable parameters
+            if not param.requires_grad:
                 continue
 
-            if len(param.shape) == 2:  # Linear layer weights (2D tensors)
-                # Compute L2 norm along fan_in dimension (dim=1) and average across output dimension
-                # [out_features, in_features] -> [out_features] -> scalar
-                fan_in_norms = torch.norm(
-                    param, p=2, dim=1
-                )  # L2 norm along input dimension
-                norm = torch.mean(
-                    fan_in_norms
-                ).item()  # Average across output dimension
-            else:  # Other parameters (biases, layernorm weights, etc.)
-                # Standard L2 norm of the entire tensor divided by sqrt(num_elements)
-                # although this is not the norm anymore, makes variable-length tensors comparable
+            if len(param.shape) == 2:
+                fan_in_norms = torch.norm(param, p=2, dim=1)
+                norm = torch.mean(fan_in_norms).item()
+            else:
                 norm = param.norm().item() / np.sqrt(param.numel())
             weight_norms[f"weight_norms/{name}"] = norm
 
             if DIST_WRAPPER.rank == 0:
-                # Log to wandb
                 wandb.log(flatten_nested(weight_norms), step=self.step)
 
     def on_before_optimizer_step(self):
-        """Hook that is called before the optimizer step."""
         if self.configs.monitor.grad_norm:
             _, total_norm = grad_norm(self.model, norm_type=2)
 
-            # Average across all ranks
-            # def numpy_mean_aggregation(values):
-            #    return float(np.mean(values))  # Convert to float in case of numpy types
-            # total_norm = gather_and_merge(total_norm, numpy_mean_aggregation)
-
-            # Log to wandb
             if DIST_WRAPPER.rank == 0:
                 wandb.log({"grad_norm": total_norm}, step=self.step)
 
     def run(self):
         """
-        Main entry for the ArtiosMPNNTrainer.
+        Main entry for the ArtiosPottsTrainer.
 
         This function handles the training process, evaluation, logging, and checkpoint saving.
         """
@@ -562,14 +506,11 @@ class ArtiosMPNNTrainer(object):
                 sort_by="self_cuda_time_total", row_limit=20
             )
             print(output)
-            # Only save trace from rank 0 to avoid file conflicts
             if DIST_WRAPPER.rank == 0:
                 tracename = f"trace_{p.step_num}_rank{DIST_WRAPPER.rank}.json"
                 filepath = f"{self.logs_dir}/{tracename}"
-                # Ensure directory exists before writing
                 os.makedirs(self.logs_dir, exist_ok=True)
                 p.export_chrome_trace(filepath)
-                # self.neptune_log_files({f"profiling/{tracename}": filepath})
 
         with torch.profiler.profile(
             activities=[
@@ -589,9 +530,8 @@ class ArtiosMPNNTrainer(object):
             batch_iter_start = time.time()
             while True:
                 for context in self.train_dl:
-                    # Track data loading time
                     data_load_time = time.time() - batch_iter_start
-                    if data_load_time > 1.0:  # Log slow data loading (> 1 second)
+                    if data_load_time > 1.0:
                         logging.warning(
                             f"SLOW DATA LOADING at step {self.step} (rank {DIST_WRAPPER.rank}): "
                             f"{data_load_time:.2f}s to get batch from dataloader"
@@ -632,27 +572,19 @@ class ArtiosMPNNTrainer(object):
                                     {"train/lr": last_lr},
                                     step=self.step,
                                 )
-                                # self.torchwatcher.watch(
-                                #     step=self.step,
-                                #     track_gradients=False,
-                                #     track_activations=True,
-                                #     track_parameters=False,
-                                #     prefix="train",
-                                # )
                             self.print(f"Step {self.step}, lr: {last_lr}")
                         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                             wandb.log(metrics, step=self.step)
 
                     if step_need_save or is_last_step:
                         self.print(f"beginning Saving checkpoint at step {self.step}")
-                        self.save_checkpoint()  # Saves non-ema checkpoint
+                        self.save_checkpoint()
                         if use_ema:
                             self.ema_wrapper.apply_shadow()
                             self.save_checkpoint(
                                 ema_suffix=f"_ema_{self.ema_wrapper.decay}"
                             )
                             self.ema_wrapper.restore()
-                            # wait_for_all_processes()
 
                     if step_need_eval or is_last_step:
                         self.evaluate()
@@ -695,7 +627,7 @@ def main():
 
     print(configs.run_name)
     print(configs)
-    trainer = ArtiosMPNNTrainer(configs)
+    trainer = ArtiosPottsTrainer(configs)
     trainer.run()
 
 

@@ -11,32 +11,27 @@ import rootutils
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-import torch.nn as nn
 import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
 from artios.config import parse_configs, parse_sys_args
 from artios.config.config import save_config
-from artios.data.data_weights import DataWeightsConfig
+from artios.configs.configs_base import configs as configs_base
+from artios.configs.configs_data import data_configs
 from artios.data.dataloader import get_dataloaders
 from artios.data.features import FullContext
-from artios.metrics.lddt_metrics import LDDTMetrics
-from artios.model.artios_backbone import ArtiosBackbone
+from artios.model.artios_mpnn import ArtiosMPNN
 from artios.model.output import ModelOutput
 from artios.model.utils import Mode
+from artios.runner.dumper import DataDumper
+from artios.runner.ema import EMAWrapper
 from artios.utils.distributed import DIST_WRAPPER
-from artios.utils.inference import ModelType
 from artios.utils.lr_scheduler import get_lr_scheduler
 from artios.utils.metrics import SimpleMetricAggregator
 from artios.utils.monitoring import grad_norm
-from artios.utils.profiler import profile_function
 from artios.utils.seed import seed_everything
-from artios.utils.training import flatten_nested, get_optimizer
-from configs.configs_base import configs as configs_base
-from configs.configs_data import data_configs
-from runner.ema import EMAWrapper
-from runner.inference import InferenceRunner, infer_predict
+from artios.utils.training import flatten_nested, get_optimizer, is_loss_nan_check
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -44,7 +39,7 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 os.environ["WANDB_CONSOLE"] = "off"
 
 
-class ArtiosBackboneTrainer(object):
+class ArtiosMPNNTrainer(object):
     def __init__(self, configs):
         self.configs = configs
         self.init_env()
@@ -73,20 +68,21 @@ class ArtiosBackboneTrainer(object):
         self.checkpoint_dir = f"{self.run_dir}/checkpoints"
         self.ema_checkpoint_dir = f"{self.run_dir}/ema_checkpoints"
         self.prediction_dir = f"{self.run_dir}/predictions"
-        self.training_samples_dir = f"{self.run_dir}/training_samples"
+        self.structure_dir = f"{self.run_dir}/structures"
         self.dump_dir = f"{self.run_dir}/dumps"
         self.error_dir = f"{self.run_dir}/errors"
         self.logs_dir = f"{self.run_dir}/logs"
 
-        # TODO: Re-add DataDumper when inference output saving is needed
+        # Add dump dir for training time inference
         self.configs.dump_dir = self.prediction_dir
+        self.dumper = DataDumper(self.configs.dump_dir)
 
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)
             os.makedirs(self.checkpoint_dir)
             os.makedirs(self.ema_checkpoint_dir)
             os.makedirs(self.prediction_dir)
-            os.makedirs(self.training_samples_dir)
+            os.makedirs(self.structure_dir)
             os.makedirs(self.dump_dir)
             os.makedirs(self.error_dir)
             os.makedirs(self.logs_dir)
@@ -97,8 +93,8 @@ class ArtiosBackboneTrainer(object):
 
         self.print(
             f"Using run name: {self.run_name}, run dir: {self.run_dir}, checkpoint_dir: "
-            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, "
-            + f"{self.error_dir} training_samples_dir: {self.training_samples_dir}"
+            + f"{self.checkpoint_dir}, ema_checkpoint_dir: {self.ema_checkpoint_dir}, prediction_dir: {self.prediction_dir}, structure_dir: "
+            + f"{self.structure_dir}, error_dir: {self.error_dir}"
         )
 
     def init_log(self):
@@ -119,8 +115,6 @@ class ArtiosBackboneTrainer(object):
             + f"global rank: {DIST_WRAPPER.rank}, local rank: {DIST_WRAPPER.local_rank}"
         )
         mp.set_sharing_strategy("file_system")
-        # mp.set_start_method("spawn", force=True)
-
         self.use_cuda = torch.cuda.device_count() > 0
         if self.use_cuda:
             self.device = torch.device("cuda:{}".format(DIST_WRAPPER.local_rank))
@@ -138,79 +132,86 @@ class ArtiosBackboneTrainer(object):
             dist.init_process_group(
                 backend="nccl", timeout=datetime.timedelta(seconds=timeout_seconds)
             )
-        # Use rank-specific seed for different augmentations across DDP processes
+
         if not self.configs.deterministic_seed:
+            # use rank-specific seed
             hash_string = f"({self.configs.seed},{DIST_WRAPPER.rank},init_seed)"
             rank_seed = int(hashlib.sha256(hash_string.encode("utf8")).hexdigest(), 16)
             rank_seed = rank_seed % (2**32)
         else:
             rank_seed = self.configs.seed
+
         seed_everything(
             seed=rank_seed,
             deterministic=self.configs.deterministic,
-        )
+        )  # different ddp processes have diff seeds
+
+        if self.configs.use_deepspeed_evo_attention:
+            env = os.getenv("CUTLASS_PATH", None)
+            print(f"env: {env}")
+            assert (
+                env is not None
+            ), "if use ds4sci, set env as https://www.deepspeed.ai/tutorials/ds4sci_evoformerattention/"
 
         # Set high precision for tensor core matmul using new API (PyTorch 2.9+)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         logging.info("Finished init ENV.")
 
+        # Set torch compile cache limit
+        torch._dynamo.config.cache_size_limit = 8
+
     def init_loss(self):
-        self.lddt_metrics = LDDTMetrics(self.configs)
+        # Loss computation is handled by the model's compute_loss method
+        pass
 
     def init_model(self):
-        self.raw_backbone_model = ArtiosBackbone(self.configs).to(self.device)
-        # TODO: we might need to initialize the packing model here.
-        # DDP not required for VAE loading since model is frozen - no need for gradient aggregation
+        self.raw_model = ArtiosMPNN(self.configs).to(self.device)  # TODO: AllatomMPNN
         self.use_ddp = False
         if DIST_WRAPPER.world_size > 1:
             self.print("Using DDP")
             self.use_ddp = True
             # Fix DDP/checkpoint https://discuss.pytorch.org/t/ddp-and-gradient-checkpointing/132244
-            self.backbone_model = DDP(
-                self.raw_backbone_model,
+            self.model = DDP(
+                self.raw_model,
                 find_unused_parameters=self.configs.find_unused_parameters,
                 device_ids=[DIST_WRAPPER.local_rank],
                 output_device=DIST_WRAPPER.local_rank,
                 static_graph=True,
             )
         else:
-            self.backbone_model = self.raw_backbone_model
+            self.model = self.raw_model
 
+        def count_parameters(model):
+            total_params = sum(p.numel() for p in model.parameters())
+            return total_params / 1000.0 / 1000.0
+
+        self.print(f"Model Parameters: {count_parameters(self.model)}")
         if self.configs.get("ema_decay", -1) > 0:
             assert self.configs.ema_decay < 1
             self.ema_wrapper = EMAWrapper(
-                self.backbone_model,
+                self.model,
                 self.configs.ema_decay,
                 self.configs.ema_mutable_param_keywords,
             )
             self.ema_wrapper.register()
 
         torch.cuda.empty_cache()
-        self.optimizer = get_optimizer(self.configs, self.backbone_model)
+        self.optimizer = get_optimizer(self.configs, self.model)
         self.init_scheduler()
-
-        # Initialize GradScaler once for use across all training steps
-        self.scaler = torch.GradScaler(
-            device="cuda" if self.use_cuda else "cpu",
-            enabled=(self.configs.dtype == "fp16"),
-        )
 
     def init_scheduler(self, **kwargs):
         self.lr_scheduler = get_lr_scheduler(self.configs, self.optimizer, **kwargs)
 
     def init_data(self):
-        self.print("beginning init_data...")
-        train_dl, self.test_dls = get_dataloaders(
+        print("beginning init_data...")
+        self.train_dl, self.test_dls = get_dataloaders(
             self.configs,
             DIST_WRAPPER.world_size,
             seed=self.configs.seed,
             error_dir=self.error_dir,
-            data_weights_config=DataWeightsConfig(),
         )
-
-        self.train_dl = train_dl
-        self.print("finished init_data")
+        print("finished init_data")
 
     def save_checkpoint(self, ema_suffix="", save_model_only=False):
         if DIST_WRAPPER.rank == 0:
@@ -222,7 +223,7 @@ class ArtiosBackboneTrainer(object):
             if not save_model_only:
                 # Save model, optimizer, scheduler, and step
                 checkpoint = {
-                    "model": self.backbone_model.state_dict(),
+                    "model": self.model.state_dict(),
                     "optimizer": self.optimizer.state_dict(),
                     "scheduler": (
                         self.lr_scheduler.state_dict()
@@ -230,15 +231,10 @@ class ArtiosBackboneTrainer(object):
                         else None
                     ),
                     "step": self.step,
-                    "step_is_completed_count": True,
                 }
             else:
                 # Save model and step (used for EMA wrappers)
-                checkpoint = {
-                    "model": self.backbone_model.state_dict(),
-                    "step": self.step,
-                    "step_is_completed_count": True,
-                }
+                checkpoint = {"model": self.model.state_dict(), "step": self.step}
 
             torch.save(checkpoint, path)
             self.print(f"Saved checkpoint to {path}")
@@ -247,7 +243,6 @@ class ArtiosBackboneTrainer(object):
         def _load_checkpoint(
             checkpoint_path: str,
             load_params_only: bool,
-            model: nn.Module,
             skip_load_optimizer: bool = False,
             skip_load_step: bool = False,
             skip_load_scheduler: bool = False,
@@ -266,23 +261,17 @@ class ArtiosBackboneTrainer(object):
                     k[len("module.") :]: v for k, v in checkpoint["model"].items()
                 }
 
-            model.load_state_dict(
-                checkpoint["model"],
+            self.model.load_state_dict(
+                state_dict=checkpoint["model"],
                 strict=self.configs.load_strict,
             )
-
             if not load_params_only:
                 if not skip_load_optimizer:
                     self.print("Loading optimizer state")
                     self.optimizer.load_state_dict(checkpoint["optimizer"])
                 if not skip_load_step:
                     self.print("Loading checkpoint step")
-                    checkpoint_step = checkpoint["step"]
-                    self.step = (
-                        checkpoint_step
-                        if checkpoint.get("step_is_completed_count", False)
-                        else checkpoint_step + 1
-                    )
+                    self.step = checkpoint["step"] + 1
                     self.start_step = self.step
                     self.global_step = self.step * self.iters_to_accumulate
                 if not skip_load_scheduler:
@@ -293,35 +282,28 @@ class ArtiosBackboneTrainer(object):
                     self.init_scheduler(last_epoch=self.step - 1)
             self.print(f"Finish loading checkpoint, current step: {self.step}")
 
-            return model
+        # Load EMA model parameters
+        if self.configs.load_ema_mpnn_checkpoint_path:
+            _load_checkpoint(
+                self.configs.load_ema_mpnn_checkpoint_path,
+                load_params_only=True,
+            )
+            self.ema_wrapper.register()
 
-        # Load model parameters from checkpoint
-        if self.configs.load_backbone_checkpoint_path:
-            self.backbone_model = _load_checkpoint(
-                self.configs.load_backbone_checkpoint_path,
+        # Load model parameters (With no EMA) from checkpoint
+        if self.configs.load_mpnn_checkpoint_path:
+            _load_checkpoint(
+                self.configs.load_mpnn_checkpoint_path,
                 self.configs.load_params_only,
-                model=self.backbone_model,
                 skip_load_optimizer=self.configs.skip_load_optimizer,
                 skip_load_scheduler=self.configs.skip_load_scheduler,
                 skip_load_step=self.configs.skip_load_step,
             )
 
-        # Load EMA shadow: from a dedicated checkpoint if provided,
-        # otherwise re-register from the loaded backbone weights
-        if hasattr(self, "ema_wrapper"):
-            if self.configs.load_ema_checkpoint_path:
-                _load_checkpoint(
-                    self.configs.load_ema_checkpoint_path,
-                    load_params_only=True,
-                    model=self.backbone_model,
-                )
-            self.ema_wrapper.register()
-
     def print(self, msg: str):
         if DIST_WRAPPER.rank == 0:
             logging.info(msg)
 
-    @profile_function("model_forward")
     def model_forward(
         self,
         context: FullContext,
@@ -338,10 +320,14 @@ class ArtiosBackboneTrainer(object):
         Returns:
             ModelOutput containing the prediction.
         """
-        output = self.backbone_model(context=context, mode=mode, seed=seed)
+        try:
+            output = self.model(context=context, mode=mode, seed=seed)
+        except Exception as e:
+            print(f"Error in model forward: {e}")
+            print(f"pdb_id: {context.basic.pdb_id}, step: {self.step}")
+            raise e
         return output
 
-    @profile_function("get_loss")
     def get_loss(
         self,
         output: ModelOutput,
@@ -356,11 +342,10 @@ class ArtiosBackboneTrainer(object):
         Returns:
             Tuple of (loss tensor, loss metrics dict).
         """
-        return self.raw_backbone_model.compute_loss(output, context)
+        return self.raw_model.compute_loss(output, context)
 
     @torch.no_grad()
     def evaluate(self):
-        """Run evaluation on all test datasets."""
         if not self.configs.eval_ema_only:
             self._evaluate(ema_suffix="")
         if hasattr(self, "ema_wrapper"):
@@ -369,11 +354,14 @@ class ArtiosBackboneTrainer(object):
             self.ema_wrapper.restore()
 
     @torch.no_grad()
-    def _evaluate(self, ema_suffix: str = "") -> dict:
+    def _evaluate(
+        self,
+        ema_suffix: str = "",
+    ) -> dict:
         """Run evaluation loop on all test datasets.
 
         Args:
-            ema_suffix: Suffix for logging (e.g., "post_hoc_ema_0.28" or "").
+            ema_suffix: Suffix for logging (e.g., "ema_0.999" or "").
 
         Returns:
             Dictionary of evaluation metrics.
@@ -391,7 +379,7 @@ class ArtiosBackboneTrainer(object):
             else nullcontext()
         )
 
-        self.backbone_model.eval()
+        self.model.eval()
 
         for test_name, test_dl in self.test_dls.items():
             self.print(f"Testing on {test_name}")
@@ -413,41 +401,29 @@ class ArtiosBackboneTrainer(object):
             metrics = simple_metric_wrapper.calc()
             self.print(f"Step {self.step}, eval {test_name}: {metrics}")
 
-            # Log validation metrics to WandB
+            # Log validation metrics to Neptune/WandB
             if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
+                # Add test_name prefix to metrics for clarity
                 prefix = f"{ema_suffix}/" if ema_suffix else ""
                 prefixed_metrics = {
                     f"{prefix}{test_name}/{k}": v for k, v in metrics.items()
                 }
                 wandb.log(prefixed_metrics, step=self.step)
 
-        return metrics
-
     def update(self):
         # Clip the gradient
         if self.configs.grad_clip_norm != 0.0:
             torch.nn.utils.clip_grad_norm_(
-                self.backbone_model.parameters(), self.configs.grad_clip_norm
+                self.model.parameters(), self.configs.grad_clip_norm
             )
 
-    @profile_function("backward_pass")
-    def backward_pass(self, loss):
-        self.scaler.scale(loss / self.iters_to_accumulate).backward()
-
-    @profile_function("optimizer_step")
-    def optimizer_step(self):
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-        self.optimizer.zero_grad(set_to_none=True)
-
-    @profile_function("train_step")
     def train_step(self, context: FullContext):
         """Execute a single training step.
 
         Args:
             context: Full context containing features and labels.
         """
-        self.backbone_model.train()
+        self.model.train()
 
         train_precision = {
             "fp32": torch.float32,
@@ -462,32 +438,43 @@ class ArtiosBackboneTrainer(object):
             else nullcontext()
         )
 
+        scaler = torch.GradScaler(
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            enabled=(self.configs.dtype == "fp16"),
+        )
+
         with enable_amp:
             output = self.model_forward(context, mode=Mode.TRAIN)
             loss, loss_dict = self.get_loss(output, context)
 
-        # if self.configs.dtype in ["bf16", "fp32"]:
-        #     if is_loss_nan_check(loss):
-        #         self.print(f"Skip iteration with NaN loss: {self.step} steps")
-        #         loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
-        self.backward_pass(loss)
+        if self.configs.dtype in ["bf16", "fp32"]:
+            if is_loss_nan_check(loss):
+                self.print(f"Skip iteration with NaN loss: {self.step} steps")
+                loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
+
+        scaler.scale(loss / self.iters_to_accumulate).backward()
 
         # For simplicity, the global training step is used
         if (self.global_step + 1) % self.iters_to_accumulate == 0:
+            self.print(
+                f"self.step {self.step}, self.iters_to_accumulate: {self.iters_to_accumulate}"
+            )
             # Unscales the gradients of optimizer's assigned parameters in-place
-            self.scaler.unscale_(self.optimizer)
+            scaler.unscale_(self.optimizer)
+
             self.on_before_optimizer_step()
-            # Do grad clip only
             self.update()
-            self.optimizer_step()
+
+            scaler.step(self.optimizer)
+            scaler.update()
+
+            self.optimizer.zero_grad(set_to_none=True)
             self.lr_scheduler.step()
 
         for key, value in loss_dict.items():
-            if "loss" not in key:
-                continue
             self.train_metric_wrapper.add(key, value, namespace="train")
 
-    def progress_bar(self, desc: str = "", display_step: int | None = None):
+    def progress_bar(self, desc: str = ""):
         if DIST_WRAPPER.rank != 0:
             return
         if self.global_step % (
@@ -504,30 +491,10 @@ class ArtiosBackboneTrainer(object):
             self._ipbar = iter(self._pbar)
 
         step = next(self._ipbar)
-        display_step = self.step if display_step is None else display_step
         self._pbar.set_description(
-            f"[step {display_step}: {step}/{self.iters_to_accumulate * self.configs.eval_interval}] {desc}"
+            f"[step {self.step}: {step}/{self.iters_to_accumulate * self.configs.eval_interval}] {desc}"
         )
         return
-
-    def _run_inference_and_log(self):
-        """
-        Runs inference during evaluation.
-        """
-        self.configs.dump_dir = os.path.join(self.prediction_dir, f"step_{self.step}")
-
-        inference_runner = InferenceRunner(
-            self.configs,
-            ModelType.BACKBONE,
-            model=self.backbone_model,
-        )
-
-        self.print(f"Running inference for step {self.step}...")
-        infer_predict(
-            inference_runner,
-            self.configs,
-            use_distributed_sampler=False,
-        )
 
     def on_validation_epoch_end(self):
         """Hook that is called at the end of each validation epoch."""
@@ -538,13 +505,9 @@ class ArtiosBackboneTrainer(object):
         ):
             return
 
-        # Perform inference during evaluation
-        if self.configs.run_training_time_inference and DIST_WRAPPER.rank == 0:
-            self._run_inference_and_log()
-
         # Calculate and log weight norms for each parameter
         weight_norms = {}
-        for name, param in self.backbone_model.named_parameters():
+        for name, param in self.model.named_parameters():
             if not param.requires_grad:  # Skip non-trainable parameters
                 continue
 
@@ -564,51 +527,26 @@ class ArtiosBackboneTrainer(object):
             weight_norms[f"weight_norms/{name}"] = norm
 
             if DIST_WRAPPER.rank == 0:
+                # Log to wandb
                 wandb.log(flatten_nested(weight_norms), step=self.step)
 
-    @profile_function("on_before_optimizer_step")
     def on_before_optimizer_step(self):
         """Hook that is called before the optimizer step."""
         if self.configs.monitor.grad_norm:
-            _, total_norm = grad_norm(self.backbone_model, norm_type=2)
+            _, total_norm = grad_norm(self.model, norm_type=2)
 
+            # Average across all ranks
+            # def numpy_mean_aggregation(values):
+            #    return float(np.mean(values))  # Convert to float in case of numpy types
+            # total_norm = gather_and_merge(total_norm, numpy_mean_aggregation)
+
+            # Log to wandb
             if DIST_WRAPPER.rank == 0:
                 wandb.log({"grad_norm": total_norm}, step=self.step)
 
-    def save_training_sample(
-        self,
-        context: FullContext,
-        motif_as_b_factor: bool = False,
-    ):
-        """Saves a training sample to the training samples directory.
-
-        Args:
-            context: Full context containing atom arrays and pdb ids.
-            motif_as_b_factor: If True, set b_factor to is_motif annotation.
-
-        Note: This method is a no-op if atom_array is None (disabled for performance).
-        """
-        atom_arrays = context.basic.atom_array
-        if atom_arrays is None:
-            return
-
-        from biotite.structure.io import save_structure
-
-        pdb_ids = context.basic.pdb_id
-
-        for idx, atom_array in enumerate(atom_arrays):
-            if atom_array is None:
-                continue
-            pdb_id = pdb_ids[idx]
-            if motif_as_b_factor:
-                atom_array.b_factor = atom_array.is_motif
-            save_structure(
-                os.path.join(self.training_samples_dir, f"{pdb_id}.cif"), atom_array
-            )
-
     def run(self):
         """
-        Main entry for the ArtiosBackboneTrainer.
+        Main entry for the ArtiosMPNNTrainer.
 
         This function handles the training process, evaluation, logging, and checkpoint saving.
         """
@@ -619,82 +557,71 @@ class ArtiosBackboneTrainer(object):
         use_ema = hasattr(self, "ema_wrapper")
         self.print(f"Using EMA: {use_ema}")
 
-        enable_profiling = self.configs.get("enable_profiling", False)
-
         def trace_handler(p):
             output = p.key_averages().table(
                 sort_by="self_cuda_time_total", row_limit=20
             )
-            self.print(output)
+            print(output)
+            # Only save trace from rank 0 to avoid file conflicts
             if DIST_WRAPPER.rank == 0:
                 tracename = f"trace_{p.step_num}_rank{DIST_WRAPPER.rank}.json"
                 filepath = f"{self.logs_dir}/{tracename}"
+                # Ensure directory exists before writing
                 os.makedirs(self.logs_dir, exist_ok=True)
                 p.export_chrome_trace(filepath)
+                # self.neptune_log_files({f"profiling/{tracename}": filepath})
 
-        profiler_context = (
-            torch.profiler.profile(
-                activities=[
-                    torch.profiler.ProfilerActivity.CPU,
-                    torch.profiler.ProfilerActivity.CUDA,
-                ],
-                schedule=torch.profiler.schedule(
-                    wait=10,
-                    warmup=10,
-                    active=10,
-                    skip_first=50,
-                    skip_first_wait=1,
-                    repeat=1,
-                ),
-                on_trace_ready=trace_handler,
-            )
-            if enable_profiling
-            else nullcontext()
-        )
-
-        with profiler_context as p:
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(
+                wait=10,
+                warmup=10,
+                active=50,
+                skip_first=50,
+                skip_first_wait=1,
+                repeat=1,
+            ),
+            on_trace_ready=trace_handler,
+        ) as p:
+            batch_iter_start = time.time()
             while True:
                 for context in self.train_dl:
-                    context = context.to(self.device, non_blocking=True)
+                    # Track data loading time
+                    data_load_time = time.time() - batch_iter_start
+                    if data_load_time > 1.0:  # Log slow data loading (> 1 second)
+                        logging.warning(
+                            f"SLOW DATA LOADING at step {self.step} (rank {DIST_WRAPPER.rank}): "
+                            f"{data_load_time:.2f}s to get batch from dataloader"
+                        )
 
                     is_update_step = (
                         self.global_step + 1
                     ) % self.iters_to_accumulate == 0
-                    next_step = self.step + 1 if is_update_step else self.step
-                    is_last_step = next_step == self.configs.max_steps
-                    step_need_log = next_step % self.configs.log_interval == 0
+                    is_last_step = (self.step + 1) == self.configs.max_steps
+                    step_need_log = (self.step + 1) % self.configs.log_interval == 0
 
                     step_need_eval = (
                         self.configs.eval_interval > 0
-                        and next_step % self.configs.eval_interval == 0
+                        and (self.step + 1) % self.configs.eval_interval == 0
                     )
                     step_need_save = (
                         self.configs.checkpoint_interval > 0
-                        and next_step % self.configs.checkpoint_interval == 0
+                        and (self.step + 1) % self.configs.checkpoint_interval == 0
                     )
-
-                    is_save_training_sample_step = self.global_step < 20
 
                     is_last_step &= is_update_step
                     step_need_log &= is_update_step
                     step_need_eval &= is_update_step
                     step_need_save &= is_update_step
 
-                    # Note: context moved to device above
-
-                    if is_save_training_sample_step:
-                        self.save_training_sample(context, motif_as_b_factor=True)
-
-                    self.progress_bar(display_step=next_step)
+                    context = context.to(self.device, non_blocking=True)
+                    self.progress_bar()
                     self.train_step(context)
-
                     if use_ema and is_update_step:
                         self.ema_wrapper.update()
-
-                    self.global_step += 1
-                    if is_update_step:
-                        self.step = next_step
-
                     if step_need_log or is_last_step:
                         metrics = self.train_metric_wrapper.calc()
                         self.print(f"Step {self.step} train: {metrics}")
@@ -705,30 +632,44 @@ class ArtiosBackboneTrainer(object):
                                     {"train/lr": last_lr},
                                     step=self.step,
                                 )
+                                # self.torchwatcher.watch(
+                                #     step=self.step,
+                                #     track_gradients=False,
+                                #     track_activations=True,
+                                #     track_parameters=False,
+                                #     prefix="train",
+                                # )
                             self.print(f"Step {self.step}, lr: {last_lr}")
                         if self.configs.use_wandb and DIST_WRAPPER.rank == 0:
                             wandb.log(metrics, step=self.step)
 
                     if step_need_save or is_last_step:
-                        self.print(f"Saving checkpoint at step {self.step}")
-                        self.save_checkpoint()
+                        self.print(f"beginning Saving checkpoint at step {self.step}")
+                        self.save_checkpoint()  # Saves non-ema checkpoint
                         if use_ema:
                             self.ema_wrapper.apply_shadow()
                             self.save_checkpoint(
-                                ema_suffix=f"ema_{self.ema_wrapper.decay}",
+                                ema_suffix=f"_ema_{self.ema_wrapper.decay}"
                             )
                             self.ema_wrapper.restore()
+                            # wait_for_all_processes()
 
                     if step_need_eval or is_last_step:
                         self.evaluate()
                         self.on_validation_epoch_end()
 
+                    self.global_step += 1
+                    if self.global_step % self.iters_to_accumulate == 0:
+                        self.step += 1
                     if self.step >= self.configs.max_steps:
                         self.print(f"Finish training after {self.step} steps")
                         break
 
-                    if enable_profiling:
-                        p.step()
+                    # Profiler step
+                    p.step()
+
+                    # Reset timer for next data loading measurement
+                    batch_iter_start = time.time()
 
                 if self.step >= self.configs.max_steps:
                     break
@@ -738,9 +679,10 @@ def main():
     LOG_FORMAT = "%(asctime)s,%(msecs)-3d %(levelname)-8s [%(filename)s:%(lineno)s %(funcName)s] %(message)s"
     logging.basicConfig(
         format=LOG_FORMAT,
+        filename="output.log",
         level=logging.INFO,
         datefmt="%Y-%m-%d %H:%M:%S",
-        filemode="w",
+        filemode="a",
     )
     configs_base["use_deepspeed_evo_attention"] = (
         os.environ.get("USE_DEEPSPEED_EVO_ATTTENTION", False) == "true"
@@ -753,7 +695,7 @@ def main():
 
     print(configs.run_name)
     print(configs)
-    trainer = ArtiosBackboneTrainer(configs)
+    trainer = ArtiosMPNNTrainer(configs)
     trainer.run()
 
 

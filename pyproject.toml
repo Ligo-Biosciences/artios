@@ -51,7 +51,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Training (runner/train_*.py).
+# Training (artios/runner/train_*.py).
 train = [
     "wandb>=0.25.0",
     "neptune-scale",
@@ -81,7 +81,7 @@ Repository = "https://github.com/Ligo-Biosciences/artios"
 "Bug Tracker" = "https://github.com/Ligo-Biosciences/artios/issues"
 
 [tool.setuptools.packages.find]
-include = ["artios*", "configs*", "runner*"]
+include = ["artios*"]
 
 [tool.setuptools.package-data]
 "artios" = ["data/pocket/*.joblib"]

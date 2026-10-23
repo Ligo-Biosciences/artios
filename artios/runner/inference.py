@@ -26,7 +26,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 
-from artios.assets import POTTS_CHECKPOINT, HubFile, download
+from artios.assets import BACKBONE_CHECKPOINT, POTTS_CHECKPOINT, HubFile, download
 from artios.config import parse_configs, parse_sys_args
 from artios.configs.configs_base import configs as configs_base
 from artios.configs.configs_data import data_configs
@@ -64,6 +64,7 @@ MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
         model_class=ArtiosBackbone,
         checkpoint_path_key="load_backbone_checkpoint_path",
         n_sample_key="sample_diffusion.N_sample",
+        default_checkpoint=BACKBONE_CHECKPOINT,
     ),
     ModelType.SEQUENCE_DESIGN: ModelConfig(
         model_class=ArtiosMPNN,

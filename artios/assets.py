@@ -35,10 +35,18 @@ class HubFile:
 
 POTTS_CHECKPOINT = HubFile(
     repo_id="Ligo-Biosciences/ArtiosPotts",
-    filename="35200_ema_0.9999.pt",
-    revision="eccf8808a629b5de76167077cc7d70b67718b91b",
-    sha256="019de1d4aebd2c8b7c6a80bdadd4f94691c1cd4ad7507c43352a22ac173ba538",
-    size=10_434_785,
+    filename="38400_ema_0.9999.pt",
+    revision="c98b78ebcd7691adb915138fed18adea45825439",
+    sha256="9c198c105e1d05c7e41d21ec6a898b6833ef5538570ac7afaa78e4e6259a7026",
+    size=10_435_129,
+)
+
+BACKBONE_CHECKPOINT = HubFile(
+    repo_id="Ligo-Biosciences/ArtiosBackbone",
+    filename="280000_ema_0.9999.pt",
+    revision="3b8939e37aff1544cb74937bad3516673c9914ad",
+    sha256="0016f6cffa0a52406f2630d1a82ce1d2ca838f91d3ed923e261c1ce0d4b130fb",
+    size=546_762_475,
 )
 
 CCD_COMPONENTS = HubFile(

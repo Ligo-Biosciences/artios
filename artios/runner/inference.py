@@ -262,6 +262,7 @@ def infer_predict(
         return None
 
     saved_paths = None
+    output = motif_mapping = None
     for seed in configs.seeds:
         seed_everything(seed=seed, deterministic=configs.deterministic)
         for context in dataloader:

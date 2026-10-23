@@ -21,8 +21,9 @@ from jaxtyping import (
 
 # Modules are only loaded and executed the first time they are imported, so the value of
 # should_typecheck will constant over the lifetime of the program.
-# Set TYPECHECK=0 or TYPECHECK=false to disable runtime type checking.
-should_typecheck = os.environ.get("TYPECHECK", "1").lower() not in ("0", "false", "no")
+# Runtime type checking is off by default (it is incompatible with torch.compile and
+# slows inference). Set TYPECHECK=1 to enable it; the test suite does so in conftest.py.
+should_typecheck = os.environ.get("TYPECHECK", "0").lower() not in ("0", "false", "no")
 
 
 Func = typing.TypeVar("Func")

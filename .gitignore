@@ -23,3 +23,6 @@ ccd_files
 
 # Pocket detection training cache
 artios/data/pocket/cache/
+
+# Inference outputs from the README examples
+output/

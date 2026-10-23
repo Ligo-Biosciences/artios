@@ -53,24 +53,35 @@ Both files must come from the same snapshot. `scripts/data/gen_ccd_cache.py` bui
 
 ## Usage
 
-Model weights and CCD files are downloaded from the Hugging Face Hub on first use. While the repositories are private, log in first with `hf auth login` (or set `HF_TOKEN`).
+Model weights and CCD files are downloaded from the Hugging Face Hub on first use (about 1.1 GB in total). While the repositories are private, log in first with `hf auth login` (or set `HF_TOKEN`). GPUs are used automatically when available; the timings below are for a laptop CPU.
+
+### Backbone generation
+
+`examples/backbone/` scaffolds the catalytic motif of orotidine 5′-monophosphate decarboxylase (six residues from PDB [1DBT](https://www.rcsb.org/structure/1DBT)) around its UMP ligand into a 128-residue design:
+
+```bash
+uv run python -m artios.runner.inference \
+    --model_type backbone \
+    --input_json_path examples/backbone/input.json \
+    --dump_dir output/backbone
+```
+
+This samples five backbones into `output/backbone/odcase_backbone.npz` (about 1.5 minutes). Use `--sample_diffusion.N_sample` to change the number of samples and `--output_format cif` to write one CIF file per sample instead (sequence design needs the NPZ). The design chain is poly-glycine; motif residues and ligands keep their own chains.
 
 ### Sequence design
 
-Design sequences for the 10 example backbones in `examples/sequence_design/`:
+Design a sequence for each generated backbone:
 
 ```bash
 uv run python -m artios.runner.inference \
     --model_type potts \
-    --input_json_path examples/sequence_design/input.json \
+    --input_json_path examples/backbone/sequence_design.json \
     --dump_dir output/sequence_design
 ```
 
-This writes `output/sequence_design/0/example_model_0_artios_potts_sequence.fasta`, containing one designed sequence per backbone (`uid_0` … `uid_9`); motif residues keep their original identities and are not included. The example takes about 7 minutes on a laptop CPU; GPUs are used automatically when available.
+This writes `output/sequence_design/0/odcase_model_0_artios_potts_sequence.fasta`, with one sequence per backbone (`uid_0` … `uid_4`; about 5 minutes). Motif residues keep their original identities and are not included. `examples/sequence_design/` contains ten further pre-generated backbones.
 
-Pass `--load_potts_checkpoint_path` to use your own weights instead of the released ones.
-
-> **TODO:** backbone generation quickstart.
+Pass `--load_backbone_checkpoint_path` or `--load_potts_checkpoint_path` to use your own weights instead of the released ones.
 
 ### Input format
 

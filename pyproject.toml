@@ -76,6 +76,9 @@ metrics = [
     "GridDataFormats",
 ]
 
+[project.scripts]
+artios = "artios.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/Ligo-Biosciences/artios"
 Repository = "https://github.com/Ligo-Biosciences/artios"

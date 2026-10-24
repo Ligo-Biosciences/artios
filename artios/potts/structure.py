@@ -108,7 +108,10 @@ class DesignTarget:
     name: str
     structure: AnnotatedStructure
     residues: tuple[Residue | None, ...]
-    """One entry per token; ``None`` for non-protein tokens (ligands, ions)."""
+    """One entry per token; ``None`` for ligands, ions and the motif residues
+    of ArtiosBackbone outputs, which are context and never designed."""
+    has_native_sequence: bool = True
+    """False for ArtiosBackbone outputs, whose residues are glycine placeholders."""
 
     @property
     def protein_chains(self) -> list[str]:
@@ -224,6 +227,47 @@ class DesignTarget:
                     PROTEIN_COMMON_THREE_TO_ONE.get(r.canonical_res_name, "X")
                 )
         return {c: "".join(s) for c, s in out.items()}
+
+
+STRUCTURE_SUFFIXES = (".pdb", ".ent", ".cif", ".mmcif", ".cif.gz", ".mmcif.gz", ".npz")
+
+
+def load_targets(
+    path: str | Path, *, chains: Iterable[str] | None = None
+) -> list[DesignTarget]:
+    """Load any supported file: one target for PDB/mmCIF, one per backbone for NPZ."""
+    path = Path(path)
+    if path.suffix.lower() == ".npz":
+        if chains is not None:
+            raise ValueError(f"Chain filtering is not supported for NPZ input {path}")
+        return load_backbones(path)
+    return [load_target(path, chains=chains)]
+
+
+def load_backbones(path: str | Path, *, name: str | None = None) -> list[DesignTarget]:
+    """Load an ArtiosBackbone NPZ output as one ``DesignTarget`` per backbone.
+
+    Targets are named ``{name}_{i}``. The glycine design chain is designable;
+    motif residues and ligands keep their identities and are context only, as
+    in ``python -m artios.runner.inference --model_type potts``.
+    """
+    from artios.utils.file_io import load_atomarray_stack
+
+    path = Path(path)
+    name = name or path.name.split(".")[0]
+    stack = load_atomarray_stack(str(path))
+    targets = []
+    for i in range(stack.stack_depth()):
+        structure = AnnotatedStructure.from_atom_array(stack[i])
+        targets.append(
+            DesignTarget(
+                name=f"{name}_{i}",
+                structure=structure,
+                residues=_residues(structure),
+                has_native_sequence=False,
+            )
+        )
+    return targets
 
 
 def load_target(
@@ -425,8 +469,15 @@ def _nucleic_type(res_names: tuple[str, ...]) -> str:
 def _residues(structure: AnnotatedStructure) -> tuple[Residue | None, ...]:
     atoms = structure.atoms
     centre = structure.centre_atom_indices
-    is_protein = structure.type_masks.chain_mol_type[centre] == "protein"
-    ins = atoms.ins_code if "ins_code" in atoms.get_annotation_categories() else None
+    # Motif residues of ArtiosBackbone outputs are tokenized per atom and never
+    # designed by the model, so they are context like ligands.
+    is_protein = (structure.type_masks.chain_mol_type[centre] == "protein") & ~(
+        structure.motif.is_motif_related[centre].astype(bool)
+    )
+    annotations = atoms.get_annotation_categories()
+    ins = atoms.ins_code if "ins_code" in annotations else None
+    # ArtiosBackbone outputs have no author numbering.
+    numbers = atoms.auth_seq_id if "auth_seq_id" in annotations else atoms.res_id
     canonical = structure.derived.cano_seq_resname
     out: list[Residue | None] = []
     for i, prot in zip(centre, is_protein):
@@ -436,7 +487,7 @@ def _residues(structure: AnnotatedStructure) -> tuple[Residue | None, ...]:
         out.append(
             Residue(
                 chain=str(atoms.auth_asym_id[i]),
-                number=int(atoms.auth_seq_id[i]),
+                number=int(numbers[i]),
                 ins_code=str(ins[i]).strip().upper() if ins is not None else "",
                 res_name=str(atoms.res_name[i]),
                 canonical_res_name=str(canonical[i]),

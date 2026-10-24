@@ -7,7 +7,7 @@ The design pipeline has two models:
 | Model | Task | Input | Output |
 |---|---|---|---|
 | **ArtiosBackbone** | All-atom motif scaffolding (EDM diffusion) | Motif CIF + ligand definitions (JSON) | Backbone structures (NPZ / CIF) |
-| **ArtiosPotts** | Sequence design (Potts model on an MPNN encoder) | Backbone NPZ from ArtiosBackbone | Designed sequences (FASTA) |
+| **ArtiosPotts** | Sequence design (Potts model on an MPNN encoder) | Backbone NPZ from ArtiosBackbone, or any PDB/mmCIF structure | Designed sequences (FASTA) and energies |
 
 Artios is built on [Protenix](https://github.com/bytedance/Protenix), ByteDance's open reproduction of AlphaFold 3 (see [NOTICE](NOTICE)).
 
@@ -55,33 +55,63 @@ Both files must come from the same snapshot. `scripts/data/gen_ccd_cache.py` bui
 
 Model weights and CCD files are downloaded from the Hugging Face Hub on first use (about 1.1 GB in total). While the repositories are private, log in first with `hf auth login` (or set `HF_TOKEN`). GPUs are used automatically when available; the timings below are for a laptop CPU.
 
+Everything runs through the `artios` command (`uv run artios --help`):
+
+| Command | Does |
+|---|---|
+| `artios scaffold` | Generate backbones around a motif (ArtiosBackbone) |
+| `artios design` | Design sequences for backbones or any PDB/mmCIF structure (ArtiosPotts) |
+| `artios score` | Score sequences on a structure: Potts energy and pseudo-log-likelihood |
+| `artios params` | Export the Potts fields h, couplings J and neighbour graph of a structure |
+
+Pass `--checkpoint` to use your own weights instead of the released ones, and `-v` for detailed logs.
+
 ### Backbone generation
 
 `examples/backbone/` scaffolds the catalytic motif of orotidine 5′-monophosphate decarboxylase (six residues from PDB [1DBT](https://www.rcsb.org/structure/1DBT)) around its UMP ligand into a 128-residue design:
 
 ```bash
-uv run python -m artios.runner.inference \
-    --model_type backbone \
-    --input_json_path examples/backbone/input.json \
-    --dump_dir output/backbone
+uv run artios scaffold examples/backbone/input.json -n 5 -o output/backbone
 ```
 
-This samples five backbones into `output/backbone/odcase_backbone.npz` (about 1.5 minutes). Use `--sample_diffusion.N_sample` to change the number of samples and `--output_format cif` to write one CIF file per sample instead (sequence design needs the NPZ). The design chain is poly-glycine; motif residues and ligands keep their own chains.
+This samples five backbones into `output/backbone/odcase_backbone.npz` (about 1.5 minutes). `--format cif` writes one CIF file per sample instead. The design chain (`0`) is poly-glycine; motif residues and ligands keep their own chains.
 
 ### Sequence design
 
-Design a sequence for each generated backbone:
+Design four sequences for each generated backbone:
 
 ```bash
-uv run python -m artios.runner.inference \
-    --model_type potts \
-    --input_json_path examples/backbone/sequence_design.json \
-    --dump_dir output/sequence_design
+uv run artios design output/backbone/odcase_backbone.npz -n 4 -o output/designs
 ```
 
-This writes `output/sequence_design/0/odcase_model_0_artios_potts_sequence.fasta`, with one sequence per backbone (`uid_0` … `uid_4`; about 5 minutes). Motif residues keep their original identities and are not included. `examples/sequence_design/` contains ten further pre-generated backbones.
+This writes `output/designs/designs.fasta` with the designed chain of each sequence, and `output/designs/designs.jsonl` with every chain, the Potts energy (lower is better) and per-residue energies. Motif residues and ligands are context and keep their identities. `examples/sequence_design/backbone.npz` contains ten further pre-generated backbones.
 
-Pass `--load_backbone_checkpoint_path` or `--load_potts_checkpoint_path` to use your own weights instead of the released ones.
+`artios design` also takes PDB and mmCIF files (or directories of them), so it works on any protein or complex. Residues are addressed by author chain and number, as in PyMOL:
+
+```bash
+# Redesign chain B of a complex, keeping residues 10-14 and 42 of chain B
+uv run artios design complex.pdb --design-chains B --fixed "B10-14 B42" -n 8 -o output/binder
+
+# Redesign only a loop
+uv run artios design protein.cif --redesign "A30-41" -o output/loop
+
+# Score designs (or, without a FASTA, the structure's own sequence)
+uv run artios score complex.pdb output/binder/designs.fasta -o output/scores
+```
+
+Selections are `A` (whole chain), `A42`, `A52B` (insertion code), `A10-20` (inclusive), or `1:42` for chain IDs that are not letters. Sampling options: `--temperature`, `--allow-cys`, `--allow-met` (both excluded by default), and `--set KEY=VALUE` for any `artios_mpnn.potts.sampling` option, e.g. `--set cfg_scale=2.0` or `--set energy_bias.W=-0.5`. Rerunning into the same output directory skips finished targets.
+
+The same functionality is available from Python:
+
+```python
+from artios.potts import PottsDesigner, load_target, parse_selection
+
+designer = PottsDesigner()
+target = load_target("complex.pdb")
+designs = designer.design(target, design_chains=["B"], fixed=parse_selection("B10-14"), num_sequences=8)
+scores = designer.score(target, [d.sequences for d in designs])
+params, _ = designer.potts_params(target)  # h, J and neighbour graph as tensors
+```
 
 ### Input format
 

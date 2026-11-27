@@ -51,6 +51,26 @@ class PottsLossType(str, Enum):
 
 
 @dataclass(frozen=True)
+class PottsParams:
+    """Ensemble-averaged Potts fields and couplings of a batch of structures.
+
+    h and J depend only on structure (the decoder input is fully masked), so
+    they can be computed once and sampled from many times. The ``*_uncond``
+    fields are the ligand-free h/J used for classifier-free guidance.
+    """
+
+    h: Tensor
+    J: Tensor
+    edge_index: Tensor
+    edge_mask: Tensor
+    is_masked: Tensor
+    h_uncond: Optional[Tensor] = None
+    J_uncond: Optional[Tensor] = None
+    edge_index_uncond: Optional[Tensor] = None
+    edge_mask_uncond: Optional[Tensor] = None
+
+
+@dataclass(frozen=True)
 class PottsLossConfig:
     loss_type: PottsLossType = PottsLossType.COMPOSITE
     label_smoothing: float = 0.0
@@ -210,12 +230,18 @@ class ArtiosPotts(nn.Module):
         seed: Optional[int] = None,
     ) -> PottsOutput:
         device = context.token.restype.device
-        _, _, R = context.token.restype.shape
-
         generator = (
             torch.Generator(device).manual_seed(seed) if seed is not None else None
         )
+        params = self.compute_potts_params(context, generator)
+        return self.sample_from_params(context, params, generator)
 
+    def compute_potts_params(
+        self,
+        context: FullContext,
+        generator: Optional[torch.Generator] = None,
+    ) -> PottsParams:
+        """Ensemble-averaged h/J, plus the ligand-free h/J when CFG is on."""
         ### Conditional ensemble
         masked_restypes, is_masked = self._build_sequence_blind_inputs(context)
         h, J, edge_index, edge_mask = self._run_ensemble(
@@ -237,6 +263,34 @@ class ArtiosPotts(nn.Module):
                     uncond_context, uncond_masked, uncond_is_masked, generator
                 )
             )
+
+        return PottsParams(
+            h=h,
+            J=J,
+            edge_index=edge_index,
+            edge_mask=edge_mask,
+            is_masked=is_masked,
+            h_uncond=h_uncond,
+            J_uncond=J_uncond,
+            edge_index_uncond=edge_index_uncond,
+            edge_mask_uncond=edge_mask_uncond,
+        )
+
+    def sample_from_params(
+        self,
+        context: FullContext,
+        params: PottsParams,
+        generator: Optional[torch.Generator] = None,
+    ) -> PottsOutput:
+        """Apply masks, biases and penalties to ``params`` and sample sequences."""
+        device = context.token.restype.device
+        _, _, R = context.token.restype.shape
+        h, J = params.h, params.J
+        edge_index, edge_mask = params.edge_index, params.edge_mask
+        is_masked = params.is_masked
+        h_uncond, J_uncond = params.h_uncond, params.J_uncond
+        edge_index_uncond = params.edge_index_uncond
+        edge_mask_uncond = params.edge_mask_uncond
 
         ### Initialisation logic
         active_site_mask = build_backbone_ligand_proximity_mask(

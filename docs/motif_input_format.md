@@ -80,24 +80,21 @@ python evaluation/scripts/convert_motif_cif.py input.cif output.cif --name my_mo
 
 ### Example
 
-Correctly formatted motif CIF (metal-binding active site with substrate and zinc):
+Correctly formatted motif CIF (carbonic anhydrase II active site with a sulfonamide inhibitor and zinc, from PDB 1BN1):
 ```
 # Protein residues: chain 0, sequential res IDs, entity 1
-ATOM    1  N NE2 . HIS 0 1 1 ? 16.441 26.723 21.566 1.00 10.96 0 0 1
-ATOM    2  O OE1 . GLU 0 1 2 ? 16.328 24.143 25.631 1.00 14.08 0 0 1
-ATOM    3  O OE2 . GLU 0 1 2 ? 16.926 26.229 25.835 1.00 16.27 0 0 1
-ATOM    4  N NE2 . HIS 0 1 3 ? 16.052 23.563 21.233 1.00 10.57 0 0 1
-ATOM    5  O OE1 . GLU 0 1 4 ? 18.048 25.099 19.464 1.00 12.38 0 0 1
-ATOM    6  O OE2 . GLU 0 1 4 ? 18.864 23.112 19.911 1.00 12.37 0 0 1
-ATOM    7  O  OH . TYR 0 1 5 ? 21.654 25.375 20.285 1.00 15.02 0 0 1
+ATOM    1  N NE2 . HIS 0 1 1 ? -7.571 -0.471 13.996 1.00  2.54 0 0 1
+ATOM    2  N NE2 . HIS 0 1 2 ? -5.940 -3.270 14.688 1.00  8.52 0 0 1
+ATOM    3  N NE2 . HIS 0 1 3 ? -8.937 -3.688 18.212 1.00  7.99 0 0 1
+ATOM    4  O OG1 . THR 0 1 4 ? -3.913 -2.138 17.799 1.00 10.73 0 0 1
 
-# Ligand PKF: chain 1, entity 2, all res_id = 1
-HETATM  8  N  N4 . PKF 1 2 1 ? 20.281 21.666 22.784 0.51  5.98 0 1 1
-HETATM  9  O  O7 . PKF 1 2 1 ? 22.056 27.785 25.373 0.51 12.54 0 1 1
+# Ligand AL5: chain 1, entity 2, all res_id = 1
+HETATM  5  S  S1 . AL5 1 2 1 ? -5.923  0.680 16.887 1.00 24.28 0 1 1
+HETATM  6  N N21 . AL5 1 2 1 ? -5.426 -0.670 16.241 1.00 20.67 0 1 1
 ...
 
 # Ligand ZN: chain 2, entity 3, res_id = 1
-HETATM 14 ZN  ZN .  ZN 2 3 1 ? 17.610 24.943 21.326 0.47  9.96 0 2 1
+HETATM  9 ZN  ZN .  ZN 2 3 1 ? -6.844 -1.668 15.437 1.00 10.83 0 2 1
 ```
 
 The parser automatically:

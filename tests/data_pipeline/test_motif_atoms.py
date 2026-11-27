@@ -43,7 +43,7 @@ def _load_backbone_input(rel_path: str):
 
 FIXTURES = [
     pytest.param(
-        "evaluation/inputs/artios/dtz/his_arg_4_atom_dtz.json",
+        "evaluation/inputs/artios/luciferase/his_arg_4_atom_dtz.json",
         id="dtz",
     ),
     pytest.param(
@@ -51,7 +51,7 @@ FIXTURES = [
         id="cutinase",
     ),
     pytest.param(
-        "evaluation/inputs/artios/cysteine_hydrolase/cysteine_hydrolase_no_ser_trp_no_asn_n.json",
+        "evaluation/inputs/artios/esterase/cysteine_hydrolase_no_ser_trp_no_asn_n.json",
         id="cysteine_hydrolase",
     ),
 ]

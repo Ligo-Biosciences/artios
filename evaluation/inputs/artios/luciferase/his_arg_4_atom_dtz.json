@@ -1,0 +1,29 @@
+{
+    "name": "his-arg-4-atom",
+    "task": "backbone",
+    "spec": {
+        "design": [
+            {
+                "length": "",
+                "chain_id": "0"
+            }
+        ],
+        "motif": {
+            "cif_file": "evaluation/inputs/motifs/luciferase/his_arg_4_atom_dtz.cif",
+            "ligands": [
+                {
+                    "cif_res_name": "DTZ",
+                    "chain_id": "1",
+                    "full_ligand": {
+                        "type": "smiles",
+                        "smiles": "C1=CC=C(C=C1)CC2=C(N3C=C([N:1]=C(C3=N2)C4=CC=CC=C4)C5=CC=CC=C5)[O:2]",
+                        "atom_map": {
+                            "N3": 1,
+                            "O1": 2
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}

@@ -19,51 +19,6 @@ import torch
 from torch.optim.lr_scheduler import LRScheduler
 
 
-class CosineAnnealingWithWarmup(LRScheduler):
-    def __init__(
-        self,
-        optimizer: torch.optim.Optimizer,
-        warmup_steps: int,
-        decay_steps: int,
-        lr: float,
-        min_lr: float,
-        last_epoch: int = -1,
-        verbose: bool = False,
-    ):
-        self.warmup_steps = warmup_steps
-        self.decay_steps = decay_steps
-        self.lr = lr
-        self.min_lr = min_lr
-        super().__init__(optimizer, last_epoch)
-
-    def _get_step_lr(self, step):
-        if step <= self.warmup_steps:
-            return (step + 1) / (self.warmup_steps + 1) * self.lr
-        elif step >= self.decay_steps:
-            return self.min_lr
-        else:
-            decay_ratio = (step - self.warmup_steps) / (
-                self.decay_steps - self.warmup_steps
-            )
-            assert 0 <= decay_ratio <= 1
-            coff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-            return self.min_lr + coff * (self.lr - self.min_lr)
-
-    def get_lr(self):
-        if not self._get_lr_called_within_step:
-            warnings.warn(
-                "To get the last learning rate computed by the scheduler, "
-                "please use `get_last_lr()`.",
-                UserWarning,
-            )
-        return [
-            self._get_step_lr(self.last_epoch) for group in self.optimizer.param_groups
-        ]
-
-    def _get_closed_form_lr(self):
-        return [self._get_step_lr(self.last_epoch) for base_lr in self.base_lrs]
-
-
 class CosineAnnealingWithWarmupAndHold(LRScheduler):
     def __init__(
         self,

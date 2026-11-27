@@ -1,7 +1,0 @@
-{
-  "name": "odcase",
-  "task": "sequence_design",
-  "spec": {
-    "npz_file": "output/backbone/odcase_backbone.npz"
-  }
-}

@@ -39,26 +39,6 @@ def scatter_sum(
         return out.scatter_add_(dim, index, src)
 
 
-def scatter_add(
-    src: torch.Tensor,
-    index: torch.Tensor,
-    dim: int = -1,
-    out: Optional[torch.Tensor] = None,
-    dim_size: Optional[int] = None,
-) -> torch.Tensor:
-    return scatter_sum(src, index, dim, out, dim_size)
-
-
-def scatter_mul(
-    src: torch.Tensor,
-    index: torch.Tensor,
-    dim: int = -1,
-    out: Optional[torch.Tensor] = None,
-    dim_size: Optional[int] = None,
-) -> torch.Tensor:
-    return torch.ops.torch_scatter.scatter_mul(src, index, dim, out, dim_size)
-
-
 def scatter_mean(
     src: torch.Tensor,
     index: torch.Tensor,
@@ -84,26 +64,6 @@ def scatter_mean(
     else:
         out.div_(count, rounding_mode="floor")
     return out
-
-
-def scatter_min(
-    src: torch.Tensor,
-    index: torch.Tensor,
-    dim: int = -1,
-    out: Optional[torch.Tensor] = None,
-    dim_size: Optional[int] = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    return torch.ops.torch_scatter.scatter_min(src, index, dim, out, dim_size)
-
-
-def scatter_max(
-    src: torch.Tensor,
-    index: torch.Tensor,
-    dim: int = -1,
-    out: Optional[torch.Tensor] = None,
-    dim_size: Optional[int] = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    return torch.ops.torch_scatter.scatter_max(src, index, dim, out, dim_size)
 
 
 def scatter(
@@ -166,8 +126,8 @@ def scatter(
         with size :attr:`dim_size` at dimension :attr:`dim`.
         If :attr:`dim_size` is not given, a minimal sized output tensor
         according to :obj:`index.max() + 1` is returned.
-    :param reduce: The reduce operation (:obj:`"sum"`, :obj:`"mul"`,
-        :obj:`"mean"`, :obj:`"min"` or :obj:`"max"`). (default: :obj:`"sum"`)
+    :param reduce: The reduce operation (:obj:`"sum"` or :obj:`"mean"`).
+        (default: :obj:`"sum"`)
 
     :rtype: :class:`Tensor`
 
@@ -189,13 +149,6 @@ def scatter(
     """
     if reduce == "sum" or reduce == "add":
         return scatter_sum(src, index, dim, out, dim_size)
-    if reduce == "mul":
-        return scatter_mul(src, index, dim, out, dim_size)
-    elif reduce == "mean":
+    if reduce == "mean":
         return scatter_mean(src, index, dim, out, dim_size)
-    elif reduce == "min":
-        return scatter_min(src, index, dim, out, dim_size)[0]
-    elif reduce == "max":
-        return scatter_max(src, index, dim, out, dim_size)[0]
-    else:
-        raise ValueError
+    raise ValueError(f"Unsupported reduce {reduce!r}; use 'sum' or 'mean'")

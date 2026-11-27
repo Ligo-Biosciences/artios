@@ -118,3 +118,40 @@ def test_bad_sequences_fail_with_a_message(tmp_path, capsys):
     )
     assert code == 2
     assert "':'-separated chains" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "extra, message",
+    [
+        (["--set", "no_such_option=1"], "Unknown sampling option no_such_option"),
+        (["--set", "temperature"], "--set expects KEY=VALUE"),
+        (["--device", "mps"], "does not run on Apple MPS"),
+    ],
+)
+def test_bad_options_fail_before_writing(tmp_path, capsys, extra, message):
+    out = tmp_path / "out"
+    assert main([*DESIGN, *extra, "-o", str(out)]) == 2
+    assert message in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_failed_run_neither_reports_output_nor_locks_the_directory(tmp_path, capsys):
+    """A typo that designs nothing must not block the corrected rerun."""
+    out = str(tmp_path / "out")
+    typo = ["--fixed", "B9999"]
+    assert main([*DESIGN, *typo, "-n", "1", "-o", out]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""  # no FASTA path for scripts to pick up
+    assert "residue 9999 is not in chain B" in captured.err
+    assert main([*DESIGN, "-n", "1", "-o", out]) == 0
+    assert len(_jsonl(Path(out) / "designs.jsonl")) == 1
+
+
+def test_overwrite_with_bad_options_keeps_results(design_dir, tmp_path):
+    out = tmp_path / "copy"
+    out.mkdir()
+    for name in ("designs.jsonl", "designs.fasta", "settings.json"):
+        (out / name).write_text((design_dir / name).read_text())
+    assert main([*DESIGN, "--overwrite", "--set", "typo=1", "-o", str(out)]) == 2
+    for name in ("designs.jsonl", "designs.fasta", "settings.json"):
+        assert (out / name).read_text() == (design_dir / name).read_text()

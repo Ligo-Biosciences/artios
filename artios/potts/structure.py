@@ -91,6 +91,14 @@ class ResidueSelector:
         end = (int(m["end"]), m["end_ins"].upper()) if m["end"] is not None else start
         return cls(chain=chain, start=start, end=end)
 
+    def __str__(self) -> str:
+        text = self.chain if self.chain.isalpha() else f"{self.chain}:"
+        if self.start is not None:
+            text += f"{self.start[0]}{self.start[1]}"
+            if self.end != self.start:
+                text += f"-{self.end[0]}{self.end[1]}"
+        return text
+
 
 def parse_selection(selection: str | Iterable[str] | None) -> list[ResidueSelector]:
     """Parse ``"A12 A15-20, B"`` (or a list of such strings) into selectors."""
@@ -142,6 +150,12 @@ class DesignTarget:
         return mask
 
     def _select_one(self, sel: ResidueSelector) -> np.ndarray:
+        if sel.chain not in self.protein_chains:
+            raise ValueError(
+                f"Selection {sel} refers to chain {sel.chain!r}, which is not a "
+                f"protein chain of {self.name}; protein chains are "
+                f"{self.protein_chains}"
+            )
         in_chain = np.array(
             [r is not None and r.chain == sel.chain for r in self.residues]
         )
@@ -154,8 +168,11 @@ class DesignTarget:
         positions = {keys[i]: i for i in idx}
         if sel.start not in positions or sel.end not in positions:
             missing = sel.start if sel.start not in positions else sel.end
+            numbers = [keys[i][0] for i in idx]
             raise ValueError(
-                f"Residue {sel.chain}{missing[0]}{missing[1]} not found in {self.name}"
+                f"Selection {sel}: residue {missing[0]}{missing[1]} is not in chain "
+                f"{sel.chain} of {self.name}, whose resolved residues run "
+                f"{min(numbers)}-{max(numbers)} (author numbering)"
             )
         lo, hi = positions[sel.start], positions[sel.end]
         if lo > hi:

@@ -73,7 +73,11 @@ def _parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="model weights (default: released weights)",
     )
-    common.add_argument("--device", help="torch device (default: cuda if available)")
+    common.add_argument(
+        "--device",
+        help="cuda, cuda:N or cpu (default: cuda if available); Apple MPS is "
+        "not supported",
+    )
     common.add_argument("-v", "--verbose", action="store_true", help="log details")
 
     s = sub.add_parser(
@@ -252,37 +256,41 @@ def _design(args) -> int:
         if k not in {"func", "structures", "out_dir", "verbose", "overwrite", "device"}
     }
     out = args.out_dir
-    out.mkdir(parents=True, exist_ok=True)
     jsonl, fasta, settings_file = (
         out / "designs.jsonl",
         out / "designs.fasta",
         out / "settings.json",
     )
+    if not args.overwrite and _read_jsonl(jsonl) and settings_file.exists():
+        if json.loads(settings_file.read_text()) != settings:
+            logger.error(
+                "%s holds results from different settings; use --overwrite or "
+                "another --out-dir",
+                out,
+            )
+            return 1
+    # Check the options (by building the designer) before touching OUT_DIR.
+    designer = _designer(args, _sampling(args))
     if args.overwrite:
         for f in (jsonl, fasta, settings_file):
             f.unlink(missing_ok=True)
-    if settings_file.exists() and json.loads(settings_file.read_text()) != settings:
-        logger.error(
-            "%s holds results from different settings; use --overwrite or "
-            "another --out-dir",
-            out,
-        )
-        return 1
+    existing = _read_jsonl(jsonl)
+    out.mkdir(parents=True, exist_ok=True)
     settings_file.write_text(json.dumps(settings, indent=2) + "\n")
 
-    done = {r["target"] for r in _read_jsonl(jsonl)}
+    done = {r["target"] for r in existing}
     # FASTA is derived from the JSONL, which is written last for each target.
     with fasta.open("w") as f:
-        for record in _read_jsonl(jsonl):
+        for record in existing:
             f.write(_fasta_record(record))
 
-    designer = _designer(args, _sampling(args))
     load_failures: list[Path] = []
     failures = 0
     for target in _targets(args.structures, args.chains, load_failures):
         if target.name in done:
             logger.info("%s: done, skipping", target.name)
             continue
+        logger.info("%s: designing %d sequences", target.name, args.num_sequences)
         start = time.perf_counter()
         try:
             designs = designer.design(
@@ -312,7 +320,8 @@ def _design(args) -> int:
             time.perf_counter() - start,
         )
     failures += len(load_failures)
-    print(fasta)
+    if fasta.stat().st_size:
+        print(fasta)
     return 1 if failures else 0
 
 
@@ -400,7 +409,7 @@ def _sampling(args) -> dict[str, str]:
     for item in args.sampling:
         key, sep, value = item.partition("=")
         if not sep or not key:
-            raise SystemExit(f"--set expects KEY=VALUE, got {item!r}")
+            raise ValueError(f"--set expects KEY=VALUE, got {item!r}")
         sampling[key] = value
     if getattr(args, "temperature", None) is not None:
         sampling["temperature"] = args.temperature

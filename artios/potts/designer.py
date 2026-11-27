@@ -110,6 +110,10 @@ class PottsDesigner:
         self.device = torch.device(
             device or ("cuda" if torch.cuda.is_available() else "cpu")
         )
+        if self.device.type == "mps":
+            # Large targets abort the process in a Metal gather kernel.
+            raise ValueError("ArtiosPotts does not run on Apple MPS; use the CPU")
+        _check_sampling_keys(sampling or {})
         overrides = " ".join(
             f"--artios_mpnn.potts.sampling.{k} {shlex.quote(str(v))}"
             for k, v in (sampling or {}).items()
@@ -300,6 +304,25 @@ class PottsDesigner:
             native_identity=float(same[flat_mask].mean())
             if target.has_native_sequence
             else None,
+        )
+
+
+def _check_sampling_keys(sampling: Mapping[str, object]) -> None:
+    """Reject keys that are not ``artios_mpnn.potts.sampling`` options."""
+    defaults = configs_base["artios_mpnn"]["potts"]["sampling"]
+    valid, shown = set(), []
+    for key, value in defaults.items():
+        if isinstance(value, dict):
+            valid |= {f"{key}.{sub}" for sub in value}
+            shown.append(f"{key}.<{'|'.join(value)}>")
+        else:
+            valid.add(key)
+            shown.append(key)
+    unknown = sorted(set(sampling) - valid)
+    if unknown:
+        raise ValueError(
+            f"Unknown sampling option {', '.join(unknown)}; options are "
+            + ", ".join(shown)
         )
 
 

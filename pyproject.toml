@@ -56,7 +56,6 @@ dependencies = [
 # Training (artios/runner/train_*.py).
 train = [
     "wandb>=0.25.0",
-    "neptune-scale",
     "pandera>=0.29.0",
     "rootutils",
 ]
@@ -69,10 +68,8 @@ data = [
     "gemmi",
     "pdbeccdutils",
 ]
-# Structure-quality and electrostatics metrics (artios/metrics, artios/electrostatics).
-metrics = [
-    "peppr",
-    "numba>=0.60",
+# Electrostatics analysis (artios/electrostatics).
+electrostatics = [
     "pdb2pqr",
     "GridDataFormats",
 ]

@@ -44,9 +44,9 @@ Optional extras install with `pip install "artios[train,data]"` or `uv sync --ex
 
 | Extra | Needed for |
 |---|---|
-| `train` | Training (`artios/runner/train_*.py`): wandb, neptune-scale, pandera |
+| `train` | Training (`artios/runner/train_*.py`): wandb, pandera |
 | `data` | Training-data preparation (`scripts/data/`) and pocket annotation |
-| `metrics` | Structure-quality and electrostatics metrics (`artios/metrics`, `artios/electrostatics`) |
+| `electrostatics` | Electrostatics analysis (`artios/electrostatics`) |
 
 ### Chemical Component Dictionary (CCD)
 

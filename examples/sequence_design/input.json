@@ -1,7 +1,0 @@
-{
-  "name": "example",
-  "task": "sequence_design",
-  "spec": {
-    "npz_file": "examples/sequence_design/backbone.npz"
-  }
-}

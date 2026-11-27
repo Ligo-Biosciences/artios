@@ -73,8 +73,8 @@ def _gt_match_in_canonical_indexing(
 
 GROUND_TRUTH_CASES = [
     pytest.param(
-        "evaluation/inputs/artios/dtz/his_arg_4_atom_dtz.json",
-        "evaluation/inputs/motifs/dtz/his_arg_4_atom_dtz.cif",
+        "evaluation/inputs/artios/luciferase/his_arg_4_atom_dtz.json",
+        "evaluation/inputs/motifs/luciferase/his_arg_4_atom_dtz.cif",
         "1",
         "DTZ",
         id="dtz_2_atom",
@@ -87,8 +87,8 @@ GROUND_TRUTH_CASES = [
         id="cutinase_5_atom",
     ),
     pytest.param(
-        "evaluation/inputs/artios/cysteine_hydrolase/cysteine_hydrolase_no_ser_trp_no_asn_n.json",
-        "evaluation/inputs/motifs/cysteine-hydrolase/no_ser_trp_motif_clean_no_asn_n.cif",
+        "evaluation/inputs/artios/esterase/cysteine_hydrolase_no_ser_trp_no_asn_n.json",
+        "evaluation/inputs/motifs/esterase/no_ser_trp_motif_clean_no_asn_n.cif",
         "1",
         "UNK",
         id="cysteine_hydrolase_5_atom",

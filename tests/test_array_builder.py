@@ -144,7 +144,7 @@ class TestBuildMotifLigand:
         Uses the DTZ (coelenterazine) plane motif - a complex bicyclic ligand
         with 13 atoms in the motif that would be tedious to manually map.
         """
-        # DTZ plane motif atoms from his_arg_plane_dtz.cif (UNL residue)
+        # DTZ plane motif atoms from the luciferase motif (UNL residue)
         # fmt: off
         atom_names = ("O1", "N1", "N2", "N3", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C10")
         elements = ("O", "N", "N", "N", "C", "C", "C", "C", "C", "C", "C", "C", "C")
@@ -252,3 +252,18 @@ class TestBuildMotifLigand:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_input_paths_resolve_against_the_json_folder(tmp_path, monkeypatch):
+    """cif_file next to the JSON wins; repo-root-style paths still work."""
+    from artios.data.infer_data_pipeline import resolve_input_paths
+
+    (tmp_path / "motif.cif").write_text("")
+    near = {"spec": {"motif": {"cif_file": "motif.cif"}}}
+    resolve_input_paths(near, tmp_path)
+    assert near["spec"]["motif"]["cif_file"] == str(tmp_path / "motif.cif")
+
+    monkeypatch.chdir(tmp_path)
+    legacy = {"spec": {"npz_file": {"path": "elsewhere/bb.npz"}}}
+    resolve_input_paths(legacy, tmp_path / "inputs")
+    assert legacy["spec"]["npz_file"] == {"path": "elsewhere/bb.npz"}

@@ -94,7 +94,7 @@ Design four sequences for each generated backbone:
 uv run artios design output/backbone/odcase_backbone.npz -n 4 -o output/designs
 ```
 
-This takes about 3 minutes per backbone and writes `output/designs/designs.fasta` with the designed chain of each sequence, and `output/designs/designs.jsonl` with every chain, the Potts energy (lower is better) and per-residue energies. Motif residues and ligands are context and keep their identities. `examples/sequence_design/backbone.npz` contains ten further pre-generated backbones.
+This takes about 3 minutes per backbone and writes `output/designs/designs.fasta` with the designed chain of each sequence, and `output/designs/designs.jsonl` with every chain, the Potts energy (lower is better) and per-residue energies. Motif residues and ligands are context and keep their identities. `examples/sequence_design/backbone.npz` holds ten more backbones, 160 residues each, generated around the luciferase motif from the paper (an arginine and a histidine placed around diphenylterazine).
 
 `artios design` also takes PDB and mmCIF files (or directories of them), so it works on any protein or complex. Residues are addressed by author chain and number, as in PyMOL:
 
@@ -157,7 +157,7 @@ Ligands can be given as CCD codes (`{"type": "ccd", "codes": ["ZN"]}`) or as ato
 - [Sequence design input format](docs/sequence_design_input_format.md): JSON input of the older `python -m artios.runner.inference` entry point, still used by `evaluation/`
 - [Motif stitching](docs/motif_stitching.md): how motif residues flow from backbone generation to the final design
 
-Example motifs and inputs live in `evaluation/inputs/motifs/` and `evaluation/inputs/artios/`.
+`evaluation/inputs/` holds the motifs (`motifs/`) and backbone inputs (`artios/`) behind the paper: the AME benchmark and the luciferase, esterase and cutinase campaigns. Their design `length` is left empty for the benchmark runner to fill; set it before running one with `artios scaffold`.
 
 ## Training
 

@@ -19,7 +19,7 @@ from artios.data.parsing.mmcif import MmcifReader
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CIF_DIR = REPO_ROOT / "tests" / "fixtures" / "cif"
-MOTIF_DIR = REPO_ROOT / "evaluation" / "inputs" / "motifs"
+MOTIF_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "motifs"
 
 
 # ---------------------------------------------------------------------------
@@ -57,9 +57,7 @@ class TestHeader:
         experimental method records. The reader must return the
         documented sentinels so downstream callers can treat those
         fields uniformly without special-casing the motif path."""
-        reader = MmcifReader(
-            MOTIF_DIR / "carbonic_anhydrase" / "carbonic_anhydrase_motif_no_h.cif"
-        )
+        reader = MmcifReader(MOTIF_FIXTURES / "carbonic_anhydrase_motif.cif")
         header = reader.header
 
         # No refinement tables → -1.0 sentinel.

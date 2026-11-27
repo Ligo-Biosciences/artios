@@ -4,7 +4,7 @@ Artios designs ligand-binding proteins. ArtiosBackbone generates backbones aroun
 
 ## Before running
 
-- Install with `uv sync` (Python 3.11 or 3.12). Weights and CCD files (about 1.1 GB) download from Hugging Face on first use. While the repositories are private, this needs `hf auth login` or `HF_TOKEN`.
+- Install with `pip install artios`, or with `uv sync` in a source checkout (Python 3.11 or 3.12). Weights and CCD files (about 1.1 GB) download from Hugging Face on first use. While the repositories are private, this needs `hf auth login` or `HF_TOKEN`.
 - The model runs on a CUDA GPU when one is available, otherwise on the CPU. Apple MPS is not supported. On a laptop CPU, `design` takes about 3 minutes for 4 sequences of a 128-residue scaffold backbone and 5 minutes for a 250-residue protein, and `scaffold` about 1.5 minutes for 5 backbones of 128 residues. Design time depends on the size of the whole input, not on how much of it is designed. Run long jobs in the background and wait for the process to exit; output files are filled in per target as each one finishes.
 - For a quick pipeline check, add `--set ensemble_size=2 --set n_sweeps=4`. This runs in seconds but gives poor sequences, so never report results from it.
 

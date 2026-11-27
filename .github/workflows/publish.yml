@@ -1,0 +1,37 @@
+name: Publish to PyPI
+
+# Publishing a GitHub release tagged vX.Y.Z uploads that version to PyPI.
+# Authentication is PyPI trusted publishing (no token secret): on PyPI the
+# artios project must trust this repository, workflow publish.yml and the
+# environment pypi.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Check the tag matches the package version
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Release tag $GITHUB_REF_NAME does not match pyproject version v$version"
+            exit 1
+          fi
+
+      - name: Build
+        run: uv build
+
+      - name: Publish
+        run: uv publish --trusted-publishing always

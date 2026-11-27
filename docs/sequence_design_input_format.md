@@ -194,7 +194,6 @@ from artios.data.parsing.json import (
     NPZFile,
     SequenceDesignInput,
     parse_input_dict,
-    parse_sequence_design_json,
 )
 
 # Parse from a task-wrapped dict (inference pipeline entry point)
@@ -203,9 +202,6 @@ input_data = parse_input_dict({
     "task": "sequence_design",
     "spec": {"npz_file": "backbone.npz"},
 })
-
-# Or parse a flat JSON file directly
-input_data = parse_sequence_design_json("my_design.json")
 
 # Access fields
 print(input_data.name)

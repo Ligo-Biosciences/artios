@@ -29,20 +29,6 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class AssemblyOperation:
-    """One row of ``_pdbx_struct_assembly_gen`` — a transform instance.
-
-    Placeholder dataclass; the actual row-parsing happens inside
-    ``expand_assembly`` because biotite's ``_apply_transformations``
-    consumes the raw ``CIFCategory`` directly.
-    """
-
-    assembly_id: str
-    oper_expression: str
-    asym_id_list: tuple[str, ...]
-
-
-@dataclass(frozen=True)
 class Bioassembly:
     """An annotated structure + CIF metadata + training-sample counts."""
 
@@ -215,18 +201,6 @@ def expand_assembly(
     if assembly_id == "1" or assembly_id == "all":
         assembly.set_annotation("assembly_1", np.array(assembly_1_mask))
     return assembly
-
-
-def get_core_indices(atom_array: AtomArray) -> np.ndarray | None:
-    """Return the indices of atoms belonging to assembly 1.
-
-    ``assembly_1`` is the boolean annotation ``expand_assembly`` writes;
-    this helper canonicalises the ``None`` return when the annotation is
-    absent (monomer CIFs, PyMOL exports).
-    """
-    if "assembly_1" in atom_array._annot:
-        return np.where(atom_array.assembly_1)[0]
-    return None
 
 
 # ---------------------------------------------------------------------------

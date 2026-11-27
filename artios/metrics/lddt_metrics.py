@@ -18,39 +18,6 @@ import torch
 import torch.nn as nn
 
 
-def get_complex_level_rankers(scores, keys):
-    assert all([k in ["plddt", "gpde", "ranking_score"] for k in keys])
-    rankers = {}
-    for key in keys:
-        if key == "gpde":
-            descending = False
-        else:
-            descending = True
-        ranking = scores[key].argsort(dim=0, descending=descending)
-        rankers[f"{key}.rank1"] = lambda x, rank1_idx=ranking[0].item(): x[
-            ..., rank1_idx
-        ]
-    return rankers
-
-
-def add_diff_metrics(scores, ranker_keys):
-    diff_metrics = {
-        "diff/best_worst": scores["best"] - scores["worst"],
-        "diff/best_random": scores["best"] - scores["random"],
-        "diff/best_median": scores["best"] - scores["median"],
-    }
-
-    for key in ranker_keys:
-        diff_metrics.update(
-            {
-                f"diff/best_{key}": scores["best"] - scores[f"{key}.rank1"],
-                f"diff/{key}_median": scores[f"{key}.rank1"] - scores["median"],
-            }
-        )
-    scores.update(diff_metrics)
-    return scores
-
-
 class LDDTMetrics(nn.Module):
     """LDDT: evaluated on chains and interfaces"""
 
@@ -64,30 +31,6 @@ class LDDTMetrics(nn.Module):
         self.complex_ranker_keys = configs.metrics.get(
             "complex_ranker_keys", ["plddt", "gpde", "ranking_score"]
         )
-
-    def compute_lddt(self, pred_dict: dict, label_dict: dict):
-        """compute complex-level and chain/interface-level lddt
-
-        Args:
-            pred_dict (Dict): a dictionary containing
-                coordinate: [N_sample, N_atom, 3]
-            label_dict (Dict): a dictionary containing
-                coordinate: [N_sample, N_atom, 3]
-                lddt_mask: [N_atom, N_atom]
-        """
-
-        out = {}
-
-        # Complex-level
-        lddt = self.lddt_base.forward(
-            pred_coordinate=pred_dict["coordinate"],
-            true_coordinate=label_dict["coordinate"],
-            # lddt_mask=label_dict["lddt_mask"],
-            chunk_size=self.chunk_size,
-        )  # [N_sample]
-        out["complex"] = lddt
-
-        return out
 
     def aggregate(
         self,
@@ -112,15 +55,6 @@ class LDDTMetrics(nn.Module):
             agg_name: agg_func(vals)
             for agg_name, agg_func in sample_aggregators.items()
         }
-
-    def aggregate_lddt(self, lddt_dict):
-        complex_lddt = self.aggregate(lddt_dict["complex"])
-
-        # Log metrics
-        complex_lddt = {
-            f"lddt/complex/{name}": value for name, value in complex_lddt.items()
-        }
-        return complex_lddt, {}
 
 
 class LDDT(nn.Module):
@@ -225,38 +159,3 @@ class LDDT(nn.Module):
             pred_distance_sparse_lm, true_distance_sparse_lm, chunk_size=chunk_size
         )  # [N_sample]
         return group_lddt
-
-    @staticmethod
-    def compute_lddt_mask(
-        true_coordinate: torch.Tensor,
-        true_coordinate_mask: torch.Tensor,
-        is_nucleotide: torch.Tensor = None,
-        is_nucleotide_threshold: float = 30.0,
-        threshold: float = 15.0,
-    ):
-        # Distance mask
-        distance_mask = (
-            true_coordinate_mask[..., None] * true_coordinate_mask[..., None, :]
-        )
-        # Distances for all atom pairs
-        # Note: we convert to bf16 for saving cuda memory, if performance drops, do not convert it
-        distance = (torch.cdist(true_coordinate, true_coordinate) * distance_mask).to(
-            true_coordinate.dtype
-        )  # [..., N_atom, N_atom]
-
-        # Local mask
-        c_lm = distance < threshold  # [..., N_atom, N_atom]
-        if is_nucleotide is not None:
-            # Use a different radius for nucleotide
-            is_nucleotide_mask = is_nucleotide.bool()[..., None]
-            c_lm = (distance < is_nucleotide_threshold) * is_nucleotide_mask + c_lm * (
-                ~is_nucleotide_mask
-            )
-
-        # Zero-out diagonals of c_lm and cast to float
-        c_lm = c_lm * (
-            1 - torch.eye(n=c_lm.size(-1), device=c_lm.device, dtype=distance.dtype)
-        )
-        # Zero-out atom pairs without true coordinates
-        c_lm = c_lm * distance_mask  # [..., N_atom, N_atom]
-        return c_lm

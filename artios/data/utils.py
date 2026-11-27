@@ -18,7 +18,6 @@ import argparse
 import copy
 import functools
 import os
-import re
 from collections import defaultdict
 from typing import TYPE_CHECKING, Optional
 
@@ -36,19 +35,6 @@ from artios.common.constants import (
 
 if TYPE_CHECKING:
     import torch
-
-
-def remove_numbers(s: str) -> str:
-    """
-    Remove numbers from a string.
-
-    Args:
-        s (str): input string
-
-    Returns:
-        str: a string with numbers removed.
-    """
-    return re.sub(r"\d+", "", s)
 
 
 def int_to_letters(n: int) -> str:
@@ -87,35 +73,6 @@ def get_inter_residue_bonds(atom_array: AtomArray) -> np.ndarray:
     inter_residue_bonds = atom_array.bonds._bonds[diff_mask]
     inter_residue_bonds = inter_residue_bonds[:, :2]  # remove bond type
     return inter_residue_bonds
-
-
-def get_starts_by(
-    atom_array: AtomArray, by_annot: str, add_exclusive_stop=False
-) -> np.ndarray:
-    """get start indices by given annotation in an AtomArray
-
-    Args:
-        atom_array (AtomArray): Biotite AtomArray
-        by_annot (str): annotation to group by, eg: 'chain_id', 'res_id', 'res_name'
-        add_exclusive_stop (bool, optional): add exclusive stop (len(atom_array)). Defaults to False.
-
-    Returns:
-        np.ndarray: start indices of each group, shape = (n,), eg: [0, 10, 20, 30, 40]
-    """
-    annot = getattr(atom_array, by_annot)
-    # If annotation change, a new start
-    annot_change_mask = annot[1:] != annot[:-1]
-
-    # Convert mask to indices
-    # Add 1, to shift the indices from the end of a residue
-    # to the start of a new residue
-    starts = np.where(annot_change_mask)[0] + 1
-
-    # The first start is not included yet -> Insert '[0]'
-    if add_exclusive_stop:
-        return np.concatenate(([0], starts, [atom_array.array_length()]))
-    else:
-        return np.concatenate(([0], starts))
 
 
 def atom_select(atom_array: AtomArray, select_dict: dict, as_mask=False) -> np.ndarray:
@@ -220,21 +177,6 @@ def parse_pdb_cluster_file_to_dict(
             for ids in pdb_clusters:
                 pdb_cluster_dict[ids.lower()] = (cluster_id, cluster_size)
     return pdb_cluster_dict
-
-
-def get_clean_data(atom_array: AtomArray) -> AtomArray:
-    """
-    Removes unresolved atoms from the AtomArray.
-
-    Args:
-        atom_array (AtomArray): The input AtomArray containing atoms.
-
-    Returns:
-        AtomArray: A new AtomArray with unresolved atoms removed.
-    """
-    atom_array_wo_unresol = atom_array.copy()
-    atom_array_wo_unresol = atom_array[atom_array.is_resolved]
-    return atom_array_wo_unresol
 
 
 def save_atoms_to_cif(
@@ -426,53 +368,6 @@ class CIFWriter:
 
         atom_site["label_entity_id"] = self.atom_array.label_entity_id
         cif.write(output_path)
-
-
-def get_lig_lig_bonds(
-    atom_array: AtomArray, lig_include_ions: bool = False
-) -> np.ndarray:
-    """
-    Get all inter-ligand bonds in order to create "token_bonds".
-
-    Args:
-        atom_array (AtomArray): biotite AtomArray object with "mol_type" attribute.
-        lig_include_ions (bool, optional): . Defaults to False.
-
-    Returns:
-        np.ndarray: inter-ligand bonds, e.g. np.array([[atom1, atom2, bond_order]...])
-    """
-    if not lig_include_ions:
-        # bonded ligand exclude ions
-        unique_chain_id, counts = np.unique(
-            atom_array.label_asym_id, return_counts=True
-        )
-        chain_id_to_count_map = dict(zip(unique_chain_id, counts))
-        ions_mask = np.array(
-            [
-                chain_id_to_count_map[label_asym_id] == 1
-                for label_asym_id in atom_array.label_asym_id
-            ]
-        )
-
-        lig_mask = (atom_array.mol_type == "ligand") & ~ions_mask
-    else:
-        lig_mask = atom_array.mol_type == "ligand"
-
-    chain_res_id = np.vstack((atom_array.label_asym_id, atom_array.res_id)).T
-    idx_i = atom_array.bonds._bonds[:, 0]
-    idx_j = atom_array.bonds._bonds[:, 1]
-
-    ligand_ligand_bond_indices = np.where(
-        (lig_mask[idx_i] & lig_mask[idx_j])
-        & np.any(chain_res_id[idx_i] != chain_res_id[idx_j], axis=1)
-    )[0]
-
-    if ligand_ligand_bond_indices.size == 0:
-        # no ligand-polymer bonds
-        lig_polymer_bonds = np.empty((0, 3)).astype(int)
-    else:
-        lig_polymer_bonds = atom_array.bonds._bonds[ligand_ligand_bond_indices]
-    return lig_polymer_bonds
 
 
 def pdb_to_cif(input_fname: str, output_fname: str, entry_id: str | None = None):

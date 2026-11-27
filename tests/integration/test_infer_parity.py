@@ -14,7 +14,6 @@ from typing import Any
 
 import numpy as np
 import pytest
-from biotite.structure import AtomArray
 
 from artios.data.parsing.json import (
     BackboneInput,
@@ -166,27 +165,3 @@ class TestMPNNDatasetParity:
         if not self.NPZ.exists():
             pytest.skip(f"MPNN fixture {self.NPZ} not present")
         _assert_deterministic(self._run)
-
-
-class TestPackingDatasetDisabled:
-    """Packing is intentionally disabled at runtime while its adapter is rebuilt.
-
-    The contract is import-safety: importing shared inference modules must keep
-    working for backbone/MPNN/Potts/evaluation flows, but actually invoking
-    packing should raise at the packing adapter boundary.
-    """
-
-    def test_packing_adapter_raises_only_when_called(self):
-        from artios.data.array_builder import packing_input_to_structure
-        from artios.data.infer_data_pipeline import (
-            MotifDataset,
-            MPNNDataset,
-            PackingDataset,
-        )
-
-        assert MotifDataset is not None
-        assert MPNNDataset is not None
-        assert PackingDataset is not None
-
-        with pytest.raises(NotImplementedError, match="Packing input construction"):
-            packing_input_to_structure(AtomArray(0), [])

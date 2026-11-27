@@ -448,37 +448,4 @@ def infer_atom_map_from_substructure(
     return cif_to_full_atom_name
 
 
-def lig_file_to_atom_info(lig_file_path: str) -> AtomInfo:
-    """
-    Convert ligand file to biotite AtomArray.
-
-    Args:
-        lig_file_path (str): ligand file path with one of the following suffixes: [mol, mol2, sdf, pdb]
-
-    Returns:
-        AtomInfo
-    """
-    if lig_file_path.endswith(".mol"):
-        mol = Chem.MolFromMolFile(lig_file_path)
-    elif lig_file_path.endswith(".sdf"):
-        suppl = Chem.SDMolSupplier(lig_file_path)
-        mol = next(suppl)
-    elif lig_file_path.endswith(".pdb"):
-        mol = Chem.MolFromPDBFile(lig_file_path)
-    elif lig_file_path.endswith(".mol2"):
-        mol = Chem.MolFromMol2File(lig_file_path)
-    else:
-        raise ValueError(f"Invalid ligand file type: .{lig_file_path.split('.')[-1]}")
-    assert (
-        mol is not None
-    ), f"Failed to retrieve molecule from file, invalid ligand file: {lig_file_path}. \
-        Please provide a file with one of the following suffixes: [mol, mol2, sdf, pdb]."
-
-    assert (
-        mol.GetConformer().Is3D()
-    ), f"3D conformer not found in ligand file: {lig_file_path}"
-    atom_info = rdkit_mol_to_atom_info(mol)
-    return atom_info
-
-
 __all__ = ["smiles_to_rdkit_mol", "atom_array_from_rdkit"]

@@ -172,14 +172,6 @@ class IndicesSchema(pa.DataFrameModel):
         strict = False  # allow extra columns (e.g., weights, pdb_sorted_entity_id)
 
 
-def validate_indices(df: pd.DataFrame) -> pd.DataFrame:
-    """Validate an indices DataFrame against the schema.
-
-    Raises pandera.errors.SchemaErrors with all violations collected.
-    """
-    return IndicesSchema.validate(df, lazy=True)
-
-
 # ── Filtering ──────────────────────────────────────────────────────────────
 
 

@@ -92,9 +92,6 @@ class TokenArray(object):
         for token, value in zip(self.tokens, values):
             token._annot[category] = value
 
-    def get_values(self):
-        return [token.value for token in self.tokens]
-
 
 # AtomArrayTokenizer was deleted in PR C — tokenization now lives on
 # ``AnnotatedStructure.grouping`` via ``compute_token_grouping_vectorized``.

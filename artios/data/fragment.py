@@ -631,32 +631,3 @@ class FragmentMaker:
         atom_array = self.fill_spectral_gaps(atom_array)
         atom_array = self.filter_fragments(atom_array)
         return atom_array
-
-    def get_fragment_statistics(self, atom_array: AtomArray) -> dict:
-        """
-        Calculate metrics per-fragment after spatial clustering and return a
-        dictionary of lists that includes the metrics per-fragment as well as all
-        the pockets in different fragments.
-
-        Args:
-            atom_array (AtomArray): Input AtomArray
-
-        Returns:
-            a dictionary with per-fragment metrics and pocket data.
-        """
-        atom_array = self.filter_low_plddt_residues(atom_array)
-        atom_array = self.spectral_split(atom_array)
-        atom_array = self.assign_fragment_ids(atom_array)
-        atom_array = self.spatially_cluster_fragments(atom_array)
-        atom_array = self.fill_spectral_gaps(atom_array)
-
-        fragments = self.calculate_fragment_metrics(atom_array)
-
-        metrics_by_name = {
-            "fragment_avg_plddt": [f.avg_plddt for f in fragments],
-            "fragment_length": [f.length for f in fragments],
-            "fragment_rg": [f.rg for f in fragments],
-            "fragment_boundaries": [f.boundaries for f in fragments],
-        }
-
-        return metrics_by_name

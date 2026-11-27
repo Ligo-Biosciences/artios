@@ -33,9 +33,6 @@ basic_configs = {
     "iters_to_accumulate": 1,
     "eval_only": False,
     "load_backbone_checkpoint_path": "",
-    "load_mpnn_checkpoint_path": "",
-    "load_packing_checkpoint_path": "",
-    "load_ema_mpnn_checkpoint_path": "",
     "load_potts_checkpoint_path": "",
     "load_ema_potts_checkpoint_path": "",
     "load_strict": True,
@@ -45,9 +42,6 @@ basic_configs = {
     "skip_load_scheduler": False,
     "use_wandb": True,
     "wandb_id": "",  # TODO: deprecated
-    "neptune_run_id": "",
-    "neptune_fork_run_id": "",
-    "neptune_fork_step": "",
     "seed": 43,
     "deterministic": False,
     "deterministic_seed": False,
@@ -138,7 +132,6 @@ model_configs = {
         "inference_value": -1.0,
     },
     "artios_mpnn": {
-        "train_zero_shot": False,
         "model": {
             "num_residue_types": 32,
             "node_dim": 128,  # TODO: make node and edge dims global config values
@@ -227,56 +220,6 @@ model_configs = {
                 "granular_active_site_coloring": True,
             },
         },
-        "sampling": {
-            "zero_shot": False,
-            "temperature": 0.1,
-            "smoothing_factor": 0.5,
-            "n_steps": 100,
-            "cosine_scale": 1.0,
-            "N_sample": 5,
-        },
-    },
-    "artios_packing": {
-        "model": {  # TODO: these configs will be tidier once Hydra in
-            "c_token": 768,
-            "local_sigma_coord": GlobalConfigValue("local_sigma_coord"),
-            "atom_encoder": {
-                "num_blocks": 3,
-                "num_heads": 4,
-                "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
-            },
-            "transformer": {
-                "num_blocks": 16,
-                "num_heads": 16,
-                "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
-            },
-            "atom_decoder": {
-                "num_blocks": 3,
-                "num_heads": 4,
-                "checkpoint_grads": GlobalConfigValue("checkpoint_grads"),
-            },
-        },
-        "train_timestep_sampler": {  # uniform
-            "alpha": 1.0,
-            "uniform_weight": 1.0,
-        },
-        "inference_timestep_scheduler": {
-            "la_proteina": {
-                "coord": {
-                    "scale": 10.0,
-                },
-            },
-        },
-        "sample_diffusion": {
-            "local_sigma_coord": GlobalConfigValue("local_sigma_coord"),
-            "alpha": 1.0,
-            "stoch_type": "deterministic",
-            "gamma": 1.0,
-            "sigma_coord": 1.0,
-            "N_sample": 20,
-            "N_step": 200,
-            "eps": 1e-5,
-        },
     },
 }
 
@@ -329,18 +272,6 @@ loss_configs = {
             "n_msa_chunk": 8,
             "supervise_query": True,
         },
-        "packing": {
-            "mse": {
-                "weight_protein": 1.0,
-                "weight_dna": 0.0,
-                "weight_rna": 0.0,
-                "weight_ligand": 4.0,
-                # "weight_motif": 0.0,
-                # "weight_motif_related": 0.0,
-                "eps": 1e-6,
-            },
-            "sigma_coord": 2.0,  # local sigma coord for packing
-        },
     },
     "metrics": {
         "lddt": {
@@ -351,7 +282,6 @@ loss_configs = {
         "interface_ranker_keys": ListValue(
             ["chain_pair_iptm", "chain_pair_iptm_global", "chain_pair_plddt"]
         ),
-        "clash": {"af3_clash_threshold": 1.1, "vdw_clash_threshold": 0.75},
     },
 }
 
@@ -369,7 +299,6 @@ monitor_configs = {
 
 training_time_inference_configs = {
     "run_training_time_inference": False,
-    "run_training_time_mpnn_inference_on_backbones": False,
     "seeds": ListValue([101]),
     "dump_dir": "./output",
     "dump_dir_list": ValueMaybeNone([]),

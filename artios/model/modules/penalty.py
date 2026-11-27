@@ -342,36 +342,6 @@ def charged_enrichment_penalty(
     return penalty * has_active_site.float()
 
 
-def build_active_site_mask(
-    centre_coordinate: Float[Tensor, "batch n_token 3"],
-    is_ligand_token: Bool[Tensor, "batch n_token"],
-    is_protein_token: Bool[Tensor, "batch n_token"],
-    token_mask: Bool[Tensor, "batch n_token"],
-    distance_cutoff: float,
-) -> Bool[Tensor, "batch n_token"]:
-    """Identify protein residues near the ligand center of mass.
-    Probably going to be used in penalties, like the aromatics penalty.
-
-    Args:
-        centre_coordinate: Per-token centre atom coordinates [B, N, 3].
-        is_ligand_token: Ligand token mask [B, N].
-        is_protein_token: Protein token mask [B, N].
-        token_mask: Valid token mask [B, N].
-        distance_cutoff: Distance threshold in Angstroms.
-
-    Returns:
-        Boolean mask of protein tokens within distance_cutoff of ligand CoM [B, N].
-    """
-    lig_coords = centre_coordinate * is_ligand_token.unsqueeze(-1).float()
-    lig_com = lig_coords.sum(dim=1) / is_ligand_token.float().sum(
-        dim=1, keepdim=True
-    ).clamp(min=1)
-
-    dist = (centre_coordinate - lig_com.unsqueeze(1)).norm(dim=-1)
-
-    return (dist < distance_cutoff) & is_protein_token & token_mask
-
-
 def _frequencies_to_tensor(
     freq_map: Mapping[str, float],
     device: torch.device,

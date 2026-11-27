@@ -311,35 +311,6 @@ class Filter(object):
         return removed_chain_ids
 
     @staticmethod
-    def remove_polymer_chains_all_residues_unknown(
-        atom_array: AtomArray,
-        entity_poly_type: dict,
-    ) -> AtomArray:
-        """remove chains with all residues unknown"""
-        chain_starts = struc.get_chain_starts(atom_array, add_exclusive_stop=True)
-        invalid_chains = []  # list of [start, end)
-        for index in range(len(chain_starts) - 1):
-            start, end = chain_starts[index], chain_starts[index + 1]
-            entity_id = atom_array[start].label_entity_id
-            if (
-                entity_poly_type.get(entity_id, "non-poly") == "polypeptide(L)"
-                and np.all(atom_array.res_name[start:end] == "UNK")
-            ) or (
-                entity_poly_type.get(entity_id, "non-poly")
-                in (
-                    "polyribonucleotide",
-                    "polydeoxyribonucleotide",
-                )
-                and np.all(atom_array.res_name[start:end] == "N")
-            ):
-                invalid_chains.append((start, end))
-        mask = np.ones(len(atom_array), dtype=bool)
-        for start, end in invalid_chains:
-            mask[start:end] = False
-        atom_array = atom_array[mask]
-        return atom_array
-
-    @staticmethod
     def remove_polymer_chains_with_unknown_residues(
         atom_array: AtomArray,
         entity_poly_type: dict,
@@ -368,32 +339,6 @@ class Filter(object):
                     "polydeoxyribonucleotide",
                 )
                 and condition_func(atom_array.res_name[start:end] == "N")
-            ):
-                invalid_chains.append((start, end))
-        mask = np.ones(len(atom_array), dtype=bool)
-        for start, end in invalid_chains:
-            mask[start:end] = False
-        atom_array = atom_array[mask]
-        return atom_array
-
-    @staticmethod
-    def remove_polymer_chains_too_short(
-        atom_array: AtomArray, entity_poly_type: dict
-    ) -> AtomArray:
-        chain_starts = struc.get_chain_starts(atom_array, add_exclusive_stop=True)
-        invalid_chains = []  # list of [start, end)
-        for index in range(len(chain_starts) - 1):
-            start, end = chain_starts[index], chain_starts[index + 1]
-            entity_id = atom_array[start].label_entity_id
-            num_residue_ids = len(set(atom_array.label_seq_id[start:end]))
-            if (
-                entity_poly_type.get(entity_id, "non-poly")
-                in (
-                    "polypeptide(L)",  # TODO: how to handle polypeptide(D)?
-                    "polyribonucleotide",
-                    "polydeoxyribonucleotide",
-                )
-                and num_residue_ids < 4
             ):
                 invalid_chains.append((start, end))
         mask = np.ones(len(atom_array), dtype=bool)

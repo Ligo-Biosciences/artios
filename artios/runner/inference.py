@@ -34,8 +34,6 @@ from artios.configs.configs_inference import inference_configs
 from artios.data.features import FullContext
 from artios.data.infer_data_pipeline import get_inference_dataloader
 from artios.model.artios_backbone import ArtiosBackbone
-from artios.model.artios_mpnn import ArtiosMPNN
-from artios.model.artios_packing import ArtiosPacking
 from artios.model.artios_potts import ArtiosPotts
 from artios.model.output import BackboneOutput, ModelOutput
 from artios.model.utils import Mode
@@ -65,15 +63,6 @@ MODEL_REGISTRY: dict[ModelType, ModelConfig] = {
         checkpoint_path_key="load_backbone_checkpoint_path",
         n_sample_key="sample_diffusion.N_sample",
         default_checkpoint=BACKBONE_CHECKPOINT,
-    ),
-    ModelType.SEQUENCE_DESIGN: ModelConfig(
-        model_class=ArtiosMPNN,
-        checkpoint_path_key="load_mpnn_checkpoint_path",
-    ),
-    ModelType.PACKING: ModelConfig(
-        model_class=ArtiosPacking,
-        checkpoint_path_key="load_packing_checkpoint_path",
-        n_sample_key="artios_packing.sample_diffusion.N_sample",
     ),
     ModelType.POTTS: ModelConfig(
         model_class=ArtiosPotts,
@@ -236,7 +225,7 @@ def infer_predict(
 ) -> Path | None:
     """Run inference on all samples in the dataloader.
 
-    The output type (BackboneOutput, PackingOutput, SequenceOutput) determines
+    The output type (BackboneOutput or PottsOutput) determines
     how results are saved - no explicit model_type dispatch needed.
 
     Args:

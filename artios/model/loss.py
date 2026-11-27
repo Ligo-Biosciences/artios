@@ -92,42 +92,6 @@ def mse_per_atom(
     return ((pred - true) ** 2).sum(dim=-1)
 
 
-@typecheck
-def nll_loss(
-    logits: Float[Tensor, "*batch n n_class"],
-    labels: Float[Tensor, "*batch n n_class"],
-    mask: Bool[Tensor, "*batch n"],
-    label_smoothing: float = 0.0,
-    eps: float = 1e-6,
-) -> Float[Tensor, "*batch"]:
-    """Compute masked negative log-likelihood loss with optional label smoothing.
-
-    Args:
-        logits: Classification logits.
-        labels: One-hot or soft labels (probabilities).
-        mask: Valid position mask.
-        label_smoothing: Label smoothing factor.
-        eps: Epsilon for numerical stability.
-
-    Returns:
-        Scalar NLL loss.
-    """
-    n_class = labels.shape[-1]
-
-    if label_smoothing > 0:
-        labels_smoothed = labels + (label_smoothing / n_class)
-        labels_smoothed = labels_smoothed / (
-            labels_smoothed.sum(dim=-1, keepdim=True) + eps
-        )
-    else:
-        labels_smoothed = labels
-
-    per_position_loss = -torch.sum(
-        labels_smoothed * F.log_softmax(logits, dim=-1), dim=-1
-    )
-    return masked_mean(per_position_loss, mask, axes=-1, eps=eps)
-
-
 def composite_nll_loss_msa(
     h: Float[Tensor, "batch n_token num_residue_types"],
     J: Float[Tensor, "batch n_token neighbours num_residue_types num_residue_types"],
@@ -347,29 +311,6 @@ def composite_nll_loss(
 # =============================================================================
 # Loss Utilities
 # =============================================================================
-
-
-@typecheck
-def timestep_scale(
-    timestep: Float[Tensor, "*batch"],
-    sigma: float,
-    clamp_max: float = 0.98,
-) -> Float[Tensor, "*batch"]:
-    """Compute per-sample scale factor from timestep.
-
-    Implements the weighting: 1 / (sqrt(2) * (sigma * (1 - t))^2)
-
-    Args:
-        timestep: Timestep values in [0, 1].
-        sigma: Sigma parameter for scaling.
-        clamp_max: Maximum value to clamp timestep to avoid division by zero.
-
-    Returns:
-        Per-sample scale factors.
-    """
-    sqrt2 = 1.414
-    t_clamped = torch.clamp(timestep, max=clamp_max)
-    return 1.0 / (sqrt2 * (sigma * (1 - t_clamped)) ** 2)
 
 
 @typecheck

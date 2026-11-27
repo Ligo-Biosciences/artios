@@ -30,6 +30,13 @@ jobs:
             exit 1
           fi
 
+      # GitHub renders the README's relative image paths; PyPI needs absolute
+      # URLs, pinned here to the release tag.
+      - name: Point README images at the tagged release
+        run: |
+          sed -i "s#](docs/figures/#](https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/docs/figures/#g" README.md
+          grep -c "raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/docs/figures/" README.md
+
       - name: Build
         run: uv build
 

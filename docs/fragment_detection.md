@@ -233,7 +233,6 @@ The `boundaries` field encodes which residue ID ranges belong to the fragment, w
 | Method | Returns | Use case |
 |--------|---------|----------|
 | `get_fragment_annotation(atom_array)` | `AtomArray` with `fragment_id` | Training data pipeline (`parser.py`) |
-| `get_fragment_statistics(atom_array)` | `dict` of lists | AFDB metrics computation (parquet format) |
 | `calculate_fragment_metrics(atom_array)` | `list[Fragment]` | Programmatic access to per-fragment metrics |
 
 ---
@@ -244,6 +243,5 @@ The `boundaries` field encodes which residue ID ranges belong to the fragment, w
 |------|------|
 | `protenix/data/fragment.py` | `FragmentMaker` class, `Fragment` dataclass |
 | `protenix/data/parser.py` | Calls `FragmentMaker.get_fragment_annotation()` during CIF parsing |
-| `protenix/data/engineering/scripts/compute_afdb_metrics.py` | Calls `FragmentMaker.get_fragment_statistics()` for AFDB-wide metrics |
 | `notebooks/prototype_fragment_detection.py` | Original prototype comparing 6 linker detection approaches |
 | `notebooks/visualize_spectral_fragments.py` | Visualization script for parameter sweeps |

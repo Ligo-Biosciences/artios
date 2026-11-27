@@ -1,12 +1,10 @@
 from collections import defaultdict
 from functools import cached_property
-from typing import Union
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from biotite.structure import AtomArray, get_residue_starts, sasa
-from sklearn.neighbors import KDTree  # TODO: switch to scipy
 
 from artios.common.constants import (
     BACKBONE_DEFS,
@@ -680,92 +678,6 @@ class ContextGenerator:
             fiedx_atom_res_perm = atom_res_perm[:, unchanged_columns_mask]
             fixed_atom_perm_list.extend(fiedx_atom_res_perm.tolist())
         return AtomPermContext(perms=fixed_atom_perm_list)
-
-    @staticmethod
-    def get_lig_pocket_mask(
-        atom_array: AtomArray, lig_label_asym_id: Union[str, list]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Ref: AlphaFold3 Chapter Methods.Metrics
-
-        the pocket is defined as all heavy atoms within 10 Å of any heavy atom of the ligand,
-        restricted to the primary polymer chain for the ligand or modified residue being scored,
-        and further restricted to only backbone atoms for proteins. The primary polymer chain is defined variously:
-        for PoseBusters it is the protein chain with the most atoms within 10 Å of the ligand,
-        for bonded ligand scores it is the bonded polymer chain and for modified residues it
-        is the chain that the residue is contained in (minus that residue).
-
-        Args:
-            atom_array (AtomArray): atoms in the complex.
-            lig_label_asym_id (Union[str, List]): The label_asym_id of the ligand of interest.
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: A tuple of ligand pocket mask and pocket mask.
-
-        # TODO: this is useful, but we need to adapt it to our features.
-        """
-
-        if isinstance(lig_label_asym_id, str):
-            lig_label_asym_ids = [lig_label_asym_id]
-        else:
-            lig_label_asym_ids = list(lig_label_asym_id)
-
-        # Get backbone mask
-        prot_backbone = (
-            atom_array.is_protein & np.isin(atom_array.atom_name, ["C", "N", "CA"])
-        ).astype(bool)
-
-        kdtree = KDTree(atom_array.coord)
-
-        ligand_mask_list = []
-        pocket_mask_list = []
-        for lig_label_asym_id in lig_label_asym_ids:
-            assert np.isin(
-                lig_label_asym_id, atom_array.label_asym_id
-            ), f"{lig_label_asym_id} is not in the label_asym_id of the cropped atom array."
-
-            ligand_mask = atom_array.label_asym_id == lig_label_asym_id
-            lig_pos = atom_array.coord[ligand_mask]
-
-            # Get atoms in 10 Angstrom radius
-            near_atom_indices = np.unique(
-                np.concatenate(kdtree.query_radius(lig_pos, 10.0))
-            )
-            near_atoms = [
-                True if i in near_atom_indices else False
-                for i in range(len(atom_array))
-            ]
-
-            # Get primary chain (protein backone in 10 Angstrom radius)
-            primary_chain_candidates = near_atoms & prot_backbone
-            primary_chain_candidates_atoms = atom_array[primary_chain_candidates]
-
-            max_atom = 0
-            primary_chain_asym_id_int = None
-            for asym_id_int in np.unique(primary_chain_candidates_atoms.asym_id_int):
-                n_atoms = np.sum(
-                    primary_chain_candidates_atoms.asym_id_int == asym_id_int
-                )
-                if n_atoms > max_atom:
-                    max_atom = n_atoms
-                    primary_chain_asym_id_int = asym_id_int
-            assert (
-                primary_chain_asym_id_int is not None
-            ), f"No primary chain found for ligand ({lig_label_asym_id=})."
-
-            pocket_mask = primary_chain_candidates & (
-                atom_array.asym_id_int == primary_chain_asym_id_int
-            )
-            ligand_mask_list.append(ligand_mask)
-            pocket_mask_list.append(pocket_mask)
-
-        ligand_mask_by_pockets = torch.Tensor(
-            np.array(ligand_mask_list).astype(int)
-        ).long()
-        pocket_mask_by_pockets = torch.Tensor(
-            np.array(pocket_mask_list).astype(int)
-        ).long()
-        return ligand_mask_by_pockets, pocket_mask_by_pockets
 
 
 def compute_motif_depth_norm(structure: AnnotatedStructure, eps: float = 1e-6) -> float:

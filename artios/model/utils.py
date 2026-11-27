@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from enum import Enum
-from typing import Optional
 
 import torch
 from torch import Tensor
@@ -146,82 +145,6 @@ def average_atom_to_token(
     out_mean = out_sum / (out_count + 1e-4)
 
     return out_mean
-
-
-def beta_function(
-    t: Tensor,
-    mean: Optional[float] = None,
-    std: Optional[float] = None,
-    alpha: Optional[float] = None,
-    beta: Optional[float] = None,
-    device: Optional[torch.device] = None,
-    dtype: Optional[torch.dtype] = None,
-) -> Tensor:
-    """
-    Evaluate the Beta probability density function at specified timestep values,
-    with the distribution parameterized by either mean/std or alpha/beta.
-
-    Args:
-        t (Tensor): Timestep values between 0 and 1
-        mean (float, optional): Mean of the Beta distribution (between 0 and 1)
-        std (float, optional): Standard deviation of the Beta distribution
-        alpha (float, optional): Alpha parameter of the Beta distribution (> 0)
-        beta (float, optional): Beta parameter of the Beta distribution (> 0)
-        device (torch.device, optional): Device for the computation
-        dtype (torch.dtype, optional): Data type for the computation
-
-    Returns:
-        Tensor: Normalised Beta function values evaluated at the specified timesteps
-    """
-    if device is not None and dtype is not None:
-        t = t.to(device=device, dtype=dtype)
-
-    # Check parameter combinations
-    mean_std_provided = mean is not None and std is not None
-    alpha_beta_provided = alpha is not None and beta is not None
-
-    if mean_std_provided and alpha_beta_provided:
-        raise ValueError(
-            "Cannot specify both (mean, std) and (alpha, beta). Choose one parameterization."
-        )
-    elif not mean_std_provided and not alpha_beta_provided:
-        raise ValueError("Must specify either (mean, std) or (alpha, beta) parameters.")
-
-    # Compute alpha and beta values (as floats first for validation)
-    if mean_std_provided:
-        assert mean is not None and std is not None
-        var = std**2
-
-        # Ensure the parameters are valid
-        if mean * (1 - mean) <= var:
-            raise ValueError(
-                f"Invalid parameters: mean={mean}, std={std}. Requires mean*(1-mean) > std^2"
-            )
-
-        common_term = (mean * (1 - mean) / var) - 1
-        alpha_val = mean * common_term
-        beta_val = (1 - mean) * common_term
-    else:
-        assert alpha is not None and beta is not None
-        if alpha <= 0 or beta <= 0:
-            raise ValueError(
-                f"Alpha and beta must be positive. Got alpha={alpha}, beta={beta}"
-            )
-        alpha_val = alpha
-        beta_val = beta
-
-    # Convert to tensors for computation
-    alpha_t = torch.tensor(alpha_val, device=t.device, dtype=t.dtype)
-    beta_t = torch.tensor(beta_val, device=t.device, dtype=t.dtype)
-
-    # Calculate Beta function normalization constant using log-gamma
-    # B(alpha, beta) = Γ(alpha)Γ(beta)/Γ(alpha+beta)
-    log_norm = (
-        torch.lgamma(alpha_t) + torch.lgamma(beta_t) - torch.lgamma(alpha_t + beta_t)
-    )
-    normalization = torch.exp(log_norm)
-
-    return t ** (alpha_t - 1) * (1 - t) ** (beta_t - 1) / normalization
 
 
 def masked_mean(

@@ -7,7 +7,6 @@ import warnings
 
 import biotite.structure as struc
 import numpy as np
-from biotite.sequence import ProteinSequence
 from biotite.structure import AtomArray
 from typing_extensions import assert_never
 
@@ -203,25 +202,6 @@ def sequence_design_input_to_structure(
     from those annotations directly — no motif transform needed.
     """
     return AnnotatedStructure.from_atom_array(atom_array), ()
-
-
-def packing_input_to_structure(
-    input_array: AtomArray,
-    sequence: ProteinSequence,
-) -> tuple[AnnotatedStructure, tuple[MotifMappingEntry, ...]]:
-    """Packing inference is temporarily disabled.
-
-    Keep this symbol importable because ``infer_data_pipeline`` and the
-    Modal/evaluation entry points share module imports across backbone, MPNN,
-    Potts, and packing flows. Calling the packing path should fail here, and
-    only here, until the adapter is rebuilt on the unified annotation pipeline.
-    """
-    raise NotImplementedError(
-        "Packing input construction is temporarily disabled while the legacy "
-        "annotation.py path is removed. Non-packing inference/evaluation paths "
-        "are unaffected; invoking PackingDataset or the Artios packing Modal "
-        "container will fail here until packing is reimplemented."
-    )
 
 
 def _build_polymer_atom_array(ccd_seqs: list[str]) -> AtomArray:

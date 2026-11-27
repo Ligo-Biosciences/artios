@@ -7,8 +7,6 @@ Supports:
 
 from __future__ import annotations
 
-import copy
-import json
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal, Union
@@ -36,7 +34,6 @@ class TaskType(str, Enum):
 
     BACKBONE = "backbone"
     SEQUENCE_DESIGN = "sequence_design"
-    PACKING = "packing"
 
 
 class InferenceInputDict(BaseModel):
@@ -62,14 +59,14 @@ class InferenceInputDict(BaseModel):
 
 def parse_input_dict(
     input_dict: dict[str, Any],
-) -> BackboneInput | SequenceDesignInput | PackingInput:
+) -> BackboneInput | SequenceDesignInput:
     """Parse a single input dict from the inference dataset JSON.
 
     Args:
         input_dict: Dictionary containing 'name', 'task', and 'spec' keys
 
     Returns:
-        Parsed and validated XInput object (BackboneInput or SequenceDesignInput or PackingInput)
+        Parsed and validated input (BackboneInput or SequenceDesignInput)
 
     Raises:
         pydantic.ValidationError: If input_dict doesn't match expected structure
@@ -102,57 +99,6 @@ def parse_input_dict(
                 **spec_with_name
             )  # ty: ignore[invalid-argument-type]
 
-        case TaskType.PACKING:
-            # Convert string npz_file to NPZFile object format if needed
-            if "npz_file" in spec_with_name:
-                npz_file_value = spec_with_name["npz_file"]
-                if isinstance(npz_file_value, str):
-                    spec_with_name["npz_file"] = {"path": npz_file_value}
-
-            # Convert string fasta_file to FastaFile object format if needed
-            if "fasta_file" in spec_with_name:
-                fasta_file_value = spec_with_name["fasta_file"]
-                if isinstance(fasta_file_value, str):
-                    spec_with_name["fasta_file"] = {"path": fasta_file_value}
-
-            return PackingInput(**spec_with_name)  # ty: ignore[invalid-argument-type]
-
-
-def parse_backbone_input(
-    input_dict: dict[str, Any], design_length: int
-) -> BackboneInput:
-    """Parse a backbone-task input dict into a `BackboneInput` model.
-
-    Injects `design_length` into `spec.design[0].length` before parsing
-    so the validation passes when the on-disk JSON has the conventional
-    `""` (defer-to-CLI) sentinel. The mutation is on a deep copy; the
-    caller's dict is unchanged.
-
-    Raises:
-        ValueError: if the dict isn't a valid backbone input.
-        pydantic.ValidationError: from `parse_input_dict`.
-    """
-    input_data = copy.deepcopy(input_dict)
-    input_data["spec"]["design"][0]["length"] = design_length
-    parsed = parse_input_dict(input_data)
-    if not isinstance(parsed, BackboneInput):
-        raise ValueError(f"Expected BackboneInput, got {type(parsed).__name__}")
-    return parsed
-
-
-def validate_artios_input_json(input_dict: dict[str, Any]) -> None:
-    """Validate an artios input JSON dict against the BackboneInput schema.
-
-    Same checks `run_modal_inference.py` runs at launch — pulled
-    earlier into the authoring loop so the eval-bot agent can catch
-    schema errors before writing the file.
-
-    Raises:
-        ValueError: if the dict isn't a valid backbone input.
-        pydantic.ValidationError: surfaced from Pydantic.
-    """
-    parse_backbone_input(input_dict, design_length=PSEUDO_DESIGN_LENGTH)
-
 
 # ---------------------------------------------------------------------------
 # Common models
@@ -176,26 +122,6 @@ class CIFFile(BaseModel):
         valid_suffixes = {".cif", ".mmcif"}
         if v.suffix.lower() not in valid_suffixes:
             raise ValueError(f"File must be .cif or .mmcif, got '{v.suffix}'")
-        return v
-
-
-class FastaFile(BaseModel):
-    """A FASTA file.
-
-    Used by packing inputs.
-
-    Example:
-        {"path": "path/to/sequence.fasta"}
-    """
-
-    path: Path = Field(..., description="Path to FASTA file")
-
-    @field_validator("path")
-    @classmethod
-    def validate_file_suffix(cls, v: Path) -> Path:
-        valid_suffixes = {".fasta", ".fa"}
-        if v.suffix.lower() not in valid_suffixes:
-            raise ValueError(f"File must be .fasta or .fa, got '{v.suffix}'")
         return v
 
 
@@ -483,180 +409,6 @@ class SequenceDesignInput(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class PackingInput(BaseModel):
-    """Top-level input for sidechain packing inference.
-
-    Given a backbone structure (from motif scaffolding) and designed sequences
-    (from MPNN), predict sidechain conformations.
-
-    The NPZ file contains an AtomArrayStack saved with dump_atomarray_stack().
-    It includes:
-    - Protein backbone coordinates (poly-glycine from motif scaffolding)
-    - Ligand coordinates and annotations
-    - All necessary chain/entity annotations
-
-    The FASTA file contains the designed sequences from MPNN, one per model
-    in the AtomArrayStack. The number of sequences must match the stack depth.
-
-    Example:
-        {
-            "name": "pack_design",
-            "npz_file": "backbone_stack.npz",
-            "fasta_file": "designed_sequences.fasta"
-        }
-    """
-
-    name: str | None = Field(default=None, description="Job identifier")
-    npz_file: NPZFile = Field(
-        ...,
-        description="NPZ file containing AtomArrayStack from motif scaffolding",
-    )
-    fasta_file: FastaFile = Field(
-        ..., description="FASTA file with designed sequences (one per model in stack)"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Legacy
 # ---------------------------------------------------------------------------
-
-
-def parse_sequence_design_json(
-    file_path: str | Path,
-    resolve_paths: bool = True,
-) -> SequenceDesignInput:
-    """Parse a sequence design input JSON file.
-
-    Args:
-        file_path: Path to the JSON file
-        resolve_paths: If True, resolve npz_file path relative to the JSON file's directory
-
-    Returns:
-        Validated SequenceDesignInput object
-
-    Raises:
-        FileNotFoundError: If the JSON file doesn't exist
-        json.JSONDecodeError: If the file is not valid JSON
-        pydantic.ValidationError: If the JSON doesn't match the schema
-    """
-    file_path = Path(file_path)
-
-    if not file_path.exists():
-        raise FileNotFoundError(f"JSON file not found: {file_path}")
-
-    with open(file_path) as f:
-        data = json.load(f)
-
-    # Convert npz_file string to NPZFile object format and resolve path
-    if "npz_file" in data:
-        npz_file_value = data["npz_file"]
-        # Accept either string or dict with "path" key
-        if isinstance(npz_file_value, str):
-            npz_path = Path(npz_file_value)
-        else:
-            npz_path = Path(npz_file_value["path"])
-
-        if resolve_paths and not npz_path.is_absolute():
-            npz_path = file_path.parent / npz_path
-
-        data["npz_file"] = {"path": str(npz_path)}
-
-    return SequenceDesignInput(**data)
-
-
-def parse_motif_json(
-    file_path: str | Path, resolve_paths: bool = True
-) -> BackboneInput:
-    """Parse a motif scaffolding input JSON file.
-
-    Args:
-        file_path: Path to the JSON file
-        resolve_paths: If True, resolve cif_file path relative to the JSON file's directory
-
-    Returns:
-        Validated MotifInput object
-
-    Raises:
-        FileNotFoundError: If the JSON file doesn't exist
-        json.JSONDecodeError: If the file is not valid JSON
-        pydantic.ValidationError: If the JSON doesn't match the schema
-    """
-    file_path = Path(file_path)
-
-    if not file_path.exists():
-        raise FileNotFoundError(f"JSON file not found: {file_path}")
-
-    with open(file_path) as f:
-        data = json.load(f)
-
-    # Convert motif.cif_file string to CIFFile object format and resolve path
-    if "motif" in data and "cif_file" in data["motif"]:
-        cif_file_value = data["motif"]["cif_file"]
-        # Accept either string or dict with "path" key
-        if isinstance(cif_file_value, str):
-            cif_path = Path(cif_file_value)
-        else:
-            cif_path = Path(cif_file_value["path"])
-
-        if resolve_paths and not cif_path.is_absolute():
-            cif_path = file_path.parent / cif_path
-
-        data["motif"]["cif_file"] = {"path": str(cif_path)}
-
-    return BackboneInput(**data)
-
-
-def parse_packing_json(
-    file_path: str | Path,
-    resolve_paths: bool = True,
-) -> PackingInput:
-    """Parse a packing input JSON file.
-
-    Args:
-        file_path: Path to the JSON file
-        resolve_paths: If True, resolve npz_file and fasta_file paths relative
-            to the JSON file's directory
-
-    Returns:
-        Validated PackingInput object
-
-    Raises:
-        FileNotFoundError: If the JSON file doesn't exist
-        json.JSONDecodeError: If the file is not valid JSON
-        pydantic.ValidationError: If the JSON doesn't match the schema
-    """
-    file_path = Path(file_path)
-
-    if not file_path.exists():
-        raise FileNotFoundError(f"JSON file not found: {file_path}")
-
-    with open(file_path) as f:
-        data = json.load(f)
-
-    # Convert npz_file string to NPZFile object format and resolve path
-    if "npz_file" in data:
-        npz_file_value = data["npz_file"]
-        if isinstance(npz_file_value, str):
-            npz_path = Path(npz_file_value)
-        else:
-            npz_path = Path(npz_file_value["path"])
-
-        if resolve_paths and not npz_path.is_absolute():
-            npz_path = file_path.parent / npz_path
-
-        data["npz_file"] = {"path": str(npz_path)}
-
-    # Convert fasta_file string to FastaFile object format and resolve path
-    if "fasta_file" in data:
-        fasta_file_value = data["fasta_file"]
-        if isinstance(fasta_file_value, str):
-            fasta_path = Path(fasta_file_value)
-        else:
-            fasta_path = Path(fasta_file_value["path"])
-
-        if resolve_paths and not fasta_path.is_absolute():
-            fasta_path = file_path.parent / fasta_path
-
-        data["fasta_file"] = {"path": str(fasta_path)}
-
-    return PackingInput(**data)

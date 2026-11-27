@@ -1,6 +1,8 @@
 # Artios
 
-Artios is a family of generative models from [Ligo Biosciences](https://ligo.bio) for designing ligand-binding proteins. Give it a catalytic or binding motif (a few residues plus one or more ligands) and it designs a protein around them.
+Artios is a family of generative models from [Ligo Biosciences](https://ligo.bio) for designing ligand-binding proteins. Give it a catalytic or binding motif (a few residues plus one or more ligands) and it designs a protein around them. It is described in [*Artios: Designing Functional De Novo Enzymes with All-Atom Diffusion and Steerable Potts Models*](https://papers.ligo.bio/artios) (Cort, Egerton-Warburton, Goreci and Harris, 2026).
+
+![The Artios enzyme design system: theozyme, ArtiosBackbone, ArtiosPotts, filtering, DNA synthesis, lysate screen and kinetics](docs/figures/overview.png)
 
 The design pipeline has two models:
 
@@ -11,7 +13,15 @@ The design pipeline has two models:
 
 Artios is built on [Protenix](https://github.com/bytedance/Protenix), ByteDance's open reproduction of AlphaFold 3 (see [NOTICE](NOTICE)).
 
-> **TODO:** model weights on Hugging Face, paper/preprint link, headline results.
+## Results
+
+- **Motif scaffolding.** On the Atomic Motif Enzyme benchmark, with the added requirement that the co-folded ligand stays in the designed pocket, 6.1% of Artios designs pass, against 1.2% for Proteina-Complexa and 0.9% for RFdiffusion3 (both with LigandMPNN). Artios solves 34 of 38 active sites.
+- **Sequence design.** On 114 held-out natural protein–ligand complexes, ArtiosPotts sequences refold and keep their ligands for 23 complexes, against 7 for LigandMPNN. Expressed in a cell-free system, they give a 1.6-fold higher median signal.
+- **In the lab.** Artios produced active luciferases (7 of 85 designs tested) and cysteine esterases (17 of 88). The purified esterase ArCut1 has *k*<sub>cat</sub>/*K*<sub>M</sub> = 1.8 × 10<sup>3</sup> M<sup>−1</sup> s<sup>−1</sup>.
+
+![AME benchmark: designs passing each filter, pass rate by length and structural diversity](docs/figures/ame_benchmark.png)
+
+![Held-out complexes: backbones passing the Protenix and AlphaFold2 filter cascades, ArtiosPotts against LigandMPNN](docs/figures/seqval.png)
 
 ## Installation
 
@@ -53,7 +63,7 @@ Both files must come from the same snapshot. `scripts/data/gen_ccd_cache.py` bui
 
 ## Usage
 
-Model weights and CCD files are downloaded from the Hugging Face Hub on first use (about 1.1 GB in total). While the repositories are private, log in first with `hf auth login` (or set `HF_TOKEN`). GPUs are used automatically when available; the timings below are for a laptop CPU.
+Model weights and CCD files are downloaded from the Hugging Face Hub on first use (about 1.1 GB in total). While the repositories are private, log in first with `hf auth login` (or set `HF_TOKEN`). A CUDA GPU is used automatically when available. CPUs work too, and the timings below are for a laptop CPU. Apple MPS is not supported.
 
 Everything runs through the `artios` command (`uv run artios --help`):
 
@@ -64,7 +74,7 @@ Everything runs through the `artios` command (`uv run artios --help`):
 | `artios score` | Score sequences on a structure: Potts energy and pseudo-log-likelihood |
 | `artios params` | Export the Potts fields h, couplings J and neighbour graph of a structure |
 
-Pass `--checkpoint` to use your own weights instead of the released ones, and `-v` for detailed logs.
+Pass `--checkpoint` to use your own weights instead of the released ones, and `-v` for detailed logs. Working with a coding agent? [AGENTS.md](AGENTS.md) is a short guide to the command for agents.
 
 ### Backbone generation
 
@@ -84,7 +94,7 @@ Design four sequences for each generated backbone:
 uv run artios design output/backbone/odcase_backbone.npz -n 4 -o output/designs
 ```
 
-This writes `output/designs/designs.fasta` with the designed chain of each sequence, and `output/designs/designs.jsonl` with every chain, the Potts energy (lower is better) and per-residue energies. Motif residues and ligands are context and keep their identities. `examples/sequence_design/backbone.npz` contains ten further pre-generated backbones.
+This takes about 3 minutes per backbone and writes `output/designs/designs.fasta` with the designed chain of each sequence, and `output/designs/designs.jsonl` with every chain, the Potts energy (lower is better) and per-residue energies. Motif residues and ligands are context and keep their identities. `examples/sequence_design/backbone.npz` contains ten further pre-generated backbones.
 
 `artios design` also takes PDB and mmCIF files (or directories of them), so it works on any protein or complex. Residues are addressed by author chain and number, as in PyMOL:
 
@@ -144,7 +154,7 @@ Backbone generation takes a JSON file describing the design length and the motif
 Ligands can be given as CCD codes (`{"type": "ccd", "codes": ["ZN"]}`) or as atom-mapped SMILES, as above. See:
 
 - [Motif input format](docs/motif_input_format.md): motif CIF rules, CCD and SMILES ligands
-- [Sequence design input format](docs/sequence_design_input_format.md): fixed residues and backbone index maps
+- [Sequence design input format](docs/sequence_design_input_format.md): JSON input of the older `python -m artios.runner.inference` entry point, still used by `evaluation/`
 - [Motif stitching](docs/motif_stitching.md): how motif residues flow from backbone generation to the final design
 
 Example motifs and inputs live in `evaluation/inputs/motifs/` and `evaluation/inputs/artios/`.
@@ -175,4 +185,12 @@ Artios is released under the [Apache License 2.0](LICENSE). It is a derivative o
 
 ## Citation
 
-> **TODO:** citation.
+```bibtex
+@misc{artios2026,
+  title  = {Artios: Designing Functional De Novo Enzymes with All-Atom Diffusion and Steerable Potts Models},
+  author = {Cort, Oliver and Egerton-Warburton, Emily and Goreci, Arda and Harris, Edward},
+  year   = {2026},
+  note   = {Ligo Biosciences},
+  url    = {https://papers.ligo.bio/artios}
+}
+```

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "artios"
-version = "0.0.1"
+version = "0.1.0"
 description = "Generative models for ligand-binding protein design: all-atom motif scaffolding and sequence design."
 readme = "README.md"
 license = "Apache-2.0"
@@ -35,7 +35,8 @@ dependencies = [
     "numpy>=1.26.3,<3.0.0",
     "scipy",
     "pandas",
-    "biotite>=1.2.0",
+    # artios.data reads BondList._bonds, which biotite removed in 1.7.
+    "biotite>=1.5,<1.7",
     "rdkit",
     "networkx",
     "einops>=0.8.1",
@@ -81,6 +82,7 @@ artios = "artios.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Ligo-Biosciences/artios"
+Paper = "https://papers.ligo.bio/artios"
 Repository = "https://github.com/Ligo-Biosciences/artios"
 "Bug Tracker" = "https://github.com/Ligo-Biosciences/artios/issues"
 

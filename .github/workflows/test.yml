@@ -27,15 +27,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The CUDA torch wheels need more room than the runner leaves free.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
+        run: |
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY" /usr/share/dotnet \
+            /usr/local/lib/android /opt/ghc /usr/local/.ghcup
+          sudo swapoff -a && sudo rm -f /mnt/swapfile || true
+          df -h /
 
       - uses: astral-sh/setup-uv@v6
         with:

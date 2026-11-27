@@ -1075,8 +1075,12 @@ def _color_graph(
 ) -> list[Bool[Tensor, "batch n_token"]]:
     """Greedy graph colouring for parallel Gibbs updates.
 
-    Assigns each node a colour such that no two adjacent nodes share a colour.
-    Uses first batch element (graph topology is shared across batch).
+    Assigns each node a colour different from those of the neighbours in its
+    own list that were coloured before it. On a directed k-NN graph a pair
+    listed in one direction only can still share a colour (about 1% of edges
+    on typical proteins), so a sweep is approximately, not exactly, Gibbs.
+    Each batch element is coloured on its own graph, so a batch may mix
+    backbones; elements with identical graphs get identical colourings.
 
     If `granular_active_site_coloring` is True and `active_site_mask` is
     provided, each active-site token is pre-assigned a unique colour
@@ -1086,45 +1090,40 @@ def _color_graph(
     colouring constraint allows it (no edge to a same-colour neighbour).
 
     Returns:
-        List of boolean masks, one per colour, each selecting an independent set.
+        List of boolean masks, one per colour (empty for batch elements that
+        use fewer colours).
     """
-    N, K = edge_index.shape[1], edge_index.shape[2]
-    ei = edge_index[0]  # [N, K]
-    em = edge_mask[0]  # [N, K]
+    colorings = [
+        _greedy_coloring(
+            edge_index[b].tolist(),
+            edge_mask[b].tolist(),
+            torch.where(active_site_mask[b])[0].tolist()
+            if granular_active_site_coloring and active_site_mask is not None
+            else [],
+        )
+        for b in range(edge_index.shape[0])
+    ]
+    colors = torch.tensor(colorings, device=edge_index.device)  # [B, N]
+    num_colors = int(colors.max()) + 1
+    return [colors == c for c in range(num_colors)]
 
-    colors = [-1] * N
-    num_colors = 0
 
-    # Reserve a unique colour per active-site token (no two share)
-    if granular_active_site_coloring and active_site_mask is not None:
-        active_indices = torch.where(active_site_mask[0])[0].tolist()
-        for c, i in enumerate(active_indices):
-            colors[i] = c
-        num_colors = len(active_indices)
-
-    for i in range(N):
+def _greedy_coloring(
+    edge_index: list[list[int]], edge_mask: list[list[bool]], reserved: list[int]
+) -> list[int]:
+    """Greedy colouring of one graph; ``reserved`` nodes get colours 0, 1, ..."""
+    colors = [-1] * len(edge_index)
+    for c, i in enumerate(reserved):
+        colors[i] = c
+    for i, (neighbours, valid) in enumerate(zip(edge_index, edge_mask)):
         if colors[i] >= 0:
             continue  # already coloured (active site)
-        neighbor_colors: set[int] = set()
-        for k in range(K):
-            if em[i, k]:
-                j = ei[i, k].item()
-                if j != i and colors[j] >= 0:
-                    neighbor_colors.add(colors[j])
+        taken = {colors[j] for j, ok in zip(neighbours, valid) if ok and j != i}
         c = 0
-        while c in neighbor_colors:
+        while c in taken:
             c += 1
         colors[i] = c
-        num_colors = max(num_colors, c + 1)
-
-    colors_tensor = torch.tensor(colors, device=edge_index.device)
-    B = edge_index.shape[0]
-    masks = []
-    for c in range(num_colors):
-        mask = (colors_tensor == c).unsqueeze(0).expand(B, -1)
-        masks.append(mask)
-
-    return masks
+    return colors
 
 
 @dataclass

@@ -634,3 +634,58 @@ class TestAromaticEnrichmentPenalty:
         assert torch.allclose(
             penalty, torch.zeros(B, device=device), atol=1e-6
         ), "Penalty should be 0 when fraction equals target"
+
+
+class TestGibbsColoring:
+    """Gibbs colour groups must be independent sets of each batch element's graph."""
+
+    @staticmethod
+    def _random_graph(n, generator):
+        """Symmetric neighbour lists (self first, as in the model), padded to n.
+
+        Greedy colouring only checks each node's own neighbour list, so it
+        yields independent sets on symmetric graphs.
+        """
+        adj = torch.rand(n, n, generator=generator) < 0.15
+        adj = (adj | adj.T).fill_diagonal_(False)
+        edge_index = torch.zeros(n, n, dtype=torch.long)
+        edge_mask = torch.zeros(n, n, dtype=torch.bool)
+        for i in range(n):
+            nbrs = [i, *torch.nonzero(adj[i]).flatten().tolist()]
+            edge_index[i, : len(nbrs)] = torch.tensor(nbrs)
+            edge_mask[i, : len(nbrs)] = True
+        return edge_index, edge_mask
+
+    def test_each_batch_element_is_coloured_on_its_own_graph(self):
+        from artios.model.generator import _color_graph
+
+        g = torch.Generator().manual_seed(0)
+        graphs = [self._random_graph(40, g) for _ in range(3)]
+        edge_index = torch.stack([e for e, _ in graphs])
+        edge_mask = torch.stack([m for _, m in graphs])
+        active = torch.zeros(3, 40, dtype=torch.bool)
+        active[1, :5] = True
+        masks = _color_graph(
+            edge_index,
+            edge_mask,
+            active_site_mask=active,
+            granular_active_site_coloring=True,
+        )
+        color = torch.stack(masks).float().argmax(0)  # [B, N]
+        assert torch.stack(masks).sum(0).eq(1).all()  # every node has one colour
+        for b in range(3):
+            i = torch.arange(40)[:, None].expand(-1, 40)
+            j = edge_index[b]
+            edge = edge_mask[b] & (i != j)
+            assert not (color[b][i] == color[b][j])[edge].any()
+        assert len(set(color[1, :5].tolist())) == 5  # active-site colours unique
+
+    def test_identical_graphs_share_one_colouring(self):
+        from artios.model.generator import _color_graph
+
+        edge_index, edge_mask = self._random_graph(30, torch.Generator())
+        masks = _color_graph(
+            edge_index[None].expand(4, -1, -1), edge_mask[None].expand(4, -1, -1)
+        )
+        for mask in masks:
+            assert (mask == mask[:1]).all()

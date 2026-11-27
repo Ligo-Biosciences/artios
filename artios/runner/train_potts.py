@@ -25,7 +25,6 @@ from artios.data.features import FullContext
 from artios.model.artios_potts import ArtiosPotts
 from artios.model.output import ModelOutput
 from artios.model.utils import Mode
-from artios.runner.dumper import DataDumper
 from artios.runner.ema import EMAWrapper
 from artios.utils.distributed import DIST_WRAPPER
 from artios.utils.lr_scheduler import get_lr_scheduler
@@ -76,7 +75,6 @@ class ArtiosPottsTrainer(object):
 
         # Add dump dir for training time inference
         self.configs.dump_dir = self.prediction_dir
-        self.dumper = DataDumper(self.configs.dump_dir)
 
         if DIST_WRAPPER.rank == 0:
             os.makedirs(self.run_dir)

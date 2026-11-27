@@ -1,0 +1,31 @@
+{
+  "name": "cysteine_hydrolase_no_ser_trp_design",
+  "task": "backbone",
+  "spec": {
+    "design": [
+      {
+        "length": ""
+      }
+    ],
+    "motif": {
+      "cif_file": "evaluation/inputs/motifs/esterase/no_ser_trp_motif_clean_no_asn_n.cif",
+      "ligands": [
+        {
+          "cif_res_name": "UNK",
+          "chain_id": "1",
+          "full_ligand": {
+            "type": "smiles",
+            "smiles": "CCC[C:1](=[O:2])[O:3]c1c[c:4]c2C(C)=[C:5]C(=O)Oc2c1",
+            "atom_map": {
+              "C1": 1,
+              "O1": 2,
+              "O": 3,
+              "C2": 4,
+              "C3": 5
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -17,6 +17,7 @@
 import json
 import logging
 import warnings
+from pathlib import Path
 from typing import Any
 
 import biotite.sequence.io as seqio
@@ -45,6 +46,33 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", module="biotite")
 
 
+def resolve_input_paths(input_dict: dict[str, Any], base: Path) -> None:
+    """Resolve relative ``cif_file``/``npz_file``/``fasta_file`` paths in place.
+
+    A relative path is taken relative to ``base`` (the input JSON's folder)
+    when the file exists there; otherwise it is left relative to the current
+    directory, as older inputs written for the repository root expect.
+    """
+    spec = input_dict.get("spec") or {}
+    for holder, key in (
+        (spec.get("motif"), "cif_file"),
+        (spec, "npz_file"),
+        (spec, "fasta_file"),
+    ):
+        if not isinstance(holder, dict) or key not in holder:
+            continue
+        value = holder[key]
+        raw = value.get("path") if isinstance(value, dict) else value
+        if not isinstance(raw, str) or Path(raw).is_absolute():
+            continue
+        candidate = base / raw
+        if candidate.exists():
+            if isinstance(value, dict):
+                value["path"] = str(candidate)
+            else:
+                holder[key] = str(candidate)
+
+
 def get_inference_dataloader(
     configs: Any,
     use_distributed_sampler: bool = True,
@@ -63,6 +91,7 @@ def get_inference_dataloader(
     """
     with open(configs.input_json_path) as f:
         input_dict = json.load(f)
+    resolve_input_paths(input_dict, Path(configs.input_json_path).parent)
 
     sample_input = parse_input_dict(input_dict)
 

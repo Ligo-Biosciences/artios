@@ -9,7 +9,7 @@
       }
     ],
     "motif": {
-      "cif_file": "examples/backbone/odcase_motif.cif",
+      "cif_file": "odcase_motif.cif",
       "ligands": [
         {
           "cif_res_name": "U5P",

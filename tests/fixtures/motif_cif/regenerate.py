@@ -62,7 +62,7 @@ def main() -> int:
         default=[],
         help=(
             "Optional list of relative CIF paths under evaluation/inputs/motifs/ "
-            "to regenerate (e.g. dtz/his_arg_dtz.cif). If omitted, every "
+            "to regenerate (e.g. luciferase/his_arg_4_atom_dtz.cif). If omitted, every "
             "motif CIF is regenerated."
         ),
     )

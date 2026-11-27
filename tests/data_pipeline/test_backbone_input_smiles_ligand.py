@@ -33,19 +33,19 @@ EVAL_INPUTS = PROJECT_ROOT / "evaluation" / "inputs" / "artios"
 
 # (json path relative to EVAL_INPUTS, design length, expected UNL res count)
 # Covers two different SMILES-motif shapes: a single aromatic scaffold
-# (dtz) and a chain-like ligand (cysteine hydrolase). The design length
+# (luciferase, DTZ) and a chain-like ligand (esterase). The design length
 # is the one used by the corresponding run script — not load-bearing, but
 # keeps the structure the same size as production.
 SMILES_MOTIF_CASES = [
     pytest.param(
-        "cysteine_hydrolase/cysteine_hydrolase_no_ser_trp_no_asn_n.json",
+        "esterase/cysteine_hydrolase_no_ser_trp_no_asn_n.json",
         160,
-        id="cysteine_hydrolase",
+        id="esterase",
     ),
     pytest.param(
-        "dtz/his_arg_4_atom_dtz.json",
+        "luciferase/his_arg_4_atom_dtz.json",
         160,
-        id="dtz_his_arg_4_atom",
+        id="luciferase",
     ),
 ]
 

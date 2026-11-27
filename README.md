@@ -2,7 +2,7 @@
 
 Artios is a family of generative models from [Ligo Biosciences](https://ligo.bio) for designing ligand-binding proteins. Give it a catalytic or binding motif (a few residues plus one or more ligands) and it designs a protein around them. It is described in [*Artios: Designing Functional De Novo Enzymes with All-Atom Diffusion and Steerable Potts Models*](https://papers.ligo.bio/artios) (Cort, Egerton-Warburton, Goreci and Harris, 2026).
 
-![The Artios enzyme design system: theozyme, ArtiosBackbone, ArtiosPotts, filtering, DNA synthesis, lysate screen and kinetics](https://raw.githubusercontent.com/Ligo-Biosciences/artios/main/docs/figures/overview.png)
+![The Artios enzyme design system: theozyme, ArtiosBackbone, ArtiosPotts, filtering, DNA synthesis, lysate screen and kinetics](docs/figures/overview.png)
 
 The design pipeline has two models:
 
@@ -19,9 +19,9 @@ Artios is built on [Protenix](https://github.com/bytedance/Protenix), ByteDance'
 - **Sequence design.** On 114 held-out natural protein–ligand complexes, ArtiosPotts sequences refold and keep their ligands for 23 complexes, against 7 for LigandMPNN. Expressed in a cell-free system, they give a 1.6-fold higher median signal.
 - **In the lab.** Artios produced active luciferases (7 of 85 designs tested) and cysteine esterases (17 of 88). The purified esterase ArCut1 has *k*<sub>cat</sub>/*K*<sub>M</sub> = 1.8 × 10<sup>3</sup> M<sup>−1</sup> s<sup>−1</sup>.
 
-![AME benchmark: designs passing each filter, pass rate by length and structural diversity](https://raw.githubusercontent.com/Ligo-Biosciences/artios/main/docs/figures/ame_benchmark.png)
+![AME benchmark: designs passing each filter, pass rate by length and structural diversity](docs/figures/ame_benchmark.png)
 
-![Held-out complexes: backbones passing the Protenix and AlphaFold2 filter cascades, ArtiosPotts against LigandMPNN](https://raw.githubusercontent.com/Ligo-Biosciences/artios/main/docs/figures/seqval.png)
+![Held-out complexes: backbones passing the Protenix and AlphaFold2 filter cascades, ArtiosPotts against LigandMPNN](docs/figures/seqval.png)
 
 ## Installation
 

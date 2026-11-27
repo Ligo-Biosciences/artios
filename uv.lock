@@ -51,7 +51,7 @@ wheels = [
 
 [[package]]
 name = "artios"
-version = "0.0.1"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "beartype" },
@@ -108,7 +108,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "beartype", specifier = ">=0.22.6" },
-    { name = "biotite", specifier = ">=1.2.0" },
+    { name = "biotite", specifier = ">=1.5,<1.7" },
     { name = "einops", specifier = ">=0.8.1" },
     { name = "gemmi", marker = "extra == 'data'" },
     { name = "griddataformats", marker = "extra == 'metrics'" },

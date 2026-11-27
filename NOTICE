@@ -27,25 +27,6 @@ Chai-1 (https://github.com/chaidiscovery/chai-lab)
     Licensed under the Apache License, Version 2.0.
     Used in: artios/utils/typing.py
 
-Neptune Labs (https://neptune.ai)
-    Copyright (c) 2025, Neptune Labs Sp. z o.o.
-    Licensed under the Apache License, Version 2.0.
-    Used in: artios/utils/torchwatcher.py
-
-================================================================================
-TM-align
-================================================================================
-
-TM-align (https://zhanggroup.org/TM-align/)
-    Y Zhang, J Skolnick. Nucl Acids Res 33, 2302-9 (2005)
-    Used in: artios/metrics/alignment/ (reference source and NumPy port)
-
-    Permission to use, copy, modify, and distribute the Software for any
-    purpose, with or without fee, is hereby granted, provided that the
-    notices on the head, the reference information, and this copyright
-    notice appear in all copies or substantial portions of the Software.
-    It is provided "as is" without express or implied warranty.
-
 ================================================================================
 MIT licensed code
 ================================================================================

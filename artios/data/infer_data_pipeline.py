@@ -20,13 +20,11 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-import biotite.sequence.io as seqio
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from typing_extensions import assert_never
 
 from artios.data.array_builder import (
     backbone_input_to_structure,
-    packing_input_to_structure,
     sequence_design_input_to_structure,
 )
 from artios.data.collate.collate import CollateContexts
@@ -34,7 +32,6 @@ from artios.data.features import FullContext
 from artios.data.features.featurizer import ContextGenerator
 from artios.data.parsing.json import (
     BackboneInput,
-    PackingInput,
     SequenceDesignInput,
     parse_input_dict,
 )
@@ -47,7 +44,7 @@ warnings.filterwarnings("ignore", module="biotite")
 
 
 def resolve_input_paths(input_dict: dict[str, Any], base: Path) -> None:
-    """Resolve relative ``cif_file``/``npz_file``/``fasta_file`` paths in place.
+    """Resolve relative ``cif_file``/``npz_file`` paths in place.
 
     A relative path is taken relative to ``base`` (the input JSON's folder)
     when the file exists there; otherwise it is left relative to the current
@@ -57,7 +54,6 @@ def resolve_input_paths(input_dict: dict[str, Any], base: Path) -> None:
     for holder, key in (
         (spec.get("motif"), "cif_file"),
         (spec, "npz_file"),
-        (spec, "fasta_file"),
     ):
         if not isinstance(holder, dict) or key not in holder:
             continue
@@ -115,9 +111,6 @@ def get_inference_dataloader(
             motif_training = True
         case SequenceDesignInput():
             dataset = MPNNDataset(sample_input)
-            motif_training = False
-        case PackingInput():
-            dataset = PackingDataset(sample_input)
             motif_training = False
         case _:
             assert_never(sample_input)
@@ -233,47 +226,3 @@ class MPNNDataset(Dataset):
             structure,
             pdb_id=sample_name,
         ).get_full_context(fixed_residues=fixed)
-
-
-class PackingDataset(Dataset):
-    """Dataset for sidechain packing inference.
-
-    Each item corresponds to one model from the AtomArrayStack paired
-    with its corresponding designed sequence from the FASTA file.
-    """
-
-    def __init__(self, packing_input: PackingInput) -> None:
-        self.packing_input = packing_input
-
-        # Load the AtomArrayStack from NPZ
-        self.atom_stack = load_atomarray_stack(self.packing_input.npz_file.path)
-        assert len(self.atom_stack.coord.shape) == 3  # (m, n_atoms, 3)
-
-        # Load sequences from FASTA file
-        fasta_dict = seqio.load_sequences(self.packing_input.fasta_file.path)
-        self.sequences = list(fasta_dict.values())
-
-        # Validate that stack depth matches number of sequences
-        stack_depth = self.atom_stack.coord.shape[0]
-        if stack_depth != len(self.sequences):
-            raise ValueError(
-                f"AtomArrayStack has {stack_depth} models but FASTA has "
-                f"{len(self.sequences)} sequences. They must match."
-            )
-
-    def __len__(self) -> int:
-        return self.atom_stack.coord.shape[0]
-
-    def __getitem__(self, index: int) -> FullContext:
-        sample_name = f"{self.packing_input.name}_model_{index}"
-        logger.info(f"Featurizing {sample_name}...")
-
-        input_array = self.atom_stack[index]
-        # # TODO: temporary fix while working on distillation backbones
-        # input_array.res_id = input_array.res_id - input_array.res_id.min() + 1
-        sequence = self.sequences[index]
-        structure, _ = packing_input_to_structure(input_array, sequence)
-        return ContextGenerator(
-            structure,
-            pdb_id=sample_name,
-        ).get_full_context()

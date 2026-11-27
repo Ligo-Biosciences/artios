@@ -657,61 +657,6 @@ class BaseSingleDataset(Dataset):
             sample_indice = self.indices_list.iloc[idx]
         return sample_indice
 
-    def _get_eval_chain_interface_mask(
-        self, idx: int, atom_array_chain_id: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, torch.Tensor, torch.Tensor]:
-        """
-        Retrieves the evaluation chain/interface mask for a given index.
-
-        Args:
-            idx: The index of the data sample.
-            atom_array_chain_id: An array containing the chain IDs of the atom array.
-
-        Returns:
-            A tuple containing the evaluation type, cluster ID, chain 1 mask, and chain 2 mask.
-        # TODO: really horrible looking method this.
-        """
-        if self.group_by_pdb_id:
-            assert isinstance(self.indices_list, list)
-            df = self.indices_list[idx]
-        else:
-            assert isinstance(self.indices_list, pd.DataFrame)
-            df = self.indices_list.iloc[idx : idx + 1]
-
-        # Only consider chain/interfaces defined in EvaluationChainInterface
-        df = df[df["eval_type"].apply(lambda x: x in EvaluationChainInterface)].copy()
-        if len(df) < 1:
-            raise ValueError("Cannot find a chain/interface for evaluation in the PDB.")
-
-        def get_atom_mask(row):
-            chain_1_mask = atom_array_chain_id == row["chain_1_id"]
-            if row["type"] == "chain":
-                chain_2_mask = chain_1_mask
-            else:
-                chain_2_mask = atom_array_chain_id == row["chain_2_id"]
-            chain_1_mask = torch.tensor(chain_1_mask).bool()
-            chain_2_mask = torch.tensor(chain_2_mask).bool()
-            if chain_1_mask.sum() == 0 or chain_2_mask.sum() == 0:
-                return None, None
-            return chain_1_mask, chain_2_mask
-
-        df["chain_1_mask"], df["chain_2_mask"] = zip(*df.apply(get_atom_mask, axis=1))
-        df = df[df["chain_1_mask"].notna()]  # drop NaN
-
-        if len(df) < 1:
-            raise ValueError(
-                "Cannot find a chain/interface for evaluation in the atom_array."
-            )
-
-        eval_type = np.array(df["eval_type"].tolist())
-        cluster_id = np.array(df["cluster_id"].tolist())
-        # [N_eval, N_atom]
-        chain_1_mask = torch.stack(df["chain_1_mask"].tolist())
-        # [N_eval, N_atom]
-        chain_2_mask = torch.stack(df["chain_2_mask"].tolist())
-
-        return eval_type, cluster_id, chain_1_mask, chain_2_mask
-
     def _apply_motif_processing(
         self, structure: AnnotatedStructure, pdb_id: str
     ) -> AnnotatedStructure:

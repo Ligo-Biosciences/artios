@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 
 import torch
 from einops import rearrange
@@ -117,30 +116,6 @@ class GaussianRBF(nn.Module):
         """
         rbf = torch.exp(-self.gamma * (distances[..., None] - self.centers) ** 2)
         return rbf
-
-
-class BaseEdgeFeaturizer(nn.Module, ABC):
-    """Base class for all edge featurizers.
-
-    Defines the interface that all featurizers must implement for converting
-    raw input data into feature representations suitable for neural networks.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    @abstractmethod
-    def forward(self, context: FullContext) -> tuple[Tensor, Tensor]:
-        """Transform input data into feature representation.
-
-        Args:
-            context: Full context containing all features.
-
-        Returns:
-            Tensor: Feature representation of input data edges
-            Tensor: Edge indices
-        """
-        pass
 
 
 class MPNNFeaturizer(nn.Module):

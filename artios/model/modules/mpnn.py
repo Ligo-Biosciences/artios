@@ -9,7 +9,6 @@ This module provides the MPNN with masked diffusion modeling:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -18,12 +17,6 @@ from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint
 
 from artios.data.features import FullContext
-from artios.model.generator import (
-    DiscreteDiffusionSampler,
-    InferenceTimestepScheduler,
-    MaskingTimestepSampler,
-    SequencePredictor,
-)
 from artios.model.modules import message_passing as mp
 from artios.model.modules.mpnn_features import MPNNFeaturizer
 from artios.model.modules.mpnn_layers import (
@@ -318,71 +311,6 @@ class MPNN(nn.Module):
             node_feats=node_feats,
             edge_feats=decoder_edge_feats,
         )
-
-    def as_predictor(self, context: FullContext) -> SequencePredictor:
-        """Creates a predictor bound to this context.
-
-        Returns:
-            A callable satisfying SequencePredictor protocol. Will return
-            logits over the original residue types.
-        """
-        encoder_output = self.encode(context)
-        node_mask = context.mask.token_mask
-
-        def predictor(
-            restype: Float[Tensor, "batch n_token vocab_with_mask"],
-        ) -> Float[Tensor, "batch n_token num_residue_types"]:
-            decoder_output = self.decode(
-                encoder_output=encoder_output,
-                restypes=restype,
-                node_mask=node_mask,
-            )
-            return decoder_output.logits
-
-        return predictor
-
-    @typecheck
-    def sample(
-        self,
-        context: FullContext,
-        timestep_scheduler: InferenceTimestepScheduler,
-        masking_timestep_sampler: MaskingTimestepSampler,
-        n_steps: int,
-        temperature: float = 0.1,
-        seed: Optional[int] = None,
-    ) -> Float[Tensor, "batch n_token num_residue_types"]:
-        """Returns final logits."""
-        device = context.token.restype.device
-        dtype = context.token.restype.dtype
-        batch_size, n_token, _ = context.token.restype.shape
-
-        generator = (
-            torch.Generator(device).manual_seed(seed)
-            if not self.training and seed is not None
-            else None
-        )
-
-        restype_init = torch.zeros(
-            batch_size, n_token, self.num_residue_types + 1, device=device, dtype=dtype
-        )
-        restype_init[..., self.mask_token_idx] = 1
-
-        sampler = DiscreteDiffusionSampler(
-            timestep_scheduler=timestep_scheduler,
-            masking_timestep_sampler=masking_timestep_sampler,
-            temperature=temperature,
-        )
-        predictor = self.as_predictor(context)
-
-        logits = sampler.sample(
-            predictor=predictor,
-            restype_init=restype_init,
-            n_steps=n_steps,
-            token_mask=context.mask.token_mask,
-            generator=generator,
-        )
-
-        return logits
 
     @typecheck
     def forward(

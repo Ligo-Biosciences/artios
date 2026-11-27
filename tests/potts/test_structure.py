@@ -99,10 +99,24 @@ def test_chain_selection_and_ranges(multi_chain):
     )
 
 
-@pytest.mark.parametrize("bad", ["Z", "A9999", "A30-5"])
-def test_selection_errors_name_the_problem(multi_chain, bad):
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    "bad, message",
+    [
+        ("Z", "chain 'Z', which is not a protein chain"),
+        ("A9999", "residue 9999 is not in chain A"),
+        ("A70-65", "Empty residue range A70-65"),
+        ("A10:14", "chain 'A10', which is not a protein chain"),  # meant A10-14
+    ],
+)
+def test_selection_errors_name_the_problem(multi_chain, bad, message):
+    with pytest.raises(ValueError, match=message):
         multi_chain.select(parse_selection(bad))
+
+
+@pytest.mark.parametrize("text", ["A", "A42", "A52B", "A10-20", "A10-12C", "1:42"])
+def test_selectors_print_as_written(text):
+    (sel,) = parse_selection(text)
+    assert str(sel) == text
 
 
 def test_mutable_mask_design_chains_fixed_and_redesign(multi_chain):

@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from contextlib import nullcontext
 
 import numpy as np
 import torch
@@ -79,39 +78,3 @@ def round_values(data: dict, recursive: bool = True) -> dict:
         elif isinstance(v, dict) and recursive:
             data[k] = round_values(v, recursive)
     return data
-
-
-def autocasting_disable_decorator(disable_casting: bool):
-    """
-    Decorator to disable autocasting for a function.
-
-    Args:
-        disable_casting (bool): If True, disables autocasting; otherwise, uses the default autocasting context.
-
-    Returns:
-        function: A decorator that wraps the function with the specified autocasting context.
-    """
-
-    def func_wrapper(func):
-        def new_func(*args, **kwargs):
-            _amp_context = (
-                torch.autocast(device_type="cuda", enabled=False)
-                if disable_casting
-                else nullcontext()
-            )
-            dtype = torch.float32 if disable_casting else None
-            with _amp_context:
-                return func(
-                    *(
-                        v.to(dtype=dtype) if isinstance(v, torch.Tensor) else v
-                        for v in args
-                    ),
-                    **{
-                        k: v.to(dtype=dtype) if isinstance(v, torch.Tensor) else v
-                        for k, v in kwargs.items()
-                    },
-                )
-
-        return new_func
-
-    return func_wrapper

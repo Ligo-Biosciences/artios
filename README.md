@@ -2,7 +2,7 @@
 
 Artios is a family of generative models from [Ligo Biosciences](https://ligo.bio) for designing ligand-binding proteins. Give it a catalytic or binding motif (a few residues plus one or more ligands) and it designs a protein around them. It is described in [*Artios: Designing Functional De Novo Enzymes with All-Atom Diffusion and Steerable Potts Models*](https://papers.ligo.bio/artios) (Cort, Egerton-Warburton, Goreci and Harris, 2026).
 
-![The Artios enzyme design system: theozyme, ArtiosBackbone, ArtiosPotts, filtering, DNA synthesis, lysate screen and kinetics](docs/figures/overview.png)
+![The Artios enzyme design system: theozyme, ArtiosBackbone, ArtiosPotts, filtering, DNA synthesis, lysate screen and kinetics](https://raw.githubusercontent.com/Ligo-Biosciences/artios/main/docs/figures/overview.png)
 
 The design pipeline has two models:
 
@@ -11,7 +11,7 @@ The design pipeline has two models:
 | **ArtiosBackbone** | All-atom motif scaffolding (EDM diffusion) | Motif CIF + ligand definitions (JSON) | Backbone structures (NPZ / CIF) |
 | **ArtiosPotts** | Sequence design (Potts model on an MPNN encoder) | Backbone NPZ from ArtiosBackbone, or any PDB/mmCIF structure | Designed sequences (FASTA) and energies |
 
-Artios is built on [Protenix](https://github.com/bytedance/Protenix), ByteDance's open reproduction of AlphaFold 3 (see [NOTICE](NOTICE)).
+Artios is built on [Protenix](https://github.com/bytedance/Protenix), ByteDance's open reproduction of AlphaFold 3 (see [NOTICE](https://github.com/Ligo-Biosciences/artios/blob/main/NOTICE)).
 
 ## Results
 
@@ -19,13 +19,19 @@ Artios is built on [Protenix](https://github.com/bytedance/Protenix), ByteDance'
 - **Sequence design.** On 114 held-out natural protein–ligand complexes, ArtiosPotts sequences refold and keep their ligands for 23 complexes, against 7 for LigandMPNN. Expressed in a cell-free system, they give a 1.6-fold higher median signal.
 - **In the lab.** Artios produced active luciferases (7 of 85 designs tested) and cysteine esterases (17 of 88). The purified esterase ArCut1 has *k*<sub>cat</sub>/*K*<sub>M</sub> = 1.8 × 10<sup>3</sup> M<sup>−1</sup> s<sup>−1</sup>.
 
-![AME benchmark: designs passing each filter, pass rate by length and structural diversity](docs/figures/ame_benchmark.png)
+![AME benchmark: designs passing each filter, pass rate by length and structural diversity](https://raw.githubusercontent.com/Ligo-Biosciences/artios/main/docs/figures/ame_benchmark.png)
 
-![Held-out complexes: backbones passing the Protenix and AlphaFold2 filter cascades, ArtiosPotts against LigandMPNN](docs/figures/seqval.png)
+![Held-out complexes: backbones passing the Protenix and AlphaFold2 filter cascades, ArtiosPotts against LigandMPNN](https://raw.githubusercontent.com/Ligo-Biosciences/artios/main/docs/figures/seqval.png)
 
 ## Installation
 
-Artios requires Python 3.11 or 3.12 and is developed on Linux with CUDA GPUs. It uses [uv](https://docs.astral.sh/uv/) for dependency management:
+Artios requires Python 3.11 or 3.12. Install it from PyPI:
+
+```bash
+pip install artios          # or `uv tool install artios` for just the command
+```
+
+To develop, train or run the examples, install from source with [uv](https://docs.astral.sh/uv/) and run the command as `uv run artios`:
 
 ```bash
 git clone https://github.com/Ligo-Biosciences/artios.git
@@ -34,12 +40,7 @@ uv sync                 # core dependencies (inference)
 uv sync --all-extras    # everything, including training and data preparation
 ```
 
-Or with pip:
-
-```bash
-pip install -e .                 # core
-pip install -e ".[train,data]"   # optional extras
-```
+Optional extras install with `pip install "artios[train,data]"` or `uv sync --extra train`:
 
 | Extra | Needed for |
 |---|---|
@@ -65,7 +66,7 @@ Both files must come from the same snapshot. `scripts/data/gen_ccd_cache.py` bui
 
 Model weights and CCD files are downloaded from the Hugging Face Hub on first use (about 1.1 GB in total). While the repositories are private, log in first with `hf auth login` (or set `HF_TOKEN`). A CUDA GPU is used automatically when available. CPUs work too, and the timings below are for a laptop CPU. Apple MPS is not supported.
 
-Everything runs through the `artios` command (`uv run artios --help`):
+Everything runs through the `artios` command (`artios --help`):
 
 | Command | Does |
 |---|---|
@@ -74,14 +75,14 @@ Everything runs through the `artios` command (`uv run artios --help`):
 | `artios score` | Score sequences on a structure: Potts energy and pseudo-log-likelihood |
 | `artios params` | Export the Potts fields h, couplings J and neighbour graph of a structure |
 
-Pass `--checkpoint` to use your own weights instead of the released ones, and `-v` for detailed logs. Working with a coding agent? [AGENTS.md](AGENTS.md) is a short guide to the command for agents.
+Pass `--checkpoint` to use your own weights instead of the released ones, and `-v` for detailed logs. Working with a coding agent? [AGENTS.md](https://github.com/Ligo-Biosciences/artios/blob/main/AGENTS.md) is a short guide to the command for agents.
 
 ### Backbone generation
 
-`examples/backbone/` scaffolds the catalytic motif of orotidine 5′-monophosphate decarboxylase (six residues from PDB [1DBT](https://www.rcsb.org/structure/1DBT)) around its UMP ligand into a 128-residue design:
+`examples/backbone/` in this repository scaffolds the catalytic motif of orotidine 5′-monophosphate decarboxylase (six residues from PDB [1DBT](https://www.rcsb.org/structure/1DBT)) around its UMP ligand into a 128-residue design:
 
 ```bash
-uv run artios scaffold examples/backbone/input.json -n 5 -o output/backbone
+artios scaffold examples/backbone/input.json -n 5 -o output/backbone
 ```
 
 This samples five backbones into `output/backbone/odcase_backbone.npz` (about 1.5 minutes). `--format cif` writes one CIF file per sample instead. The design chain (`0`) is poly-glycine; motif residues and ligands keep their own chains.
@@ -91,7 +92,7 @@ This samples five backbones into `output/backbone/odcase_backbone.npz` (about 1.
 Design four sequences for each generated backbone:
 
 ```bash
-uv run artios design output/backbone/odcase_backbone.npz -n 4 -o output/designs
+artios design output/backbone/odcase_backbone.npz -n 4 -o output/designs
 ```
 
 This takes about 3 minutes per backbone and writes `output/designs/designs.fasta` with the designed chain of each sequence, and `output/designs/designs.jsonl` with every chain, the Potts energy (lower is better) and per-residue energies. Motif residues and ligands are context and keep their identities. `examples/sequence_design/backbone.npz` holds ten more backbones, 160 residues each, generated around the luciferase motif from the paper (an arginine and a histidine placed around diphenylterazine).
@@ -100,13 +101,13 @@ This takes about 3 minutes per backbone and writes `output/designs/designs.fasta
 
 ```bash
 # Redesign chain B of a complex, keeping residues 10-14 and 42 of chain B
-uv run artios design complex.pdb --design-chains B --fixed "B10-14 B42" -n 8 -o output/binder
+artios design complex.pdb --design-chains B --fixed "B10-14 B42" -n 8 -o output/binder
 
 # Redesign only a loop
-uv run artios design protein.cif --redesign "A30-41" -o output/loop
+artios design protein.cif --redesign "A30-41" -o output/loop
 
 # Score designs (or, without a FASTA, the structure's own sequence)
-uv run artios score complex.pdb output/binder/designs.fasta -o output/scores
+artios score complex.pdb output/binder/designs.fasta -o output/scores
 ```
 
 Selections are `A` (whole chain), `A42`, `A52B` (insertion code), `A10-20` (inclusive), or `1:42` for chain IDs that are not letters. Sampling options: `--temperature`, `--allow-cys`, `--allow-met` (both excluded by default), and `--set KEY=VALUE` for any `artios_mpnn.potts.sampling` option, e.g. `--set cfg_scale=2.0` or `--set energy_bias.W=-0.5`. Rerunning into the same output directory skips finished targets.
@@ -153,15 +154,15 @@ Backbone generation takes a JSON file describing the design length and the motif
 
 Ligands can be given as CCD codes (`{"type": "ccd", "codes": ["ZN"]}`) or as atom-mapped SMILES, as above. See:
 
-- [Motif input format](docs/motif_input_format.md): motif CIF rules, CCD and SMILES ligands
-- [Sequence design input format](docs/sequence_design_input_format.md): JSON input of the older `python -m artios.runner.inference` entry point, still used by `evaluation/`
-- [Motif stitching](docs/motif_stitching.md): how motif residues flow from backbone generation to the final design
+- [Motif input format](https://github.com/Ligo-Biosciences/artios/blob/main/docs/motif_input_format.md): motif CIF rules, CCD and SMILES ligands
+- [Sequence design input format](https://github.com/Ligo-Biosciences/artios/blob/main/docs/sequence_design_input_format.md): JSON input of the older `python -m artios.runner.inference` entry point, still used by `evaluation/`
+- [Motif stitching](https://github.com/Ligo-Biosciences/artios/blob/main/docs/motif_stitching.md): how motif residues flow from backbone generation to the final design
 
 `evaluation/inputs/` holds the motifs (`motifs/`) and backbone inputs (`artios/`) behind the paper: the AME benchmark and the luciferase, esterase and cutinase campaigns. Their design `length` is left empty for the benchmark runner to fill; set it before running one with `artios scaffold`.
 
 ## Training
 
-Training code is included as a reference: `artios/runner/train_backbone.py` and `artios/runner/train_potts.py`, launched through `scripts/training/`. See [preparing training data](docs/prepare_training_data.md) and [data sampling weights](docs/data_sampling_weights.md).
+Training code is included as a reference: `artios/runner/train_backbone.py` and `artios/runner/train_potts.py`, launched through `scripts/training/`. See [preparing training data](https://github.com/Ligo-Biosciences/artios/blob/main/docs/prepare_training_data.md) and [data sampling weights](https://github.com/Ligo-Biosciences/artios/blob/main/docs/data_sampling_weights.md).
 
 > **TODO:** training datasets on Hugging Face.
 
@@ -181,7 +182,7 @@ tests/       test suite (run with `uv run pytest -m "not slow"`)
 
 ## License
 
-Artios is released under the [Apache License 2.0](LICENSE). It is a derivative of Protenix and includes code adapted from other open-source projects; see [NOTICE](NOTICE) for attributions.
+Artios is released under the [Apache License 2.0](https://github.com/Ligo-Biosciences/artios/blob/main/LICENSE). It is a derivative of Protenix and includes code adapted from other open-source projects; see [NOTICE](https://github.com/Ligo-Biosciences/artios/blob/main/NOTICE) for attributions.
 
 ## Citation
 

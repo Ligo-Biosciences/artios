@@ -85,7 +85,7 @@ def test_download_rejects_checksum_mismatch(tmp_path, monkeypatch):
         assets.download(assets.POTTS_CHECKPOINT)
 
 
-def test_download_explains_private_repo_access(monkeypatch):
+def test_download_explains_repo_access_errors(monkeypatch):
     def unauthorized(**_):
         raise RepositoryNotFoundError.__new__(RepositoryNotFoundError)
 

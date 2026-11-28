@@ -1,10 +1,10 @@
 # Artios for agents
 
-Artios designs ligand-binding proteins. ArtiosBackbone generates backbones around a motif, and ArtiosPotts designs sequences for any backbone or PDB/mmCIF structure. Use the `artios` command (`uv run artios COMMAND --help`); the Python API is `artios.potts`.
+Artios designs ligand-binding proteins. ArtiosBackbone generates backbones around a motif, and ArtiosPotts designs sequences for any backbone or PDB/mmCIF structure. Use the `artios` command (`artios COMMAND --help`, or `uv run artios` in a source checkout); the Python API is `artios.potts`.
 
 ## Before running
 
-- Install with `pip install artios`, or with `uv sync` in a source checkout (Python 3.11 or 3.12). Weights and CCD files (about 1.1 GB) download from Hugging Face on first use. While the repositories are private, this needs `hf auth login` or `HF_TOKEN`.
+- Install with `uv tool install artios`, `uv pip install artios` or `pip install artios` (Python 3.11 or later; on 3.14 and later, building the `biotraj` dependency needs a C compiler), or with `uv sync` in a source checkout. `artios --version` checks the install. Weights and CCD files (about 1.1 GB) download from Hugging Face on first use and are cached.
 - The model runs on a CUDA GPU when one is available, otherwise on the CPU. Apple MPS is not supported. On a laptop CPU, `design` takes about 3 minutes for 4 sequences of a 128-residue scaffold backbone and 5 minutes for a 250-residue protein, and `scaffold` about 1.5 minutes for 5 backbones of 128 residues. Design time depends on the size of the whole input, not on how much of it is designed. Run long jobs in the background and wait for the process to exit; output files are filled in per target as each one finishes.
 - For a quick pipeline check, add `--set ensemble_size=2 --set n_sweeps=4`. This runs in seconds but gives poor sequences, so never report results from it.
 
@@ -29,8 +29,9 @@ Artios designs ligand-binding proteins. ArtiosBackbone generates backbones aroun
 
 ```python
 import numpy as np, biotite.structure as struc
-from biotite.structure.io import load_structure
-atoms = load_structure("complex.cif", model=1)  # author chains and numbers
+from biotite.structure.io import pdbx
+cif = pdbx.CIFFile.read("complex.cif")  # for a PDB file: pdb.PDBFile.read(path).get_structure(model=1)
+atoms = pdbx.get_structure(cif, model=1, use_author_fields=True)  # author chains and numbers
 print(sorted(set(atoms.res_name[atoms.hetero])))  # ligand names
 ligand = atoms[atoms.res_name == "LIG"]
 protein = atoms[struc.filter_amino_acids(atoms)]
@@ -88,6 +89,6 @@ The energy of a sequence is the sum over tokens of `h[i, s_i] + 1/2 sum_k J[i, k
 
 ## Developing
 
-- **Tests.** `uv run pytest tests/potts` covers the CLI and API in about 2 minutes on CPU. The full suite is `uv run pytest -m "not slow"`; it needs Hugging Face access and `uv sync --all-extras`.
+- **Tests.** `uv run pytest tests/potts` covers the CLI and API in about 2 minutes on CPU. The full suite is `uv run pytest -m "not slow"`; it needs `uv sync --all-extras` and downloads the CCD files on first run.
 - **Formatting.** Run `uvx ruff@0.6.3 format .`; CI checks this exact version.
 - **Code map.** `artios/cli.py` is a thin layer over `artios/potts/` (`PottsDesigner`, `load_target`). The model is in `artios/model/artios_potts.py`, the sampler in `artios/model/generator.py` and the steering penalties in `artios/model/modules/penalty.py`. `python -m artios.runner.inference` is the older entry point, which `evaluation/` still uses.

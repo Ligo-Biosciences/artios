@@ -25,13 +25,16 @@ Artios is built on [Protenix](https://github.com/bytedance/Protenix), ByteDance'
 
 ## Installation
 
-Artios requires Python 3.11 or 3.12. Install it from PyPI:
+Artios needs Python 3.11 or later. Install it from PyPI with [uv](https://docs.astral.sh/uv/) or pip:
 
 ```bash
-pip install artios          # or `uv tool install artios` for just the command
+uv tool install artios    # the `artios` command, in its own environment
+uv pip install artios     # or into the active virtual environment (`pip install artios`)
 ```
 
-To develop, train or run the examples, install from source with [uv](https://docs.astral.sh/uv/) and run the command as `uv run artios`:
+On Python 3.14 and later, one dependency of biotite (`biotraj`) has no prebuilt wheel yet and is built from source, which needs a C compiler. Run `artios --version` to check the install.
+
+To develop or train, install from source with uv and run the command as `uv run artios`:
 
 ```bash
 git clone https://github.com/Ligo-Biosciences/artios.git
@@ -40,7 +43,7 @@ uv sync                 # core dependencies (inference)
 uv sync --all-extras    # everything, including training and data preparation
 ```
 
-Optional extras install with `pip install "artios[train,data]"` or `uv sync --extra train`:
+Optional extras install with `uv pip install "artios[train,data]"` or `uv sync --extra train`:
 
 | Extra | Needed for |
 |---|---|
@@ -52,7 +55,7 @@ Optional extras install with `pip install "artios[train,data]"` or `uv sync --ex
 
 Artios needs the wwPDB Chemical Component Dictionary and a matching pre-computed RDKit cache. On first use, it downloads a pinned snapshot from [Ligo-Biosciences/Artios-CCD](https://huggingface.co/datasets/Ligo-Biosciences/Artios-CCD) (about 550 MB), verifies the checksums and caches it for later (offline) runs.
 
-To use local files instead, put both files in one directory and point `ARTIOS_CCD_DIR` at it, or place them in `ccd_files/` at the repository root:
+To use local files instead, put both files in one directory and point `ARTIOS_CCD_DIR` at it, or, in a source checkout, place them in `ccd_files/` at the repository root:
 
 ```
 ccd_files/
@@ -64,7 +67,7 @@ Both files must come from the same snapshot. `scripts/data/gen_ccd_cache.py` bui
 
 ## Usage
 
-Model weights and CCD files are downloaded from the Hugging Face Hub on first use (about 1.1 GB in total). While the repositories are private, log in first with `hf auth login` (or set `HF_TOKEN`). A CUDA GPU is used automatically when available. CPUs work too, and the timings below are for a laptop CPU. Apple MPS is not supported.
+Model weights and CCD files are downloaded from the Hugging Face Hub on first use (about 1.1 GB in total) and cached for later runs. A CUDA GPU is used automatically when available. CPUs work too, and the timings below are for a laptop CPU. Apple MPS is not supported.
 
 Everything runs through the `artios` command (`artios --help`):
 
@@ -79,9 +82,13 @@ Pass `--checkpoint` to use your own weights instead of the released ones, and `-
 
 ### Backbone generation
 
-`examples/backbone/` in this repository scaffolds the catalytic motif of orotidine 5′-monophosphate decarboxylase (six residues from PDB [1DBT](https://www.rcsb.org/structure/1DBT)) around its UMP ligand into a 128-residue design:
+`examples/backbone/` in this repository scaffolds the catalytic motif of orotidine 5′-monophosphate decarboxylase (six residues from PDB [1DBT](https://www.rcsb.org/structure/1DBT)) around its UMP ligand into a 128-residue design. Without a clone, download it first:
 
 ```bash
+url=https://raw.githubusercontent.com/Ligo-Biosciences/artios/main/examples/backbone
+curl -fsSL --create-dirs -o examples/backbone/input.json $url/input.json \
+  -o examples/backbone/odcase_motif.cif $url/odcase_motif.cif
+
 artios scaffold examples/backbone/input.json -n 5 -o output/backbone
 ```
 

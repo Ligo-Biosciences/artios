@@ -221,7 +221,9 @@ def atom_array_from_rdkit(
         is_bond_aromatic = bond.GetIsAromatic()
         bond_type = RDKIT_BOND_TYPE_TO_BIOTITE[(bond.GetBondType(), is_bond_aromatic)]
         bond_list.append((begin_atom_idx, end_atom_idx, bond_type))
-    atom_array.bonds = struc.bonds.BondList(n_atoms, np.array(bond_list))
+    atom_array.bonds = struc.bonds.BondList(
+        n_atoms, np.array(bond_list, dtype=np.int64).reshape(-1, 3)
+    )
 
     # Set extra annotations
     annotations = mol._annotations if hasattr(mol, "_annotations") else {}

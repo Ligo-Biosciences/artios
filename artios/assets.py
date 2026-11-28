@@ -97,9 +97,9 @@ def download(asset: HubFile) -> Path:
         )
     except RepositoryNotFoundError as e:
         raise RuntimeError(
-            f"Could not access {asset.repo_id} on the Hugging Face Hub. If the "
-            "repository is private, log in with `hf auth login` or set HF_TOKEN "
-            "to a token with read access."
+            f"Could not access {asset.repo_id} on the Hugging Face Hub. Check the "
+            "network connection and, if HF_TOKEN is set or you have run "
+            "`hf auth login`, that the token is valid."
         ) from e
     except LocalEntryNotFoundError as e:
         raise RuntimeError(

@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from collections.abc import Iterator
@@ -38,6 +39,11 @@ def main(argv: list[str] | None = None) -> int:
     library_level = logging.INFO if args.verbose else logging.ERROR
     for name in ("artios", "py.warnings"):
         logging.getLogger(name).setLevel(library_level)
+    if not args.verbose:
+        # huggingface_hub sets its own level on import, from this variable.
+        os.environ.setdefault("HF_HUB_VERBOSITY", "error")
+        for name in ("httpx", "httpx2", "httpcore"):
+            logging.getLogger(name).setLevel(logging.WARNING)
     try:
         return args.func(args)
     except ValueError as e:  # bad selections, sequences, settings
@@ -56,6 +62,7 @@ def _parser() -> argparse.ArgumentParser:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    p.add_argument("--version", action="version", version=f"artios {_version()}")
     sub = p.add_subparsers(title="commands", required=True, metavar="COMMAND")
 
     common = argparse.ArgumentParser(add_help=False)
@@ -84,8 +91,10 @@ def _parser() -> argparse.ArgumentParser:
         "scaffold",
         parents=[common],
         help="generate backbones around a motif (ArtiosBackbone)",
-        description="Generate backbones around a motif with ArtiosBackbone. "
-        "INPUT is a backbone input JSON (see docs/motif_input_format.md).",
+        description="Generate backbones around a motif with ArtiosBackbone.\n\n"
+        "INPUT is a backbone input JSON, described in\n"
+        "https://github.com/Ligo-Biosciences/artios/blob/main/docs/motif_input_format.md",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     s.add_argument("input", type=Path, metavar="INPUT")
     s.add_argument(
@@ -193,6 +202,15 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("artios")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def _comma_list(text: str) -> list[str]:
     return [t for t in text.replace(" ", ",").split(",") if t]
 
@@ -201,8 +219,6 @@ def _comma_list(text: str) -> list[str]:
 
 
 def _scaffold(args) -> int:
-    import os
-
     # The backbone runner picks its own device; restrict it before torch loads.
     if args.device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""

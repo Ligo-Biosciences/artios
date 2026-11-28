@@ -30,6 +30,7 @@ from artios.assets import resolve_ccd_files
 from artios.common.chain_type import ChainType
 from artios.common.residue_names import STANDARD_POLYMER_TYPES_SET
 from artios.data.chem.perms import get_substructure_perms
+from artios.data.parsing._biotite_compat import filter_bonds
 
 logger = logging.getLogger(__name__)
 
@@ -423,7 +424,8 @@ def _connect_inter_residue(
             (curr_connect_indices[0], next_connect_indices[0], struc.BondType.SINGLE)
         )
 
-    return struc.BondList(atoms.array_length(), np.array(bonds, dtype=np.uint32))
+    bond_array = np.array(bonds, dtype=np.uint32).reshape(-1, 3)
+    return struc.BondList(atoms.array_length(), bond_array)
 
 
 def add_inter_residue_bonds(
@@ -451,9 +453,10 @@ def add_inter_residue_bonds(
         atom_array.bonds = inter_bonds
         return atom_array
 
-    select_mask = np.ones(len(inter_bonds._bonds), dtype=bool)
+    inter_bond_array = inter_bonds.as_array()
+    select_mask = np.ones(len(inter_bond_array), dtype=bool)
     if exclude_struct_conn_pairs:
-        for b_idx, (atom_i, atom_j, b_type) in enumerate(inter_bonds._bonds):
+        for b_idx, (atom_i, atom_j, b_type) in enumerate(inter_bond_array):
             atom_k = atom_i if atom_array.atom_name[atom_i] in ("N", "O3'") else atom_j
             bonds, types = atom_array.bonds.get_bonds(atom_k)
             if len(bonds) == 0:
@@ -473,7 +476,7 @@ def add_inter_residue_bonds(
             logging.warning(
                 "label_asym_id not found, far inter chain bonds will not be removed"
             )
-        for b_idx, (atom_i, atom_j, b_type) in enumerate(inter_bonds._bonds):
+        for b_idx, (atom_i, atom_j, b_type) in enumerate(inter_bond_array):
             if atom_array.label_asym_id[atom_i] != atom_array.label_asym_id[atom_j]:
                 coord_i = atom_array.coord[atom_i]
                 coord_j = atom_array.coord[atom_j]
@@ -481,15 +484,15 @@ def add_inter_residue_bonds(
                     select_mask[b_idx] = False
 
     # filter out removed_inter_bonds from atom_array.bonds
-    remove_bonds = inter_bonds._bonds[~select_mask]
-    remove_mask = np.isin(atom_array.bonds._bonds[:, 0], remove_bonds[:, 0]) & np.isin(
-        atom_array.bonds._bonds[:, 1], remove_bonds[:, 1]
+    remove_bonds = inter_bond_array[~select_mask]
+    bond_array = atom_array.bonds.as_array()
+    remove_mask = np.isin(bond_array[:, 0], remove_bonds[:, 0]) & np.isin(
+        bond_array[:, 1], remove_bonds[:, 1]
     )
-    atom_array.bonds._bonds = atom_array.bonds._bonds[~remove_mask]
+    atom_array.bonds = filter_bonds(atom_array.bonds, ~remove_mask)
 
     # merged normal inter_bonds into atom_array.bonds
-    inter_bonds._bonds = inter_bonds._bonds[select_mask]
-    atom_array.bonds = atom_array.bonds.merge(inter_bonds)
+    atom_array.bonds = atom_array.bonds.merge(filter_bonds(inter_bonds, select_mask))
     return atom_array
 
 

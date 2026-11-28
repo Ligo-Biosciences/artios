@@ -232,7 +232,10 @@ class TestBuildMotifLigand:
         cif_atoms.coord = motif_cif_coords
 
         # Superimpose CIF coords onto reference coords
-        mobile_onto_fixed, _ = superimpose(fixed=ref_atoms, mobile=cif_atoms)
+        # biotite 1.x returns (fitted, transformation), 2.x the transformation.
+        result = superimpose(fixed=ref_atoms, mobile=cif_atoms)
+        transformation = result[1] if isinstance(result, tuple) else result
+        mobile_onto_fixed = transformation.apply(cif_atoms)
 
         # Compute per-atom distances after alignment
         distances = np.linalg.norm(ref_atoms.coord - mobile_onto_fixed.coord, axis=1)

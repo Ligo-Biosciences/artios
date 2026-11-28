@@ -231,8 +231,10 @@ def _save_backbone_trajectory(output: BackboneOutput, ctx: SaveContext) -> list[
         for step_idx in step_indices:
             frame = ctx.atom_array.copy()
             frame.coord = sample_trajectory[step_idx]
-            fitted, _ = superimpose(reference_frame, frame, atom_mask=backbone_mask)
-            frames.append(fitted)
+            # biotite 1.x returns (fitted, transformation), 2.x the transformation.
+            result = superimpose(reference_frame, frame, atom_mask=backbone_mask)
+            transformation = result[1] if isinstance(result, tuple) else result
+            frames.append(transformation.apply(frame))
 
         atom_array_stack = struc.stack(frames)
 

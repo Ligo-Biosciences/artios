@@ -8,8 +8,8 @@ The design pipeline has two models:
 
 | Model | Task | Input | Output |
 |---|---|---|---|
-| **ArtiosBackbone** | All-atom motif scaffolding (EDM diffusion) | Motif CIF + ligand definitions (JSON) | Backbone structures (NPZ / CIF) |
-| **ArtiosPotts** | Sequence design (Potts model on an MPNN encoder) | Backbone NPZ from ArtiosBackbone, or any PDB/mmCIF structure | Designed sequences (FASTA) and energies |
+| **[ArtiosBackbone](https://huggingface.co/Ligo-Biosciences/ArtiosBackbone)** | All-atom motif scaffolding (EDM diffusion) | Motif CIF + ligand definitions (JSON) | Backbone structures (NPZ / CIF) |
+| **[ArtiosPotts](https://huggingface.co/Ligo-Biosciences/ArtiosPotts)** | Sequence design (Potts model on an MPNN encoder) | Backbone NPZ from ArtiosBackbone, or any PDB/mmCIF structure | Designed sequences (FASTA) and energies |
 
 ## Results
 
@@ -65,7 +65,7 @@ Both files must come from the same snapshot. `scripts/data/gen_ccd_cache.py` bui
 
 ## Usage
 
-Model weights and CCD files are downloaded from the Hugging Face Hub on first use (about 1.1 GB in total) and cached for later runs. A CUDA GPU is used automatically when available. CPUs work too, and the timings below are for a laptop CPU. Apple MPS is not supported.
+Model weights and CCD files are downloaded from [Hugging Face](https://huggingface.co/Ligo-Biosciences) on first use (about 1.1 GB in total) and cached for later runs. A CUDA GPU is used automatically when available. CPUs work too, and the timings below are for a laptop CPU. Apple MPS is not supported.
 
 Everything runs through the `artios` command (`artios --help`):
 
@@ -169,7 +169,7 @@ Ligands can be given as CCD codes (`{"type": "ccd", "codes": ["ZN"]}`) or as ato
 
 Training code is included as a reference: `artios/runner/train_backbone.py` and `artios/runner/train_potts.py`, launched through `scripts/training/`. See [preparing training data](https://github.com/Ligo-Biosciences/artios/blob/main/docs/prepare_training_data.md) and [data sampling weights](https://github.com/Ligo-Biosciences/artios/blob/main/docs/data_sampling_weights.md).
 
-> **TODO:** training datasets on Hugging Face.
+Fragment-level structural clusters of the MGnify and AlphaFold DB training structures are in [Artios-Clusters](https://huggingface.co/datasets/Ligo-Biosciences/Artios-Clusters). The training datasets are not on Hugging Face yet.
 
 ## Repository layout
 

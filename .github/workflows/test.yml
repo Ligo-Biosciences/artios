@@ -51,7 +51,45 @@ jobs:
           key: hf-ccd-${{ hashFiles('artios/assets.py') }}
 
       - name: Run fast tests
-        env:
-          # Needed while the Hugging Face repositories are private.
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: uv run pytest -m "not slow"
+
+  # The package as users get it: the built wheel with the newest dependencies.
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY" /usr/share/dotnet \
+            /usr/local/lib/android /opt/ghc /usr/local/.ghcup
+          sudo swapoff -a && sudo rm -f /mnt/swapfile || true
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install the wheel
+        run: |
+          uv build --wheel
+          uv venv --python ${{ matrix.python }} "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv" dist/*.whl pytest
+          # Run the tests outside the checkout so they import the wheel.
+          mkdir "$RUNNER_TEMP/check"
+          cp -r tests examples "$RUNNER_TEMP/check/"
+
+      - name: Cache Hugging Face downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-potts-ccd-${{ hashFiles('artios/assets.py') }}
+
+      - name: Test the installed package
+        working-directory: ${{ runner.temp }}/check
+        run: |
+          "$RUNNER_TEMP/venv/bin/artios" --version
+          "$RUNNER_TEMP/venv/bin/python" -c "import artios; assert 'site-packages' in artios.__file__, artios.__file__"
+          "$RUNNER_TEMP/venv/bin/python" -m pytest tests/potts -q

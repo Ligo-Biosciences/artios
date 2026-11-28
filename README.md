@@ -11,8 +11,6 @@ The design pipeline has two models:
 | **ArtiosBackbone** | All-atom motif scaffolding (EDM diffusion) | Motif CIF + ligand definitions (JSON) | Backbone structures (NPZ / CIF) |
 | **ArtiosPotts** | Sequence design (Potts model on an MPNN encoder) | Backbone NPZ from ArtiosBackbone, or any PDB/mmCIF structure | Designed sequences (FASTA) and energies |
 
-Artios is built on [Protenix](https://github.com/bytedance/Protenix), ByteDance's open reproduction of AlphaFold 3 (see [NOTICE](https://github.com/Ligo-Biosciences/artios/blob/main/NOTICE)).
-
 ## Results
 
 - **Motif scaffolding.** On the Atomic Motif Enzyme benchmark, with the added requirement that the co-folded ligand stays in the designed pocket, 6.1% of Artios designs pass, against 1.2% for Proteina-Complexa and 0.9% for RFdiffusion3 (both with LigandMPNN). Artios solves 34 of 38 active sites.

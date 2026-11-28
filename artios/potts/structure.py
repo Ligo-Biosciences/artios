@@ -457,14 +457,14 @@ def _pdb_to_cif_file(path: Path, model: int = 1) -> pdbx.CIFFile:
                 )
         entity_of_asym[asym] = entity_by_key[key]
 
-    atoms.set_annotation(
-        "label_entity_id",
-        np.array([entity_of_asym[label_asym[r]] for r in res_of_atom]),
-    )
+    entity_of_atom = np.array([entity_of_asym[label_asym[r]] for r in res_of_atom])
+    atoms.set_annotation("label_entity_id", entity_of_atom)
     cif = pdbx.CIFFile()
     pdbx.set_structure(cif, atoms, data_block=path.stem)
     block = cif.block
     atom_site = block["atom_site"]
+    # Set explicitly: biotite 2 writes its own label_entity_id.
+    atom_site["label_entity_id"] = pdbx.CIFColumn(entity_of_atom.astype(str))
     atom_site["label_asym_id"] = pdbx.CIFColumn(label_asym[res_of_atom].astype(str))
     atom_site["label_seq_id"] = pdbx.CIFColumn(label_seq[res_of_atom].astype(str))
     block["entity_poly"] = pdbx.CIFCategory(

@@ -44,6 +44,7 @@ from artios.common.constants import (
 )
 from artios.data.chem import ccd
 from artios.data.chem.ccd import RefInfo, get_ccd_ref_info
+from artios.data.parsing._biotite_compat import filter_bonds
 from artios.utils.typing import Bool, Float, Int, Int32, Shaped, typecheck
 
 logger = logging.getLogger(__name__)
@@ -81,22 +82,15 @@ def remove_bonds_between_polymer_chains(
 
     Returns a **copy** of ``atom_array.bonds`` with those bonds filtered
     out. Does not mutate the input.
-
-    TODO: ``bonds._bonds`` / ``_remove_redundant_bonds`` is private
-    biotite API; should move into ``_biotite_compat.py`` so a biotite
-    upgrade is a one-file patch.
     """
-    copy = atom_array.bonds.copy()
+    bonds = atom_array.bonds.as_array()
     polymer_mask = np.isin(atom_array.label_entity_id, list(entity_poly_type.keys()))
-    i = copy._bonds[:, 0]
-    j = copy._bonds[:, 1]
+    i = bonds[:, 0]
+    j = bonds[:, 1]
     pp_bond_mask = polymer_mask[i] & polymer_mask[j]
     diff_chain_mask = atom_array.chain_id[i] != atom_array.chain_id[j]
     pp_bond_mask = pp_bond_mask & diff_chain_mask
-    copy._bonds = copy._bonds[~pp_bond_mask]
-    copy._remove_redundant_bonds()
-    copy._max_bonds_per_atom = copy._get_max_bonds_per_atom()
-    return copy
+    return filter_bonds(atom_array.bonds, ~pp_bond_mask)
 
 
 def canonicalize_chain_ids(atom_array: AtomArray) -> AtomArray:

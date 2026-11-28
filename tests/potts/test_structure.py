@@ -24,7 +24,9 @@ def with_ligands():
 
 
 def _write_pdb(cif_path: Path, out: Path, edit=None) -> Path:
-    atoms = pdbx.get_structure(pdbx.CIFFile.read(str(cif_path)), model=1)
+    atoms = pdbx.get_structure(
+        pdbx.CIFFile.read(str(cif_path)), model=1, use_author_fields=True
+    )
     atoms = atoms[atoms.res_name != "HOH"]
     if edit is not None:
         edit(atoms)
@@ -155,7 +157,9 @@ def test_build_context_pins_everything_but_the_design(multi_chain):
 @pytest.mark.parametrize("chains", [["A"], ["C", "D"]])
 def test_chains_filter_keeps_author_chain_ligands(chains):
     """Ligands follow the author chain they were deposited with."""
-    raw = pdbx.get_structure(pdbx.CIFFile.read(str(MULTI_CHAIN)), model=1)
+    raw = pdbx.get_structure(
+        pdbx.CIFFile.read(str(MULTI_CHAIN)), model=1, use_author_fields=True
+    )
     m2t_chains = set(raw.chain_id[raw.res_name == "M2T"])
     target = load_target(MULTI_CHAIN, chains=chains)
     assert sorted(target.protein_chains) == sorted(chains)

@@ -65,12 +65,13 @@ def get_inter_residue_bonds(atom_array: AtomArray) -> np.ndarray:
     """
     if atom_array.bonds is None:
         return np.empty((0, 2), dtype=int)
-    idx_i = atom_array.bonds._bonds[:, 0]
-    idx_j = atom_array.bonds._bonds[:, 1]
+    bonds = atom_array.bonds.as_array()
+    idx_i = bonds[:, 0]
+    idx_j = bonds[:, 1]
     chain_id_diff = atom_array.chain_id[idx_i] != atom_array.chain_id[idx_j]
     res_id_diff = atom_array.res_id[idx_i] != atom_array.res_id[idx_j]
     diff_mask = chain_id_diff | res_id_diff
-    inter_residue_bonds = atom_array.bonds._bonds[diff_mask]
+    inter_residue_bonds = bonds[diff_mask]
     inter_residue_bonds = inter_residue_bonds[:, :2]  # remove bond type
     return inter_residue_bonds
 
@@ -130,8 +131,9 @@ def get_ligand_polymer_bond_mask(
     # identify polymer by mol_type (protein, rna, dna, ligand)
     polymer_mask = np.isin(atom_array.mol_type, ["protein", "rna", "dna"])
 
-    idx_i = atom_array.bonds._bonds[:, 0]
-    idx_j = atom_array.bonds._bonds[:, 1]
+    bonds = atom_array.bonds.as_array()
+    idx_i = bonds[:, 0]
+    idx_j = bonds[:, 1]
 
     lig_polymer_bond_indices = np.where(
         (lig_mask[idx_i] & polymer_mask[idx_j])
@@ -141,7 +143,7 @@ def get_ligand_polymer_bond_mask(
         # no ligand-polymer bonds
         lig_polymer_bonds = np.empty((0, 3)).astype(int)
     else:
-        lig_polymer_bonds = atom_array.bonds._bonds[
+        lig_polymer_bonds = bonds[
             lig_polymer_bond_indices
         ]  # np.array([[atom1, atom2, bond_order]...])
     return lig_polymer_bonds
@@ -353,11 +355,9 @@ class CIFWriter:
                 field_in_b_factor_col
             )
 
-        pdbx.set_structure(
-            cif,
-            self.atom_array,
-            include_bonds=include_bonds,
-        )
+        # Bonds are written whenever atom_array.bonds is set; biotite deprecated
+        # include_bonds in 1.5 and removed it in 2.0.
+        pdbx.set_structure(cif, self.atom_array)
 
         block = cif.block
         atom_site = block.get("atom_site")

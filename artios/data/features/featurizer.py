@@ -631,13 +631,14 @@ class ContextGenerator:
 
         # Atoms connected to different residue are fixed.
         # Bonds array: [[atom_idx_i, atom_idx_j, bond_type]]
-        idx_i = self.s.atoms.bonds._bonds[:, 0]
-        idx_j = self.s.atoms.bonds._bonds[:, 1]
+        bonds = self.s.atoms.bonds.as_array()
+        idx_i = bonds[:, 0]
+        idx_j = bonds[:, 1]
         diff_mask = (
             self.s.reference.ref_space_uid[idx_i]
             != self.s.reference.ref_space_uid[idx_j]
         )
-        inter_residue_bonds = self.s.atoms.bonds._bonds[diff_mask]
+        inter_residue_bonds = bonds[diff_mask]
         fixed_atom_mask = np.isin(
             np.arange(len(self.s.atoms)),
             np.unique(inter_residue_bonds[:, :2]),

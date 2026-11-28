@@ -13,14 +13,14 @@ is a one-file patch instead of a scavenger hunt. Callers should import
 the public re-exports here and never reach into ``pdbx.convert``
 directly.
 
-TODO: bonds-level private access (``BondList._bonds``,
-``_remove_redundant_bonds``, ``_get_max_bonds_per_atom``) is still
-scattered across ``filter.py`` / ``annotation.py``. Folding it in
-here is a follow-up.
+Bonds go through the public ``BondList`` API (``as_array`` and the
+constructor); ``filter_bonds`` covers the one pattern it lacks.
 """
 
 from __future__ import annotations
 
+import numpy as np
+from biotite.structure import BondList
 from biotite.structure.io.pdbx import convert as _pdbx_convert
 
 # Match the legacy-file behaviour of ignoring metal-coordinate bonds in
@@ -71,10 +71,25 @@ Thin re-export of ``pdbx.convert._parse_operation_expression``.
 Signature: ``parse_operation_expression(expr) -> list[list[str]]``.
 """
 
-apply_transformations = _pdbx_convert._apply_transformations
-"""Apply an expression of transformations to a sub-structure.
 
-Thin re-export of ``pdbx.convert._apply_transformations``.
-Signature:
-``apply_transformations(sub_structure, transformations, operations) -> AtomArray``.
-"""
+def apply_transformations(sub_structure, transformations, operations):
+    """Apply an expression of transformations to a sub-structure.
+
+    Wraps ``pdbx.convert._apply_transformations``. biotite 1.5 also set a
+    ``sym_id`` annotation (the index of the operation that made each copy);
+    later versions do not, so it is added here to keep outputs identical.
+    """
+    assembly = _pdbx_convert._apply_transformations(
+        sub_structure, transformations, operations
+    )
+    if "sym_id" not in assembly.get_annotation_categories():
+        assembly.set_annotation(
+            "sym_id",
+            np.repeat(np.arange(len(operations)), sub_structure.array_length()),
+        )
+    return assembly
+
+
+def filter_bonds(bonds: BondList, keep: np.ndarray) -> BondList:
+    """A new ``BondList`` with the bonds of ``bonds.as_array()[keep]``."""
+    return BondList(bonds.get_atom_count(), bonds.as_array()[keep])

@@ -202,9 +202,10 @@ class DataPipeline(object):
             include_bonds (bool): Whether to include bond information in the CIF file. Default is False.
 
         """
+        # Bonds are written whenever atom_array.bonds is set; biotite deprecated
+        # include_bonds in 1.5 and removed it in 2.0.
         strucio.save_structure(
             file_path=output_cif_file,
             array=atom_array,
             data_block=os.path.basename(output_cif_file).replace(".cif", ""),
-            include_bonds=include_bonds,
         )

@@ -21,6 +21,7 @@ import numpy as np
 from biotite.structure import AtomArray
 
 from artios.data.chem import ccd
+from artios.data.parsing._biotite_compat import filter_bonds
 from artios.data.utils import atom_select, get_inter_residue_bonds
 
 logger = logging.getLogger(__name__)
@@ -286,8 +287,9 @@ def build_ref_chain_with_atom_array(
         res_starts = struc.get_residue_starts(chain, add_exclusive_stop=True)
         inter_bonds = ccd._connect_inter_residue(chain, res_starts)
 
-        bond_mask = np.ones(len(inter_bonds._bonds), dtype=bool)
-        for b_idx, (atom_i, atom_j, _b_type) in enumerate(inter_bonds._bonds):
+        inter_bond_array = inter_bonds.as_array()
+        bond_mask = np.ones(len(inter_bond_array), dtype=bool)
+        for b_idx, (atom_i, atom_j, _b_type) in enumerate(inter_bond_array):
             idx_i = atom_select(
                 atom_array,
                 {
@@ -323,8 +325,7 @@ def build_ref_chain_with_atom_array(
                 )
                 central_bond_count[atom_key] = 1
 
-        inter_bonds._bonds = inter_bonds._bonds[bond_mask]
-        chain.bonds = chain.bonds.merge(inter_bonds)
+        chain.bonds = chain.bonds.merge(filter_bonds(inter_bonds, bond_mask))
 
         chain.hetero[:] = False
         entity_atom_array[entity_id] = chain

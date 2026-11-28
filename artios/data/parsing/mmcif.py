@@ -379,11 +379,14 @@ def _parse_asymmetric_unit(
         conn_bonds = _biotite_compat.parse_inter_residue_bonds(
             model_atom_site, block["struct_conn"]
         )
-        coord1 = atoms.coord[conn_bonds._bonds[:, 0]]
-        coord2 = atoms.coord[conn_bonds._bonds[:, 1]]
+        conn_array = conn_bonds.as_array()
+        coord1 = atoms.coord[conn_array[:, 0]]
+        coord2 = atoms.coord[conn_array[:, 1]]
         dist = np.linalg.norm(coord1 - coord2, axis=1)
         if bond_length_threshold is not None:
-            conn_bonds._bonds = conn_bonds._bonds[dist < bond_length_threshold]
+            conn_bonds = _biotite_compat.filter_bonds(
+                conn_bonds, dist < bond_length_threshold
+            )
         bonds = bonds.merge(conn_bonds)
     atoms.bonds = bonds
     return atoms

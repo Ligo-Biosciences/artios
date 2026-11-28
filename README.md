@@ -169,7 +169,7 @@ Ligands can be given as CCD codes (`{"type": "ccd", "codes": ["ZN"]}`) or as ato
 
 Training code is included as a reference: `artios/runner/train_backbone.py` and `artios/runner/train_potts.py`, launched through `scripts/training/`. See [preparing training data](https://github.com/Ligo-Biosciences/artios/blob/main/docs/prepare_training_data.md) and [data sampling weights](https://github.com/Ligo-Biosciences/artios/blob/main/docs/data_sampling_weights.md).
 
-Fragment-level structural clusters of the MGnify and AlphaFold DB training structures are in [Artios-Clusters](https://huggingface.co/datasets/Ligo-Biosciences/Artios-Clusters). The training datasets are not on Hugging Face yet.
+The training data, a 278 GB SquashFS snapshot with the train and evaluation split indices, is in [Artios-Training-Data](https://huggingface.co/datasets/Ligo-Biosciences/Artios-Training-Data). Fragment-level structural clusters of its MGnify and AlphaFold DB structures are in [Artios-Clusters](https://huggingface.co/datasets/Ligo-Biosciences/Artios-Clusters).
 
 ## Repository layout
 
